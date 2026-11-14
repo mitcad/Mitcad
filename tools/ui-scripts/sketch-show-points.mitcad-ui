@@ -11,8 +11,12 @@
 #      overlay); a drag moves it, and the points drawn again after the drag
 #      are still without markers; a click on the lone point selects it and
 #      its ball is drawn.
-#   4. Remembered: Finish and Edit Sketch1 again opens with Show points off.
-#   5. Checked again: every marker drawn.
+#   4. Finished with it off (mitcad#1764, GitHub mitcad/Mitcad#290): the
+#      points of Sketch1 and of Sketch2 (a line and a lone point in the top
+#      left corner) stay without markers outside sketch mode.
+#   5. Remembered: Edit Sketch1 again opens with Show points off.
+#   6. Checked again in Sketch2: every marker drawn, and after Finish both
+#      sketches' points are drawn.
 # The pointer stays within x -30..30 mm, y -25..25 mm: the free part of the
 # view after the fit also in session 0's 1024x768 window on Windows.
 # Run by tools/ui-sketch-show-points-test.sh (Linux) and
@@ -68,20 +72,40 @@ sketch-click 25 5
 wait-log '^Selected: nothing'
 wait-idle
 
-# 4. Remembered: the sketch opens with Show points off again.
+# 4. Finished with Show points off (mitcad#1764): Sketch1's points and
+#    Sketch2's stay without markers outside sketch mode; no marker is
+#    drawn again as the sketch is finished.
 mark
 command sketch.finish
 wait-log '^Sketch finished$'
 wait-idle
+expect-sketch-point-markers F1 hidden
+expect-sketch-point-markers F2 hidden
+expect-no-log '^Sketch point markers: [1-9]'
+screenshot '${MITCAD_TEST_WORK}/sketch-show-points-finished-off.png'
+
+# 5. Remembered: the sketch opens with Show points off again.
 mark
 dblclick-logged '^Timeline Sketch1 at '
 wait-log '^Editing sketch F1 \(Sketch1\)'
 expect-log '^Sketch Sketch1 opens with Show points off$'
-wait-log '^Sketch point markers: 0 drawn, [1-9][0-9]* hidden$'
+wait-idle
+expect-sketch-point-markers F1 hidden
+expect-widget-property palettePoints checked false
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-idle
+expect-sketch-point-markers F1 hidden
+
+# 6. Checked again in another sketch: every point drawn, Sketch2's while
+#    it is edited and both sketches' after it is finished (mitcad#1764).
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F2 \(Sketch2\)'
+expect-log '^Sketch Sketch2 opens with Show points off$'
 wait-idle
 expect-widget-property palettePoints checked false
-
-# 5. Checked again: every point drawn.
 mark
 button '^Show points$' palettePoints
 wait-log '^Show points on$'
@@ -94,4 +118,8 @@ mark
 command sketch.finish
 wait-log '^Sketch finished$'
 wait-idle
+expect-sketch-point-markers F1 drawn
+expect-sketch-point-markers F2 drawn
+expect-no-log '^Sketch point markers: [0-9]+ drawn, [1-9][0-9]* hidden$'
+screenshot '${MITCAD_TEST_WORK}/sketch-show-points-finished-on.png'
 expect-never 'Recompute failed|TestDriver: FAIL'

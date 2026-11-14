@@ -1,0 +1,47 @@
+[
+  {"comment": "Rib Direction (mitcad#1746): a 100 x 40 x 10 base (Sketch1 F1, Extrude1 F2) with two cylinders of radius 10 joined on it: at (20, 20) up to z = 60 (Sketch2 F3, Extrude2 F4) and at (80, 20) up to z = 30 (Sketch3 F5, Extrude3 F6): 40000 + 7000 pi mm3."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 100, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [20, 20], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "start": {"type": "offset", "offset": 10}, "extent": {"type": "distance", "distance": 50},
+    "operation": "join", "participants": ["F2.b0"]}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F5", "center": [80, 20], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": "r{c1}"}],
+    "start": {"type": "offset", "offset": 10}, "extent": {"type": "distance", "distance": 20},
+    "operation": "join", "participants": ["F2.b0"]}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 61991.14857512855}},
+
+  {"comment": "On the midplane y = 20 (Plane1 F7 from XZ: normal +Y, sketch y -Z, so the sketch's y points down here, the '-y' of a sketch drawn with y up), Sketch4 F8: a slanted line from the tall cylinder's outline at z = 50 to the low one's top edge, (30, 50) - (70, 30) in X and Z."},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xz", "distance": 20}}},
+  {"cmd": "sketch.create", "plane": "F7"},
+  {"cmd": "sketch.add_line", "sketch": "F8", "start": [30, -50], "end": [70, -30]},
+
+  {"comment": "Rib1 (F9), 4 thick, Direction the sketch's y (straight down), up to the next faces, with Extend Ends: the trapezoid under the line down to the base, 40 * 30 * 4, and at each end the sliver between the tip and the cylinder's curved face across the thickness, together 60 * (40 - 2 sqrt(96) - 100 asin(0.2)) = 16.0973987220897. One solid with the base and both cylinders."},
+  {"cmd": "add_feature", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": "sketch_y", "extend_ends": true}},
+  {"expect": {"feature": "Rib1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 66807.24597385064}},
+
+  {"comment": "The same along the Z axis, flipped (down)."},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": {"along": "z"}, "flip": true, "extend_ends": true}},
+  {"expect": {"feature": "Rib1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 66807.24597385064}},
+
+  {"comment": "Without Extend Ends: the trapezoid alone, on the base."},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": "sketch_y"}},
+  {"expect": {"feature": "Rib1", "status": "ok"}},
+  {"expect": {"body": "F2.b0", "volume": 66791.14857512855}},
+
+  {"comment": "Flipped, the sketch's -y, it grows up, where nothing closes it off."},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": "sketch_y", "flip": true, "extend_ends": true}},
+  {"expect": {"feature": "Rib1", "status": "error", "error_contains": "does not end at faces of the bodies"}}
+]

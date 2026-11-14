@@ -130,7 +130,7 @@ expect_sent "$A" "$TEAM" "the repository has the project"
 
 echo "--- Open from Cloud: Open It, a folder that is not empty, a new folder"
 open_from_cloud "$TEAM"
-ui_expect_new "Project \"team\": 2 version(s), latest " "the summary: the project, its versions"
+ui_expect_new "Project \"team\": 2 versions, latest " "the summary: the project, its versions"
 ui_expect_new "Open from Cloud dialog: open, enabled" "the folder named after the repository is its clone: Open It"
 NOT_EMPTY=$WORK/not-empty
 mkdir -p "$NOT_EMPTY"

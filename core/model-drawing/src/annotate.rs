@@ -1350,10 +1350,11 @@ fn angle(
     Ok(())
 }
 
-/// A radius or a diameter: of a circle seen end on, a line from its
-/// centre (across it for a diameter) to the rim with an arrow, run on to
-/// the text on a shoulder outside; of a circle or round face seen from the
-/// side, a linear dimension across it.
+/// A radius or a diameter: of a circle seen end on, a radius's leader
+/// from its text to the rim with its arrow there ([`radius_end_on`]), a
+/// diameter's line across it with an arrow at each end, run on to the text
+/// ([`diameter_end_on`]), the text on a shoulder outside; of a circle or
+/// round face seen from the side, a linear dimension across it.
 fn round(
     g: &mut Group,
     annotation: &ViewAnnotation,
@@ -1385,43 +1386,16 @@ fn round(
                 }
             });
             let text_at = add2(c, shift);
-            let mut u = vec2::unit(shift).unwrap_or([1.0, 0.0]);
-            // The arrow on the arc where it is: its nearer end when the
-            // text lies beyond it, the leader then run out radially from
-            // there before it bends to the text, so that the arrow points
-            // along the line it ends (mitcad#1694).
-            let mut elbow = None;
-            if let Some((start, end)) = arc
-                && !in_sweep(u[1].atan2(u[0]), start, end)
-            {
-                let angle = u[1].atan2(u[0]);
-                let off = |a: f64| {
-                    let d = (angle - a).rem_euclid(TAU);
-                    d.min(TAU - d)
-                };
-                let a = if off(start) <= off(end) { start } else { end };
-                u = [a.cos(), a.sin()];
-                elbow = Some(add2(c, mul2(u, r + RADIAL_LEADER)));
-            }
-            let rim = add2(c, mul2(u, r));
-            if diameter {
-                let opposite = sub2(c, mul2(u, r));
-                g.line(Pen::Thin, opposite, rim);
-                arrow(g, opposite, mul2(u, -1.0));
-            } else {
-                g.line(Pen::Thin, c, rim);
-            }
-            arrow(g, rim, u);
+            let toward = vec2::unit(shift).unwrap_or([1.0, 0.0]);
+            let outside = len2(shift) > r;
             let side = if shift[0] >= 0.0 { 1.0 } else { -1.0 };
             let width = words.width(frame.text) + 1.0;
-            if len2(shift) > r {
-                match elbow {
-                    Some(elbow) => {
-                        g.line(Pen::Thin, rim, elbow);
-                        g.line(Pen::Thin, elbow, text_at);
-                    }
-                    None => g.line(Pen::Thin, rim, text_at),
-                }
+            if diameter {
+                diameter_end_on(g, c, r, toward, arc, outside.then_some(text_at));
+            } else {
+                radius_end_on(g, c, r, toward, arc, outside.then_some(text_at));
+            }
+            if outside {
                 g.line(Pen::Thin, text_at, add2(text_at, [side * width, 0.0]));
             }
             let (x, anchor) = if side > 0.0 {
@@ -1495,6 +1469,116 @@ fn round(
         frame.text,
     );
     Ok(())
+}
+
+/// The end of an arc (counter-clockwise from `start` to `end`, radians)
+/// nearer the direction `angle`: the first on a tie.
+fn nearer_end(angle: f64, start: f64, end: f64) -> f64 {
+    let off = |a: f64| {
+        let d = (angle - a).rem_euclid(TAU);
+        d.min(TAU - d)
+    };
+    if off(start) <= off(end) { start } else { end }
+}
+
+/// A radius of a circle seen end on, its centre `c` and radius `r` on the
+/// sheet, its text the way `toward` (unit) from the centre and, when it
+/// lies outside the circle, at `text`: one arrow, its tip on the arc at the
+/// end of the line that reaches it and pointing along that line's last
+/// segment (mitcad#1694, mitcad#1770).
+/// - The text inside the circle: a line from the centre out to the rim
+///   towards the text (an arc's nearer end when its sweep misses that
+///   way), the arrow on it pointing out.
+/// - The text outside, the arc there: a leader from the text straight to
+///   the rim, the arrow on it pointing in.
+/// - The text outside on the arc's hollow side (its sweep misses the text
+///   but takes the way opposite, as a fillet in an inside corner seen with
+///   its text beyond its centre): a leader from the text through the
+///   centre to the rim opposite, the arrow on it pointing out.
+/// - Else: a leader from the text to a bend [`RADIAL_LEADER`] out from the
+///   arc's nearer end, run in radially from there to the end, the arrow on
+///   it pointing in.
+fn radius_end_on(
+    g: &mut Group,
+    c: P2,
+    r: f64,
+    toward: P2,
+    arc: Option<(f64, f64)>,
+    text: Option<P2>,
+) {
+    let angle = toward[1].atan2(toward[0]);
+    let on_arc = |a: f64| arc.is_none_or(|(start, end)| in_sweep(a, start, end));
+    let nearer = match arc {
+        Some((start, end)) => {
+            let a = nearer_end(angle, start, end);
+            [a.cos(), a.sin()]
+        }
+        None => toward,
+    };
+    let Some(text_at) = text else {
+        let u = if on_arc(angle) { toward } else { nearer };
+        let rim = add2(c, mul2(u, r));
+        g.line(Pen::Thin, c, rim);
+        arrow(g, rim, u);
+        return;
+    };
+    if on_arc(angle) {
+        let rim = add2(c, mul2(toward, r));
+        g.line(Pen::Thin, text_at, rim);
+        arrow(g, rim, mul2(toward, -1.0));
+    } else if on_arc(angle + PI) {
+        let u = mul2(toward, -1.0);
+        let rim = add2(c, mul2(u, r));
+        g.line(Pen::Thin, text_at, rim);
+        arrow(g, rim, u);
+    } else {
+        let rim = add2(c, mul2(nearer, r));
+        let elbow = add2(c, mul2(nearer, r + RADIAL_LEADER));
+        g.line(Pen::Thin, text_at, elbow);
+        g.line(Pen::Thin, elbow, rim);
+        arrow(g, rim, mul2(nearer, -1.0));
+    }
+}
+
+/// A diameter of a circle seen end on, as [`radius_end_on`] has it: a line
+/// across it through its centre towards the text, an arrow at each end
+/// pointing out, run on from the rim to the text when it lies outside
+/// (`text`). On an arc whose sweep misses the text's way, across from its
+/// nearer end, the leader run out radially from there [`RADIAL_LEADER`]
+/// before it bends to the text, so that it runs on along the line across
+/// (mitcad#1694).
+fn diameter_end_on(
+    g: &mut Group,
+    c: P2,
+    r: f64,
+    toward: P2,
+    arc: Option<(f64, f64)>,
+    text: Option<P2>,
+) {
+    let angle = toward[1].atan2(toward[0]);
+    let mut u = toward;
+    let mut elbow = None;
+    if let Some((start, end)) = arc
+        && !in_sweep(angle, start, end)
+    {
+        let a = nearer_end(angle, start, end);
+        u = [a.cos(), a.sin()];
+        elbow = Some(add2(c, mul2(u, r + RADIAL_LEADER)));
+    }
+    let rim = add2(c, mul2(u, r));
+    let opposite = sub2(c, mul2(u, r));
+    g.line(Pen::Thin, opposite, rim);
+    arrow(g, opposite, mul2(u, -1.0));
+    arrow(g, rim, u);
+    if let Some(text_at) = text {
+        match elbow {
+            Some(elbow) => {
+                g.line(Pen::Thin, rim, elbow);
+                g.line(Pen::Thin, elbow, text_at);
+            }
+            None => g.line(Pen::Thin, rim, text_at),
+        }
+    }
 }
 
 /// Crossed centre lines through a circle's centre (sheet), reaching
@@ -3004,68 +3088,159 @@ mod tests {
         assert_eq!(measure(&o, &points).unwrap(), Some(5.0));
     }
 
+    /// A radius's one arrow and the line it ends (mitcad#1770): the
+    /// arrow's tip, its direction (from the middle of its base to its tip),
+    /// and the other end of the one line that ends at the tip.
+    fn radius_arrow(laid: &Laid) -> (P2, P2, P2) {
+        let arrows: Vec<(P2, P2)> = laid
+            .group
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Fill { points } if points.len() == 3 => {
+                    let base = mid(points[1], points[2]);
+                    Some((points[0], unit2(sub2(points[0], base))))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arrows.len(), 1, "one arrow: {:?}", laid.group.items);
+        let (tip, along) = arrows[0];
+        let ending: Vec<P2> = laid
+            .group
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Line { a, b, .. } if len2(sub2(*b, tip)) < 1e-9 => Some(*a),
+                Item::Line { a, b, .. } if len2(sub2(*a, tip)) < 1e-9 => Some(*b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ending.len(),
+            1,
+            "one line ends at the arrow's tip {tip:?}: {:?}",
+            laid.group.items
+        );
+        (tip, along, ending[0])
+    }
+
+    /// Whether a line of a group joins `a` and `b` (either way round).
+    fn joins(laid: &Laid, a: P2, b: P2) -> bool {
+        laid.group.items.iter().any(|item| match item {
+            Item::Line { a: p, b: q, .. } => {
+                (len2(sub2(*p, a)) < 1e-9 && len2(sub2(*q, b)) < 1e-9)
+                    || (len2(sub2(*p, b)) < 1e-9 && len2(sub2(*q, a)) < 1e-9)
+            }
+            _ => false,
+        })
+    }
+
     #[test]
-    fn a_radius_arrow_points_along_the_leader_it_ends_beyond_the_arcs_sweep() {
+    fn a_radius_arrow_sits_on_its_leader_wherever_its_text_is() {
+        // mitcad#1694, mitcad#1770: a fillet's arc of 1.5 seen end on (each
+        // quarter, as a fillet in a side view has it), half an arc and a
+        // whole circle, the text in each quadrant round it, near and far:
+        // in the arc's sweep, beyond it and on its hollow side. Its one
+        // arrow's tip is on the arc (within 0.01 sheet mm) at the end of
+        // the leader from the text, pointing along the leader's last
+        // segment (within half a degree), never beside it.
         let map = map();
         let frame = Frame {
             map: &map,
             view_box: view_box(),
             text: DIMENSION_TEXT,
         };
-        // A quarter arc of 1.5 (a fillet seen from the side), from 0 to 90
-        // degrees, its text up and to the left: beyond its sweep.
-        let fillet = Seen::Circle {
-            center: [10.0, 10.0],
-            radius: 1.5,
-            end_on: true,
-            across: [1.0, 0.0],
-            arc: Some((0.0, PI / 2.0)),
-        };
+        let radius = 1.5;
+        let c = frame.at([10.0, 10.0]);
+        let mut arcs: Vec<Option<(f64, f64)>> = (0..4_i32)
+            .map(|k| {
+                let start = f64::from(k) * PI / 2.0;
+                Some((start, start + PI / 2.0))
+            })
+            .collect();
+        arcs.push(Some((PI / 3.0, PI / 3.0 + PI)));
+        arcs.push(None);
+        let cos_half_degree = 0.5_f64.to_radians().cos();
         let mut r = ViewAnnotation::new(1, AnnotationType::Radius, Vec::new());
-        for shift in [[-12.0, 10.0], [-20.0, -4.0], [15.0, -12.0]] {
-            r.text_offset = Some(shift);
-            let laid = lay_out(&r, &[fillet], &frame, Some(&words("R1.5")), &[]).unwrap();
-            // The arrow: its tip on the arc, its direction from the middle
-            // of its base to its tip.
-            let (tip, along) = laid
-                .group
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Fill { points } if points.len() == 3 => {
-                        let base = mid(points[1], points[2]);
-                        Some((points[0], unit2(sub2(points[0], base))))
+        for arc in arcs {
+            let fillet = Seen::Circle {
+                center: [10.0, 10.0],
+                radius,
+                end_on: true,
+                across: [1.0, 0.0],
+                arc,
+            };
+            for quadrant in 0..4_i32 {
+                for (turn, reach) in [(20.0, 8.0), (45.0, 15.0), (70.0, 30.0)] {
+                    let angle = (f64::from(quadrant) * 90.0 + turn).to_radians();
+                    let shift = [reach * angle.cos(), reach * angle.sin()];
+                    r.text_offset = Some(shift);
+                    let laid = lay_out(&r, &[fillet], &frame, Some(&words("R1.5")), &[]).unwrap();
+                    let case = format!("arc {arc:?}, text {shift:?}");
+                    let (tip, along, from) = radius_arrow(&laid);
+                    // The tip on the arc.
+                    let off = sub2(tip, c);
+                    assert!(
+                        (len2(off) - radius * map.scale).abs() < 0.01,
+                        "{case}: the tip {tip:?} is off the circle"
+                    );
+                    if let Some((start, end)) = arc {
+                        let a = off[1].atan2(off[0]);
+                        assert!(
+                            (a - start + 1e-9).rem_euclid(TAU) <= end - start + 2e-9,
+                            "{case}: the tip {tip:?} is off the arc"
+                        );
                     }
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("no arrow: {:?}", laid.group.items));
-            // Every line that ends at the arrow's tip runs along it.
-            let ending: Vec<(P2, P2)> = laid
-                .group
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    Item::Line { a, b, .. }
-                        if len2(sub2(*a, tip)) < 1e-9 || len2(sub2(*b, tip)) < 1e-9 =>
-                    {
-                        Some((*a, *b))
+                    // Pointing along the leader's last segment, towards
+                    // the arc.
+                    let last = unit2(sub2(tip, from));
+                    assert!(
+                        dot2(last, along) >= cos_half_degree,
+                        "{case}: the arrow {along:?} is not along the leader's last \
+                         segment {from:?}-{tip:?}"
+                    );
+                    // The leader runs from the text to the tip: straight,
+                    // or through a bend.
+                    let text_at = add2(c, shift);
+                    let reaches = len2(sub2(from, text_at)) < 1e-9 || joins(&laid, text_at, from);
+                    assert!(reaches, "{case}: the leader does not reach the text");
+                    // Where the arc is the text's way, the leader comes
+                    // straight in; on its hollow side, through the centre.
+                    let sweep = |a: f64| arc.is_none_or(|(s, e)| in_sweep(a, s, e));
+                    if sweep(angle) {
+                        assert!(len2(sub2(from, text_at)) < 1e-9, "{case}: not straight");
+                        assert!(dot2(along, unit2(shift)) < -0.999, "{case}: not in");
+                    } else if sweep(angle + PI) {
+                        assert!(len2(sub2(from, text_at)) < 1e-9, "{case}: not straight");
+                        assert!(dot2(along, unit2(shift)) < -0.999, "{case}: not along");
+                        assert!(dot2(off, unit2(shift)) < 0.0, "{case}: not opposite");
                     }
-                    _ => None,
-                })
-                .collect();
-            assert!(!ending.is_empty(), "{shift:?}: no line ends at the arrow");
-            for (a, b) in ending {
-                let d = unit2(sub2(b, a));
-                assert!(
-                    vec2::cross(d, along).abs() < 1e-9,
-                    "{shift:?}: the line {a:?}-{b:?} is not along the arrow {along:?}"
-                );
+                }
             }
-            // Its tip on the arc's nearer end.
-            let c = frame.at([10.0, 10.0]);
+        }
+        // The text inside a large circle: a line from the centre out to
+        // the rim, the arrow on it pointing out; on an arc that misses the
+        // text's way, to its nearer end.
+        for (arc, shift, rim) in [
+            (None, [6.0, 8.0], [12.0, 16.0]),
+            (Some((0.0, PI / 2.0)), [-6.0, -8.0], [20.0, 0.0]),
+        ] {
+            let circle = Seen::Circle {
+                center: [10.0, 10.0],
+                radius: 20.0,
+                end_on: true,
+                across: [1.0, 0.0],
+                arc,
+            };
+            r.text_offset = Some(shift);
+            let laid = lay_out(&r, &[circle], &frame, Some(&words("R20")), &[]).unwrap();
+            let (tip, along, from) = radius_arrow(&laid);
+            assert!(len2(sub2(tip, add2(c, rim))) < 0.01, "{shift:?}: {tip:?}");
+            assert!(len2(sub2(from, c)) < 1e-9, "{shift:?}: {from:?}");
             assert!(
-                (len2(sub2(tip, c)) - 1.5 * map.scale).abs() < 1e-9,
-                "{shift:?}: {tip:?}"
+                dot2(unit2(sub2(tip, from)), along) >= cos_half_degree,
+                "{shift:?}: {along:?}"
             );
         }
     }

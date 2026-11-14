@@ -7,6 +7,7 @@
 // of a stack trace, the report's Markdown and the prefilled issue form's
 // address. Qt Core only, no windows (app.unit tests it).
 
+#include <QDateTime>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -118,12 +119,45 @@ struct Section {
 struct Report {
   QString title;
   QList<Section> sections;
-  QString key; // the duplicate key, empty for feedback
+  QString key;       // the duplicate key, empty for feedback
+  QString designZip; // the design's zip's file name (mitcad#1795), empty for none
 };
 
 // The report as Markdown: each included section with text under its
-// heading, code sections fenced, the duplicate key last.
+// heading, code sections fenced, a line naming the design's zip, the
+// duplicate key last.
 QString reportBody(const Report& report, const QString& version);
+
+// ---------------------------------------------------------------------------
+// The design's zip (Include the design, mitcad#1795)
+
+// The largest file an issue takes as an attachment (GitHub's 25 MB): a
+// larger zip is e-mailed.
+constexpr qint64 kAttachmentLimit = 25LL * 1000 * 1000;
+// kAttachmentLimit, or MITCAD_TEST_ATTACHMENT_LIMIT (bytes, UI tests).
+qint64 attachmentLimit();
+
+// The address a design too large to attach, or one not to be shown in a
+// public issue, is e-mailed to.
+inline constexpr char kTestFileAddress[] = "testfile@mitcad.org";
+
+// The zip's file name: the report's title with its letters and digits,
+// other characters as dashes (at most 60), and the time:
+// "Bug-Fillet-fails-20261113-142501.zip"; "feedback-…" for a title
+// without letters or digits.
+QString designZipName(const QString& title, const QDateTime& time);
+
+// A zip's size for people: "12.3 MB", "850 kB" (decimal units, as the
+// attachment limit).
+QString designZipSizeText(qint64 bytes);
+
+// The design's zip of a report as the preview shows it (mitcad#1795): its
+// file, its size, or why it could not be made.
+struct DesignZip {
+  QString path;    // the zip; "" none
+  qint64 size = 0; // bytes
+  QString error;   // why it could not be made; "" when it was
+};
 
 // The longest prefilled address sent to a browser: issue trackers refuse
 // longer ones (414), and so do some browsers.

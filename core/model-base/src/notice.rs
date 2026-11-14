@@ -131,6 +131,13 @@ pub enum NoticePlace {
     Occurrence {
         path: String,
     },
+    /// A joint or a constraint set by its feature's uid (mitcad#1753: the
+    /// joints of a loop that cannot all hold), painted as its highlight
+    /// shows it: its sides and frames. On the wire `{"kind": "joint",
+    /// "feature": "F7"}`.
+    Joint {
+        feature: String,
+    },
 }
 
 // (Coordinates are finite numbers: a place equals itself.)
@@ -175,6 +182,13 @@ impl NoticePlace {
         Self::Occurrence { path: path.into() }
     }
 
+    /// A joint or a constraint set by its feature's uid (`F7`).
+    pub fn joint(feature: impl ToString) -> Self {
+        Self::Joint {
+            feature: feature.to_string(),
+        }
+    }
+
     /// A region of the sketch `sketch` (its uid) by its key.
     pub fn region_of(sketch: impl ToString, name: impl Into<String>) -> Self {
         Self::Region {
@@ -191,7 +205,10 @@ impl NoticePlace {
             | Self::Edge { name, .. }
             | Self::Vertex { name, .. }
             | Self::Region { name, .. } => Some(name),
-            Self::Point { .. } | Self::Box { .. } | Self::Occurrence { .. } => None,
+            Self::Point { .. }
+            | Self::Box { .. }
+            | Self::Occurrence { .. }
+            | Self::Joint { .. } => None,
         }
     }
 
@@ -204,7 +221,8 @@ impl NoticePlace {
             Self::Point { .. }
             | Self::Box { .. }
             | Self::Region { .. }
-            | Self::Occurrence { .. } => None,
+            | Self::Occurrence { .. }
+            | Self::Joint { .. } => None,
         }
     }
 
@@ -235,7 +253,10 @@ impl NoticePlace {
                 body.is_none() && other.body().is_some()
             }
             Self::Region { sketch, .. } => sketch.is_none() && other.sketch().is_some(),
-            Self::Point { .. } | Self::Box { .. } | Self::Occurrence { .. } => false,
+            Self::Point { .. }
+            | Self::Box { .. }
+            | Self::Occurrence { .. }
+            | Self::Joint { .. } => false,
         };
         unknown
             && std::mem::discriminant(self) == std::mem::discriminant(other)
@@ -254,7 +275,8 @@ impl NoticePlace {
             Self::Point { .. }
             | Self::Box { .. }
             | Self::Region { .. }
-            | Self::Occurrence { .. } => {}
+            | Self::Occurrence { .. }
+            | Self::Joint { .. } => {}
         }
         self
     }
@@ -678,6 +700,7 @@ pub fn about_place(place: NoticePlace, inner: &str) -> String {
         NoticePlace::Region { .. } => "region",
         NoticePlace::Point { .. } | NoticePlace::Box { .. } => "place",
         NoticePlace::Occurrence { .. } => "occurrence",
+        NoticePlace::Joint { .. } => "joint",
     };
     let detail = format!(
         "{kind} {}: {}",

@@ -953,10 +953,15 @@ pub fn trust_shown_host_keys(
         }
     }
     let extra = scan.keys.len() - found.len();
-    if extra > 0 {
-        log.push(format!(
-            "{name}: {extra} key(s) of the new scan were not shown, not trusted"
-        ));
+    // One whole message for one and for several: no "(s)" (mitcad#1759).
+    match extra {
+        0 => {}
+        1 => log.push(format!(
+            "{name}: a key of the new scan was not shown, not trusted"
+        )),
+        n => log.push(format!(
+            "{name}: {n} keys of the new scan were not shown, not trusted"
+        )),
     }
     let path = known_hosts_path(context)?;
     let mut written = false;

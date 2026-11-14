@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QJsonArray>
 #include <QLocale>
 #include <QMainWindow>
 #include <QMessageBox>
@@ -27,6 +29,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSysInfo>
+#include <QTemporaryFile>
 #include <QTime>
 #include <QTimer>
 #include <QtLogging>
@@ -57,6 +60,8 @@ constexpr int kKeptReports = 20;
 constexpr int kActions = 32;
 // The log ring's newest lines a report offers (mitcad#269).
 constexpr int kReportLogLines = 150;
+// The log ring's lines a design's zip takes (mitcad#1795): all it keeps.
+constexpr int kZipLogLines = 5000;
 // Whether the start offers the crashes of earlier runs.
 bool g_offerEarlier = true;
 
@@ -221,6 +226,7 @@ QString ReportCenter::diagnostics() const {
 void ReportCenter::sendFeedback() {
   // The window as it is, before the form covers it.
   const QImage screenshot = m_window.grab().toImage();
+  const bool designOpen = m_host.designOpen && m_host.designOpen();
   report::FeedbackDialog* form = nullptr;
   const auto preview = [this, &form](const report::Feedback& feedback) {
     report::Report report;
@@ -240,9 +246,9 @@ void ReportCenter::sendFeedback() {
     }
     report.sections << report::Section{QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), diagnostics(),
                                        feedback.diagnostics, true, true};
-    return previewAndSend(report, feedback.screenshot, form);
+    return previewAndSend(report, feedback.screenshot, form, feedback.includeDesign);
   };
-  report::FeedbackDialog dialog(screenshot, preview, &m_window);
+  report::FeedbackDialog dialog(screenshot, designOpen, preview, &m_window);
   form = &dialog;
   prepareModal(&dialog);
   qInfo().noquote() << QStringLiteral("Send Feedback: the form shows");
@@ -254,7 +260,12 @@ void ReportCenter::sendFeedback() {
 // ---------------------------------------------------------------------------
 // The preview and the delivery
 
-bool ReportCenter::previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent) {
+QString ReportCenter::reportsFolder() {
+  return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/reports");
+}
+
+bool ReportCenter::previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent,
+                                  bool includeDesign) {
   // Masked before anyone sees it.
   const report::MaskContext context = report::currentMaskContext();
   report::Report masked = report;
@@ -279,18 +290,124 @@ bool ReportCenter::previewAndSend(const report::Report& report, const QImage& sc
   const QString tracker = issueTracker();
   const QUrl trackerUrl(tracker);
   const QString destination = trackerUrl.host().isEmpty() ? tracker : trackerUrl.host();
-  report::ReportPreviewDialog dialog(masked, screenshot, destination, parent, logFile);
+  // Include the design (mitcad#1795): the zip made now, for its size;
+  // Send makes it again with the report as sent.
+  report::DesignZip design;
+  if (includeDesign) {
+    const QString folder = reportsFolder();
+    QDir().mkpath(folder);
+    design.path = QDir(folder).filePath(report::designZipName(masked.title, QDateTime::currentDateTime()));
+    report::Report named = masked;
+    named.designZip = QFileInfo(design.path).fileName();
+    // The screenshot as a file for the zip while it is made.
+    QTemporaryFile shot(QDir(folder).filePath(QStringLiteral("preview-XXXXXX.png")));
+    QString shotFile;
+    if (!screenshot.isNull() && shot.open() && screenshot.save(&shot, "PNG")) {
+      shot.close();
+      shotFile = shot.fileName();
+    }
+    design = writeDesignZip(design.path, report::reportBody(named, QApplication::applicationVersion()), shotFile);
+  }
+  report::ReportPreviewDialog dialog(masked, screenshot, destination, parent, logFile, design);
   prepareModal(&dialog);
-  if (execDialog(&dialog) != QDialog::Accepted) {
+  const bool sent = execDialog(&dialog) == QDialog::Accepted;
+  const bool withDesign = sent && dialog.designIncluded();
+  if (!design.path.isEmpty() && design.error.isEmpty() && !withDesign) {
+    // Made for the preview only.
+    QFile::remove(design.path);
+    qInfo().noquote() << QStringLiteral("Report design zip removed: %1").arg(QFileInfo(design.path).fileName());
+  }
+  if (!sent) {
     qInfo().noquote() << QStringLiteral("Report not sent: the preview was cancelled");
     return false;
   }
-  deliver(dialog.report(), dialog.screenshot(), parent, dialog.logFile());
+  deliver(dialog.report(), dialog.screenshot(), parent, dialog.logFile(), withDesign ? design.path : QString());
   return true;
 }
 
-void ReportCenter::deliver(const report::Report& report, const QImage& screenshot, QWidget* parent,
-                           const QString& logFile) {
+report::DesignZip ReportCenter::writeDesignZip(const QString& path, const QString& markdown,
+                                               const QString& screenshotFile) const {
+  report::DesignZip zip;
+  zip.path = path;
+  if (!m_host.query) {
+    zip.error = tr("the design cannot be read here");
+    return zip;
+  }
+  QJsonArray extra;
+  extra.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("mitcad-report/report.md")},
+                           {QStringLiteral("text"), markdown}});
+  if (!screenshotFile.isEmpty()) {
+    extra.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("mitcad-report/screenshot.png")},
+                             {QStringLiteral("path"), screenshotFile}});
+  }
+  // The log of this run, as far as the ring keeps it.
+  QStringList lines;
+  for (const mcp::LogLine& line : mcp::logLines(0, kZipLogLines)) {
+    lines << mcp::formatLogLine(line);
+  }
+  if (!lines.isEmpty()) {
+    extra.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("mitcad-report/log.txt")},
+                             {QStringLiteral("text"), lines.join(QLatin1Char('\n')) + QLatin1Char('\n')}});
+  }
+  QJsonObject request{{QStringLiteral("query"), QStringLiteral("design_package")},
+                      {QStringLiteral("zip"), path},
+                      {QStringLiteral("extra"), extra}};
+  const QString file = m_host.designFile ? m_host.designFile() : QString();
+  if (!file.isEmpty()) {
+    request.insert(QStringLiteral("file"), file);
+  }
+  try {
+    const QJsonObject answer = m_host.query(request);
+    zip.size = answer.value(QStringLiteral("size")).toInteger();
+    QStringList files;
+    for (const QJsonValue& name : answer.value(QStringLiteral("files")).toArray()) {
+      files << name.toString();
+    }
+    qInfo().noquote() << QStringLiteral("Report design zip: %1, %2 bytes; files %3")
+                             .arg(path)
+                             .arg(zip.size)
+                             .arg(files.join(QStringLiteral(", ")));
+    for (const QString& kind : {QStringLiteral("missing"), QStringLiteral("left_out")}) {
+      QStringList names;
+      for (const QJsonValue& name : answer.value(kind).toArray()) {
+        names << name.toString();
+      }
+      if (!names.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("Report design zip %1: %2").arg(kind, names.join(QStringLiteral(", ")));
+      }
+    }
+  } catch (const std::exception& e) {
+    zip.error = QString::fromUtf8(e.what());
+    qWarning().noquote() << QStringLiteral("Report design zip not made: %1").arg(zip.error);
+  }
+  return zip;
+}
+
+void ReportCenter::deliver(const report::Report& sent, const QImage& screenshot, QWidget* parent,
+                           const QString& logFile, const QString& designZip) {
+  report::Report report = sent;
+  // The screenshot's file first: the design's zip takes it.
+  QString shotPath;
+  if (!screenshot.isNull()) {
+    const QString folder = reportsFolder();
+    QDir().mkpath(folder);
+    const QString path =
+        folder + QStringLiteral("/screenshot-%1.png")
+                     .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+    if (screenshot.save(path)) {
+      shotPath = path;
+    }
+  }
+  // Include the design (mitcad#1795): the zip made again with the report as
+  // sent; the body names it once it is there.
+  report::DesignZip zip;
+  if (!designZip.isEmpty()) {
+    report.designZip = QFileInfo(designZip).fileName();
+    zip = writeDesignZip(designZip, report::reportBody(report, QApplication::applicationVersion()), shotPath);
+    if (!zip.error.isEmpty()) {
+      report.designZip.clear();
+    }
+  }
   const QString body = report::reportBody(report, QApplication::applicationVersion());
   const report::IssueLink link = report::issueLink(issueTracker(), report.title, body);
   QStringList included;
@@ -310,25 +427,41 @@ void ReportCenter::deliver(const report::Report& report, const QImage& screensho
     notes << tr("The report was too long for the form's link: the whole report is on the clipboard. Paste it into "
                 "the form's description in place of the shortened text.");
   }
-  if (!screenshot.isNull()) {
-    const QString folder =
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/reports");
-    QDir().mkpath(folder);
-    const QString path =
-        folder + QStringLiteral("/screenshot-%1.png")
-                     .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
-    if (screenshot.save(path)) {
-      qInfo().noquote() << QStringLiteral("Report screenshot saved: %1 %2x%3")
-                               .arg(path)
-                               .arg(screenshot.width())
-                               .arg(screenshot.height());
-      notes << tr("The screenshot is saved as %1: drag it into the form to attach it.")
-                   .arg(QDir::toNativeSeparators(path));
-    }
+  if (!shotPath.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Report screenshot saved: %1 %2x%3")
+                             .arg(shotPath)
+                             .arg(screenshot.width())
+                             .arg(screenshot.height());
+    notes << tr("The screenshot is saved as %1: drag it into the form to attach it.")
+                 .arg(QDir::toNativeSeparators(shotPath));
   }
   if (!logFile.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Report debug log: %1").arg(logFile);
     notes << tr("The debug log is %1: drag it into the form to attach it.").arg(QDir::toNativeSeparators(logFile));
+  }
+  if (!designZip.isEmpty()) {
+    if (!zip.error.isEmpty()) {
+      notes << tr("Could not make the design's zip: %1").arg(zip.error);
+    } else {
+      // Shown in the file manager, before the form opens over it.
+      const bool overLimit = zip.size > report::attachmentLimit();
+      qInfo().noquote() << QStringLiteral("Report design zip shown: %1, %2 bytes%3")
+                               .arg(designZip)
+                               .arg(zip.size)
+                               .arg(overLimit ? QStringLiteral(", over the attachment limit: to be e-mailed")
+                                              : QString());
+      openExternalUrl(QUrl::fromLocalFile(QFileInfo(designZip).absolutePath()));
+      const QString text =
+          overLimit ? tr("The design is packed as %1 (%2), and its folder is open in your file manager. It is "
+                         "larger than the 25 MB an issue takes: e-mail it to %3 and write its name in the issue.")
+                    : tr("The design is packed as %1 (%2), and its folder is open in your file manager. Attach "
+                         "the zip to the issue by dragging it into the comment box, or e-mail it to %3 and write "
+                         "its name in the issue.");
+      const QString note = text.arg(QDir::toNativeSeparators(designZip), report::designZipSizeText(zip.size),
+                                    QString::fromLatin1(report::kTestFileAddress));
+      qInfo().noquote() << QStringLiteral("Report design zip note: %1").arg(note);
+      notes << note;
+    }
   }
   openExternalUrl(link.url);
   if (notes.isEmpty()) {

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/MainWindowActivate.cpp app/browser/ActivateOnPick.cpp app/framework/CommandSessionVisibility.cpp app/framework/CommandPanel.cpp app/framework/TestDriver.cpp tools/cli
+# check-all sources: app/MainWindowActivate.cpp app/browser/ActivateOnPick.cpp app/framework/CommandSessionVisibility.cpp app/framework/CommandPanel.cpp app/framework/TestDriver.cpp tools/cli app/commands/GearCommands.cpp app/commands/PlaceInputs.cpp
 # A feature that changes the picked body activates its component
 # (mitcad#1634) in the build VM, as tools/ui-activate-on-pick-test.sh on
 # Linux: the shared steps tools/ui-scripts/activate-on-pick.mitcad-ui on
@@ -8,7 +8,9 @@
 # a question, the panel says where the fillet goes, OK adds it, and Undo
 # takes back the fillet, then the activation; Esc after the activation
 # leaves Lid active; an edge of each component gives the refusal and the
-# Activate Lid button, which keeps Lid's edge.
+# Activate Lid button, which keeps Lid's edge. Gear on the top face of
+# Lid's block (a part placed by a pick, mitcad#1752) activates Lid as well,
+# and OK adds the gear in Lid.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-activate-on-pick-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -39,6 +41,9 @@ Ui-ExpectLog 'Added fillet on 1 edge' 'OK added the fillet in Lid'
 Ui-ExpectLog 'Command Fillet cancelled' 'Esc cancelled Fillet after the activation'
 Ui-ExpectLog 'Panel Fillet offers: Activate Lid (drops 1)' 'an edge of each component offers Activate Lid'
 Ui-ExpectLog 'Panel Fillet notice: Fillet goes into Lid (now active). 1 pick of another component dropped.' 'the Activate button kept Lid''s edge'
+Ui-ExpectLog 'Activated Lid for Gear (picked face ' 'Gear on Lid''s face activated Lid'
+Ui-ExpectLog 'Panel Gear notice: Gear goes into Lid (now active).' 'the panel says where the gear goes'
+Ui-ExpectLog 'Added gear ' 'OK added the gear in Lid'
 Ui-ExpectLog 'TestDriver: done' 'the picked body''s component is activated'
 Ui-StopApp
 Write-Host 'PASS: A feature on another component''s body activates that component'

@@ -132,7 +132,7 @@ void describe(const QJsonObject& overhang, const QJsonObject& thickness, bool ov
   if (walls) {
     QString line = QObject::tr("Thinnest wall: %1").arg(thinnestText(thickness));
     if (thickness.contains(QStringLiteral("regions"))) {
-      line += QObject::tr(", %1 thin region(s)").arg(thickness.value(QStringLiteral("regions")).toInt());
+      line += QObject::tr(", %n thin region(s)", nullptr, thickness.value(QStringLiteral("regions")).toInt());
     }
     lines << line;
   }

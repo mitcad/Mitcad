@@ -280,7 +280,7 @@ QJsonValue pathOf(const Selection& items, bool chain, Built& error, const QStrin
   // The curve of an Intersection Curve (mitcad#1405), alone.
   if (kind == SelectKind::Feature) {
     if (items.size() > 1) {
-      error = Built::failure(QObject::tr("Select one intersection curve."), input);
+      error = Built::failure(QObject::tr("Select one intersection curve or helix curve."), input);
       return QJsonValue();
     }
     return QJsonObject{{QStringLiteral("feature"), items.first().owner}};

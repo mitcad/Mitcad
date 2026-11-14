@@ -167,6 +167,22 @@ Language ([user guide](user-guide.md#language)).
   translated text (`walls %1 and %2`), never a joined `" and "`.
 - **The model's messages** (Rust, `core/`: refusals, errors, warnings,
   notes) are translated as they are shown: [below](#the-models-messages).
+- **English plurals** (mitcad#1756). A text with a count is written once,
+  `tr("%1: %n degree(s) of freedom", nullptr, dof)`; English has its own
+  catalogue of those texts only, `app/translations/mitcad_en.ts` (listed in
+  `languages.txt` as `en`, refreshed with `lupdate -pluralonly`), whose two
+  forms the English interface shows: "1 degree of freedom", "17 degrees of
+  freedom", a verb or pronoun after the count agreeing ("1 waiting message
+  was not sent"). Every language asks it last, so a count another language
+  has not translated yet is still good English. It is no language to
+  choose (`availableLanguages` lists English once). A new `%n` text comes
+  into `mitcad_en.ts` unfinished at the next `update_translations`;
+  `repo.translations` then asks for its two forms, and refuses a form that
+  keeps a bracketed plural ("face(s)") or an entry that is no plural. A
+  count built outside `tr()`, `.arg(count)` after a "(s)", shows the
+  brackets in every language: give it `%n` (`repo.ui-strings` refuses
+  it, mitcad#1758; a text with two counts is made of parts, each with
+  its own `%n`).
 
 ## The model's messages
 
@@ -278,7 +294,16 @@ translates what it shows the user, as it shows it (mitcad#1284).
   template has two words side by side), so it would stay English before a
   translated rest; where such a message is common, its lead-in is part of
   each whole message (`section %1: an edge found again after a change in
-  %2`, a loft's renamed references; mitcad#1688).
+  %2`, a loft's renamed references; mitcad#1688). A count is no `%n`
+  here: the template cannot give the catalogues a count, so a count
+  before a bracketed plural (`{n} key(s) of the new scan`) would show the
+  brackets in every language. `core/` writes one whole message for one
+  and for several (`a key of the new scan was not shown`, `{n} keys of
+  the new scan were not shown`; zero gets its own where it is shown) or
+  puts the count after a colon (`files written: {}`), and `mitcad-translations
+  messages` (`repo.model-messages`) refuses a template with a count before
+  a word with "(s)", "(es)" or "(ies)", up to two words between and none
+  of them a determiner or a word that ends a noun phrase (mitcad#1759).
 - **Tests.** `test_app`'s model message tests check the matching, the
   values and the English fallback, and that every template has its Finnish
   and its pseudo-language translation. The pseudo-language marks the
@@ -528,3 +553,16 @@ päätä", never "napsauta keskipiste".
 | prime tower (3D print) | esitäyttötorni | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
 | key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
 | navigation bar, toolbar | navigointipalkki, työkalurivi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |
+| setup (CAM) | kiinnitys | New Setup: Uusi kiinnitys; never asetus, which is a setting |
+| operation (CAM) | työstövaihe | Facing: Tasaus; Contour: Ääriviiva; Pocket: Tasku; Drill: Poraus; Adaptive Clearing: Mukautuva rouhinta; Rest Machining: Jäännöstyöstö; contour (the operation) in a sentence: ääriviivatyöstö |
+| toolpath | työstörata | Generate: Laske; Simulate: Simuloi; Post Process…: Jälkikäsittele…; the program: ohjelma |
+| stock (CAM) | aihio | stock body: aihiokappale; margin: vara; stock to leave: jätettävä työvara |
+| work zero, work offset | nollapiste, työkoordinaatisto | probe the work zero: mittaa nollapiste anturilla; G54–G59 as they are |
+| machine (CNC) | kone | controller: ohjain; travel: liikealue; tool changer: työkalunvaihtaja; router: jyrsinkone; rapid: pikaliike; machine library: konekirjasto |
+| tool (CAM) | työkalu | flat end mill: varsijyrsin; ball end mill: pallopääjyrsin; bull nose end mill: nurkkapyöristetty varsijyrsin; drill: pora; chamfer mill: viistejyrsin; engraving cutter: kaiverrusterä; cutter: terä; tool library: työkalukirjasto |
+| flute length | leikkuupituus | flutes: terät; stick-out: ulkonema; corner radius: nurkkasäde; point angle: kärkikulma; shank: varsi; holder: pidin; collet: kiristysholkki; collet nut: kiristysmutteri |
+| spindle | kara | spindle speed: karan nopeus; coolant: jäähdytys; flood: tulvajäähdytys; mist: sumu; air blast: ilmapuhallus |
+| feed | syöttö | plunge feed: pistosyöttö; feeds and speeds: syötöt ja nopeudet; climb, conventional: myötäjyrsintä, vastajyrsintä |
+| heights, depths (CAM) | korkeudet, syvyydet | clearance height: siirtokorkeus; retract height: vetäytymiskorkeus; safe height: turvakorkeus; step down: askelsyvyys; stepover: sivuaskel |
+| entry (CAM) | sisääntulo | plunge: pisto; ramp: ramppi; helix: heliksi (a helix curve is kierukka); lead in and out: sisään- ja ulosajokaaret; engagement: kosketuskulma |
+| holding tab | pidike | peck drilling: askelporaus; canned cycle: ohjaimen porauskierto |

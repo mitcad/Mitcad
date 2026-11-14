@@ -23,7 +23,7 @@ key Return
 focus-main
 wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/kit\.3mf, refinement [a-z]+, plates one_file, slicer bambu_studio, on the bed'
 wait-log 'Exported plates one_file for bambu_studio: '
-wait-log 'Exported ${MITCAD_TEST_WORK:re}/kit\.3mf: 3mf, 2 plate\(s\)'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/kit\.3mf: 3mf, 2 plates'
 expect-file "${MITCAD_TEST_WORK}/kit.3mf"
 
 # 2. A file per plate, beside the path given.
@@ -40,7 +40,7 @@ sleep 300
 key Return
 focus-main
 wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/each\.3mf, refinement [a-z]+, plates file_per_plate, slicer bambu_studio, on the bed'
-wait-log 'Exported ${MITCAD_TEST_WORK:re}/each\.3mf: 3mf, 2 plate\(s\) in 2 files'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/each\.3mf: 3mf, 2 plates in 2 files'
 expect-file "${MITCAD_TEST_WORK}/each - Plate 1.3mf"
 expect-file "${MITCAD_TEST_WORK}/each - Plate 2.3mf"
 
@@ -59,6 +59,6 @@ sleep 300
 key Return
 focus-main
 wait-log 'Export dialog: 3MF for 3D printing \(\*\.3mf\) to ${MITCAD_TEST_WORK:re}/two\.3mf, refinement [a-z]+, plates plate plate2, slicer bambu_studio, on the bed'
-wait-log 'Exported ${MITCAD_TEST_WORK:re}/two\.3mf: 3mf, 1 plate\(s\)'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/two\.3mf: 3mf, 1 plate'
 expect-file "${MITCAD_TEST_WORK}/two.3mf"
 expect-never 'TestDriver: FAIL|Could not export'

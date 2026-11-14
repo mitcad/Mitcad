@@ -1292,6 +1292,94 @@ void test_ribs() {
   // Side 1 is along the sketch normal, -Y.
   CHECK(near(bounding_box(*deep).min.Y(), 16, 1e-9) && near(bounding_box(*deep).max.Y(), 20, 1e-9));
 
+  // Extend Ends (mitcad#1746): the line (10, 30) - (30, 10) stops 5 short
+  // of the plate and the base along itself. As drawn, up to the next faces,
+  // its tips at right angles to it cut two corners off the triangle: 400 *
+  // 4; continued along it, the ends fill up to the slanted faces: the whole
+  // triangle.
+  RibSpec shorter;
+  shorter.feature = "F8";
+  shorter.frame = midplane();
+  shorter.chains = {{{"c1", line3(gp_Pnt(10, 20, 30), gp_Pnt(30, 20, 10))}}};
+  shorter.thickness = 4;
+  shorter.bodies = {body};
+  shorter.flip = true;
+  CHECK_NEAR(volume(*rib(shorter)), 400.0 * 4);
+  shorter.extend_ends = true;
+  const ShapePtr filled = rib(shorter);
+  CHECK_NEAR(volume(*filled), 30.0 * 30.0 / 2 * 4);
+  CHECK(filled->notes().empty());
+  const BooleanResult whole = boolean(BooleanOp::Join, {body.get()}, *filled);
+  CHECK(whole.pieces.size() == 1);
+  CHECK_NEAR(volume(*whole.pieces.at(0).shape), 20000 + 30.0 * 30.0 / 2 * 4);
+  // The input bodies are left as they were.
+  CHECK_NEAR(volume(*body), 20000);
+  // End Offset -1: the faces each end stops at move 1 back along the line,
+  // so the two corner triangles' legs (5 sqrt(2), along the line and the
+  // tip) are 1 shorter: 400 + 2 * (5 sqrt(2) - 1)^2 / 2.
+  shorter.end_offset = -1.0;
+  CHECK_NEAR(volume(*rib(shorter)), (451.0 - 10 * std::sqrt(2.0)) * 4);
+  shorter.end_offset = 0.0;
+  // With a depth of 3 on the base alone, the start (up towards where the
+  // plate is not) meets nothing and stays, with a note; the end fills down
+  // to the base's top: 4 * (20 sqrt(2) * 3 + the strip 3 wide from the tip
+  // to z = 5, 15 sqrt(2) - 4.5).
+  const ShapePtr base_only = extrude("F2", {rectangle(1, 0, 0, 60, 40)}, 0, 5);
+  shorter.bodies = {base_only};
+  shorter.depth = 3.0;
+  const ShapePtr half = rib(shorter);
+  CHECK_NEAR(volume(*half), 4 * (75 * std::sqrt(2.0) - 4.5));
+  CHECK(half->notes().size() == 1);
+  CHECK(!half->notes().empty() && half->notes().front().find("start") != std::string::npos &&
+        half->notes().front().find("meets no face of the bodies") != std::string::npos);
+  // Direction (mitcad#1746): a 100 x 40 x 10 base with two cylinders of
+  // radius 10 on it, at x = 20 (to z = 60) and x = 80 (to z = 30); on the
+  // plane y = 20 a slanted line from the first's outline at z = 50 to the
+  // second's top edge, (30, 50) - (70, 30), grows straight down (-Z) up to
+  // the next faces: the trapezoid under it down to the base, 40 * 30 * 4.
+  // With Extend Ends the ends fill the slivers between the tips (x = 30 and
+  // 70) and the cylinders' curved faces, across the 4 mm thickness: in all
+  // 60 * the integral of 10 - sqrt(100 - t^2) for t from -2 to 2.
+  const ShapePtr floor = extrude("F2", {rectangle(1, 0, 0, 100, 40)}, 0, 10);
+  const ShapePtr tall = extrude("F3", {circle(5, 20, 20, 10)}, 10, 60);
+  const ShapePtr low_boss = extrude("F4", {circle(6, 80, 20, 10)}, 10, 30);
+  const ShapePtr one = boolean(BooleanOp::Join, {floor.get()}, *tall).pieces.at(0).shape;
+  const ShapePtr bosses = boolean(BooleanOp::Join, {one.get()}, *low_boss).pieces.at(0).shape;
+  CHECK_NEAR(volume(*bosses), 40000 + 7000 * kPi);
+  RibSpec down;
+  down.feature = "F9";
+  down.frame = midplane();
+  down.chains = {{{"c1", line3(gp_Pnt(30, 20, 50), gp_Pnt(70, 20, 30))}}};
+  down.thickness = 4;
+  down.bodies = {bosses};
+  down.direction = gp_Dir(0, 0, -1);
+  CHECK_NEAR(volume(*rib(down)), 40.0 * 30 * 4);
+  down.extend_ends = true;
+  const ShapePtr between = rib(down);
+  const double slivers = 60 * (40 - 2 * std::sqrt(96.0) - 100 * std::asin(0.2));
+  CHECK_NEAR(volume(*between), 40.0 * 30 * 4 + slivers);
+  CHECK(between->notes().empty());
+  const BooleanResult braced = boolean(BooleanOp::Join, {bosses.get()}, *between);
+  CHECK(braced.pieces.size() == 1);
+  CHECK_NEAR(volume(*braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 30 * 4 + slivers);
+  // Flipped it grows up, where nothing closes it off.
+  down.flip = true;
+  CHECK(throws_with([&] { rib(down); }, "does not end at faces of the bodies"));
+  down.flip = false;
+  // A direction along the line's chord gives the rib no width.
+  down.direction = gp_Dir(gp_Vec(gp_Pnt(30, 20, 50), gp_Pnt(70, 20, 30)));
+  CHECK(throws_with([&] { rib(down); }, "the rib's direction runs along its curves' chord"));
+
+  // A web's curves are not continued.
+  RibSpec web_ends;
+  web_ends.feature = "F9";
+  web_ends.web = true;
+  web_ends.thickness = 2;
+  web_ends.depth = 10.0;
+  web_ends.extend_ends = true;
+  web_ends.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(40, 0, 0))}}};
+  CHECK(throws_with([&] { rib(web_ends); }, "a web's curves end where they are drawn"));
+
   // Webs: two crossing lines 2 thick, 10 deep from the XY plane.
   RibSpec webs;
   webs.feature = "F7";

@@ -77,6 +77,11 @@ impl Document {
         persist_json(&self.0.hand_off_results(&store))
     }
 
+    pub(crate) fn take_results_to_write(&self, min_ms: f64) -> Box<ResultWrites> {
+        let min = Duration::from_secs_f64(min_ms.max(0.0) / 1000.0);
+        Box::new(ResultWrites(Some(self.0.take_results_to_write(min))))
+    }
+
     // Display meshes kept in the store (mitcad#858).
 
     pub(crate) fn restore_display_meshes(&self, request: &str) -> String {
@@ -156,6 +161,21 @@ impl Document {
             options: options.to_owned(),
             left_to_store: AtomicUsize::new(0),
         })
+    }
+}
+
+/// Results taken from a document for its result store, written on another
+/// thread (mitcad#1796): an autosave takes them on the UI thread and its
+/// writer writes them.
+pub struct ResultWrites(Option<mitcad_model::ResultWrites>);
+
+impl ResultWrites {
+    pub(crate) fn count(&self) -> usize {
+        self.0.as_ref().map_or(0, mitcad_model::ResultWrites::len)
+    }
+
+    pub(crate) fn write_taken(&mut self) -> String {
+        persist_json(&self.0.take().map(|w| w.write()).unwrap_or_default())
     }
 }
 

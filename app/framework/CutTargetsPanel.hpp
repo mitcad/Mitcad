@@ -19,6 +19,14 @@ namespace mitcad {
 QJsonObject setCutTargetChecked(const QJsonObject& scope, const QJsonObject& target,
                                 const QString& body, bool checked);
 QJsonObject selectCutTargets(const QJsonObject& scope, bool all);
+// A row an automatic scope leaves out only because it moves against the
+// cut's component through joints (the report row's `joint_motion`,
+// mitcad#1789), checked in the list: the scope turns explicit with every
+// eligible row of `report` (the preview's `cut_targets`) checked now, their
+// body exceptions kept, plus `target`, in one step. With `body`, only that
+// body of the target: its other bodies go to `excluded_bodies`.
+QJsonObject includeMovingCutTarget(const QJsonObject& scope, const QJsonObject& report,
+                                   const QJsonObject& target, const QString& body);
 
 // What the view hides when a new cut's panel opens (mitcad#475), from the
 // model's `components` and `bodies` queries and the `document` query's
@@ -58,6 +66,7 @@ private:
   QJsonObject m_report;
   bool m_current = false;
   bool m_refreshing = false;
+  bool m_wraps = false; // a row shows a wrapped reason or note
   QTreeWidget* m_tree = nullptr;
   QLabel* m_status = nullptr;
   QPushButton* m_all = nullptr;

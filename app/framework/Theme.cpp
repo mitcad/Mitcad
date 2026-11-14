@@ -358,6 +358,13 @@ const std::vector<RoleEntry>& roleTable() {
       MITCAD_ROLE(RuleLogic, hex(0x3d6bc2), hex(0x3d6bc2), Badge, RuleText),
       MITCAD_ROLE(RuleAction, hex(0x8b4f3a), hex(0x8b4f3a), Badge, RuleText),
       MITCAD_SAME(RuleText, hex(0xffffff), View),
+      // Simulate's stock (mitcad#1013): a grey stock (nothing left over the
+      // part reads as the stock), the material left from teal to violet,
+      // a cut into the part pink; none of the status hues.
+      MITCAD_ROLE(CamStock, hex(0xb0aaa2), hex(0x8c877f), View, CamStock),
+      MITCAD_ROLE(CamLeftThin, hex(0x4fb3bf), hex(0x6fd0db), View, CamLeftThin),
+      MITCAD_ROLE(CamLeftThick, hex(0x5e35b1), hex(0x9575cd), View, CamLeftThick),
+      MITCAD_ROLE(CamGouge, hex(0xd81b60), hex(0xff5c8d), View, CamGouge),
   };
   return table;
 }

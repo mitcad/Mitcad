@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1794: Project Again offers the edges that could take a lost
+# projection's source's place, on project-again-successor.json: Sketch3's
+# projection of the front top edge is lost, and the two pieces of that edge
+# the notch left are its candidates. The Sketch Palette offers Project
+# Again under the warning; its panel lists the two pieces as rows in words
+# (no names), the first chosen and previewed; the pointer over the second
+# row paints that edge in the view (one place, drawn), leaving the list
+# takes it away; a click chooses it and previews it; OK keeps it, and the
+# warning is gone. All geometry is synthetic.
+# Run by tools/ui-project-again-successor-test.sh (Linux) and
+# tools/ui-windows-project-again-successor-test.ps1 (Windows).
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch3 at '
+wait-log 'Editing sketch F5 [(]Sketch3[)]' 30
+wait-log '^Palette paletteProjectAgain at ' 30
+expect-ever '^Sketch Palette warnings: .*it is gone' 30
+wait-idle 30
+mark
+click-logged '^Palette paletteProjectAgain at '
+wait-log '^Palette: Project Again from the warning' 30
+wait-log '^Panel Project Again options successor: 1, Line, 25[^,]* mm,.*[|] 2, Line, 25[^,]* mm' 30
+wait-log '^Preview Project Again: ok' 30
+wait-idle 30
+expect-no-log '^Panel Project Again options successor: .*E[{]'
+# The pointer over the second row (a move sent to the list itself, as on
+# every platform): its edge painted, then gone again.
+mark
+hover-row input_successor 1
+wait-log '^Panel Project Again choice successor=1 hovered: 1 places' 30
+wait-log '^Notice hover highlighted: panel: .*[(]1 drawn[)]' 30
+mark
+leave-widget input_successor
+wait-log '^Panel Project Again choice successor=1 left' 30
+# The second row chosen: its edge takes the source's place.
+mark
+click-row input_successor 1
+wait-log '^Preview Project Again: ok' 30
+wait-idle 30
+screenshot '${MITCAD_TEST_WORK}/project-again-successor.png'
+mark
+key Return
+wait-log '^Projected again' 30
+# The palette already showed no warning after the chosen edge's preview; nothing new is warned after OK.
+expect-no-log '^Sketch Palette warnings: the projection'
+mark
+key ctrl+Return
+wait-log 'Sketch finished' 30
+expect-never 'Recompute failed'

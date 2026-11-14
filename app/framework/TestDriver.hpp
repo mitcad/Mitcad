@@ -107,6 +107,8 @@
 //                           ribbon and palette retain the enabled action
 //   expect-ribbon-labels <label>...  actual workspace labels, including
 //                           accessibility, and no all-caps group captions
+//                           (but the acronyms listed in testRibbonLabels,
+//                           CNC, which are the group's name)
 //   expect-design-chrome    the design in front shows its ribbon (Docked:
 //                           its toolbar, the view's top below it; Floating:
 //                           its group cards), its Browser and its
@@ -154,6 +156,12 @@
 //   timeline-leave             leave the timeline and clear its preview
 //   leave-widget <objectName>  the pointer leaves that widget (its viewport
 //                              too): a notice's hover ends (mitcad#1327)
+//   hover-row <objectName> <row>  the pointer over a row (from 0) of a list
+//                              by its object name: a move to the row's middle
+//                              sent to the list's viewport itself (a choice's
+//                              rows that paint the hovered option, mitcad#1794)
+//   click-row <objectName> <row>  hover-row, then the left button pressed and
+//                              released there: chooses the row as a click does
 //   expect-timeline-hover <uids|none>  actual preview feature identifiers
 //   expect-timeline-tooltip <regex>  actual visible tooltip plain text
 //   capture-view-image <path>  save only the OCCT framebuffer
@@ -185,6 +193,21 @@
 //   view-navigation <scheme>  this process's view navigation, not saved:
 //                           middle-pan|alt-buttons|middle-pan-f4|middle-orbit|
 //                           right-orbit|trackpad|trackpad-shift
+//   view-orbit-center model|cursor  this process's Orbit center, not saved
+//                           (mitcad#1791)
+//   capture-view-orbit-center <var> fixed|last  the fixed orbit center, or
+//                           the point the last orbit or turn turned about,
+//                           as x,y,z (waits for one)
+//   expect-view-orbit-center none|<x,y,z>  no fixed center, or one there
+//   capture-view-point <var> <x,y,z>  a model point's place in the view
+//                           (logical pixels) as x,y
+//   capture-view-place <var> <x%> <y%>  a place of the view as x,y
+//   expect-view-point <x,y,z> <x,y> same|moved <px>  wait until the model
+//                           point's place is at most (more than) that far
+//                           from a captured place
+//   click-view-point <x,y,z> [button] [mods]  a click at a model point's
+//                           place
+//   drag-view-point <x,y,z> <dx> <dy> [button] [mods]  a drag from it
 //   expect-navigation-runtime       saved navigation bindings and camera gestures
 //   expect-assistant-setup <mode>    isolated real setup controls and config results
 //   agent-menu <row> on|off         the agent indicator's menu filled as it opens,
@@ -889,6 +912,9 @@ private:
   // The interface walked (mitcad#1473, TestDriverWalk.cpp): runs the step
   // if it is one of those.
   bool runWalkStep(const QString& name, const QStringList& args, int line);
+  // The orbit's center (mitcad#1791, TestDriverOrbitCenter.cpp): runs the
+  // step if it is one of those.
+  bool runOrbitCenterStep(const QString& name, const QStringList& args, int line);
   void walkClose(qint64 notBefore, qint64 until);
 
   bool m_active = false;

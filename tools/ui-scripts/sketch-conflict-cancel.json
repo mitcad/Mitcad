@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1761: a vertical line c3 at x 5 between the fixed points p1 and p2, two free points p4 (-5, 0) and p5 (25, 5) held 10 mm (k7) and 20 mm (k8) from it. Symmetry of p4 and p5 about c3 contradicts the two distances, a Coincident of p4 on c3 the 10 mm one: both are refused for conflicting constraints and paint what blocks them. Two fixed points frame the view so that the clicks stay in its free part."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [5, -20], "fixed": true},
+      {"id": "p2", "type": "point", "at": [5, 20], "fixed": true},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+      {"id": "p4", "type": "point", "at": [-5, 0]},
+      {"id": "p5", "type": "point", "at": [25, 5]},
+      {"id": "p9", "type": "point", "at": [-40, -30], "fixed": true},
+      {"id": "p10", "type": "point", "at": [40, 30], "fixed": true}],
+    "dimensions": [
+      {"id": "k7", "type": "point_line_distance", "point": "p4", "line": "c3", "value": 10},
+      {"id": "k8", "type": "point_line_distance", "point": "p5", "line": "c3", "value": 20}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": []}}}
+]

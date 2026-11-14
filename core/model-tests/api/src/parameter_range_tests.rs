@@ -161,13 +161,12 @@ fn the_maximum_that_splits_a_profile_reports_the_volume_and_the_warning() {
     assert!(at_min.get("applied").is_none(), "{at_min}");
 
     // At the max the plate is in two, and the extrusion warns that its
-    // region was found as several. (It is now found as three: the piece
-    // inside the hole comes in too, mitcad#1740; assert exactly two bodies
-    // and a total volume below the plate's once that is fixed.)
+    // region was found as its two pieces; the piece inside the hole stays
+    // out (mitcad#1740).
     assert_eq!(at_max["changed"], json!(true), "{at_max}");
-    let count = at_max["body_count"].as_u64().unwrap();
-    assert!(count >= 2, "{at_max}");
-    assert_eq!(at_max["body_count_change"], json!(count - 1));
+    assert_eq!(at_max["body_count"], json!(2), "{at_max}");
+    assert_eq!(at_max["body_count_change"], json!(1));
+    assert!(total_volume(at_max) < 8000.0 - 1.0, "{at_max}");
     // A body that is there now gives its change; one that is not is new.
     let bodies = at_max["bodies"].as_array().unwrap();
     for body in bodies {
@@ -188,6 +187,7 @@ fn the_maximum_that_splits_a_profile_reports_the_volume_and_the_warning() {
     assert!(warning.starts_with("region r{"), "{warning}");
     assert!(warning.contains(" found as r{"), "{warning}");
     assert!(warning.contains("} + r{"), "{warning}");
+    assert_eq!(warning.matches(" + ").count(), 1, "{warning}");
     assert!(warning.ends_with("after a change in Sketch1"), "{warning}");
     assert!(warnings[0]["message"].is_string());
 
@@ -227,7 +227,7 @@ fn steps_values_and_limits_of_the_range() {
     assert_eq!(beyond["applied"], json!(24.0), "{beyond}");
     assert_eq!(beyond["applied_text"], json!("24 mm"));
     assert_eq!(beyond["limited"], json!("max"));
-    assert!(beyond["body_count"].as_u64().unwrap() >= 2, "{beyond}"); // mitcad#1740
+    assert_eq!(beyond["body_count"], json!(2), "{beyond}");
 
     // Refused queries.
     for (query, expected) in [

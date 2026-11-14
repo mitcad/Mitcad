@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1780: editing a feature whose stored pick is gone, on
+# gone-pick-edit.json: Thread1's first face went when Extrude1 took another
+# circle. The Faces chip says one of its two picks is missing, the panel's
+# message names the input in words, the list of picks marks the gone one,
+# and its ✕ takes it out: the edit then builds and OK keeps it. All
+# geometry is synthetic.
+# Run by tools/ui-gone-pick-edit-test.sh (Linux) and
+# tools/ui-windows-gone-pick-edit-test.ps1 (Windows).
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+mark
+dblclick-logged '^Timeline Thread1 at '
+expect-log 'Editing F5 with Thread'
+wait-log '^Preview Thread: failed' 30
+wait-log '^Thread Faces: 1 of 2 pick[(]s[)] gone: face F2:side[(]c2[)] of F2[.]b0' 30
+wait-log '^Panel Thread faces: 2 selected, 1 missing' 30
+wait-log '^Panel Thread picks faces: 1[.] .* [(]missing[)]; 2[.] ' 30
+wait-log '^Panel Thread error: A face of Faces is gone: pick it again' 30
+wait-idle 30
+screenshot '${MITCAD_TEST_WORK}/gone-pick-edit.png'
+# The gone pick is the one chosen in the list: its ✕ takes it out.
+mark
+button '^✕$' remove_pick_faces
+wait-log '^Thread Faces: 1 face' 30
+wait-log '^Preview Thread: ok' 30
+wait-idle 30
+expect-no-log '^Panel Thread faces: [0-9]+ selected, [0-9]+ missing'
+mark
+button '^OK$'
+expect-log 'Edited F5' 30
+expect-never 'TestDriver: FAIL'

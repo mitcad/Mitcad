@@ -57,7 +57,7 @@ done
 sleep 3
 opened=$(grep -m1 -o '^\[ *[0-9.]*\] Opened' "$UI_LOG" | tr -dc '0-9.')
 bodies=$(grep -m1 'Bodies shown:' "$UI_LOG" | tr ',' '\n' | wc -l)
-mapfile -t recomputes < <(grep -o 'Recomputed [0-9]* feature(s) in [0-9.]* ms' "$UI_LOG")
+mapfile -t recomputes < <(grep -o 'Recomputed [0-9]* features\? in [0-9.]* ms' "$UI_LOG")
 open_ms=$(last 'Timing open: \([0-9.]*\) ms')
 load_ms=$(last 'Timing open load: \([0-9.]*\) ms')
 display=$(sed -n 's/.*Timing display: //p' "$UI_LOG" | sort -g -r | head -1)
@@ -89,7 +89,7 @@ ui_key ctrl+z
 sleep 3
 ui_key ctrl+y
 sleep 3
-undo=$(tail -n +"$from" "$UI_LOG" | grep -o 'Recomputed [0-9]* feature(s) in [0-9.]* ms' | paste -sd ';')
+undo=$(tail -n +"$from" "$UI_LOG" | grep -o 'Recomputed [0-9]* features\? in [0-9.]* ms' | paste -sd ';')
 refresh=$(stats 'Timing refresh: \([0-9.]*\) ms' "$from")
 title=$(stats 'Timing title: \([0-9.]*\) ms' "$from")
 ui_crashed && ui_fail "the app crashed"

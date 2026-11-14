@@ -3993,8 +3993,11 @@ impl<K: Kernel> FramesCrateOps<K> for Document<K> {
         const SHOWN: usize = 10;
         let more = own.len().saturating_sub(SHOWN);
         warnings.extend(own.into_iter().take(SHOWN));
-        if more > 0 {
-            warnings.push(format!("and {more} more fastener warning(s)"));
+        // One whole message for one and for several: no "(s)" (mitcad#1759).
+        match more {
+            0 => {}
+            1 => warnings.push("and one more fastener warning".to_owned()),
+            n => warnings.push(format!("and {n} more fastener warnings")),
         }
         done
     }

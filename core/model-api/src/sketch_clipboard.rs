@@ -203,11 +203,18 @@ impl<K: Kernel> SketchClipboardOps<K> for Document<K> {
         let mut warnings: Vec<String> = Vec::new();
         // What the copy left out was said then: only what this paste dropped.
         let dropped = pasted.left_out.saturating_sub(fragment.left_out);
-        if dropped > 0 {
-            warnings.push(format!(
-                "{dropped} constraint(s) and dimension(s) left out: they reference geometry the \
-                 copied geometry lacks"
-            ));
+        // One whole message for one and for several: no "(s)" (mitcad#1759).
+        match dropped {
+            0 => {}
+            1 => warnings.push(
+                "a constraint or dimension left out: it references geometry the copied geometry \
+                 lacks"
+                    .to_owned(),
+            ),
+            n => warnings.push(format!(
+                "{n} constraints and dimensions left out: they reference geometry the copied \
+                 geometry lacks"
+            )),
         }
         if !pasted.values.is_empty() {
             // Counted for a person, the ids for agents (mitcad#1612).

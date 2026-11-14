@@ -11,14 +11,15 @@
 #   - The conditioned rows' light bulbs are fx bulbs (the plain bulb with a
 #     small fx corner badge) with tooltips that say what the condition
 #     gives now and what a click does; the folders have the plain bulb
-#     with a tooltip naming the bodies left as they are; Body2's row,
-#     hidden by its condition, stays in the browser with Show When... in
-#     its menu.
+#     (their eyes are their own and change no body, mitcad#1771); Body2's
+#     row, hidden by its condition, stays in the browser with Show When...
+#     in its menu.
 #   - The root's Bodies folder: Hide All and Show All (their tooltips name
 #     Body2) change Body1 and leave Body2 following its condition (logged
 #     with the count kept).
 #   - Part:1's Bodies folder holds only a conditioned body: its Hide All is
-#     disabled with the reason, its light bulb changes nothing.
+#     disabled with the reason; its eye hides and shows the folder and
+#     leaves Leg's condition.
 #   - Body2's light bulb shows it and removes the condition, with the
 #     status message; undo brings the condition back.
 #   - The same for Part:1's light bulb (it hides Part:1).
@@ -129,10 +130,9 @@ ui_expect_log "Browser fx bulb Root/Bodies/Body2 off: Shown when Holes == 'Yes'.
   "Body2's light bulb is an fx bulb, off, and says what a click does"
 ui_expect_log "Browser fx bulb Root/Part:1 on: Shown when Holes == 'No'. Shown now (Holes is 'No'). Clicking the light bulb hides Part:1 and removes its condition." \
   "Part:1's light bulb is an fx bulb, on, and says what a click does"
-ui_expect_log "Browser bulb Root/Bodies on: Clicking the light bulb hides the other bodies. Body2 follows its Show When and is left as it is." \
-  "the root's Bodies folder has the plain bulb, its tooltip saying that Body2 keeps its condition"
-grep -E "Browser fx bulb Root/(Part:[12]/)?Bodies (on|off):" "$UI_LOG" && ui_fail "a folder has the fx bulb"
-echo "ok   no folder has the fx bulb"
+grep -E "Browser (fx )?bulb Root/(Part:[12]/)?Bodies (on|off):" "$UI_LOG" &&
+  ui_fail "a folder's bulb has a condition's tooltip"
+echo "ok   the folders have the plain bulb: their eyes change no body (mitcad#1771)"
 ui_expect_log "Browser fx Root/Bodies/Body2: Shown when Holes == 'Yes'" "Body2's row keeps its fx badge"
 ui_expect_log "Browser eye Root/Bodies/Body2 at" "Body2's row, hidden, stays in the browser"
 grep -F "Browser fx bulb Root/Bodies/Body1" "$UI_LOG" && ui_fail "Body1 has no condition but an fx bulb"
@@ -180,10 +180,17 @@ ui_step "close the menu"                   ui_key Escape
 ui_sync
 ui_mark
 ui_step "Part:1's Bodies light bulb"       ui_click_logged "Browser eye Root/Part:1/Bodies"
-ui_expect_new "Hide Bodies Root/Part:1/Bodies: kept 1 following Show When: Leg" "the light bulb keeps Leg (logged)"
-expect_none "Visibility Root/Part:1/Bodies" "nothing changed"
+ui_expect_new "Visibility Root/Part:1/Bodies: hidden" "the eye hides the folder (mitcad#1771)"
+expect_none "following Show When" "the eye changes no body"
 save
 expect_file "$LEG" "[true,\"Holes == 'No'\"]" "Leg still follows its condition"
+expect_file '.display.folders' '{"C1":{"bodies":true}}' "the folder hidden as display state"
+ui_mark
+ui_step "Part:1's Bodies light bulb"       ui_click_logged "Browser eye Root/Part:1/Bodies"
+ui_expect_new "Visibility Root/Part:1/Bodies: shown" "the eye shows the folder again"
+save
+expect_file "$LEG" "[true,\"Holes == 'No'\"]" "Leg still follows its condition"
+expect_file '.display.folders' 'null' "no folder hidden"
 
 echo "--- Body2's light bulb removes the condition; undo brings it back"
 ui_mark

@@ -388,6 +388,19 @@ label.
 11. **Tooltips** say in one short line what the control is or does; the
     limits and the ctest `repo.tooltips` are in
     [the code conventions](development.md#code-conventions).
+12. **Counts** (mitcad#1758). A count goes into its text as `%n`, with the
+    count given to `tr()` (`tr("%n face(s)", nullptr, faces)`), so that
+    every language shows its own forms ("1 face", "3 faces";
+    [translations](translations.md)); never with `.arg()` before a word
+    whose plural is in brackets ("%1 face(s)"), which shows the brackets
+    in every language. A text with two counts is made of parts, each
+    with its own `%n`, joined by a text of its own. The model's messages
+    (Rust, `core/`) have no `%n`: they write one whole message for one
+    and for several (`a key of the new scan was not shown`, `{n} keys of
+    the new scan were not shown`) or put the count after a colon (`files
+    written: {}`); `repo.model-messages` refuses a count before a
+    bracketed plural in them (mitcad#1759,
+    [translations](translations.md#the-models-messages)).
 
 ## 3. Messages and severity
 
@@ -416,7 +429,8 @@ for every other text a person sees.
   of face F4:side(…)".
 - The places a notice is about (faces, edges and vertices of a body, a
   region of a sketch, a point, a small box, an occurrence with every body
-  it places) are its `places`, which keep
+  it places, a joint as the pointer over its Browser row draws it) are its
+  `places`, which keep
   the names for agents
   and logs. Where a notice is shown, the pointer over it paints its places
   in the view as the selection preview draws them, seen through what
@@ -716,6 +730,7 @@ dynamic value.
 | | `JointA`, `JointB`, `JointOrigin` | #f28c28, #2ab57d, #17a2b8 | a joint's sides and motion origin | |
 | | `PrintOverhang`, `PrintThin`, `PrintGap` | #7e3fd0 / #b48cff, #c2188b / #ff6ec7, #00897b / #4dd0c0 | Print Analysis' categories (violet, magenta, teal: narrow gaps, mitcad#1519), by the view's background, with the legend | |
 | | `RuleFrame` … `RuleAction`, `RuleText` | see [configurations.md](configurations.md) | the rule blocks' categories under white text | |
+| | `CamStock`, `CamLeftThin`, `CamLeftThick`, `CamGouge` | #b0aaa2 / #8c877f, #4fb3bf / #6fd0db, #5e35b1 / #9575cd, #d81b60 / #ff5c8d | Simulate's stock (mitcad#1013): the stock grey (nothing left over the part reads as the stock), the material left from teal (thin) to violet (thick), a cut into the part pink; by the view's background, with the legend in the Simulate window | |
 
 The table's order is the enum's; `allColorRoles`, `colorRoleName`,
 `colorRoleUse` and `colorRolePartner` list it for the checks.
@@ -753,7 +768,10 @@ fails on:
 - `SelectionItem::logDescription()` (an item's internal name and its
   owner's id, for logs) inside the arguments of a `tr()` text and its
   `.arg()` chain or of a text setter (`setText`, `setToolTip`,
-  `showStatus`, `showError`, …; mitcad#1741, "What a text says").
+  `showStatus`, `showError`, …; mitcad#1741, "What a text says");
+- in the app's texts, a count put in with `.arg()` before a bracketed
+  plural, `%1 face(s)` or `%2 thin region(s)` (up to two words between,
+  none of them a short word; rule 12, mitcad#1758): the count is `%n`.
 
 The commands' developer document (`app/COMMANDS.md`) is read for the
 British spellings only (`--spelling`, mitcad#1478): it names code, log

@@ -211,7 +211,7 @@ Ui-Step '3MF (Alt+T, Down x7), High (Alt+R, Down), OK' {
   Ui-FocusMain
 }
 Ui-ExpectNew "Export dialog: 3MF for 3D printing (*.3mf) to $workLogged/meshes/Plate.3mf, refinement high" '3MF with refinement High, the name''s extension follows the type'
-Ui-ExpectNew "Exported $workLogged/meshes/Plate.3mf: 3mf, 1 body(ies)" 'Plate written as 3MF' 60
+Ui-ExpectNew "Exported $workLogged/meshes/Plate.3mf: 3mf, 1 body" 'Plate written as 3MF' 60
 if (-not (Test-Path (Join-Path $meshes 'Plate.3mf'))) { Ui-Fail 'no Plate.3mf' }
 Ui-ExpectLog 'Browser Root/Lid:1/Bodies/Lid at' 'the browser lists Lid''s body in Lid:1'
 Ui-Mark
@@ -223,7 +223,7 @@ Ui-ExpectNew ", type 3mf, refinement high, file $workLogged/meshes/Lid.3mf" 'the
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-FocusDialog '^Export$'; Ui-Key 'Return'; Ui-FocusMain }
 Ui-ExpectNew "Export dialog: 3MF for 3D printing (*.3mf) to $workLogged/meshes/Lid.3mf, refinement high" 'taken as proposed'
-Ui-ExpectNew "Exported $workLogged/meshes/Lid.3mf: 3mf, 1 body(ies)" 'Lid written as 3MF' 60
+Ui-ExpectNew "Exported $workLogged/meshes/Lid.3mf: 3mf, 1 body" 'Lid written as 3MF' 60
 if (-not (Test-Path (Join-Path $meshes 'Lid.3mf'))) { Ui-Fail 'no Lid.3mf' }
 Write-Host 'ok   both files written'
 

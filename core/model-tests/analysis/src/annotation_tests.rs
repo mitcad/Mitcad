@@ -8,7 +8,8 @@
 //! placed outside the body and stacked, the old default colours read as
 //! Auto and the texts' height (mitcad#894); hole callouts written from
 //! their holes' features, a frame under one (mitcad#902); previews of
-//! `add_annotation` (mitcad#1097).
+//! `add_annotation` (mitcad#1097); rolled back with the features their
+//! picks are on, not broken (mitcad#1756).
 
 use serde_json::{Value, json};
 
@@ -1853,5 +1854,66 @@ fn a_preview_is_what_add_annotation_adds_and_changes_nothing() {
         let mut asked = new.clone();
         asked["preview"] = json!(true);
         assert_eq!(refused(&mut doc, asked), refused(&mut doc, new));
+    }
+}
+
+#[test]
+fn an_annotation_on_a_feature_after_the_marker_is_rolled_back_not_a_warning() {
+    // mitcad#1756: editing a sketch rolls the timeline back to it; an
+    // annotation on a body a later feature makes is rolled back with that
+    // feature, not broken.
+    let mut doc = block();
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "a": top(), "b": bottom()}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "kind": "material", "a": top(), "at": [5, 5, 20]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_annotation", "a": {"datum": "xy"}, "b": {"datum": "yz"}}),
+    );
+    for name in ["Offset1", "Material1", "Angle1"] {
+        let shown = annotation(&doc, name);
+        assert!(shown.get("error").is_none(), "{shown}");
+    }
+    // The sketch's edit: the marker right after it, the extrusion rolled
+    // back. Its picks are not there, but no warning: rolled back.
+    command(&mut doc, json!({"cmd": "set_marker", "position": 1}));
+    for name in ["Offset1", "Material1"] {
+        let rolled = annotation(&doc, name);
+        assert!(rolled["error"].is_string(), "{rolled}");
+        assert_eq!(rolled["rolled_back"], true, "{rolled}");
+        assert!(rolled.get("level").is_none(), "{rolled}");
+        assert!(rolled.get("notices").is_none(), "{rolled}");
+        assert!(rolled.get("drawing").is_none(), "{rolled}");
+    }
+    // The origin's planes are there before any feature: measured as ever.
+    let planes = annotation(&doc, "Angle1");
+    assert!(
+        planes.get("error").is_none() && planes.get("rolled_back").is_none(),
+        "{planes}"
+    );
+    // The marker at the end again (the sketch finished): as before.
+    command(&mut doc, json!({"cmd": "set_marker", "position": 2}));
+    for name in ["Offset1", "Material1"] {
+        let back = annotation(&doc, name);
+        assert!(
+            back.get("error").is_none()
+                && back.get("rolled_back").is_none()
+                && back.get("level").is_none(),
+            "{back}"
+        );
+    }
+    // A pick that is gone with the marker at the end stays a warning
+    // (mitcad#1040): the extrusion deleted.
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": "F2"}));
+    for name in ["Offset1", "Material1"] {
+        let broken = annotation(&doc, name);
+        assert!(broken["error"].is_string(), "{broken}");
+        assert!(broken.get("rolled_back").is_none(), "{broken}");
+        assert_eq!(broken["level"], "warning", "{broken}");
     }
 }

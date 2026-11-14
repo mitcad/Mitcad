@@ -6,7 +6,8 @@
 # core/thumbnailer-capi). The installer puts it in bin and registers it
 # for .mitcad (cmake/Packaging.cmake, packaging/windows/filetype.nsh).
 # Windows only: Linux has mitcad-thumbnailer's freedesktop entry
-# (mitcad#1539), macOS nothing yet.
+# (mitcad#1539), macOS the Quick Look extension (mitcad#1696,
+# cmake/MacQuickLook.cmake).
 if(NOT WIN32)
   return()
 endif()

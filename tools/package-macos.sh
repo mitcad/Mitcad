@@ -120,13 +120,29 @@ done < <(find "$app" -type f -print0)
 
 # --- Sign ---------------------------------------------------------------------
 # --deep signs the nested code (frameworks, plug-ins, dylibs) first.
+# --deep gives the nested code the application's entitlements, so the Quick
+# Look extension (mitcad#1696), which macOS loads only in the App Sandbox,
+# is signed again with its own; then the application around it, whose
+# signature seals the extension's new one.
+quicklook_appex="$app/Contents/PlugIns/MitCadThumbnails.appex"
+quicklook_entitlements="$repo/app/packaging/macos/QuickLookThumbnails.entitlements"
 if [ -z "$sign_identity" ]; then
   echo "== Signing ad hoc (set MITCAD_SIGN_IDENTITY for a Developer ID signature)"
   codesign --force --deep --sign - --timestamp=none "$app"
+  if [ -d "$quicklook_appex" ]; then
+    codesign --force --sign - --timestamp=none --entitlements "$quicklook_entitlements" "$quicklook_appex"
+    codesign --force --sign - --timestamp=none "$app"
+  fi
 else
   echo "== Signing with the identity '$sign_identity' (hardened runtime)"
   codesign --force --deep --sign "$sign_identity" --options runtime \
     --entitlements "$repo/app/packaging/macos/entitlements.plist" --timestamp "$app"
+  if [ -d "$quicklook_appex" ]; then
+    codesign --force --sign "$sign_identity" --options runtime \
+      --entitlements "$quicklook_entitlements" --timestamp "$quicklook_appex"
+    codesign --force --sign "$sign_identity" --options runtime \
+      --entitlements "$repo/app/packaging/macos/entitlements.plist" --timestamp "$app"
+  fi
 fi
 
 echo "== Verifying the signature"

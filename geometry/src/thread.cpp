@@ -31,7 +31,6 @@
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
-#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
@@ -84,6 +83,7 @@
 #include "helix_brep.hpp"
 #include "history.hpp"
 #include "local_boolean.hpp"
+#include "proximity.hpp"
 #include "mitcad/geometry/reference.hpp"
 #include "sweep.hpp"
 #include "thread_options.hpp"
@@ -564,14 +564,14 @@ TopoDS_Shape grooves(const Thread& t, double low, double high, double from, doub
 // Whether the body has material just past the end of the threaded part
 // (`side` -1 below `at`, +1 above it) where the thread's tools would
 // reach: the radii between `inner` and `outer` at eight angles.
-bool material_past(const TopoDS_Shape& body, const Thread& t, double at, double side, double inner,
-                   double outer) {
-  BRepClass3d_SolidClassifier classifier(body);
+// (The body's sides, `sides`, told by rays where they can, mitcad#1796: a
+// classifier of a body of long spline edges, a loft's, took seconds for a
+// thread's checks.)
+bool material_past(detail::PointSide& sides, const Thread& t, double at, double side, double inner, double outer) {
   const double s = at + side * 0.25 * t.pitch;
   for (int k = 0; k < 8; ++k) {
     for (const double f : {0.05, 0.5, 0.95}) {
-      classifier.Perform(t.point(s, kTwoPi * k / 8.0, inner + f * (outer - inner)), 1.0e-7);
-      if (classifier.State() != TopAbs_OUT) {
+      if (sides.state(t.point(s, kTwoPi * k / 8.0, inner + f * (outer - inner)), 1.0e-7) != TopAbs_OUT) {
         return true;
       }
     }
@@ -1071,9 +1071,10 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
     bool free_high = false;
     {
       const Timed timed(checks_time(trace));
-      free_low = from <= kSame && !material_past(body.occt(), t, from, -1.0, inner + low_grown, outer + low_grown);
+      detail::PointSide sides(body.occt());
+      free_low = from <= kSame && !material_past(sides, t, from, -1.0, inner + low_grown, outer + low_grown);
       free_high = to >= t.length - kSame &&
-                  !material_past(body.occt(), t, to, 1.0, inner + high_grown, outer + high_grown);
+                  !material_past(sides, t, to, 1.0, inner + high_grown, outer + high_grown);
     }
     const double run_low = free_low ? t.pitch : 0.0;
     const double run_high = free_high ? t.pitch : 0.0;
@@ -1104,14 +1105,15 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
     bool run_high = false;
     {
       const Timed timed(checks_time(trace));
-      free_low = from <= kSame && !material_past(body.occt(), t, from, -1.0, inner, outer);
-      free_high = to >= t.length - kSame && !material_past(body.occt(), t, to, 1.0, inner, outer);
+      detail::PointSide sides(body.occt());
+      free_low = from <= kSame && !material_past(sides, t, from, -1.0, inner, outer);
+      free_high = to >= t.length - kSame && !material_past(sides, t, to, 1.0, inner, outer);
       const double mate_inner = t.internal ? inner : t.crest();
       const double mate_outer = t.internal ? t.crest() : outer;
       run_low = free_low || (!spec.flat_ends && from <= kSame &&
-                             !material_past(body.occt(), t, from, -1.0, mate_inner, mate_outer));
+                             !material_past(sides, t, from, -1.0, mate_inner, mate_outer));
       run_high = free_high || (!spec.flat_ends && to >= t.length - kSame &&
-                               !material_past(body.occt(), t, to, 1.0, mate_inner, mate_outer));
+                               !material_past(sides, t, to, 1.0, mate_inner, mate_outer));
     }
     // At an end against the body that is uneven (mitcad#901: a shank under
     // a head's serrated underside), the tools stop a little short of where
@@ -1194,8 +1196,9 @@ std::vector<Step> other_steps(const Shape& body, const FacePlan& p, const Thread
   bool free_high = false;
   {
     const Timed timed(checks_time(trace));
-    free_low = from <= kSame && !material_past(body.occt(), t, from, -1.0, inner, outer);
-    free_high = to >= t.length - kSame && !material_past(body.occt(), t, to, 1.0, inner, outer);
+    detail::PointSide sides(body.occt());
+    free_low = from <= kSame && !material_past(sides, t, from, -1.0, inner, outer);
+    free_high = to >= t.length - kSame && !material_past(sides, t, to, 1.0, inner, outer);
   }
   chamfer_steps(steps, t, from, to, c, free_low, free_high, inner, outer, t.face_radius, p.face);
   return steps;
@@ -1750,8 +1753,9 @@ FacePlan plan_face(const Shape& body, const ThreadSpec& spec, std::size_t k, Fac
     const double outer = thread.face_radius + margin;
     {
       const Timed timed(checks_time(trace));
-      free_low = from <= kSame && !material_past(body.occt(), thread, from, -1.0, inner, outer);
-      free_high = to >= thread.length - kSame && !material_past(body.occt(), thread, to, 1.0, inner, outer);
+      detail::PointSide sides(body.occt());
+      free_low = from <= kSame && !material_past(sides, thread, from, -1.0, inner, outer);
+      free_high = to >= thread.length - kSame && !material_past(sides, thread, to, 1.0, inner, outer);
     }
     bool start_high = false;
     if (!spec.full_length) {

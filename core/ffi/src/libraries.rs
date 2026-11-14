@@ -66,9 +66,24 @@ pub fn configure_libraries(json: &str) -> Result<String, VcsError> {
         .filter(|p| !p.trim().is_empty())
         .map_or_else(LibraryCache::default_print_library, PathBuf::from);
     mitcad_model::print_library::set_user_library(Some(print_library.clone()));
+    // The user's CAM machine library (mitcad#1013): `cam_library`, else
+    // `MITCAD_CAM_LIBRARY_DIR`, else `cam-library` beside the print library.
+    let cam_library = value
+        .get("cam_library")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("MITCAD_CAM_LIBRARY_DIR")
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| print_library.parent().map(|p| p.join("cam-library")));
+    mitcad_model::cam::library::set_user_cam_library(cam_library.clone());
     let answer = json!({"root": cache.root.to_string_lossy(),
                         "extra": cache.extra.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
-                        "print_library": print_library.to_string_lossy()});
+                        "print_library": print_library.to_string_lossy(),
+                        "cam_library": cam_library.map(|p| p.to_string_lossy().into_owned())});
     *CACHE.write().unwrap_or_else(|e| e.into_inner()) = Some(cache);
     Ok(answer.to_string())
 }

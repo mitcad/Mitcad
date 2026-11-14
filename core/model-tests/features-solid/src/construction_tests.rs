@@ -12,6 +12,7 @@ use mitcad_model::analysis::PhysicalProperties;
 use mitcad_model::datum::{
     CurveGeometry, PathParameter, PathPoint, SurfaceGeometry, SurfacePoint, Vec3,
 };
+use mitcad_model::exchange::{BodyKind, ExportBody, ExportOptions, MeshTolerance, TriangleMesh};
 use mitcad_model::ids::FeatureUid;
 use mitcad_model::internal::datum::{add, norm, scale, sub, unit};
 use mitcad_model::internal::profile::{cross, dot};
@@ -78,7 +79,11 @@ pub(crate) struct GeoShape {
 /// properties from bounding boxes.
 #[derive(Default)]
 pub(crate) struct GeoKernel {
-    mock: MockKernel,
+    pub(crate) mock: MockKernel,
+    /// The sides of extruded circles as cones of this half-angle (radians),
+    /// their radius the circle's at the middle of the extrusion: for the
+    /// tangent planes of cones (mitcad#1779).
+    cone: Option<f64>,
 }
 
 fn failed(message: impl Into<String>) -> KernelError {
@@ -232,6 +237,38 @@ impl Kernel for GeoKernel {
         self.mock.bounding_box(&shape.mock)
     }
 
+    // Exports in a coordinate system's frame (mitcad#1775): the mock's.
+
+    fn body_kind(&self, shape: &GeoShape) -> Result<BodyKind, KernelError> {
+        self.mock.body_kind(&shape.mock)
+    }
+
+    fn write_file(
+        &self,
+        path: &str,
+        bodies: &[ExportBody<'_, GeoShape>],
+        options: &ExportOptions,
+    ) -> Result<(), KernelError> {
+        let mocks: Vec<ExportBody<'_, MockShape>> = bodies
+            .iter()
+            .map(|b| ExportBody {
+                name: b.name,
+                color: b.color,
+                shape: &b.shape.mock,
+                placements: b.placements,
+            })
+            .collect();
+        self.mock.write_file(path, &mocks, options)
+    }
+
+    fn triangle_mesh(
+        &self,
+        shape: &GeoShape,
+        tolerance: &MeshTolerance,
+    ) -> Result<TriangleMesh, KernelError> {
+        self.mock.triangle_mesh(&shape.mock, tolerance)
+    }
+
     fn face_geometry(
         &self,
         shape: &GeoShape,
@@ -262,11 +299,23 @@ impl Kernel for GeoKernel {
                     cross(along, prism.frame.normal()),
                 ))
             }
-            Some(SegmentGeometry::Circle { center, radius, .. }) => Ok(SurfaceGeometry::Cylinder {
-                origin: prism.at(*center, (prism.start + prism.end) / 2.0),
-                axis: prism.frame.normal(),
-                radius: *radius,
-            }),
+            Some(SegmentGeometry::Circle { center, radius, .. }) => {
+                let origin = prism.at(*center, (prism.start + prism.end) / 2.0);
+                let axis = prism.frame.normal();
+                Ok(match self.cone {
+                    Some(half_angle) => SurfaceGeometry::Cone {
+                        origin,
+                        axis,
+                        radius: *radius,
+                        half_angle,
+                    },
+                    None => SurfaceGeometry::Cylinder {
+                        origin,
+                        axis,
+                        radius: *radius,
+                    },
+                })
+            }
             _ => Ok(SurfaceGeometry::Other {
                 kind: "other".to_owned(),
             }),
@@ -418,6 +467,25 @@ impl Kernel for GeoKernel {
                     normal: out,
                 })
             }
+            // The nearest point of the generator in the half-plane of
+            // `near`.
+            SurfaceGeometry::Cone {
+                origin,
+                axis,
+                radius,
+                half_angle,
+            } => {
+                let from = sub(near, origin);
+                let out = unit(sub(from, scale(axis, dot(from, axis))))
+                    .ok_or_else(|| failed("on the axis"))?;
+                let (sin, cos) = half_angle.sin_cos();
+                let start = add(origin, scale(out, radius));
+                let along = add(scale(axis, cos), scale(out, sin));
+                Ok(SurfacePoint {
+                    point: add(start, scale(along, dot(sub(near, start), along))),
+                    normal: sub(scale(out, cos), scale(axis, sin)),
+                })
+            }
             _ => Err(failed("no geometry")),
         }
     }
@@ -518,7 +586,7 @@ fn failure(doc: &mut Document<GeoKernel>, kind: &str, definition: Value) -> Stri
 }
 
 #[track_caller]
-fn assert_near(value: &Value, expected: Vec3) {
+pub(crate) fn assert_near(value: &Value, expected: Vec3) {
     let actual: Vec3 = std::array::from_fn(|i| value[i].as_f64().expect("a number"));
     assert!(
         norm(sub(actual, expected)) < 1e-9,
@@ -526,17 +594,17 @@ fn assert_near(value: &Value, expected: Vec3) {
     );
 }
 
-const REGION: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
-const FRONT: &str = "c1[c4,c2]";
-const RIGHT: &str = "c2[c1,c3]";
-const BACK: &str = "c3[c2,c4]";
-const LEFT: &str = "c4[c3,c1]";
+pub(crate) const REGION: &str = "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}";
+pub(crate) const FRONT: &str = "c1[c4,c2]";
+pub(crate) const RIGHT: &str = "c2[c1,c3]";
+pub(crate) const BACK: &str = "c3[c2,c4]";
+pub(crate) const LEFT: &str = "c4[c3,c1]";
 
-fn side(segment: &str) -> String {
+pub(crate) fn side(segment: &str) -> String {
     format!("F2:side({segment})")
 }
 
-fn top() -> String {
+pub(crate) fn top() -> String {
     format!("F2:end({REGION})")
 }
 
@@ -544,23 +612,23 @@ fn bottom() -> String {
     format!("F2:start({REGION})")
 }
 
-fn face(name: &str) -> Value {
+pub(crate) fn face(name: &str) -> Value {
     json!({"body": "F2.b0", "face": name})
 }
 
-fn edge(a: &str, b: &str) -> Value {
+pub(crate) fn edge(a: &str, b: &str) -> Value {
     let name = EdgeName::new(a.parse().unwrap(), b.parse().unwrap());
     json!({"body": "F2.b0", "edge": name.to_string()})
 }
 
-fn vertex(faces: [&str; 3]) -> Value {
+pub(crate) fn vertex(faces: [&str; 3]) -> Value {
     let name = VertexName::new(faces.map(|f| f.parse::<FaceName>().unwrap())).unwrap();
     json!({"body": "F2.b0", "vertex": name.to_string()})
 }
 
 /// Sketch1 with a 60 x 40 rectangle at the origin, extruded 20 mm (d3):
 /// the block x 0..60, y 0..40, z 0..20 (body F2.b0).
-fn block() -> Document<GeoKernel> {
+pub(crate) fn block() -> Document<GeoKernel> {
     let mut doc = Document::new(GeoKernel::default());
     command(
         &mut doc,
@@ -576,7 +644,20 @@ fn block() -> Document<GeoKernel> {
 /// A 20 mm diameter circle at the origin extruded 40 mm (body F2.b0, side
 /// face F2:side(c1)).
 fn cylinder() -> Document<GeoKernel> {
-    let mut doc = Document::new(GeoKernel::default());
+    round(GeoKernel::default())
+}
+
+/// As [`cylinder`], its side a cone of `half_angle` (radians) about the Z
+/// axis, of radius 10 at z = 20 and growing upwards.
+fn cone(half_angle: f64) -> Document<GeoKernel> {
+    round(GeoKernel {
+        cone: Some(half_angle),
+        ..GeoKernel::default()
+    })
+}
+
+fn round(kernel: GeoKernel) -> Document<GeoKernel> {
+    let mut doc = Document::new(kernel);
     command(
         &mut doc,
         json!([{"cmd": "sketch.create"},
@@ -736,6 +817,191 @@ fn tangent_planes_of_cones_lean_with_the_surface() {
     let generator = add([0.0, 10.0, 0.0], [0.0, half.sin(), half.cos()]);
     assert!(plane.distance_to([0.0, 10.0, 0.0]).abs() < 1e-12);
     assert!(plane.distance_to(generator).abs() < 1e-12);
+}
+
+/// The signed distance of `point` from a plane of the datum query, along
+/// its normal.
+fn plane_distance(plane: &Value, point: Vec3) -> f64 {
+    let at =
+        |key: &str| -> Vec3 { std::array::from_fn(|i| plane[key][i].as_f64().expect("a number")) };
+    dot(sub(point, at("origin")), at("normal"))
+}
+
+/// The datum of a construction plane added with `flip`.
+fn flipped_plane(doc: &mut Document<GeoKernel>, definition: Value) -> Value {
+    let added = command(
+        doc,
+        json!({"cmd": "add_feature", "def": {"type": "construction_plane",
+               "definition": definition, "flip": true}}),
+    );
+    query(doc, json!({"query": "datum", "uid": added["uid"]}))
+}
+
+#[test]
+fn tangent_planes_of_cylinders_move_along_their_normal_by_the_offset() {
+    // mitcad#1779: positive away from the face, negative into it, 0 or none
+    // where it touches.
+    let mut doc = cylinder();
+    let side = json!({"body": "F2.b0", "face": "F2:side(c1)"});
+    let tangent = |offset: Option<f64>| {
+        let mut definition = json!({"type": "tangent", "face": side, "angle": 0, "plane": "xz"});
+        if let Some(offset) = offset {
+            definition["offset"] = json!(offset);
+        }
+        definition
+    };
+    for (offset, y) in [
+        (None, 10.0),
+        (Some(0.0), 10.0),
+        (Some(3.0), 13.0),
+        (Some(-4.0), 6.0),
+    ] {
+        let moved = plane(&mut doc, tangent(offset));
+        assert_near(&moved["origin"], [0.0, y, 0.0]);
+        assert_near(&moved["normal"], [0.0, 1.0, 0.0]);
+        assert_near(&moved["x_axis"], [1.0, 0.0, 0.0]);
+    }
+    // Flip turns the normal round, not the offset: still away from the face.
+    let flipped = flipped_plane(&mut doc, tangent(Some(3.0)));
+    assert_near(&flipped["origin"], [0.0, 13.0, 0.0]);
+    assert_near(&flipped["normal"], [0.0, -1.0, 0.0]);
+
+    // Tangent at a point: along the face's outward normal there.
+    let at_point = |offset: Option<f64>| {
+        let mut definition =
+            json!({"type": "tangent_at_point", "face": side, "point": {"point": [20.0, 0.0, 5.0]}});
+        if let Some(offset) = offset {
+            definition["offset"] = json!(offset);
+        }
+        definition
+    };
+    for (offset, x) in [
+        (None, 10.0),
+        (Some(0.0), 10.0),
+        (Some(2.0), 12.0),
+        (Some(-2.5), 7.5),
+    ] {
+        let moved = plane(&mut doc, at_point(offset));
+        assert_near(&moved["origin"], [x, 0.0, 5.0]);
+        assert_near(&moved["normal"], [1.0, 0.0, 0.0]);
+    }
+}
+
+#[test]
+fn tangent_planes_of_cones_move_along_their_leaning_normal_by_the_offset() {
+    // mitcad#1779 on a cone of 20 degrees (radius 10 at z = 20).
+    let half = 20f64.to_radians();
+    let (sin, cos) = half.sin_cos();
+    let mut doc = cone(half);
+    let side = json!({"body": "F2.b0", "face": "F2:side(c1)"});
+    // The generator at +Y and the normal leaning down from it.
+    let generator = [[0.0, 10.0, 20.0], [0.0, 10.0 + sin, 20.0 + cos]];
+    let normal = [0.0, cos, -sin];
+    let touching = plane(
+        &mut doc,
+        json!({"type": "tangent", "face": side, "angle": 0, "plane": "xz"}),
+    );
+    let x_axis: Vec3 = std::array::from_fn(|i| touching["x_axis"][i].as_f64().unwrap());
+    for offset in [0.0, 5.0, -3.0] {
+        let moved = plane(
+            &mut doc,
+            json!({"type": "tangent", "face": side, "angle": 0, "plane": "xz", "offset": offset}),
+        );
+        assert_near(&moved["normal"], normal);
+        assert_near(&moved["x_axis"], x_axis);
+        for point in generator {
+            let distance = plane_distance(&moved, point);
+            assert!(
+                (distance + offset).abs() < 1e-9,
+                "offset {offset}: the generator is {distance} from the plane"
+            );
+        }
+    }
+
+    // Tangent at a point beside the cone at +X: the generator's nearest
+    // point, moved along the normal there.
+    let touch = [10.0 + 20.0 * sin * sin, 0.0, 20.0 + 20.0 * sin * cos];
+    let outward = [cos, 0.0, -sin];
+    for offset in [0.0, 2.0, -1.5] {
+        let moved = plane(
+            &mut doc,
+            json!({"type": "tangent_at_point", "face": side, "point": {"point": [30.0, 0.0, 20.0]},
+                   "offset": offset}),
+        );
+        assert_near(&moved["normal"], outward);
+        assert_near(&moved["origin"], add(touch, scale(outward, offset)));
+    }
+}
+
+#[test]
+fn a_tangent_plane_without_an_offset_is_saved_without_one() {
+    // mitcad#1779: a design saved before the offset loads with none (0) and
+    // is saved again as it was; an offset is a parameter of its own.
+    let mut doc = cylinder();
+    let side = json!({"body": "F2.b0", "face": "F2:side(c1)"});
+    construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "tangent", "face": side, "angle": 0, "plane": "xz"}),
+    );
+    construct(
+        &mut doc,
+        "construction_plane",
+        json!({"type": "tangent_at_point", "face": side, "point": {"point": [20.0, 0.0, 5.0]}}),
+    );
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let planes: Vec<&Value> = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["type"] == "construction_plane")
+        .collect();
+    assert_eq!(planes.len(), 2);
+    for feature in &planes {
+        assert!(feature["definition"].get("offset").is_none(), "{feature}");
+    }
+    let mut loaded = Document::from_json(&saved, GeoKernel::default()).unwrap();
+    loaded.recompute();
+    assert_eq!(loaded.to_json(), saved);
+    assert_eq!(
+        query(&loaded, json!({"query": "datums"})),
+        query(&doc, json!({"query": "datums"}))
+    );
+
+    // With an offset: written as its parameter, and loaded back.
+    let uid = construct(
+        &mut loaded,
+        "construction_plane",
+        json!({"type": "tangent", "face": side, "angle": 0, "plane": "xz", "offset": 4}),
+    );
+    let saved = loaded.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    let with_offset = file["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["uid"] == uid.as_str())
+        .unwrap();
+    let parameter = with_offset["definition"]["offset"]
+        .as_str()
+        .expect("the offset's parameter")
+        .to_owned();
+    let mut again = Document::from_json(&saved, GeoKernel::default()).unwrap();
+    again.recompute();
+    assert_eq!(again.to_json(), saved);
+    assert_near(
+        &query(&again, json!({"query": "datum", "uid": uid}))["origin"],
+        [0.0, 14.0, 0.0],
+    );
+    command(
+        &mut again,
+        json!({"cmd": "set_parameter", "name": parameter, "value": -2}),
+    );
+    assert_near(
+        &query(&again, json!({"query": "datum", "uid": uid}))["origin"],
+        [0.0, 8.0, 0.0],
+    );
 }
 
 #[test]

@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# The Thread panel's size from a picked face (mitcad#1781), on
+# thread-size.json: a Ø60 shaft (Extrude1 F2) threaded M60x3 6g by Thread1
+# (F7), a Ø65 shaft (Extrude2 F4) and another Ø60 shaft (Extrude3 F6).
+#   1. Thread1 edited: Faces cleared and the shaft picked again, its size
+#      stays M60x3 6g (the face suggests nothing in an edit); OK, and the
+#      timeline's tooltip still names M60x3 6g.
+#   2. A new Thread, Size 60 and Designation M60x3 chosen by hand, then the
+#      Ø65 shaft picked: M60x3 stays, the preview and the panel's message
+#      warn that the face is 5 mm larger than the thread; OK adds M60x3 6g.
+#   3. A new Thread with nothing chosen, the other Ø60 shaft picked: the
+#      model's whole size table suggests M60x5.5 6g (not M56 or M64, the
+#      nearest coarse first-choice sizes); OK adds it.
+# Run by tools/ui-thread-size-test.sh (Linux) and
+# tools/ui-windows-thread-size-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The edited thread keeps its size when its face is picked again.
+mark
+dblclick-logged '^Timeline Thread1 at '
+expect-log '^Editing F7 with Thread'
+wait-log '^Pick places:' 20
+wait-idle 60
+mark
+button '.*' clear_faces
+wait-log '^Thread Faces: nothing$'
+wait-idle 30
+mark
+click-pick 'face F2[.]b0/F2:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Thread size kept: M60x3 6g [(]chosen[)]$'
+wait-log '^Preview Thread: ok' 30
+wait-idle 30
+expect-no-log '^Thread size suggested'
+mark
+button '^OK$'
+wait-log '^Edited F7' 60
+wait-idle 60
+hover-logged '^Timeline Thread1 at '
+expect-timeline-tooltip '(?s)M60x3 6g, external, cosmetic'
+timeline-leave
+
+# 2. A size chosen by hand stays when the face is picked.
+mark
+command solid.thread
+expect-log '^Command Thread started'
+wait-log '^Pick places:' 20
+qt-choice input_size '60'
+wait-log '^Thread: Size = 60$'
+qt-choice input_designation 'M60x3'
+wait-log '^Thread: Designation = M60x3$'
+mark
+click-pick 'face F4[.]b0/F4:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Thread size kept: M60x3 6g [(]chosen[)]$'
+wait-log '^Preview Thread: ok, warning: M60x3 ' 30
+wait-log '^Panel Thread message box: warning: M60x3 [(].60 mm[)] on a face [(].65 mm[)]: the face.s diameter is 5 mm larger than the thread.s major diameter'
+wait-idle 30
+mark
+button '^OK$'
+wait-log '^Added cosmetic thread M60x3 6g on 1 face[(]s[)]' 60
+wait-idle 60
+
+# 3. Nothing chosen: the nearest size of the whole table.
+mark
+command solid.thread
+expect-log '^Command Thread started'
+wait-log '^Pick places:' 20
+click-pick 'face F6[.]b0/F6:side[(]c1[)]'
+wait-log '^Thread Faces: 1 face'
+wait-log '^Thread size suggested: M60x5[.]5 6g for the face [(].60 mm external[)]$'
+wait-log '^Preview Thread: ok' 30
+wait-idle 30
+expect-no-log '^Preview Thread: ok, warning'
+mark
+button '^OK$'
+wait-log '^Added cosmetic thread M60x5[.]5 6g on 1 face[(]s[)]' 60
+wait-idle 60
+expect-never 'TestDriver: FAIL'

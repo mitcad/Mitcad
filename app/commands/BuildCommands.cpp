@@ -2887,10 +2887,13 @@ Inspection inspectTimber(const SharedPtr& shared, const CommandState& state, con
       const bool joined = placed.cover > 0.0 && state.choice(kSpacingMode) == kGap;
       const QString spacing = joined ? QObject::tr("edge to edge, cover %1 mm").arg(placed.cover, 0, 'g', 6)
                                      : spacingText(state);
-      lines << QObject::tr("Over %1 face(s), %2 mm: %3 member(s), %4")
-                   .arg(state.items(kFaces).size())
+      // Each count in a text of its own (mitcad#1758).
+      const QString over = QObject::tr("Over %n face(s)", "Timber row: the faces the row goes over",
+                                       static_cast<int>(state.items(kFaces).size()));
+      lines << QObject::tr("%1, %2 mm: %n member(s), %3", "Timber row: over the faces, the span, the members",
+                           count)
+                   .arg(over)
                    .arg(placed.span, 0, 'f', 1)
-                   .arg(count)
                    .arg(spacing.toHtmlEscaped());
       logged = QStringLiteral("row over %1 face(s), span %2 mm, %3 member(s), %4")
                 .arg(state.items(kFaces).size())
@@ -3014,7 +3017,8 @@ Inspection inspectSetOnSide(const SharedPtr& shared, const CommandState& state, 
                                        : setCount(state.choice(kSpacingMode), state.value(kDistance),
                                                   state.choice(kFit), side.length, side.width, cover);
   result.text += QStringLiteral("<br>") +
-                 QObject::tr("A set along the member: %1 member(s), %2").arg(count).arg(spacingText(state).toHtmlEscaped());
+                 QObject::tr("A set along the member: %n member(s), %1", nullptr, count)
+                     .arg(spacingText(state).toHtmlEscaped());
   result.log += QStringLiteral("; set of %1, %2").arg(count).arg(spacingText(state));
   return result;
 }
@@ -4089,7 +4093,7 @@ Inspection inspectFrame(const SharedPtr& shared, const CommandState& state, cons
   // The frame is a component of its own in the host (mitcad#522).
   const QString addsTo = QObject::tr("%1 in %2").arg(name, host.name);
   lines[1] = QObject::tr("Adds to: %1").arg(addsTo).toHtmlEscaped();
-  lines << QObject::tr("%1, %2: %3 member(s)").arg(name, what).arg(count).toHtmlEscaped();
+  lines << QObject::tr("%1, %2: %n member(s)", nullptr, count).arg(name, what).toHtmlEscaped();
   if (!joined.isEmpty()) {
     lines << joined.toHtmlEscaped();
   }
@@ -5108,10 +5112,8 @@ CommandDef spacingCommand(const SharedPtr& shared, DocumentHost& host, const Com
       return result;
     }
     const int count = lead->spacing.value(QStringLiteral("count")).toInt();
-    result.text = QObject::tr("<b>%1</b><br>A set of %2 member(s); %3")
-                      .arg(lead->shownName().toHtmlEscaped())
-                      .arg(count)
-                      .arg(spacingText(state).toHtmlEscaped());
+    result.text = QObject::tr("<b>%1</b><br>A set of %n member(s); %2", nullptr, count)
+                      .arg(lead->shownName().toHtmlEscaped(), spacingText(state).toHtmlEscaped());
     result.log = QStringLiteral("set %1 of %2 member(s): %3").arg(lead->component).arg(count).arg(spacingText(state));
     return result;
   };
@@ -5403,7 +5405,7 @@ CommandDef frameCommand(const SharedPtr& shared, DocumentHost& host, const Comma
     result.shape = preview.shape;
     const int count = preview.answer.value(QStringLiteral("count")).toInt();
     QStringList lines{QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped()),
-                      QObject::tr("%1 member(s): %2").arg(count).arg(preview.counts).toHtmlEscaped()};
+                      QObject::tr("%n member(s): %1", nullptr, count).arg(preview.counts).toHtmlEscaped()};
     // The openings by the wall's kind, marked in the view, and the sizes the
     // Openings window checks its rows against (mitcad#519).
     const QString kind = state.choice(kFrameKind);
@@ -6134,10 +6136,9 @@ CommandDef connectorCommand(const SharedPtr& shared, DocumentHost& host, const C
       }
       result.report.insert(QStringLiteral("markers"), markers);
       const QString holes = holesText(answer.value(QStringLiteral("machining")));
-      lines << QObject::tr("Preview: %1, %2 fastener(s)%3")
-                   .arg(part.name.toHtmlEscaped())
-                   .arg(fasteners)
-                   .arg(holes.isEmpty() ? QString() : QObject::tr(", machining %1").arg(holes.toHtmlEscaped()));
+      lines << QObject::tr("Preview: %1, %n fastener(s)%2", nullptr, fasteners)
+                   .arg(part.name.toHtmlEscaped(),
+                        holes.isEmpty() ? QString() : QObject::tr(", machining %1").arg(holes.toHtmlEscaped()));
       if (result.error.isEmpty()) {
         result.error = problemsOf(answer);
       }
@@ -6689,7 +6690,7 @@ CommandDef swapFastenerCommand(const SharedPtr& shared, DocumentHost& host, cons
                 : size.isEmpty() || size == kWoodAuto ? QObject::tr("%1, sized from the members").arg(part->name)
                                                       : QStringLiteral("%1 %2").arg(part->name, size);
     }
-    result.text = QStringLiteral("<b>%1</b><br>%2").arg(QObject::tr("%1 fastener(s)").arg(targets.size()),
+    result.text = QStringLiteral("<b>%1</b><br>%2").arg(QObject::tr("%n fastener(s)", nullptr, static_cast<int>(targets.size())),
                                                         QObject::tr("%1 become %2").arg(now.join(QStringLiteral(", ")), becomes)
                                                             .toHtmlEscaped());
     if (!part) {

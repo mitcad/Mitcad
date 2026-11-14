@@ -75,7 +75,7 @@ ui_step "File > Export"                    file_menu e
 ui_expect_new "Export dialog opened: unit $UNITS" "Export offers millimetres first"
 type_into_dialog 'Export' "$WORK/block.step"
 ui_focus_main
-ui_expect_new "Exported $WORK/block.step: step, 1 body(ies), mm" "the STEP file is written in millimetres"
+ui_expect_new "Exported $WORK/block.step: step, 1 body, mm" "the STEP file is written in millimetres"
 grep -q "MILLI" "$WORK/block.step" || ui_fail "the STEP file names no millimetres"
 echo "ok   the file's unit is the millimetre"
 ui_step "File > Export an STL file"        file_menu e

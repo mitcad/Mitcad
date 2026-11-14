@@ -70,6 +70,11 @@ LocalResult ordinary(const Shape& body, const TopoDS_Shape& tool, LocalOperation
   boolean.SetArguments(arguments);
   boolean.SetTools(tools);
   boolean.SetNonDestructive(true);
+  // The face and edge pairs intersected on all cores, as the other booleans
+  // do (boolean.cpp): a modelled thread's groove cut from a loft with a
+  // hole took 7.5 s on one core, 1.0 s on all (mitcad#1796), the same
+  // result.
+  boolean.SetRunParallel(true);
   build(boolean);
   if (!boolean.IsDone() || boolean.HasErrors()) {
     throw std::runtime_error("the boolean operation failed");
@@ -184,6 +189,7 @@ std::optional<LocalResult> local(const Shape& body, const std::vector<NamedTool>
     fuse.AddArgument(tool.shape);
   }
   fuse.SetNonDestructive(true);
+  fuse.SetRunParallel(true);
   interruptible([&](const Message_ProgressRange& range) { fuse.Perform(range); });
   if (fuse.HasErrors()) {
     return std::nullopt;

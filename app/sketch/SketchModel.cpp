@@ -122,7 +122,10 @@ bool SketchModel::load(const QJsonObject& sketch) {
                        !p.value(QStringLiteral("unfollowed")).toArray().isEmpty() ||
                        !p.value(QStringLiteral("stale")).toArray().isEmpty();
     staleProjections = staleProjections || stale;
-    projectAgain = projectAgain || (stale && !flag(p, "lost"));
+    // A lost one with edges that could have taken its place too: Project
+    // Again asks which (mitcad#1794).
+    const QJsonArray candidates = p.value(QStringLiteral("candidates")).toArray();
+    projectAgain = projectAgain || (stale && (!flag(p, "lost") || !candidates.isEmpty()));
     ProjectionData projection;
     const QJsonValue source = p.value(QStringLiteral("source"));
     if (source.isObject()) {
@@ -144,6 +147,18 @@ bool SketchModel::load(const QJsonObject& sketch) {
     }
     projection.stale = stale;
     projection.section = flag(p, "section");
+    const QJsonArray described = p.value(QStringLiteral("candidate_curves")).toArray();
+    for (int i = 0; i < candidates.size(); ++i) {
+      const QJsonObject curve = described.at(i).toObject();
+      SuccessorData candidate;
+      candidate.edge = candidates.at(i).toString();
+      candidate.type = curve.value(QStringLiteral("type")).toString();
+      candidate.length = curve.value(QStringLiteral("length")).toDouble();
+      candidate.radius = curve.value(QStringLiteral("radius")).toDouble();
+      candidate.body = projection.body;
+      candidate.occurrence = projection.occurrence;
+      projection.candidates.push_back(candidate);
+    }
     projections.push_back(projection);
   }
   dof = sketch.value(QStringLiteral("dof")).toInt();
@@ -158,6 +173,10 @@ bool SketchModel::load(const QJsonObject& sketch) {
   redundant.clear();
   for (const QJsonValue& id : sketch.value(QStringLiteral("redundant")).toArray()) {
     redundant << id.toString();
+  }
+  notParallel.clear();
+  for (const QJsonValue& id : sketch.value(QStringLiteral("not_parallel")).toArray()) {
+    notParallel << id.toString();
   }
   for (const QJsonValue& id : sketch.value(QStringLiteral("unmet_inactive")).toArray()) {
     unmetInactive << id.toString();
@@ -393,6 +412,7 @@ bool SketchModel::load(const QJsonObject& sketch) {
     o.expression = k.value(QStringLiteral("value")).toObject().value(QStringLiteral("expression")).toString();
     o.left = flag(k, "left");
     o.derived = flag(k, "derived");
+    o.round = flag(k, "round");
     offsets.push_back(o);
   }
 
@@ -404,6 +424,14 @@ bool SketchModel::load(const QJsonObject& sketch) {
     conflicts.push_back(ids);
   }
   return framed;
+}
+
+std::vector<SuccessorData> SketchModel::successors() const {
+  std::vector<SuccessorData> out;
+  for (const ProjectionData& projection : projections) {
+    out.insert(out.end(), projection.candidates.begin(), projection.candidates.end());
+  }
+  return out;
 }
 
 const PointData* SketchModel::point(const QString& id) const {

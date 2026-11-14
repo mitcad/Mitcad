@@ -91,6 +91,10 @@ class MeasurementOverlay;
 class PickList;
 struct PrintOverlay;
 struct ProxyMesh;
+namespace cam {
+struct ToolpathScene;
+struct StockMesh;
+}
 
 // The existing platform format for both viewport and global share context:
 // macOS 4.1 core; Windows/Linux 4.5 compatibility. main() selects it before
@@ -183,6 +187,9 @@ struct SketchEntityDisplay {
   // The occurrence that places the sketch when it is a component's (the
   // shape is placed already); picks carry it.
   QString occurrence = QString();
+  // A 3D sketch's (mitcad#1524): its points keep their markers with the
+  // Sketch Palette's Show points off (setSketchPointsHidden).
+  bool spatial = false;
   // What the shape is made from (the entity's solved geometry, the sketch
   // frame, the style and the placement): an entity shown with the same
   // signature keeps its display (setSketchEntities). Empty: always new.
@@ -198,6 +205,9 @@ struct DatumDisplay {
   // The picked item's geometry; empty: the kind's name. An Intersection
   // Curve's is featureCurveGeometry() (mitcad#1417).
   QString geometry = QString();
+  // A coordinate system's triad (mitcad#1775): 0, 1 or 2 for the line of
+  // its X, Y or Z, drawn solid in that axis's colour; -1 for any other.
+  int axis = -1;
 };
 
 // A selected item drawn in its input's colour.
@@ -370,6 +380,19 @@ public:
   // them. Logs "Filament change overlay: …" when it changes.
   void setFilamentChangeOverlay(const std::vector<std::pair<QColor, std::vector<float>>>& bands,
                                 const std::vector<float>& rings);
+  // CAM toolpaths (mitcad#1013, view/CamToolpathOverlay.cpp): the shown
+  // setups' toolpaths as lines over the bodies (rapids dashed, cuts solid,
+  // entries in their own colour, the current operation's thicker in the
+  // selection's colour, an operation out of date dotted and muted) and
+  // Simulate's tool as a cylinder; never picked. An empty scene clears
+  // them. Logs "CAM toolpath overlay: …" when it changes.
+  void setCamToolpaths(const cam::ToolpathScene& scene);
+  // Simulate's stock (mitcad#1013, view/CamStockOverlay.cpp): the stock as
+  // cut so far as a surface, lit and a little see-through, grey, or shaded
+  // by the material it leaves over the part (CamLeftThin to CamLeftThick,
+  // a cut into the part CamGouge); never picked. An empty mesh clears it.
+  // Logs "CAM stock overlay: …" when it changes.
+  void setCamStock(const cam::StockMesh& mesh);
   // Show Build Volume (mitcad#640, view/BuildVolume.cpp): the design
   // printer's bed and printable height as lines, and the boxes of the bodies
   // that do not fit in the warning's colour for the view's background
@@ -528,8 +551,11 @@ public:
   // A click on the cube's arrow `id` (up, down, left, right, cw, ccw).
   void pressCubeArrow(const QString& id);
   QMargins overlayInsets() const { return m_overlayInsets; }
-  // The width that the sketch's badge takes at the bottom left, margin
-  // included (0: none), so that the floating status pill keeps clear of it.
+  // The width that the sketch's badge takes at the bottom left, from the
+  // view's left edge to the right edge of the badge and the pointer's place
+  // above it (0: none; right of a card along the left edge when it keeps
+  // clear of one, mitcad#1756), so that the floating status pill keeps
+  // clear of it.
   void setBadgeWidth(int width);
   int badgeWidth() const { return m_badgeWidth; }
   // Parts of the view that panels float over (widget pixels): the places
@@ -718,11 +744,25 @@ public:
   void removeSketchProfiles(const QString& sketch);
   std::size_t profileCount() const { return m_profiles.size(); }
   void setSketchEntities(const std::vector<SketchEntityDisplay>& entities);
-  // The Sketch Palette's Show points off (mitcad#1705): this sketch's points
-  // are drawn without their markers, while they stay pickable, so that the
+  // The Sketch Palette's Show points off (mitcad#1705, mitcad#1764): the
+  // points of every shown sketch, the edited one and finished ones, are
+  // drawn without their markers, while they stay pickable, so that the
   // hover, snaps, drags and selection work as before (the sketch overlay
-  // paints the hovered and selected ones). Empty: every point drawn.
-  void setHiddenSketchPoints(const QString& sketch);
+  // paints the edited sketch's hovered point, setHighlights the selected
+  // ones). 3D sketches' points keep their markers. False: every point drawn.
+  void setSketchPointsHidden(bool hidden);
+  // The sketch that sketch mode edits (mitcad#1762; empty: none). Its
+  // curves and points are drawn a second time through the bodies: in a
+  // layer of their own after the points' layer, without a depth test and
+  // writing no depth, about a third as strong in their own colours, the
+  // curves dashed (a centre line keeps its dash-dot), the points' markers
+  // faint. In sight, the entity itself is drawn under its copy in the same
+  // colour, which leaves it as it was; behind a face only the faint copy
+  // shows. The copies are not pickable: picks and the hover stay as they
+  // were. Other sketches shown are drawn as before. Logs "Sketch through
+  // the bodies: <sketch> <n> curve(s), <m> point(s), dimmed, curves
+  // dashed" ("none") when it changes.
+  void setSketchThrough(const QString& sketch);
   void setDatums(const std::vector<DatumDisplay>& datums);
   // The shapes the shown sketch profiles, sketch entities and datums are
   // drawn from, for UI tests (mitcad#1586): the view's own, built on the
@@ -759,6 +799,9 @@ public:
     double largestSag = 0.0;
     int highlightEdges = 0;
     int highlightShared = 0;
+    // The body's edges drawn, and its smooth seams left out (mitcad#1773).
+    int drawnEdges = 0;
+    int seams = 0;
   };
   EdgeDrawing edgeDrawing(const std::string& uid) const;
   // The highlights of sketch curves against the curves they highlight, for
@@ -772,6 +815,14 @@ public:
     double pixels = 0.0;
   };
   SketchHighlightFit sketchHighlightFit() const;
+  // For UI tests (expect-sketch-point-markers, mitcad#1764): how many of
+  // this sketch's shown points are drawn with their markers and how many
+  // without (Show points off, setSketchPointsHidden).
+  struct SketchPointMarkers {
+    int drawn = 0;
+    int hidden = 0;
+  };
+  SketchPointMarkers sketchPointMarkers(const QString& sketch) const;
   // Draws the selection (replacing what it drew before). A large one is
   // drawn in slices over later turns of the event loop (mitcad#1631), so
   // that Esc, a click or another selection is handled meanwhile; the next
@@ -1022,6 +1073,21 @@ public:
   // constrained orbit), then upwards by `up` degrees about the view's
   // right, about the mouse orbit's centre; the zoom is kept.
   void turnView(double right, double up);
+  // The orbit's center (mitcad#1791, view/OrbitCenterView.cpp). A fixed
+  // center, set from the view's context menu (Set Orbit Center Here),
+  // which every orbit turns about until it is cleared: the mouse's and the
+  // trackpad's, the orientation cube's drag and the arrow keys (the 3D
+  // mouse keeps its own); a marker shows it while it is set. Pan and zoom
+  // keep it; MainWindow clears it when another design is opened. Logs
+  // "Orbit center set at x y z" or "Orbit center cleared".
+  void setOrbitCenter(const std::optional<gp_Pnt>& at);
+  const std::optional<gp_Pnt>& orbitCenter() const { return m_orbitCenter; }
+  // The model point under the right click that asked for the context menu
+  // at `global` (picked as a hover picks, the nearest thing shown under
+  // the cursor), none over empty space or for another menu.
+  std::optional<gp_Pnt> contextMenuPoint(const QPoint& global) const;
+  // The point the last orbit or turn turned about (UI tests).
+  const std::optional<gp_Pnt>& lastOrbitPivot() const { return m_lastOrbitPivot; }
   // The isometric home view, fitted.
   void lookHome();
 
@@ -1187,6 +1253,9 @@ protected:
                          const occ::handle<V3d_View>& view, const NCollection_Vec2<int>& point) override;
   void OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& context,
                           const occ::handle<V3d_View>& view) override;
+  // What OCCT's orbits (the mouse's, the trackpad's, the orientation
+  // cube's drag) turn about as they start (mitcad#1791, orbitPivot).
+  gp_Pnt GravityPoint(const occ::handle<AIS_InteractiveContext>& context, const occ::handle<V3d_View>& view) override;
 
 private:
   // Headless UI tests (MITCAD_TEST_HEADLESS): the hidden view logs its
@@ -1373,8 +1442,15 @@ private:
     bool reference = false;
     bool temporary = false; // shown only for a command (mitcad#546)
     bool hidden = false;    // a point without its marker (Show points off, mitcad#1705)
+    bool spatial = false;   // a 3D sketch's, whose points keep their markers (mitcad#1764)
   };
   void styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const;
+  // A shown curve's colour: its kind's, pale outside the active component,
+  // lighter when shown only for a command.
+  Quantity_Color sketchCurveColor(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const;
+  // A shown point's marker image as styleSketchEntity draws it, and the key
+  // it is shared under (`key`).
+  QImage sketchPointMarker(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look, QString& key) const;
   // Whether the entity is drawn over a halo (mitcad#302): fully constrained
   // curves and centre lines, whose colour follows the background and would
   // otherwise vanish over a body's face of the same tone.
@@ -1399,9 +1475,19 @@ private:
   // Logs "Sketch point markers: <n> drawn, <m> hidden" when it changed (for
   // UI tests, mitcad#1705).
   void logSketchPointMarkers();
-  // Whether a shown sketch entity is a point of the sketch whose points are
-  // hidden (setHiddenSketchPoints).
-  bool sketchPointHidden(const AIS_InteractiveObject* object, const SketchEntityLook& look) const;
+  // Whether a shown sketch entity is a point drawn without its marker
+  // (setSketchPointsHidden).
+  bool sketchPointHidden(const SketchEntityLook& look) const;
+  // The faint copy drawn through the bodies of a shown entity of the
+  // sketch setSketchThrough names (mitcad#1762): made, restyled or taken
+  // away as the entity and the setting say. A point without its marker
+  // (Show points off) has none.
+  void updateSketchThrough(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look);
+  void removeSketchThrough(const AIS_InteractiveObject* object);
+  void styleSketchThrough(const occ::handle<AIS_Shape>& through, const occ::handle<AIS_Shape>& object,
+                          const SketchEntityLook& look) const;
+  // Logs "Sketch through the bodies: ..." when it changed (for UI tests).
+  void logSketchThrough();
   // Recolours the sketch entities shown after the background turned dark
   // or light.
   void restyleSketchEntities();
@@ -1541,6 +1627,12 @@ private:
   std::map<const AIS_InteractiveObject*, SketchEntityLook> m_sketchEntityLooks;
   // Their halos (mitcad#302), not pickable, drawn before the entities.
   std::map<const AIS_InteractiveObject*, occ::handle<AIS_Shape>> m_sketchEntityHalos;
+  // The edited sketch drawn through the bodies (mitcad#1762): its uid
+  // (setSketchThrough), the faint copies of its shown entities, not
+  // pickable, and the log line last written.
+  QString m_throughSketch;
+  std::map<const AIS_InteractiveObject*, occ::handle<AIS_Shape>> m_sketchEntityThrough;
+  QString m_loggedSketchThrough = QStringLiteral("none");
   // The halos as last logged ("Sketch halos:").
   QString m_loggedSketchHalos;
   // The sketch layers' order and the sketch highlights as last logged
@@ -1554,9 +1646,10 @@ private:
   // The shown sketches' colours as last logged ("Sketch colours:", for UI
   // tests; mitcad#286).
   QString m_loggedSketchColours;
-  // The sketch whose points are drawn without markers (mitcad#1705), and
-  // the point markers as last logged ("Sketch point markers:").
-  QString m_hiddenPointsSketch;
+  // Whether the sketches' points are drawn without markers (Show points
+  // off, mitcad#1705, mitcad#1764), and the point markers as last logged
+  // ("Sketch point markers:").
+  bool m_sketchPointsHidden = false;
   QString m_loggedPointMarkers;
   std::vector<occ::handle<AIS_Shape>> m_datums;
   std::vector<occ::handle<AIS_Shape>> m_highlights;
@@ -1749,6 +1842,9 @@ private:
   // that holds the curves and their highlights (mitcad#897), with the
   // points' own hover style in it.
   Graphic3d_ZLayerId m_sketchPointLayer = Graphic3d_ZLayerId_UNKNOWN;
+  // The edited sketch's faint copies through the bodies, just after the
+  // points' layer (mitcad#1762).
+  Graphic3d_ZLayerId m_sketchThroughLayer = Graphic3d_ZLayerId_UNKNOWN;
   occ::handle<Prs3d_Drawer> m_sketchPointHover;
   // Image references drawn through the bodies, just before the halos
   // (mitcad#782).
@@ -1781,6 +1877,12 @@ private:
   occ::handle<AIS_InteractiveObject> m_filamentBands;
   occ::handle<AIS_InteractiveObject> m_filamentRings;
   QString m_loggedFilamentOverlay = QStringLiteral("Filament change overlay: none");
+  // CAM toolpaths and Simulate's tool (setCamToolpaths, mitcad#1013).
+  occ::handle<AIS_InteractiveObject> m_camToolpaths;
+  QString m_loggedCamToolpaths = QStringLiteral("CAM toolpath overlay: none");
+  // Simulate's stock (setCamStock, mitcad#1013).
+  occ::handle<AIS_InteractiveObject> m_camStock;
+  QString m_loggedCamStock = QStringLiteral("CAM stock overlay: none");
   // The build volume's lines and the boxes of bodies outside it
   // (setBuildVolume, mitcad#640).
   occ::handle<AIS_Shape> m_buildFrame;
@@ -1961,6 +2063,27 @@ private:
   occ::handle<AIS_Shape> m_centerOfMass;
   bool m_centerOfMassFollowsTone = false;
   QString m_loggedCenterOfMass = QStringLiteral("Center of Mass drawn: none");
+  // The orbit's center (setOrbitCenter, mitcad#1791,
+  // view/OrbitCenterView.cpp). orbitPivot: what an orbit or a turn turns
+  // about, `cursor` (device pixels) where it starts when it has one: the
+  // fixed center, else with Orbit center Cursor the model point under the
+  // cursor, else the middle of what is shown. modelPointAt: the nearest
+  // model point under a pixel (nothing that keeps its place on the screen,
+  // such as the cube); pickedModelPoint the same from the last pick.
+  gp_Pnt orbitPivot(const std::optional<NCollection_Vec2<int>>& cursor);
+  std::optional<gp_Pnt> modelPointAt(const NCollection_Vec2<int>& pixel);
+  std::optional<gp_Pnt> pickedModelPoint() const;
+  // The marker: at the fixed center while it is set, else at a Cursor
+  // orbit's point until the navigation ends.
+  void showOrbitMarker(const std::optional<gp_Pnt>& at);
+  std::optional<gp_Pnt> m_orbitCenter;
+  std::optional<gp_Pnt> m_lastOrbitPivot;
+  occ::handle<AIS_Shape> m_orbitMarker;
+  std::optional<gp_Pnt> m_orbitMarkerAt;
+  // The model point under the right click that asked for the context menu,
+  // and where (global).
+  std::optional<gp_Pnt> m_contextPoint;
+  QPoint m_contextPointGlobal;
   // The pick list (setPickListNames, mitcad#1703, view/PickListView.cpp):
   // a left press arms it, the timer opens it unless the press moved, went
   // up or was cancelled first; while it is open after a press, that

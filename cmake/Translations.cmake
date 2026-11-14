@@ -16,6 +16,12 @@
 # Adding a language is data: its line in languages.txt and its .ts file
 # (docs/translations.md). The target update_translations refreshes the .ts
 # files from the sources with lupdate (tools/translations-update.cmake).
+#
+# English, the source language, is listed too (mitcad#1756): mitcad_en.ts
+# has only its plural forms ("1 degree of freedom", "2 degrees of
+# freedom" for the source's "degree(s)"), compiled and shipped as the
+# others are, without Qt's catalogue (Qt's own texts are English) and never
+# the pseudo-language's model.
 find_package(Qt6 REQUIRED COMPONENTS LinguistTools)
 
 set(mitcad_ts_dir "${PROJECT_SOURCE_DIR}/app/translations")
@@ -68,7 +74,11 @@ foreach(code IN LISTS MITCAD_UI_LANGUAGES)
   mitcad_compile_catalogue("${mitcad_ts_dir}/mitcad_${code}.ts" "${model_ts}" ${code})
   list(APPEND mitcad_shipped "${mitcad_qm_dir}/mitcad_${code}.qm")
   # Qt's own catalogue of the language, as Qt ships it (BSD-3-Clause, Qt's
-  # translations module), where there is one.
+  # translations module), where there is one; none for English's plural
+  # forms.
+  if(code STREQUAL "en")
+    continue()
+  endif()
   if(EXISTS "${mitcad_qt_translations}/qtbase_${code}.qm")
     add_custom_command(
       OUTPUT "${mitcad_qm_dir}/qtbase_${code}.qm"
@@ -85,8 +95,10 @@ endforeach()
 
 # The pseudo-language of the tests (docs/translations.md): every text of the
 # first language's file, accented, longer and in brackets.
-if(BUILD_TESTING AND MITCAD_UI_LANGUAGES)
-  list(GET MITCAD_UI_LANGUAGES 0 mitcad_first_language)
+set(mitcad_translated_languages ${MITCAD_UI_LANGUAGES})
+list(REMOVE_ITEM mitcad_translated_languages en)
+if(BUILD_TESTING AND mitcad_translated_languages)
+  list(GET mitcad_translated_languages 0 mitcad_first_language)
   set(mitcad_pseudo_ts "${mitcad_ts_work}/mitcad_xx.source.ts")
   add_custom_command(
     OUTPUT "${mitcad_pseudo_ts}"

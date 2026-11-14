@@ -298,6 +298,10 @@ void MainWindow::followMeasurements() {
                                               ? QString()
                                               : QStringLiteral(" (hidden)"),
                                           group.isEmpty() ? QString() : QStringLiteral(" in ") + group)
+                           // Rolled back with the features its picks are
+                           // on (mitcad#1756), not broken.
+                           : measurement.value(QStringLiteral("rolled_back")).toBool()
+                               ? QStringLiteral("%1 rolled back: %2").arg(name, error)
                                : QStringLiteral("%1 broken: %2").arg(name, error));
   }
   const QString logged = QStringLiteral("Annotations: %1")

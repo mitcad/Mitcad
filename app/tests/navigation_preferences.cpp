@@ -150,6 +150,14 @@ int navigationPreferencesTests() {
   CHECK(turnStep && turnStep->value() == 15 && turnStep->minimum() == 1 && turnStep->maximum() == 90);
   if (turnStep) turnStep->setValue(30);
   CHECK(form.chosen().turnStep == 30.0);
+  // The orbit's center (mitcad#1791): Model by default, then Cursor.
+  auto* orbitCenter = form.findChild<QComboBox*>(QStringLiteral("navigationOrbitCenter"));
+  CHECK(orbitCenter && orbitCenter->count() == 2 && orbitCenter->currentData().toInt() == int(OrbitCenter::Model));
+  if (orbitCenter) {
+    CHECK(orbitCenter->itemText(0) == QStringLiteral("Model") && orbitCenter->itemText(1) == QStringLiteral("Cursor"));
+    orbitCenter->setCurrentIndex(orbitCenter->findData(int(OrbitCenter::Cursor)));
+  }
+  CHECK(form.chosen().orbitCenter == OrbitCenter::Cursor);
 
   // The 3D mouse's tab (mitcad#951): its speed, a reversed axis, an axis
   // off, a lock and a button's command go into the settings.
@@ -213,6 +221,9 @@ int navigationPreferencesTests() {
     CHECK(reopened.chosen().turnStep == 30.0);
     auto* reopenedStep = reopened.findChild<QSpinBox*>(QStringLiteral("navigationTurnStep"));
     CHECK(reopenedStep && reopenedStep->value() == 30);
+    CHECK(reopened.chosen().orbitCenter == OrbitCenter::Cursor);
+    auto* reopenedCenter = reopened.findChild<QComboBox*>(QStringLiteral("navigationOrbitCenter"));
+    CHECK(reopenedCenter && reopenedCenter->currentData().toInt() == int(OrbitCenter::Cursor));
     CHECK(reopened.chosen().spaceMouse.speed == 2.0 && reopened.chosen().spaceMouse.reversed[0] &&
           !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
     CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));

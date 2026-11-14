@@ -148,6 +148,6 @@ if ($seats.Count -eq 0 -or @($seats | Where-Object { $_ -notmatch 'head top 0 mm
 Ui-Step 'Close (Escape)'                 { Ui-Key 'Escape' }
 Ui-Mark
 Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
-Ui-ExpectNew 'Undo: Swap 2 fastener(s) for Ring nail test 3.1x90' 'one undo step takes the swap back'
+Ui-ExpectNew 'Undo: Swap 2 fasteners for Ring nail test 3.1x90' 'one undo step takes the swap back'
 
 Ui-Finish $TimberTest

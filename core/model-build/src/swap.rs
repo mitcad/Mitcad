@@ -237,7 +237,11 @@ impl<K: Kernel> SwapBuild<K> for Document<K> {
             .first()
             .map(|s| s.name.clone())
             .unwrap_or_else(|| label.clone());
-        let undo = format!("Swap {} fastener(s) for {shown}", swaps.len());
+        // One whole label for one and for several: no "(s)" (mitcad#1759).
+        let undo = match swaps.len() {
+            1 => format!("Swap a fastener for {shown}"),
+            n => format!("Swap {n} fasteners for {shown}"),
+        };
         let mut seen_warning = BTreeSet::new();
         warnings.retain(|w| seen_warning.insert(w.clone()));
         let out = Swapped {

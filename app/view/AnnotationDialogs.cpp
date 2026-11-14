@@ -826,7 +826,14 @@ std::optional<AnnotationEdit> editAnnotation(QWidget* parent, const QJsonObject&
   auto* form = new QFormLayout;
   layout->addLayout(form);
   const QString error = annotation.value(QStringLiteral("error")).toString();
-  if (!error.isEmpty()) {
+  if (annotation.value(QStringLiteral("rolled_back")).toBool()) {
+    // Rolled back with the features its picks are on (mitcad#1756): no
+    // error, it comes back with them.
+    auto* rolled = new QLabel(QObject::tr("Rolled back: its picks are on features after the timeline marker."),
+                              &dialog);
+    rolled->setWordWrap(true);
+    layout->insertWidget(0, rolled);
+  } else if (!error.isEmpty()) {
     // In words (mitcad#1741).
     auto* broken = new QLabel(QObject::tr("Broken: %1").arg(shownError(annotation)), &dialog);
     broken->setWordWrap(true);

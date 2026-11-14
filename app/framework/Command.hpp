@@ -548,6 +548,13 @@ struct InputDef {
   // The headings in a state, when they carry a value (Gear Pair's "Centre
   // distance 60 mm", mitcad#656); choiceColumns when unset.
   std::function<QStringList(const CommandState&)> choiceColumnsFor;
+  // Choice shown as rows of columns: what an option (by its value) is
+  // about in the view, painted while the pointer is over its row as a
+  // notice's places (mitcad#1794: Project Again's edges that could take a
+  // lost source's place; DocumentHost::hoverNoticePlaces). Unset or
+  // empty: nothing; a frontend that cannot tell the pointer over a row
+  // paints nothing.
+  std::function<QJsonArray(const CommandState&, const QString&)> choicePlaces;
   // Choice shown as a drop-down: a small icon beside each option (by its
   // value), its tooltip on the option (mitcad#655: the place of a printer,
   // a lock for Mitcad's own). A frontend without icons shows the labels.
@@ -632,6 +639,11 @@ struct InputDef {
   // Value: its handle stays in the view while the input is hidden (folded
   // away under More, mitcad#656: a placement's Offset and Angle).
   bool handleWhenHidden = false;
+  // Selection: its field is in a window beside the panel, not a row of it
+  // (mitcad#1800: Filament Change's To Object). The panel never draws it;
+  // while it is shown (`visible`) it takes the view's picks when that
+  // window makes it the active one (CommandSession::pickInWindow).
+  bool windowPick = false;
   // Text under the row, in grey, read after each preview that succeeded
   // (mitcad#656: Check Belt's belt length, nearest belt and travel, one
   // per line); none when empty.
@@ -847,6 +859,10 @@ struct InputDef {
     choiceColumnsFor = std::move(now);
     return *this;
   }
+  InputDef& withChoicePlaces(std::function<QJsonArray(const CommandState&, const QString&)> placesOf) {
+    choicePlaces = std::move(placesOf);
+    return *this;
+  }
   InputDef& withPlaces() {
     places = true;
     return *this;
@@ -857,6 +873,10 @@ struct InputDef {
   }
   InputDef& withHandleWhenHidden() {
     handleWhenHidden = true;
+    return *this;
+  }
+  InputDef& withWindowPick() {
+    windowPick = true;
     return *this;
   }
   InputDef& withRowNote(std::function<QString(const CommandState&, const CommandContext&)> note) {
@@ -991,6 +1011,18 @@ public:
   QString itemsWords(const QString& id) const { return m_itemsWords.value(key(id)); }
   void setItemsWords(const QString& id, const QString& words) { m_itemsWords[key(id)] = words; }
   void setItemWords(const QString& id, const QStringList& words) { m_itemWords[key(id)] = words; }
+  // A selection's picks that are gone from the model (mitcad#1780): their
+  // places in items(id), which the shown preview's error named and the
+  // model no longer has (CommandSession::markMissingPicks); empty while
+  // none is known to be. The panel's chip counts them, its list marks them.
+  QList<int> missingItems(const QString& id) const { return m_missing.value(key(id)); }
+  void setMissingItems(const QString& id, const QList<int>& indices) {
+    if (indices.isEmpty()) {
+      m_missing.remove(key(id));
+    } else {
+      m_missing[key(id)] = indices;
+    }
+  }
 
   QString choice(const QString& id) const { return m_choices.value(key(id)); }
   void setChoice(const QString& id, const QString& option) { m_choices[key(id)] = option; }
@@ -1024,6 +1056,7 @@ private:
   QHash<QString, QString> m_itemsTexts;
   QHash<QString, QStringList> m_itemWords;
   QHash<QString, QString> m_itemsWords;
+  QHash<QString, QList<int>> m_missing;
   QHash<QString, QString> m_choices;
   QHash<QString, bool> m_checks;
   QHash<QString, int> m_rows;

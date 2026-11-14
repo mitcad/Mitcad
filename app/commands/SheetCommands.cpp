@@ -88,8 +88,15 @@ bool isBendFace(const SelectionItem& item) {
 }
 
 // The edge between two walls of a panel: a corner.
+// An edge through the thickness between two walls of a flat face, or
+// between a wall of a flat face and the side of a bend (a corner where the
+// bend starts, mitcad#1765).
 bool isCorner(const SelectionItem& item) {
-  return item.kind == SelectKind::Edge && item.name.count(QStringLiteral(":sheet_side")) == 2;
+  if (item.kind != SelectKind::Edge) {
+    return false;
+  }
+  const qsizetype walls = item.name.count(QStringLiteral(":sheet_side"));
+  return walls == 2 || (walls == 1 && item.name.count(QStringLiteral(":sheet_bend_side")) == 1);
 }
 
 // The model's answer for a pick (commands.md, `sheet_reference`), or an
@@ -175,6 +182,34 @@ SelectionItem cornerEdge(const QString& body, const QJsonObject& corner) {
     std::swap(a, b);
   }
   return SelectionItem{SelectKind::Edge, body, QStringLiteral("E{%1|%2}").arg(a, b), QStringLiteral("line")};
+}
+
+// The edges the stored corners of a Corner Round or Corner Chamfer lie on
+// in the body where the model is now (the model's `sheet_corner_edges`,
+// mitcad#1766): a corner beside a bend is the edge between its wall and
+// the bend's side, which no name made from the corner's two curves gives.
+// A corner the body has no edge for (one its own round took away, before
+// the edit rolls the timeline back) keeps the edge between the walls of
+// its two curves.
+Selection cornerEdges(const QString& body, const QJsonArray& corners, const CommandContext& context) {
+  QJsonArray found;
+  try {
+    found = context
+                .queryObject({{QStringLiteral("query"), QStringLiteral("sheet_corner_edges")},
+                              {QStringLiteral("body"), body},
+                              {QStringLiteral("corners"), corners}})
+                .value(QStringLiteral("edges"))
+                .toArray();
+  } catch (const std::exception& error) {
+    qDebug().noquote() << QStringLiteral("Corner edges not found: %1").arg(QString::fromUtf8(error.what()));
+  }
+  Selection edges;
+  for (qsizetype i = 0; i < corners.size(); ++i) {
+    const QString name = i < found.size() ? found.at(i).toString() : QString();
+    edges.append(name.isEmpty() ? cornerEdge(body, corners.at(i).toObject())
+                                : SelectionItem{SelectKind::Edge, body, name, QStringLiteral("line")});
+  }
+  return edges;
 }
 
 // --- Values
@@ -754,6 +789,7 @@ CommandDef sheetBendCommand(const CommandContext& context) {
   def.icon = QStringLiteral("sheet-bend");
   def.tooltip = QObject::tr("Bends between two flat faces: at their common seam, or joining two placed sheets");
   def.group = kGroup;
+  def.pinned = true; // mitcad#1778
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("join")};
   def.featureType = QStringLiteral("sheet_bend");
   const auto sheetPart = [](const SelectionItem& item) { return isWall(item) || isPanelFace(item); };
@@ -942,6 +978,9 @@ CommandDef sheetFoldCommand(const CommandContext& context) {
 
 namespace {
 
+// The stored corners an edit loaded, with their body, for `rolledBack`.
+const QString kLoadedCorners = QStringLiteral("loaded_corners");
+
 CommandDef cornerCommand(const CommandContext& context, bool round) {
   CommandDef def;
   def.id = round ? QStringLiteral("sheet.corner_round") : QStringLiteral("sheet.corner_chamfer");
@@ -997,11 +1036,11 @@ CommandDef cornerCommand(const CommandContext& context, bool round) {
     return result;
   };
   def.load = [round](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
-    Selection edges;
-    for (const QJsonValue& corner : feature.value(QStringLiteral("corners")).toArray()) {
-      edges.append(cornerEdge(str(feature, "body"), corner.toObject()));
-    }
-    state.setItems(QStringLiteral("corners"), edges);
+    const QJsonArray corners = feature.value(QStringLiteral("corners")).toArray();
+    state.setItems(QStringLiteral("corners"), cornerEdges(str(feature, "body"), corners, model));
+    // Found again once the timeline is rolled back to the feature.
+    state.setObject(kLoadedCorners, {{QStringLiteral("body"), str(feature, "body")},
+                                     {QStringLiteral("corners"), corners}});
     if (round) {
       loadValue(state, QStringLiteral("radius"), feature.value(QStringLiteral("radius")), feature, model);
     } else {
@@ -1009,6 +1048,25 @@ CommandDef cornerCommand(const CommandContext& context, bool round) {
       loadValue(state, QStringLiteral("first"), distances.value(QStringLiteral("first")), feature, model);
       loadValue(state, QStringLiteral("second"), distances.value(QStringLiteral("second")), feature, model);
     }
+  };
+  // The corners `load` took from the model after the edited feature (where
+  // its round or bevel took them away) found again where the feature
+  // finds them (mitcad#1766): a corner beside a bend is highlighted on the
+  // edge between its wall and the bend's side.
+  def.rolledBack = [name = def.name](CommandState& state, const CommandContext& model) {
+    const QJsonObject loaded = state.object(kLoadedCorners);
+    const QJsonArray corners = loaded.value(QStringLiteral("corners")).toArray();
+    if (corners.isEmpty()) {
+      return;
+    }
+    const Selection edges = cornerEdges(str(loaded, "body"), corners, model);
+    state.setItems(QStringLiteral("corners"), edges);
+    QStringList logged;
+    for (const SelectionItem& edge : edges) {
+      logged << edge.logDescription();
+    }
+    qDebug().noquote() << QStringLiteral("%1 corners where the feature finds them: %2")
+                              .arg(name, logged.join(QStringLiteral("; ")));
   };
   def.describe = [round](const CommandState& state, const CommandContext&) {
     return QStringLiteral("Added corner %1 on %2 corner(s)")
@@ -1131,6 +1189,7 @@ CommandDef sheetUnfoldCommand(const CommandContext& context) {
   def.icon = QStringLiteral("sheet-unfold");
   def.tooltip = QObject::tr("Opens chosen bends flat while a face stays where it is");
   def.group = kGroup;
+  def.pinned = true; // mitcad#1778
   def.keywords = {QStringLiteral("sheet metal"), QStringLiteral("flatten"), QStringLiteral("develop")};
   def.featureType = QStringLiteral("sheet_unfold");
   def.inputs = {
@@ -1402,20 +1461,30 @@ CommandDef sheetFlatPatternCommand(const CommandContext& context) {
 
 namespace mitcad {
 
-void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context) {
+void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context,
+                                const CommandDef& editRules, const CommandDef& showFlat) {
   using namespace cmd;
-  registry.add(sheetFaceCommand(context));
-  registry.add(sheetFlangeCommand(context));
-  registry.add(sheetBendCommand(context));
-  registry.add(sheetFoldCommand(context));
-  registry.add(sheetCornerRoundCommand(context));
-  registry.add(sheetCornerChamferCommand(context));
-  registry.add(sheetCutCommand(context));
-  registry.add(sheetCornerReliefCommand(context));
-  registry.add(sheetUnfoldCommand(context));
-  registry.add(sheetRefoldCommand(context));
-  registry.add(sheetFlatPatternCommand(context));
-  registry.add(sheetRulesCommand(context));
+  // Registration order is the menu's order: each section's commands
+  // together, the sections in their order (CommandDef::section,
+  // mitcad#1778).
+  const auto add = [&registry](CommandDef def, const char* section) {
+    def.section = QString::fromLatin1(section);
+    registry.add(def);
+  };
+  add(sheetRulesCommand(context), "rules");
+  add(editRules, "rules");
+  add(sheetFaceCommand(context), "create");
+  add(sheetFlangeCommand(context), "create");
+  add(sheetBendCommand(context), "bends");
+  add(sheetFoldCommand(context), "bends");
+  add(sheetCornerReliefCommand(context), "bends");
+  add(sheetCornerRoundCommand(context), "edges");
+  add(sheetCornerChamferCommand(context), "edges");
+  add(sheetCutCommand(context), "edges");
+  add(sheetUnfoldCommand(context), "flat");
+  add(sheetRefoldCommand(context), "flat");
+  add(sheetFlatPatternCommand(context), "flat");
+  add(showFlat, "flat");
 }
 
 } // namespace mitcad

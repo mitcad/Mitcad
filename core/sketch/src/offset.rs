@@ -218,6 +218,19 @@ pub struct SketchOffset<P> {
     /// Computed after every solve (chains with ellipses or splines).
     #[serde(default, skip_serializing_if = "is_false")]
     pub derived: bool,
+    /// Corners: Round (mitcad#1774), of an offset made by constraints: at
+    /// each corner where two curves of the chain meet at an angle (two
+    /// lines, a line and an arc or two arcs, mitcad#1786) and the chain
+    /// turns away from the offset, an arc in `corners` about the source's
+    /// corner point (its centre is that point) joins the two results,
+    /// tangent to both (the offset's own tangencies, [`tangent_corners`]);
+    /// its radius is the distance, as the curves it touches are at the
+    /// distance, so it has no dimension of its own and follows Edit Offset.
+    /// Corners the chain turns toward the offset at stay trimmed; tangent
+    /// joins stay shared. False: Sharp, the results meet where they cross.
+    /// A derived offset rounds its outer corners whatever this says.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub round: bool,
 }
 
 impl<P> SketchOffset<P> {
@@ -242,6 +255,7 @@ impl<P> SketchOffset<P> {
             corners: self.corners.clone(),
             helpers: self.helpers.clone(),
             derived: self.derived,
+            round: self.round,
         })
     }
 
@@ -1613,7 +1627,8 @@ impl Vanishing {
 }
 
 /// The curves of a chain of lines and arcs that vanish when it is offset
-/// by constraints by `d` (mitcad#1234, see [`trim`]; its corners sharp),
+/// by constraints by `d` (mitcad#1234, see [`trim`]; its corners `sharp`,
+/// else round at the outer corners, mitcad#1786, as a derived offset's),
 /// where the offsets of the curves on either side of them meet, the lines
 /// and arcs whose offsets run on along another's and how the curves left
 /// follow each other (mitcad#1244, mitcad#1246: the outline may fall into
@@ -1624,12 +1639,13 @@ pub(crate) fn exact_vanishing(
     sources: &[(Curve2, bool)],
     d: f64,
     closed: bool,
+    sharp: bool,
     name: &dyn Fn(usize) -> String,
 ) -> Result<Vanishing, String> {
     let pieces = pieces_of(sources, d);
     let n = pieces.len();
     let size = chain_size(&pieces);
-    let trimmed = match trim(&pieces, d, closed, size, true) {
+    let trimmed = match trim(&pieces, d, closed, size, sharp) {
         Ok(trimmed) => trimmed,
         Err(error) => {
             let collapses = pieces
@@ -2092,6 +2108,13 @@ pub fn seed(
     entities: &mut [Entity],
     value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
 ) {
+    // The curves through each point (mitcad#1774).
+    let mut users: BTreeMap<EntityUid, Vec<EntityUid>> = BTreeMap::new();
+    for e in entities.iter().filter(|e| !e.is_point()) {
+        for p in e.kind.points() {
+            users.entry(p).or_default().push(e.id);
+        }
+    }
     for offset in offsets.iter().filter(|o| !o.derived) {
         let Ok(d) = value(offset.distance) else {
             continue;
@@ -2100,6 +2123,13 @@ pub fn seed(
             continue;
         }
         let d = if offset.left { -d } else { d };
+        // Whether a curve the offset did not make goes through a point.
+        let made: BTreeSet<EntityUid> = made_and_helpers(offset).into_iter().collect();
+        let joined_elsewhere = |p: EntityUid| {
+            users
+                .get(&p)
+                .is_some_and(|curves| curves.iter().any(|c| !made.contains(c)))
+        };
         let updates = {
             let index = EntityIndex::new(entities);
             let at = |p: EntityUid| match index.get(p).map(|e| &e.kind) {
@@ -2230,7 +2260,18 @@ pub fn seed(
                             Some(v) if dot(v, along) < 0.0 => (b, a),
                             _ => (a, b),
                         };
-                        points.extend([(*start, a), (*end, b)]);
+                        // An end the user joined a curve of their own to
+                        // (an arc that rounds a corner, mitcad#1774) starts
+                        // where it is along the line, so that a drag that
+                        // moved it along there (the arc's radius) stays.
+                        let on_line = |p: EntityUid, end: P2| match at(p) {
+                            Some(q) if joined_elsewhere(p) => {
+                                add(a, scale(along, dot(sub(q, a), along)))
+                            }
+                            _ => end,
+                        };
+                        let (pa, pb) = (on_line(*start, a), on_line(*end, b));
+                        points.extend([(*start, pa), (*end, pb)]);
                         lines.extend([(*start, a, b), (*end, a, b)]);
                     }
                     (
@@ -2507,6 +2548,33 @@ pub fn tangent_corners(
         .collect();
     let mut out = Vec::new();
     for offset in offsets.iter().filter(|o| !o.derived) {
+        // Corners: Round (mitcad#1774): each corner arc touches the two
+        // results it joins at their ends (lines or arcs, mitcad#1786).
+        for corner in &offset.corners {
+            let Some((start, end)) = index.get(corner.arc).and_then(|e| e.kind.ends()) else {
+                continue;
+            };
+            for at in [start, end] {
+                let result = offset.results.iter().copied().find(|r| {
+                    index
+                        .get(*r)
+                        .and_then(|e| e.kind.ends())
+                        .is_some_and(|(s, e)| s == at || e == at)
+                });
+                if let Some(result) = result
+                    && touching.insert(pair(result, corner.arc))
+                {
+                    out.push(Binding {
+                        owner: offset.id,
+                        kind: BindingKind::TangentAt {
+                            a: result,
+                            b: corner.arc,
+                            at,
+                        },
+                    });
+                }
+            }
+        }
         let n = offset.curves.len();
         if n < 2 || !offset.whole() {
             continue;
@@ -2604,6 +2672,11 @@ struct Helper {
 ///   corners close the loop by themselves (their equations depend on each
 ///   other once); the solve does not report that, as it is the offset's own
 ///   ([`crate::solve::Extra::restating`]).
+/// - A result after a round corner's arc (mitcad#1774, mitcad#1786) is
+///   placed by that arc: a line's distance, an arc's helper length is left
+///   out. An outline whose every result is placed by its neighbour keeps
+///   its first result's own dimension; the loop that closes on it is the
+///   offset's own.
 /// - Each helper's end on an arc source is held at the arc's middle (in
 ///   place of its point-on-curve), the one on a circle level with the
 ///   centre, so that the helper does not slide. A helper something else
@@ -2760,6 +2833,40 @@ pub fn independent<P>(
                 held[j] = true;
             }
         }
+        // The dimension that holds each result at the distance by itself:
+        // a line's distance from its source, an arc's (or circle's) helper
+        // length.
+        let own_dims: Vec<Option<ConstraintUid>> = (0..n)
+            .map(|k| match kind(results[k]) {
+                Some(EntityKind::Line { .. }) => {
+                    distances.get(&pair(sources[k], results[k])).copied()
+                }
+                _ => helpers[k].as_ref().and_then(|h| h.length),
+            })
+            .collect();
+        // Corners: Round (mitcad#1774): the curve after each corner arc is
+        // placed by the arc (about the source's corner, its radius that of
+        // the curve before through their tangency), so its own dimension is
+        // left out: a line's distance, an arc's helper length (mitcad#1786:
+        // the arc's circle then goes through the arc's end, where it touches
+        // the corner arc); held at its distance too, the arc's ends met each
+        // line at a double point. An outline whose every result is so placed
+        // keeps its first one's below.
+        for corner in &offset.corners {
+            let Some((start, end)) = kind(corner.arc).and_then(|k| k.ends()) else {
+                continue;
+            };
+            let before = results.get(corner.join as usize).copied();
+            let after = results.iter().position(|r| {
+                Some(*r) != before
+                    && kind(*r).and_then(|k| k.ends()).is_some_and(|(s, e)| {
+                        [start, end].contains(&s) || [start, end].contains(&e)
+                    })
+            });
+            if let Some(k) = after.and_then(|after| own_dims[after]) {
+                left_out.insert(k);
+            }
+        }
         // Lines placed by the circles they touch.
         for (&source, &result) in sources.iter().zip(results) {
             if !matches!(kind(result), Some(EntityKind::Line { .. })) {
@@ -2782,6 +2889,35 @@ pub fn independent<P>(
                 && let Some(&k) = parallels.get(&key)
             {
                 left_out.insert(k);
+            }
+        }
+        // An outline whose every result is placed by its neighbour through a
+        // round corner or a tangent one (a closed chain rounded at every
+        // corner, mitcad#1774, or rounded and tangent all round,
+        // mitcad#1786) would hold no distance at all: its first result keeps
+        // its own dimension, and the loop of tangencies that closes on it is
+        // the offset's own (`Extra::restating`).
+        if !offset.corners.is_empty() {
+            let outlines: Vec<Vec<usize>> = if offset.outlines.is_empty() {
+                vec![(0..n).collect()]
+            } else {
+                offset
+                    .outlines
+                    .iter()
+                    .map(|o| {
+                        o.iter()
+                            .filter_map(|r| results.iter().position(|x| x == r))
+                            .collect()
+                    })
+                    .collect()
+            };
+            for outline in outlines {
+                let held_by_own = outline
+                    .iter()
+                    .any(|&k| own_dims[k].is_some_and(|c| !left_out.contains(&c)));
+                if !held_by_own && let Some(c) = outline.iter().find_map(|&k| own_dims[k]) {
+                    left_out.remove(&c);
+                }
             }
         }
         // Helpers held in place.
@@ -2905,7 +3041,7 @@ fn vanishing_at(
         let computed = compute(&chain, d, closed, None, &offset.namer()).ok()?;
         computed.dropped
     } else if chain.len() > 1 {
-        exact_vanishing(&chain, d, closed, &offset.namer())
+        exact_vanishing(&chain, d, closed, !offset.round, &offset.namer())
             .ok()?
             .dropped
     } else {
@@ -3398,6 +3534,7 @@ impl SketchEdit<'_> {
             corners,
             helpers: Vec::new(),
             derived: true,
+            round: false,
         });
         self.report.constraints.push(id);
         Ok((id, ids))
@@ -3625,6 +3762,27 @@ impl SketchEdit<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Makes an offset's corners round or sharp (mitcad#1774, Edit Offset's
+    /// Corners; [`SketchOffset::round`]): the offset is made again with
+    /// them, where its sources are, and the user's constraints on its curves
+    /// go along (those on a corner arc that goes are removed with a
+    /// warning). A derived offset rounds its outer corners anyway, and an
+    /// offset whose corners are already so is left as it is.
+    pub fn set_offset_corners(&mut self, id: ConstraintUid, round: bool) -> Result<(), String> {
+        let i = self
+            .def
+            .offsets
+            .iter()
+            .position(|o| o.id == id)
+            .ok_or_else(|| format!("offset {id} does not exist"))?;
+        let offset = &self.def.offsets[i];
+        if offset.derived || offset.round == round {
+            return Ok(());
+        }
+        self.def.offsets[i].round = round;
+        self.remake_offset(id, false, true).map(|_| ())
     }
 
     /// The solve that finishes an edit, with every offset fitted to the
@@ -4044,7 +4202,7 @@ impl SketchEdit<'_> {
             let closed = self.chain_closed(&chain);
             self.derived_offset(&chain, closed, &ValueInput::Name(name), sign * value)
         } else {
-            self.offset_with(curves, &ValueInput::Name(name), sign * value)
+            self.offset_with(curves, &ValueInput::Name(name), sign * value, offset.round)
         };
         self.reuse_results.clear();
         self.renumber_offset(remade?.0, offset.id);
@@ -4452,6 +4610,180 @@ impl SketchEdit<'_> {
                         .map_or_else(|| format!("{}", id.0), |e| e.as_ref().to_string()),
                     offset.id
                 ));
+            }
+        }
+        Ok(())
+    }
+}
+
+// Offset copies freed from their source (mitcad#1755).
+impl SketchEdit<'_> {
+    /// The offsets that made any of `curves` (a result or a corner arc), in
+    /// the definition's order.
+    pub(crate) fn offsets_making(&self, curves: &[EntityUid]) -> Vec<ConstraintUid> {
+        self.def
+            .offsets
+            .iter()
+            .filter(|o| o.made().iter().any(|c| curves.contains(c)))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// Frees the offsets that made any of `curves` ([`SketchEdit::free_offset`])
+    /// and says so in a note: Trim, Extend, Sketch Fillet and Chamfer change
+    /// the shape of an offset's curve this way, which the offset would
+    /// otherwise make again from its source, or (a derived offset's) refuse.
+    /// The offsets freed.
+    pub(crate) fn free_offsets_of(
+        &mut self,
+        curves: &[EntityUid],
+    ) -> Result<Vec<ConstraintUid>, String> {
+        let ids = self.offsets_making(curves);
+        for id in &ids {
+            self.free_offset(*id)?;
+        }
+        self.note_freed(&ids);
+        Ok(ids)
+    }
+
+    /// The note that offsets were freed, one for each: in words, the
+    /// offset's id as the agents' detail (mitcad#1612).
+    pub(crate) fn note_freed(&mut self, ids: &[ConstraintUid]) {
+        for id in ids {
+            self.report.notes.push(crate::said(
+                "the offset is no longer linked to its source",
+                format!("offset {id} is no longer linked to its source"),
+            ));
+        }
+    }
+
+    /// Turns the curves an offset made into plain sketch geometry
+    /// (mitcad#1755): its record goes, with what ties its curves to the
+    /// source (each line's parallel and distance, the helper lines that
+    /// hold the arcs' radii with their points and dimensions); a result arc
+    /// or circle about its source's centre gets a centre point of its own
+    /// at the same place. The curves keep their shapes and ids, the points
+    /// they share and the user's constraints; a tangent corner the solve
+    /// held while the offset was there becomes a `tangent` constraint of its
+    /// own. The source is left as it is. An offset of these curves stays an
+    /// offset of them, about the same new centre. The offset is not made
+    /// again afterwards: nothing records it.
+    pub(crate) fn free_offset(&mut self, id: ConstraintUid) -> Result<(), String> {
+        use super::pattern::BindingKind;
+        let offset = self
+            .def
+            .offsets
+            .iter()
+            .find(|o| o.id == id)
+            .cloned()
+            .ok_or_else(|| format!("offset {id} does not exist"))?;
+        // Before the record goes: the offsets of its curves, and the corners
+        // where its curves touch by their sources' definition.
+        let dependents = self.dependents(id);
+        let corners = tangent_corners(
+            std::slice::from_ref(&offset),
+            &self.def.entities,
+            &self.def.constraints,
+        );
+        // Its own constraints and dimensions, with the record.
+        let own = constraints_of(
+            &offset,
+            &self.def.entities,
+            &self.def.constraints,
+            &self.def.dimensions,
+        );
+        self.drop_constraints(&own);
+        // The helper lines with the points only they use.
+        let helpers: BTreeSet<EntityUid> = offset
+            .helpers
+            .iter()
+            .copied()
+            .filter(|h| self.def.entity(*h).is_some())
+            .collect();
+        let mut gone = helpers.clone();
+        for h in &helpers {
+            let points = self
+                .def
+                .entity(*h)
+                .map(|e| e.kind.points())
+                .unwrap_or_default();
+            for p in points {
+                let elsewhere = self
+                    .def
+                    .entities
+                    .iter()
+                    .any(|e| !helpers.contains(&e.id) && e.kind.points().contains(&p));
+                if !elsewhere {
+                    gone.insert(p);
+                }
+            }
+        }
+        self.drop_entities(&gone);
+        // A centre of its own for each result arc or circle that shares its
+        // source's; the offsets of its curves go round the new one too.
+        let made: BTreeSet<EntityUid> = offset
+            .made()
+            .into_iter()
+            .filter(|c| self.def.entity(*c).is_some())
+            .collect();
+        let mut moving = made.clone();
+        let mut owned: BTreeSet<ConstraintUid> = BTreeSet::new();
+        for d in &dependents {
+            if let Some(o) = self.def.offsets.iter().find(|o| o.id == *d) {
+                moving.extend(o.made());
+                owned.extend(constraints_of(
+                    o,
+                    &self.def.entities,
+                    &self.def.constraints,
+                    &self.def.dimensions,
+                ));
+            }
+        }
+        let center_of = |kind: &EntityKind| match kind {
+            EntityKind::Arc { center, .. } | EntityKind::Circle { center, .. } => Some(*center),
+            _ => None,
+        };
+        let mut centers: BTreeMap<EntityUid, EntityUid> = BTreeMap::new();
+        for c in &made {
+            let Some(center) = self.def.entity(*c).and_then(|e| center_of(&e.kind)) else {
+                continue;
+            };
+            if centers.contains_key(&center) {
+                continue;
+            }
+            let shared = self
+                .def
+                .entities
+                .iter()
+                .any(|e| !moving.contains(&e.id) && e.kind.points().contains(&center));
+            if shared {
+                let at = self.at(center)?;
+                let new = self.add_point(at);
+                centers.insert(center, new);
+            }
+        }
+        if !centers.is_empty() {
+            for e in &mut self.def.entities {
+                if moving.contains(&e.id)
+                    && let Some(center) = center_of(&e.kind)
+                    && let Some(new) = centers.get(&center)
+                {
+                    e.kind.replace_point(center, *new);
+                }
+            }
+            for c in &mut self.def.constraints {
+                if owned.contains(&c.id) {
+                    super::modify::remap(&mut c.kind, &centers);
+                }
+            }
+        }
+        // The tangent corners as constraints between its curves.
+        for corner in corners {
+            if let BindingKind::TangentAt { a, b, .. } = corner.kind
+                && self.def.entity(a).is_some()
+                && self.def.entity(b).is_some()
+            {
+                self.add_constraint(ConstraintKind::Tangent { a, b, at: None });
             }
         }
         Ok(())

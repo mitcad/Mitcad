@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-cam"
+description = "CAM for MitCad: tools, machines, toolpaths of milling operations and the G-code post-processors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_cam"
+
+# No model dependency: the model and the api build CAM on this crate, as
+# they do the sketch (docs/cam.md, "Crates").
+[dependencies]
+mitcad-vec3 = { path = "../vec3" }
+serde.workspace = true
+serde_json.workspace = true
+# Offsets of closed outlines of lines and arcs, with islands, arcs kept as
+# arcs (MIT OR Apache-2.0).
+cavalier_contours = "0.9.0"

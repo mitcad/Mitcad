@@ -8,8 +8,11 @@
 namespace mitcad {
 
 // The interface language (mitcad#1460, mitcad#1284; docs/translations.md).
-// English is the source language of every text and needs no file; another
-// language is the Qt Linguist catalogue mitcad_<code>.qm in the
+// English is the source language of every text; its own catalogue
+// mitcad_en.qm has only its plural forms (mitcad#1756: "1 degree of
+// freedom", "17 degrees of freedom" for the source's "degree(s)"), and is
+// no language to choose. Another language is the Qt Linguist catalogue
+// mitcad_<code>.qm in the
 // translations folder (beside the executable in a build tree and the
 // Windows installer, share/mitcad/translations in the AppImage,
 // Resources/translations in a macOS bundle), with Qt's own qtbase_<code>.qm
@@ -52,7 +55,8 @@ LanguageChoice chooseLanguage(const QString& option, const QString& environment,
                               const QStringList& systemLanguages, const QStringList& available);
 
 // At start, after the QApplication exists and before any window: the
-// catalogues of the chosen language installed (English installs none) and
+// catalogues of the chosen language installed (English only its plural
+// forms, which every language has below its own) and
 // "Language: <code> (<reason>)" logged. `option` is --language's value.
 // Returns the code in use.
 QString startInterfaceLanguage(const QString& option);

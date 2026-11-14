@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# Seam edges (mitcad#1773) on seam-edges.json: the view draws the edges
+# where the shape changes and leaves out the seams where a round face
+# closes on itself smoothly.
+#   - The box with a hole (F1.b0): its 12 edges and the hole's two
+#     circles; the hole's seam left out.
+#   - The cylinder (F5.b0): its two circles; its seam left out.
+#   - The plate with rounded corners (F6.b0): all 24 edges, the roundings'
+#     tangent boundaries too; nothing left out.
+#   - The teardrop (F9.b0): its two splines and the crease at its tip;
+#     nothing left out.
+# Run by tools/ui-seam-edges-test.sh.
+expect-ever 'View area'
+wait-idle
+
+expect-view-seams F1.b0 14 1
+expect-view-seams F5.b0 2 1
+expect-view-seams F6.b0 24 0
+expect-view-seams F9.b0 3 0

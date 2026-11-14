@@ -89,7 +89,12 @@ std::optional<Cutouts> fill_cutouts(const Shape& body, const std::vector<int>& o
 // outer side meeting it so (a wall rising past the far edge, mitcad#1238 on
 // any of these faces: taken away, `rejoin` the body's material in the
 // region continued into the material under the face's surface, the wall's
-// faces grown down to the chamfer along their own surfaces). Near an end of a chain of the selected edges the regions
+// faces grown down to the chamfer along their own surfaces). A far edge
+// that meets a selected edge where the face ends in a point between them
+// (a circular segment beside a chord whose ends lie on its arc,
+// mitcad#1783) counts too, its regions touching the selected edges at those
+// points only; for concave edges under a planar face only a slab a quarter
+// of `contact` deep is filled. Near an end of a chain of the selected edges the regions
 // are looked for only on the edges' side of the faces at that end, so that
 // they do not run round the chain's end. The dressup of `body` (the
 // chamfer at its full size) less the regions filled, with the walls put

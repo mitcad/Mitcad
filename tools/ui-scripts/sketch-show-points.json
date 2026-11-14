@@ -6,5 +6,9 @@
   {"cmd": "sketch.add_point", "sketch": "F1", "at": [40, 30]},
   {"cmd": "sketch.add_line", "sketch": "F1", "start": [-20, -15], "end": [20, -15]},
   {"cmd": "sketch.add_line", "sketch": "F1", "start": [-20, 15], "end": [20, 15]},
-  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-10, 5]}
+  {"cmd": "sketch.add_point", "sketch": "F1", "at": [-10, 5]},
+  {"comment": "Sketch2 (F2, mitcad#1764) on XY in the top left corner, inside Sketch1's frame and away from where the pointer goes: a line (-38, 22) to (-32, 22) and a lone point at (-35, 27)."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_line", "sketch": "F2", "start": [-38, 22], "end": [-32, 22]},
+  {"cmd": "sketch.add_point", "sketch": "F2", "at": [-35, 27]}
 ]

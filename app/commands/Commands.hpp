@@ -31,16 +31,22 @@ class SketchController;
 // definitions' questions about the model while the application runs.
 void registerCreateCommands(CommandRegistry& registry, const CommandContext& context,
                             const CommandDef& createSketch);
-// MODIFY: Press Pull, Fillet, Chamfer, Shell, Draft, Scale, Combine,
-// Offset Face, Replace Face, Split Face, Split Body, Move/Copy, Align,
-// Delete, Appearance. Materials are the main window's Edit Materials
-// (mitcad#655).
+// MODIFY, in the menu's sections (mitcad#1778): Press Pull, Fillet,
+// Chamfer, Shell, Draft; Offset Face, Move Face, Replace Face, Split Face,
+// Delete Face; Combine, Split Body, Scale, Convert Mesh; Move/Copy, Align;
+// Dogbone, Mortise and Tenon; Material, Appearance. The main window adds
+// Edit Appearances to the last and Edit Parameters and Configurations as
+// the "parameters" section.
 void registerModifyCommands(CommandRegistry& registry, const CommandContext& context);
-// CONSTRUCT: every construction plane, axis and point.
+// CONSTRUCT: every construction plane, axis and point, in the sections
+// "planes", "axes" and "points" (mitcad#1778).
 void registerConstructCommands(CommandRegistry& registry, const CommandContext& context);
-// ASSEMBLE (mitcad#55): Joint, As-Built Joint, Joint Origin, Rigid Group,
-// Drive Joint. New Component comes first (registerCreateCommands); Animate
-// Joint, Insert Component and Insert from Library last (the main window).
+// ASSEMBLE (mitcad#55), in the menu's sections (mitcad#1778): Joint,
+// As-Built Joint, Joint Origin, Rigid Group, Assembly Constraint; Drive
+// Joint, Motion Link, Contact Set. New Component comes first
+// (registerCreateCommands); Animate Joint and Motion Study end "motion",
+// Insert Component and Insert from Library are the last section (the main
+// window).
 void registerAssembleCommands(CommandRegistry& registry, const CommandContext& context);
 // INSPECT: Measure, Interference, Section Analysis, Print Analysis
 // (mitcad#620) and Physical Properties (a dialog over `window` for the
@@ -54,10 +60,13 @@ void registerSketchCommands(CommandRegistry& registry, sketch::SketchController&
 // The constraint commands' ids, in the sketch palette's order.
 QStringList sketchConstraintCommands();
 
-// SHEET METAL (mitcad#210): Face, Flange, Bend, Fold, Corner Round, Corner
-// Chamfer, Sheet Cut, Corner Relief, Unfold, Refold, Flat Pattern and Sheet Rules; the main
-// window adds Edit Sheet Rules, Show Flat Pattern and Export Flat Pattern.
-void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context);
+// SHEET METAL (mitcad#210), in the menu's sections (mitcad#1778): Sheet
+// Rules and the main window's `editRules` (Edit Sheet Rules); Face,
+// Flange; Bend, Fold, Corner Relief; Corner Round, Corner Chamfer, Sheet
+// Cut; Unfold, Refold, Flat Pattern and the main window's `showFlat` (Show
+// Flat Pattern). The main window adds Export Flat Pattern (the Make tab).
+void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext& context,
+                                const CommandDef& editRules, const CommandDef& showFlat);
 
 // The BUILD tab (mitcad#375, BuildCommands.cpp): PROFILE (Profile, Panel,
 // Linear Component), TIMBER (Timber, Wall, Floor / Roof; mitcad#520), CONNECT
@@ -86,9 +95,11 @@ void registerBearingCommands(CommandRegistry& registry, const CommandContext& co
 void registerEqualSpacingCommands(CommandRegistry& registry, sketch::SketchController& controller);
 bool dimensionEqualSpacing(sketch::SketchController& controller);
 
-// SURFACE (mitcad#455, SurfaceCommands.cpp): Surface Extrude, Surface
-// Revolve, Surface Sweep, Surface Loft, Patch, Stitch, Thicken and the
-// surface features that make and change surface bodies.
+// SURFACE (mitcad#455, SurfaceCommands.cpp), in the menu's sections
+// (mitcad#1778): Surface Extrude, Surface Revolve, Surface Sweep, Surface
+// Loft; Patch, Ruled Surface, Boundary Surface, Blend Surface; Extend,
+// Trim, Untrim, Offset Surface; Match Surface, Fair Surface, Reverse
+// Normal; Stitch, Unstitch, Thicken.
 void registerSurfaceCommands(CommandRegistry& registry, const CommandContext& context);
 
 // Redefine Sketch Plane (mitcad#787, SketchPlaneCommands.cpp): a sketch

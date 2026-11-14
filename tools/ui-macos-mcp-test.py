@@ -49,7 +49,9 @@ def load_live():
 
 
 LIVE = load_live()
-LIVE_TOOLS = LIVE.LIVE_TOOLS
+# The first GUI has no --mcp-folder: test its restricted input profile.
+# The later debugger flow uses the shared module's folder-enabled catalog.
+LIVE_TOOLS = LIVE.LIVE_TOOLS - {"ui_click", "ui_type", "ui_dialog"}
 BOX = {"cmd": "add_feature", "def": {
     "type": "box", "plane": {"type": "origin", "plane": "xy"},
     "corner": [0, 0], "length": 30, "width": 20, "height": 10,
@@ -352,7 +354,9 @@ def _run_locked(app, cli, out, ui, gui_options):
             check(connection["agents"] == 1 and connection["agent_clients"] == ["mitcad-live-integration"],
                   "Initialized client name was not reported by the live UI")
             names = {tool["name"] for tool in bridge.request("tools/list")["result"]["tools"]}
-            check(names == LIVE_TOOLS, "Live catalog exposed file/session ownership tools")
+            check(names == LIVE_TOOLS,
+                  "Live no-folder catalog differs: missing " + repr(sorted(LIVE_TOOLS - names))
+                  + "; unexpected " + repr(sorted(names - LIVE_TOOLS)))
             document = bridge.tool("document_list", {})["documents"][0]["document"]
             bridge.request("ping", identifier=(1 << 64) - 1)
             check(body_volume(bridge, document) == (0, 0), "Initial GUI document was not empty")

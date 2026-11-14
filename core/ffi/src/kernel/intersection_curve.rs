@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Intersection curves (mitcad#1405): two chains of curves, each swept
 //! along its sketch's normal, and where the swept surfaces cross
-//! (`geometry/include/mitcad/geometry/intersection_curve.hpp`).
+//! (`geometry/include/mitcad/geometry/intersection_curve.hpp`); since
+//! mitcad#1777 also the curve tools' growing helices and sections of faces
+//! and bodies.
 
 #[cxx::bridge(namespace = "mitcad::bridge")]
 pub mod ffi {
@@ -27,11 +29,40 @@ pub mod ffi {
         knots: Vec<f64>,
     }
 
+    /// See `mitcad_model::kernel::HelixCurveSpec` (mitcad#1777).
+    struct HelixCurveInput {
+        origin: [f64; 3],
+        direction: [f64; 3],
+        x_axis: [f64; 3],
+        radius: f64,
+        pitch: f64,
+        revolutions: f64,
+        left_handed: bool,
+        growth: f64,
+    }
+
     unsafe extern "C++" {
         include!("bridge/intersection_curve.hpp");
         include!("bridge/trycatch.hpp");
 
         type SweepCurve = crate::kernel::sweeps::ffi::SweepCurve;
+        type ShapeList = crate::kernel::shape::ffi::ShapeList;
+
+        /// A helix that grows (mitcad#1777, `geometry::helix_curve`): one
+        /// curve on the cone its turns lie on.
+        fn helix_curve(input: &HelixCurveInput) -> Result<Vec<CrossingCurve>>;
+        /// Where the shapes of `first` meet those of `second` (mitcad#1777,
+        /// `geometry::shape_section`): shape `i` of a side with the next
+        /// `first_counts[i]` (`second_counts[i]`) of its face names, none
+        /// for the whole shape.
+        fn shape_section(
+            first: &ShapeList,
+            first_faces: &[String],
+            first_counts: &[usize],
+            second: &ShapeList,
+            second_faces: &[String],
+            second_counts: &[usize],
+        ) -> Result<Vec<CrossingCurve>>;
 
         /// Where the chain `first` swept along `first_direction` crosses
         /// the chain `second` swept along `second_direction`

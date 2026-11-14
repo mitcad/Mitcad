@@ -139,8 +139,12 @@ to all equations.
    curve parameters `(0.1 * curve size)^2`.
 4. **Continuation**: a dimension that changes by more than about 30 % (or
    pi/8 for angles) is applied in up to 16 steps, each solved from the
-   previous one, which keeps the geometry on its branch (no flips). If the
-   stepped solve fails, a direct solve is tried.
+   previous one, which keeps the geometry on its branch (no flips). A step
+   after which an arc lies on the other side of its chord (the sine of its
+   sweep changed sign, each clearly away from a half circle) is taken again
+   in halves, up to 8 times in all, the step growing back after each one that
+   keeps the arcs (mitcad#1774). If the stepped solve fails, a direct solve
+   is tried.
 5. **Failure**: a component that does not converge is analysed at its
    least-squares point (see below) to name the conflicting constraints, and
    then restored to its geometry before the solve. Other components keep
@@ -152,6 +156,12 @@ to all equations.
    the LM iteration, and halves the step when it does not reduce the goal
    distance enough (the constraint curvature can make full steps
    oscillate). The result is the constrained point nearest to the target.
+   A drag that gets nowhere from a singular point of the solution set (an
+   arc held about its centre, its ends on two lines it touches: its radius
+   is free, but the linearized constraints hold it) is taken again from a
+   point beside it (every unknown moved by up to 1e-3 of the sketch size,
+   the same pseudo-random amounts every time, and solved), and kept when
+   the goals get nearer (mitcad#1774).
 
 ## Analysis
 
@@ -178,6 +188,16 @@ to all equations.
   with arcs about shared centres factored a nearly dense matrix of 1 174
   rows in creation order (0.15 s); this way its factor has no entries
   below the diagonal (0.4 ms).
+- **Singular points** (mitcad#1774). The rank only drops at special points
+  of the solution set: an arc whose ends lie on two lines, its centre held,
+  touching both (its circle meets each line in a double point) has the rows
+  of its end equations along the lines vanish, so that its ends seemed free
+  to slide and the lines' dimensions followed from the rest. A component
+  with consistent dependent rows and free unknowns (at most 4000) is moved
+  as a drag is (above), solved, and analysed there with a stricter pivot
+  (`1e-8`, so that a point the solve left within its tolerance of a double
+  point does not count as regular); where the rank there is higher, that
+  analysis is the component's (`regular_nearby` in `analysis.rs`).
 - **Culprits.** For a dependent row the factor gives the coefficients of the
   combination of earlier rows that reproduces it (`L^T c = l`). The
   constraints with non-zero coefficients form the dependent set. The same

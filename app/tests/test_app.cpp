@@ -2075,6 +2075,23 @@ void reportLinkTests() {
   CHECK(reportBody(report, QStringLiteral("0.1.0")) ==
         QStringLiteral("### What happened\n\nIt broke.\n\n### Stack\n\n```\na\nb\n```\n\n"
                        "<sub>Sent from MitCad 0.1.0 · duplicate key `mitcad-0123456789ab`</sub>\n"));
+
+  // Include the design (mitcad#1795): the body names the zip, before the
+  // footer; the zip's name is the title's letters and digits and the time.
+  report.designZip = QStringLiteral("Bug-Fillet-fails-20261113-142501.zip");
+  CHECK(reportBody(report, QStringLiteral("0.1.0")) ==
+        QStringLiteral("### What happened\n\nIt broke.\n\n### Stack\n\n```\na\nb\n```\n\n"
+                       "### Design\n\nA zip of the design was made for this report: "
+                       "`Bug-Fillet-fails-20261113-142501.zip`. It is attached below, or sent to "
+                       "testfile@mitcad.org.\n\n"
+                       "<sub>Sent from MitCad 0.1.0 · duplicate key `mitcad-0123456789ab`</sub>\n"));
+  const QDateTime time(QDate(2026, 11, 13), QTime(14, 25, 1));
+  CHECK(designZipName(QStringLiteral("Bug: Fillet fails"), time) == QStringLiteral("Bug-Fillet-fails-20261113-142501.zip"));
+  CHECK(designZipName(QStringLiteral("  ..Wish: a/b\\c  "), time) == QStringLiteral("Wish-a-b-c-20261113-142501.zip"));
+  CHECK(designZipName(QStringLiteral("§§ ¤"), time) == QStringLiteral("feedback-20261113-142501.zip"));
+  CHECK(designZipName(QString(100, QLatin1Char('x')), time) ==
+        QString(60, QLatin1Char('x')) + QStringLiteral("-20261113-142501.zip"));
+  CHECK(kAttachmentLimit == 25000000);
 }
 
 // The addresses of Cloud projects (mitcad#89).
@@ -2988,6 +3005,8 @@ int startBackdropTests();
 int commandSearchTests();
 int defaultViewTests();
 int windowPlaceTests();
+int camToolpathsTests();
+int camStockTests();
 int uiKeysTests();
 int originPreferenceTests();
 
@@ -3169,6 +3188,8 @@ int main(int argc, char* argv[]) {
     failures += commandSearchTests();
     failures += defaultViewTests();
     failures += windowPlaceTests();
+    failures += camToolpathsTests();
+    failures += camStockTests();
     failures += uiKeysTests();
     failures += originPreferenceTests();
     mitcad::tests::navigationSettingsTests(check);

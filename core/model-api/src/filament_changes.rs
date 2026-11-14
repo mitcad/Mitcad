@@ -40,6 +40,11 @@ pub(super) struct FilamentChangesQuery {
     /// out.
     #[serde(default)]
     plate: Option<String>,
+    /// An event not in the schedule (mitcad#1800: a plane or face picked
+    /// in Filament Change): the result's `trial` says where it would be,
+    /// `{height, place, body, warning}`.
+    #[serde(default)]
+    trial: Option<FilamentChange>,
 }
 
 /// The `filament_change_preview` query (mitcad#1643): the print colours
@@ -74,7 +79,11 @@ pub(super) fn query<K: Kernel>(
     doc: &Document<K>,
     query: &FilamentChangesQuery,
 ) -> Result<Value, ApiError> {
-    Ok(doc.filament_changes_json(query.plate.as_deref())?)
+    let mut listed = doc.filament_changes_json(query.plate.as_deref())?;
+    if let Some(trial) = &query.trial {
+        listed["trial"] = doc.filament_change_trial_json(query.plate.as_deref(), trial)?;
+    }
+    Ok(listed)
 }
 
 /// The `filament_change_preview` query.

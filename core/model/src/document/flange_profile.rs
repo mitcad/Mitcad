@@ -2,13 +2,17 @@
 //! A sheet-metal flange's profile sketch (mitcad#1648): the sketch whose
 //! closed region on the bend line is the wall's outline
 //! (`SheetFlangeDef::profile`). `sheet_flange_profile` makes it from a
-//! flange's definition where the flange puts its wall: a fixed
-//! construction plane on the wall (hidden) and a sketch on it with the
+//! flange's definition where the flange puts its wall: a flange-wall
+//! construction plane (hidden, mitcad#1776) and a sketch on it with the
 //! rectangle the flange's length and width give now, its side on the bend
 //! line fixed there; both go in at the marker, before the flange, as one
-//! undo step. For a definition that already has a profile, the profile's
-//! plane is moved onto the wall where the flange's angle, radius or
-//! position now put it.
+//! undo step. The plane follows the flange's wall at every recompute once
+//! the flange names the sketch (`PlaneDefinition::FlangeWall`). For a
+//! definition that already has a profile, the profile's plane is made a
+//! flange-wall plane (a fixed plane of an earlier design) and its stored
+//! frame put where the definition puts the wall. A design opened with a
+//! profile on a fixed plane of its own gets the flange-wall plane
+//! ([`DocState::settle_flange_profiles`]).
 
 use std::sync::Arc;
 
@@ -35,9 +39,10 @@ pub struct FlangeProfile {
     pub added: usize,
 }
 
-/// The fixed plane of a profile sketch's frame.
-fn fixed<P>(frame: SketchFrame) -> FeatureDef<P> {
-    FeatureDef::ConstructionPlane(ConstructionPlaneDef::new(PlaneDefinition::Fixed {
+/// The flange-wall plane of a profile sketch, at `frame` until a flange
+/// names the sketch (mitcad#1776).
+fn on_wall<P>(frame: SketchFrame) -> FeatureDef<P> {
+    FeatureDef::ConstructionPlane(ConstructionPlaneDef::new(PlaneDefinition::FlangeWall {
         origin: frame.origin,
         x_axis: frame.x_axis,
         y_axis: frame.y_axis,
@@ -157,7 +162,7 @@ impl<K: Kernel> Document<K> {
         }
         let (min, max) = (layout.min, layout.max);
         self.apply(|state| {
-            let plane = state.add_feature(&fixed(frame), None)?;
+            let plane = state.add_feature(&on_wall(frame), None)?;
             // The plane only carries the sketch: hidden in the view.
             state.feature_visibility.insert(plane.uid, false);
             let sketch = state.add_feature(
@@ -176,8 +181,12 @@ impl<K: Kernel> Document<K> {
         })
     }
 
-    /// An existing profile sketch's fixed plane moved to `frame` (no undo
-    /// step when it is there already).
+    /// An existing profile sketch's plane put on the wall (mitcad#1776): a
+    /// fixed plane (an earlier design's) becomes a flange-wall plane, and a
+    /// flange-wall plane's stored frame, used until a flange names the
+    /// sketch, is moved to `frame` (no undo step when it is there
+    /// already). The sketch's curves stay where they are in its own
+    /// coordinates, the wall's.
     fn move_flange_profile(
         &mut self,
         sketch: FeatureUid,
@@ -204,26 +213,90 @@ impl<K: Kernel> Document<K> {
         let FeatureDef::ConstructionPlane(plane_def) = &plane_entry.def else {
             return Err(refused());
         };
-        let PlaneDefinition::Fixed {
-            origin,
-            x_axis,
-            y_axis,
-        } = &plane_def.definition
-        else {
-            return Err(refused());
-        };
         let made = FlangeProfile {
             sketch,
             plane,
             added: 0,
         };
-        if same_frame(&frame, *origin, *x_axis, *y_axis) {
-            return Ok(made);
+        match &plane_def.definition {
+            PlaneDefinition::FlangeWall {
+                origin,
+                x_axis,
+                y_axis,
+            } if same_frame(&frame, *origin, *x_axis, *y_axis) => return Ok(made),
+            PlaneDefinition::Fixed { .. } | PlaneDefinition::FlangeWall { .. } => {}
+            _ => return Err(refused()),
         }
         let name = plane_entry.name.clone();
         self.apply(|state| {
-            state.edit_feature(plane, &fixed(frame))?;
+            state.edit_feature(plane, &on_wall(frame))?;
             Ok((format!("Move {name} onto the flange's wall"), made))
         })
+    }
+}
+
+impl DocState {
+    /// Makes the fixed plane of each flange's profile sketch a flange-wall
+    /// plane (mitcad#1776), as a design opened from an earlier version
+    /// needs: a sketch named by a flange's `profile` that lies on a fixed
+    /// construction plane of its own (no other feature refers to the plane,
+    /// the plane links nothing, is not flipped, and the sketch is not on
+    /// another component's plane). The stored frame stays the fixed one, so
+    /// nothing moves until the plane is evaluated on the flange's wall; the
+    /// sketch's curves stay in the wall's coordinates. A sketch on any other
+    /// plane is left where the user put it (the flange warns when it is not
+    /// on its wall).
+    pub(crate) fn settle_flange_profiles(&mut self) {
+        let mut planes = Vec::new();
+        for entry in &self.features {
+            let FeatureDef::SheetFlange(flange) = &entry.def else {
+                continue;
+            };
+            let Some(sketch) = flange.profile else {
+                continue;
+            };
+            let Some(FeatureDef::Sketch(def)) = self.entry(sketch).map(|e| &e.def) else {
+                continue;
+            };
+            let SketchPlane::Construction(plane) = def.plane else {
+                continue;
+            };
+            if def.plane_link.is_some() || planes.contains(&plane) {
+                continue;
+            }
+            let Some(FeatureDef::ConstructionPlane(plane_def)) = self.entry(plane).map(|e| &e.def)
+            else {
+                continue;
+            };
+            let own = matches!(plane_def.definition, PlaneDefinition::Fixed { .. })
+                && !plane_def.flip
+                && plane_def.links.is_empty()
+                && plane_def.datum_links.is_empty();
+            let shared = self.features.iter().any(|other| {
+                other.uid != sketch && other.def.references().features.contains(&plane)
+            });
+            if own && !shared {
+                planes.push(plane);
+            }
+        }
+        for plane in planes {
+            let Some(position) = self.features.iter().position(|f| f.uid == plane) else {
+                continue;
+            };
+            let entry = Arc::make_mut(&mut self.features[position]);
+            if let FeatureDef::ConstructionPlane(plane_def) = &mut entry.def
+                && let PlaneDefinition::Fixed {
+                    origin,
+                    x_axis,
+                    y_axis,
+                } = plane_def.definition
+            {
+                plane_def.definition = PlaneDefinition::FlangeWall {
+                    origin,
+                    x_axis,
+                    y_axis,
+                };
+            }
+        }
     }
 }

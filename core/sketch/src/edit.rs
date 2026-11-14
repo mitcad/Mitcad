@@ -149,6 +149,30 @@ pub(crate) fn resolve_dimension_value(
     })
 }
 
+/// What [`SketchEdit::require_needed`] compares an edit with (mitcad#1774):
+/// the sketch's redundant constraints and its degrees of freedom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Freedom {
+    pub redundant: usize,
+    pub dof: usize,
+}
+
+impl Freedom {
+    pub fn of(status: &SketchStatus) -> Self {
+        Self {
+            redundant: status.redundant.len(),
+            dof: status.dof,
+        }
+    }
+
+    /// Whether what was added since `before` follows from the rest in full:
+    /// more is redundant and no degree of freedom was taken away. One that
+    /// is redundant only in part takes at least one away (mitcad#1774).
+    pub fn implied_in_full(self, before: Freedom) -> bool {
+        self.redundant > before.redundant && self.dof >= before.dof
+    }
+}
+
 /// A point of a command: an existing point or a new one at a position.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PointInput {
@@ -554,27 +578,34 @@ impl<'a> SketchEdit<'a> {
         Ok(())
     }
 
-    /// The number of redundant constraints now. A constraint or driving
-    /// dimension that raises it is implied by the others; the commands that
-    /// add one refuse it, as they refuse one that over-constrains the
-    /// sketch (a dimension can be added as driven instead).
-    pub fn redundancy(&self) -> Result<usize, String> {
-        Ok(self.solved()?.status.redundant.len())
+    /// The number of redundant constraints and the degrees of freedom now
+    /// ([`Freedom`]). A constraint or driving dimension that raises the
+    /// count and takes no freedom away is implied by the others; the
+    /// commands that add one refuse it, as they refuse one that
+    /// over-constrains the sketch (a dimension can be added as driven
+    /// instead).
+    pub fn redundancy(&self) -> Result<Freedom, String> {
+        Ok(Freedom::of(&self.solved()?.status))
     }
 
-    /// Refuses a new constraint or driving dimension the others imply, and
-    /// one that conflicts with them: then by the constraints that block it
-    /// (mitcad#1566, [`SketchEdit::refusal`]). Named by the change ("the
-    /// new constraint would over-constrain the sketch"), not by its id.
-    pub fn require_needed(&self, before: usize) -> Result<(), String> {
-        let redundant = match self.solve_def(&self.def) {
-            Ok(solved) => solved.status.redundant.len(),
+    /// Refuses a new constraint or driving dimension the others imply in
+    /// full, and one that conflicts with them: then by the constraints that
+    /// block it (mitcad#1566, [`SketchEdit::refusal`]). Named by the change
+    /// ("the new constraint would over-constrain the sketch"), not by its
+    /// id. One the others imply only in part is kept (mitcad#1774): it
+    /// raises the redundant count but takes at least one degree of freedom
+    /// away (an arc's centre made coincident with a corner whose bisector
+    /// the arc's tangents already hold it on fixes its radius), and its
+    /// redundant part is a warning of the sketch's status like any other.
+    pub fn require_needed(&self, before: Freedom) -> Result<(), String> {
+        let now = match self.solve_def(&self.def) {
+            Ok(solved) => Freedom::of(&solved.status),
             Err(error) => return Err(self.refusal(&error, true)),
         };
-        if redundant > before {
+        if now.implied_in_full(before) {
             return Err(format!(
-                "{} would over-constrain the sketch: the others already fix what it \
-                 constrains (a dimension can be added as driven)",
+                "{} would over-constrain the sketch: it takes no freedom away, the others \
+                 already fix all it constrains (a dimension can be added as driven)",
                 self.change
             ));
         }

@@ -3,7 +3,8 @@
 // activates that component (mitcad#1634, browser/ActivateOnPick): the
 // command table (Fillet, Chamfer, Shell and the rest; not Create Sketch,
 // the Construct commands or Extrude), when a pick activates, the panel's
-// Activate button for picks of several components and the notice.
+// Activate button for picks of several components and the notice; the
+// parts placed by a pick and their linked shafts (mitcad#1752).
 #include "browser/ActivateOnPick.hpp"
 
 #include <cstdio>
@@ -207,6 +208,87 @@ void noticeTests() {
         QStringLiteral("Shell goes into Base (now active).\n3 picks of other components dropped."));
 }
 
+// A part placed by a pick (mitcad#1752): Gear and the rest activate by
+// Place On as Hole does, except on another component's shaft, which they
+// take linked, saying so.
+void partTests() {
+  const DocumentSnapshot snapshot = design();
+  const auto shaftFace = [](const QString& body, const QString& occurrence) {
+    SelectionItem item = pick(SelectKind::Face, body, occurrence);
+    item.geometry = QStringLiteral("cylinder");
+    return item;
+  };
+  const auto planarFace = [](const QString& body, const QString& occurrence) {
+    SelectionItem item = pick(SelectKind::Face, body, occurrence);
+    item.geometry = QStringLiteral("plane");
+    return item;
+  };
+  const auto rim = [](const QString& body, const QString& occurrence) {
+    SelectionItem item = edge(body, occurrence);
+    item.geometry = QStringLiteral("circle");
+    return item;
+  };
+
+  // Every part placed by a pick, by its Place On; the shafts linked.
+  for (const char* id : {"solid.gear", "solid.pulley", "solid.bearing", "solid.coil", "solid.box", "solid.cylinder",
+                         "solid.sphere", "solid.torus"}) {
+    CHECK(activatingInputs(QString::fromLatin1(id)) == QStringList{QStringLiteral("at")});
+    CHECK(linksShafts(QString::fromLatin1(id)));
+  }
+  // Hole drills the shaft: its component; Fillet has no Place On.
+  CHECK(!linksShafts(QStringLiteral("solid.hole")));
+  CHECK(!linksShafts(QStringLiteral("solid.fillet")));
+
+  // Shafts: a cylindrical face, a circle or an arc of a body.
+  CHECK(isShaftPick(shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(isShaftPick(rim(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(!isShaftPick(planarFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(!isShaftPick(edge(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+
+  // A Gear on Lid's top face activates Lid, on its shaft nothing; a Hole
+  // in Lid's shaft activates Lid.
+  const QString gear = QStringLiteral("solid.gear");
+  CHECK(pickActivates(gear, planarFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(activationForPick(snapshot, planarFace(QStringLiteral("F4.b0"), QStringLiteral("O2")), {}).component ==
+        QStringLiteral("C2"));
+  CHECK(!pickActivates(gear, shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(!pickActivates(gear, rim(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(pickActivates(QStringLiteral("solid.hole"), shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+  CHECK(pickActivates(QStringLiteral("solid.fillet"), rim(QStringLiteral("F4.b0"), QStringLiteral("O2"))));
+
+  // The Activate button leaves a linked shaft out.
+  const Selection picks{shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))};
+  CHECK(activatingPicks(gear, picks).isEmpty());
+  CHECK(activatingPicks(QStringLiteral("solid.hole"), picks).size() == 1);
+  CHECK(activationForPicks(snapshot, activatingPicks(gear, picks)).isEmpty());
+
+  // The notice for Lid's shaft while Base is active, by the names only.
+  CHECK(linkedShaftNotice(snapshot, gear, QStringLiteral("Gear"),
+                          shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2"))) ==
+        QStringLiteral("Gear goes into Base (active), linked to the shaft of Lid: a part on a shaft stays out of "
+                       "the shaft's component."));
+  // None for Base's own shaft, a face, or a Hole.
+  CHECK(linkedShaftNotice(snapshot, gear, QStringLiteral("Gear"),
+                          shaftFace(QStringLiteral("F2.b0"), QStringLiteral("O1")))
+            .isEmpty());
+  CHECK(linkedShaftNotice(snapshot, gear, QStringLiteral("Gear"),
+                          planarFace(QStringLiteral("F4.b0"), QStringLiteral("O2")))
+            .isEmpty());
+  CHECK(linkedShaftNotice(snapshot, QStringLiteral("solid.hole"), QStringLiteral("Hole"),
+                          shaftFace(QStringLiteral("F4.b0"), QStringLiteral("O2")))
+            .isEmpty());
+
+  // After another pick: the activation's notice stays while its component
+  // is active, a shaft's goes.
+  const QString activated = QStringLiteral("Gear goes into Base (now active).");
+  CHECK(keptNotice(snapshot, QStringLiteral("Gear"), activated) == activated);
+  CHECK(keptNotice(snapshot, QStringLiteral("Gear"), QStringLiteral("Gear goes into Lid (now active).")).isEmpty());
+  CHECK(keptNotice(snapshot, QStringLiteral("Gear"),
+                   QStringLiteral("Gear goes into Base (active), linked to the shaft of Lid: a part on a shaft "
+                                  "stays out of the shaft's component."))
+            .isEmpty());
+  CHECK(keptNotice(snapshot, QStringLiteral("Gear"), QString()).isEmpty());
+}
 } // namespace
 
 int activateOnPickTests() {
@@ -215,5 +297,6 @@ int activateOnPickTests() {
   pickTests();
   offerTests();
   noticeTests();
+  partTests();
   return failures;
 }

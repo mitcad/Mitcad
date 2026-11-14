@@ -280,10 +280,9 @@ void MainWindow::writeWebViewer(bool turnOn) {
   const QString commit = recordWebViewer(root, command, title);
   if (!failed.isEmpty()) {
     sheetWarning(this, title,
-                 tr("The web viewer of %1 lacks %2 design(s) whose page could not be written:\n%3")
-                     .arg(name)
-                     .arg(failed.size())
-                     .arg(failed.join(QLatin1Char('\n'))));
+                 tr("The web viewer of %1 lacks %n design(s) whose page could not be written:\n%2", nullptr,
+                    static_cast<int>(failed.size()))
+                     .arg(name, failed.join(QLatin1Char('\n'))));
   }
   showHint(tr("The web viewer of %1 is in %2: open index.html there in a browser%3.")
                .arg(name, QDir::toNativeSeparators(folder),

@@ -16,7 +16,7 @@ use mitcad_model::ids::{BodyUid, EntityUid, FeatureUid};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::notice::{self, Notice};
 use mitcad_model::sketch::cleanup::Removal;
-use mitcad_model::sketch::edit::{EditReport, PointInput, SketchEdit};
+use mitcad_model::sketch::edit::{EditReport, Freedom, PointInput, SketchEdit};
 use mitcad_model::sketch::geometry::Curve2;
 use mitcad_model::sketch::modify::{DragTarget, Item, Map2, point_input};
 use mitcad_model::sketch::offset::derived_entities;
@@ -452,6 +452,10 @@ named_enum! {
             #[serde(with = "curves")]
             curves: Vec<EntityUid>,
             distance: ValueInput,
+            /// `"sharp"` (default) or `"round"`: an arc about the source's
+            /// corner at each outer corner between lines (mitcad#1774).
+            #[serde(default)]
+            corners: OffsetCorners,
         },
         "sketch.mirror" => Mirror {
             sketch: FeatureUid,
@@ -503,6 +507,9 @@ named_enum! {
             distance: Option<ValueInput>,
             #[serde(default)]
             flip: bool,
+            /// Sharp or round corners (mitcad#1774); left out, as they are.
+            #[serde(default)]
+            corners: Option<OffsetCorners>,
         },
         "sketch.project" => Project {
             sketch: FeatureUid,
@@ -595,6 +602,10 @@ named_enum! {
             sketch: FeatureUid,
             #[serde(default)]
             projection: Option<Value>,
+            // A projection whose source edge is gone: the edge on its curve
+            // that took its place, one of its `candidates` (mitcad#1784).
+            #[serde(default)]
+            successor: Option<String>,
         },
         // Projected geometry into ordinary sketch geometry (mitcad#257).
         "sketch.convert_projected" => ConvertProjected {
@@ -881,6 +892,24 @@ impl<'de> Deserialize<'de> for ProjectSource {
     }
 }
 
+/// The corners of an offset made by constraints (mitcad#1774): where the
+/// results cross (Sharp), or an arc about the source's corner at each corner
+/// where two curves meet at an angle (lines or arcs, mitcad#1786) that the
+/// chain turns away from the offset at (Round).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum OffsetCorners {
+    #[default]
+    Sharp,
+    Round,
+}
+
+impl OffsetCorners {
+    fn round(self) -> bool {
+        self == Self::Round
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Rotation {
@@ -1061,7 +1090,24 @@ pub(super) fn status_json(status: &SketchStatus, def: &SketchDef) -> Value {
     if !status.degenerate.is_empty() {
         value["degenerate"] = degenerate_ids(status);
     }
+    // Only when a line distance is between lines that are not parallel
+    // (mitcad#1774).
+    if !status.not_parallel.is_empty() {
+        value["not_parallel"] = not_parallel_ids(status);
+    }
     value
+}
+
+/// The line distances between lines that are not parallel (mitcad#1774) as
+/// the JSON list of their ids.
+pub(super) fn not_parallel_ids(status: &SketchStatus) -> Value {
+    json!(
+        status
+            .not_parallel
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    )
 }
 
 /// A sketch command's result with what a person reads of its warnings and
@@ -1398,9 +1444,11 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
             SketchCommand::CleanUpStaleProjections { sketch } => {
                 self.clean_up_stale_projections(sketch)?
             }
-            SketchCommand::ProjectAgain { sketch, projection } => {
-                self.project_again(sketch, projection.as_ref())?
-            }
+            SketchCommand::ProjectAgain {
+                sketch,
+                projection,
+                successor,
+            } => self.project_again(sketch, projection.as_ref(), successor.as_deref())?,
             SketchCommand::ConvertProjected { sketch, entities } => {
                 self.convert_projected(sketch, &entities)?
             }
@@ -1800,6 +1848,27 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                             .collect();
                         value["stale"] = json!(ids);
                     }
+                    // An edge followed in its source's place, or those that
+                    // could have taken a lost source's place (mitcad#1784).
+                    if let Some(successor) = &report.successor {
+                        value["successor"] = json!(successor);
+                    }
+                    if !report.candidates.is_empty() {
+                        let names: Vec<&str> = report
+                            .candidates
+                            .iter()
+                            .map(|(name, _)| name.as_str())
+                            .collect();
+                        value["candidates"] = json!(names);
+                        // Each one's kind and size, for a list a person
+                        // reads (mitcad#1794).
+                        let curves: Vec<Value> = report
+                            .candidates
+                            .iter()
+                            .map(|(_, projected)| candidate_curve(projected))
+                            .collect();
+                        value["candidate_curves"] = json!(curves);
+                    }
                 }
                 value
             })
@@ -1808,6 +1877,15 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
         // warning carries its entities, the others none.
         let mut warnings = self.warnings(uid).to_vec();
         let collapsed = status.degenerate_warning();
+        // Line distances between lines that are not parallel (mitcad#1774):
+        // the warning, also where the query solved the sketch itself, about
+        // their lines.
+        let crooked = status.not_parallel_warning();
+        if let Some(warning) = &crooked
+            && !warnings.contains(warning)
+        {
+            warnings.push(warning.clone());
+        }
         let mut warning_entities: Vec<Vec<String>> = warnings
             .iter()
             .map(|warning| {
@@ -1817,6 +1895,22 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                         .iter()
                         .map(|id| Ref::Curve(*id).to_string())
                         .collect();
+                }
+                if crooked.as_deref() == Some(warning.as_str()) {
+                    let mut lines: Vec<String> = Vec::new();
+                    for d in def
+                        .dimensions
+                        .iter()
+                        .filter(|d| status.not_parallel.contains(&d.id))
+                    {
+                        for r in d.kind.refs() {
+                            let r = r.to_string();
+                            if !lines.contains(&r) {
+                                lines.push(r);
+                            }
+                        }
+                    }
+                    return lines;
                 }
                 output
                     .and_then(|o| {
@@ -1866,6 +1960,8 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             result[key] = value[key].clone();
         }
         result["degenerate"] = degenerate_ids(&status);
+        // Drawn as in conflict by the application (mitcad#1774).
+        result["not_parallel"] = not_parallel_ids(&status);
         // The points, curves, constraints and dimensions in the order they
         // were made (mitcad#1492): sketch mode's list of them.
         let order: Vec<String> = def
@@ -1934,6 +2030,10 @@ pub(crate) fn solve_notices(
     for (message, _) in redundant {
         notices.push(Notice::warning(message.as_str()));
     }
+    // A line distance between lines that are not parallel (mitcad#1774).
+    if let Some(warning) = status.not_parallel_warning() {
+        notices.push(Notice::warning(warning));
+    }
     // Counted, not named (mitcad#1612); the status's `unmet_inactive` lists
     // their ids for agents.
     match status.unmet_inactive.len() {
@@ -1986,6 +2086,23 @@ pub(crate) fn redundant_groups(
     // Per owner and the sketch's own (last): dimensions, constraints,
     // fixed entities and the entities they name.
     let mut groups: Vec<([usize; 3], Vec<String>)> = vec![([0; 3], Vec::new()); owners.len() + 1];
+    // The sketch's own, in words when they are few (mitcad#1774): what
+    // follows from what.
+    if let Some(words) = def.and_then(|def| own_in_words(status, def, &owners)) {
+        let mut out: Vec<(String, Vec<String>)> = Vec::new();
+        let mut without = status.clone();
+        without.redundant.retain(|item| {
+            let SolverItem::Constraint(k) = item else {
+                return true;
+            };
+            owners.iter().any(|(_, own, _)| own.contains(k))
+        });
+        if !without.redundant.is_empty() {
+            out = redundant_groups(&without, def);
+        }
+        out.extend(words);
+        return out;
+    }
     for redundant in &status.redundant {
         let (group, kind, about): (usize, usize, Vec<String>) = match redundant {
             SolverItem::Fixed(entity) => (owners.len(), 2, vec![entity.to_string()]),
@@ -2051,6 +2168,73 @@ pub(crate) fn redundant_groups(
         .collect()
 }
 
+/// The sketch's own redundant constraints and dimensions (those of no
+/// offset or pattern), each a warning that says in words what it follows
+/// from (mitcad#1774, `conflict::follows`: "Redundant: the Coincident
+/// between two points follows from the Tangent between a line and an arc
+/// and the projected geometry"), with the entities it names; None when
+/// there is none, more than three, or a fixed entity among them, which
+/// [`redundant_groups`] counts as before.
+fn own_in_words(
+    status: &SketchStatus,
+    def: &SketchDef,
+    owners: &[(String, BTreeSet<ConstraintUid>, Vec<String>)],
+) -> Option<Vec<(String, Vec<String>)>> {
+    use mitcad_model::sketch::conflict;
+    use mitcad_model::sketch::solve::DimensionInput;
+    let mut own: Vec<ConstraintUid> = Vec::new();
+    for item in &status.redundant {
+        match item {
+            SolverItem::Fixed(_) => return None,
+            SolverItem::Constraint(k) => {
+                if !owners.iter().any(|(_, held, _)| held.contains(k)) {
+                    own.push(*k);
+                }
+            }
+        }
+    }
+    if own.is_empty() || own.len() > 3 {
+        return None;
+    }
+    // Without their values: "the distance", "the radius".
+    let dimensions: Vec<DimensionInput<'_>> = def
+        .dimensions
+        .iter()
+        .map(|d| DimensionInput {
+            id: d.id,
+            kind: &d.kind,
+            value: None,
+        })
+        .collect();
+    let ctx = conflict::Context {
+        entities: &def.entities,
+        constraints: &def.constraints,
+        dimensions: &dimensions,
+        bindings: &[],
+    };
+    own.iter()
+        .map(|k| {
+            let set = status
+                .redundant_sets
+                .iter()
+                .find(|set| set.contains(&SolverItem::Constraint(*k)))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let words = conflict::follows(&ctx, *k, set)?;
+            let refs = match (
+                def.constraints.iter().find(|c| c.id == *k),
+                def.dimensions.iter().find(|d| d.id == *k),
+            ) {
+                (Some(c), _) => c.kind.refs(),
+                (None, Some(d)) => d.kind.refs(),
+                (None, None) => Vec::new(),
+            };
+            let about = refs.iter().map(ToString::to_string).collect();
+            Some((format!("Redundant: {words}"), about))
+        })
+        .collect()
+}
+
 /// The document's methods used only in this module, as an
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.
@@ -2087,10 +2271,14 @@ trait SketchLocal<K: Kernel> {
     /// of them when None) projected anew, with what was carried over to
     /// the new entities, what stays on the old ones and, in `warnings`, the
     /// same in words and the regions later features use whose names change.
+    /// `successor` (mitcad#1784): for one whose source edge is gone, the
+    /// edge on its curve that took its place, one of its `candidates`; it
+    /// becomes the projection's source.
     fn project_again(
         &mut self,
         sketch: FeatureUid,
         projection: Option<&Value>,
+        successor: Option<&str>,
     ) -> Result<Value, ApiError>;
 
     /// `sketch.axis` (mitcad#500): the entity that stands for the sketch's
@@ -2782,7 +2970,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             joined_ref.get_or_insert_with(|| json!({}))["implied_removed"] =
                                 json!(list);
                         }
-                        edit.require_needed(before.redundant.len())?;
+                        edit.require_needed(Freedom::of(&before))?;
                     }
                 }
                 C::AddDimension {
@@ -3009,9 +3197,12 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     made_ref.push(Ref::Curve(line).to_string());
                 }
                 C::Offset {
-                    curves, distance, ..
+                    curves,
+                    distance,
+                    corners,
+                    ..
                 } => {
-                    let (_, made) = edit.offset(&curves, &distance)?;
+                    let (_, made) = edit.offset_cornered(&curves, &distance, corners.round())?;
                     *made_ref = curve_list(made);
                 }
                 C::Mirror { entities, axis, .. } => {
@@ -3074,9 +3265,13 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     offset,
                     distance,
                     flip,
+                    corners,
                     ..
                 } => {
                     edit.edit_offset(offset, distance.as_ref(), flip)?;
+                    if let Some(corners) = corners {
+                        edit.set_offset_corners(offset, corners.round())?;
+                    }
                     if let Some(o) = edit.def.offsets.iter().find(|o| o.id == offset) {
                         *made_ref = curve_list(o.made());
                     }
@@ -3111,7 +3306,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let before = edit.redundancy().ok();
                     let (id, dim) = edit.add_equal_spacing(&input, &dimension)?;
                     if let Some(before) = before {
-                        edit.require_spacing_needed(before, id)?;
+                        edit.require_spacing_needed(before.redundant, id)?;
                     }
                     if let (Some(dim), Some(at)) = (dim, text) {
                         edit.set_text_position(dim, at)?;
@@ -3129,7 +3324,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let before = edit.redundancy().ok();
                     edit.edit_equal_spacing(constraint, anchors, mode, direction, keep_order)?;
                     if let Some(before) = before {
-                        edit.require_spacing_needed(before, constraint)?;
+                        edit.require_spacing_needed(before.redundant, constraint)?;
                     }
                     made_ref.push(constraint.to_string());
                 }
@@ -3434,6 +3629,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         &mut self,
         sketch: FeatureUid,
         projection: Option<&Value>,
+        successor: Option<&str>,
     ) -> Result<Value, ApiError> {
         let output = self.sketch_output(sketch).ok_or_else(|| {
             ApiError(format!(
@@ -3446,9 +3642,17 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         let def = self
             .sketch_def(sketch)
             .ok_or_else(|| ApiError(format!("{sketch} is not a sketch")))?;
-        let which: Vec<usize> = match projection {
-            Some(selector) => vec![projection_index(def, selector)?],
-            None => again_candidates(&follow),
+        let which: Vec<usize> = match (projection, successor) {
+            (Some(selector), _) => vec![projection_index(def, selector)?],
+            // A successor without a projection: the one lost projection
+            // that has it among its candidates (mitcad#1784).
+            (None, Some(name)) => follow
+                .iter()
+                .filter(|r| r.candidates.iter().any(|(n, _)| n == name))
+                .map(|r| r.projection)
+                .take(1)
+                .collect(),
+            (None, None) => again_candidates(&follow),
         };
         if which.is_empty() {
             return Err(ApiError(
@@ -3457,9 +3661,15 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     .to_owned(),
             ));
         }
-        let (again, report) = self.edit_sketch(sketch, "Project Again in {sketch}", |edit| {
-            edit.project_again(&follow, &which)
-        })?;
+        let (again, report) =
+            self.edit_sketch(
+                sketch,
+                "Project Again in {sketch}",
+                |edit| match successor {
+                    Some(name) => Ok(vec![edit.project_again_from(&follow, which[0], name)?]),
+                    None => edit.project_again(&follow, &which),
+                },
+            )?;
         let mut warnings: Vec<String> = Vec::new();
         let mut done: Vec<Value> = Vec::new();
         for one in &again {
@@ -3605,6 +3815,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         let mut value = report_json(&report, self.sketch_def(sketch));
         value["converted"] = names(&done.converted);
         value["kept"] = json!(points(&done.kept));
+        // The offsets freed with their curves (mitcad#1755).
+        if !done.offsets.is_empty() {
+            value["offsets"] = names(&done.offsets);
+        }
         value["warnings"] = json!(warnings);
         Ok(value)
     }
@@ -3735,6 +3949,36 @@ pub(crate) fn seen_from(
     axis: impl Fn([f64; 3]) -> [f64; 3],
 ) -> Option<[f64; 3]> {
     matches!(plane, SketchPlane::Xz).then(|| axis([0.0, -1.0, 0.0]))
+}
+
+/// An edge that could have taken a lost projection's source's place, as
+/// the sketch query describes it (`candidate_curves`, mitcad#1794): the
+/// kind of its first line, arc or circle as projected onto the sketch's
+/// plane, its length and an arc's or circle's radius; `{}` when it has none.
+fn candidate_curve(projected: &[mitcad_model::sketch::project::Projected]) -> Value {
+    use mitcad_model::sketch::project::Projected;
+    projected
+        .iter()
+        .find_map(|p| match p {
+            Projected::Curve(Curve2::Line { a, b }) => Some(json!({
+                "type": "line",
+                "length": ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt(),
+            })),
+            Projected::Curve(Curve2::Arc {
+                radius, start, end, ..
+            }) => Some(json!({
+                "type": "arc",
+                "length": radius * (end - start).abs(),
+                "radius": radius,
+            })),
+            Projected::Curve(Curve2::Circle { radius, .. }) => Some(json!({
+                "type": "circle",
+                "length": std::f64::consts::TAU * radius,
+                "radius": radius,
+            })),
+            _ => None,
+        })
+        .unwrap_or_else(|| json!({}))
 }
 
 /// The linked projections Project Again repairs (mitcad#1303), by their
@@ -3920,6 +4164,7 @@ mod notice_tests {
             corners: Vec::new(),
             helpers: Vec::new(),
             derived: false,
+            round: false,
         });
         def.constraints.push(Constraint::new(
             ConstraintUid(3),

@@ -23,8 +23,10 @@ KEY=${MITCAD_VM_KEY:-$HOME/.ssh/mitcad_vm}
 SSH=(ssh -i "$KEY" -o BatchMode=yes -o LogLevel=ERROR "$HOST")
 cd "$(dirname "$0")/../.."
 
-# An empty staging folder (a failed sync may have left one).
-"${SSH[@]}" "powershell -NoProfile -NonInteractive -Command \"if (Test-Path '$STAGE') { Remove-Item -Recurse -Force '$STAGE' }; New-Item -ItemType Directory -Force '$STAGE','$DIR' | Out-Null\""
+# An empty staging folder (a failed sync may have left one). Its removal is
+# tried a few times: a file of it held for a moment (a scanner, an indexer)
+# made Remove-Item fail, and the sync then stopped before copying anything.
+"${SSH[@]}" "powershell -NoProfile -NonInteractive -Command \"for (\$i = 0; \$i -lt 5 -and (Test-Path '$STAGE'); \$i++) { Remove-Item -Recurse -Force '$STAGE' -ErrorAction SilentlyContinue; if (Test-Path '$STAGE') { Start-Sleep -Seconds 2 } }; if (Test-Path '$STAGE') { throw 'the staging folder $STAGE cannot be removed' }; New-Item -ItemType Directory -Force '$STAGE','$DIR' | Out-Null\""
 
 git ls-files -z --cached --others --exclude-standard |
   tar --null -T - -cf - |

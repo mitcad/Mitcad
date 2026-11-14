@@ -320,7 +320,21 @@ private:
   // longer follow their sources made anew (one undo step), what stays on
   // the old curves shown in the status bar.
   void projectAgain(const QString& sketch);
+  // Show Dimensions of a sketch's row (mitcad#1772): its dimensions drawn
+  // in the view outside sketch mode, or no longer; one undo step, display
+  // state as a light bulb (in every mode, also in a read-only design).
+  void setSketchDimensionsShown(const QString& sketch, bool shown);
   void browserDoubleClicked(const BrowserNode& node);
+  // CAM (mitcad#1013): a setup's or an operation's place among its
+  // siblings (-1: not found); a setup moved to `index`, an operation moved
+  // to `index` of `setup` (another setup takes it there), one undo step
+  // each; an operation dragged onto another operation (into its place) or
+  // onto a setup (last in it), logged "Browser CAM drop: <source> onto
+  // <target>".
+  int camIndex(const BrowserNode& node) const;
+  void moveCamSetup(const BrowserNode& node, int index);
+  void moveCamOperation(const BrowserNode& node, int setup, int index);
+  void camDropped(const BrowserNode& source, const BrowserNode& target);
   void toggleVisibility(const BrowserNode& node);
   // An eye while Isolate is on (mitcad#1700): a row left out by the
   // isolation alone joins it, a row isolated on its own (with other items
@@ -330,10 +344,23 @@ private:
   // The isolation with a row's items added: the body, the occurrence, or
   // a Bodies folder's bodies.
   Selection isolationWith(const BrowserNode& node) const;
+  // The eye of a component's Bodies, Sketches or Construction folder
+  // (mitcad#1771): the model's set_folder_visible, display state that
+  // changes no light bulb in the folder.
+  static QJsonObject folderCommand(const BrowserNode& node, bool visible);
+  // A folder's Show All / Hide All: every light bulb in it set (the bodies
+  // without a Show When condition, mitcad#863), Show All showing the folder
+  // too, one undo step.
+  void setFolderContents(const BrowserNode& node, bool show);
+  // The sketches or construction features a Sketches or Construction
+  // folder lists (not the sketches shown under their features, mitcad#1699).
+  QStringList folderFeatures(const BrowserNode& node) const;
+  // Whether a folder shows anything by its eye and its items' light bulbs:
+  // Show All or Hide All in its menu.
+  bool folderContentsShown(const BrowserNode& node) const;
   // The names of a component's bodies that follow a Show When condition,
-  // which the Bodies folder's light bulb and Show All / Hide All leave as
-  // they are (mitcad#863), and what the folder says when they are all it
-  // holds.
+  // which the Bodies folder's Show All / Hide All leave as they are
+  // (mitcad#863), and what the folder says when they are all it holds.
   QStringList conditionedBodies(const QString& owner) const;
   static QString bodiesFollowConditions(const QStringList& bodies);
   // "Body2 follows its Show When and is left as it is." (mitcad#863): the

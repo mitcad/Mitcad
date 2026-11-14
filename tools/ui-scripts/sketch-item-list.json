@@ -1,6 +1,6 @@
 [
   {"comment": "SPDX-License-Identifier: MIT"},
-  {"comment": "A design for tools/ui-scripts/sketch-item-list.mitcad-ui (mitcad#1492, mitcad#1750): a 60 x 40 x 20 box (F2.b0) from Sketch1 (F1); Sketch2 (F3) on its top face, empty, for the steps to draw in; Sketch3 (F4) on XY as a design saved before the work steps were recorded has it: a line and its two points, no steps."},
+  {"comment": "A design for tools/ui-scripts/sketch-item-list.mitcad-ui (mitcad#1492, mitcad#1750): a 60 x 40 x 20 box (F2.b0) from Sketch1 (F1); Sketch2 (F3) on its top face, empty, for the steps to draw in; Sketch3 (F4) on XY as a design saved before the work steps were recorded has it: a line, its two points and an inactive Horizontal on the line (k4, met by the line: a dimmed cell with no badge, mitcad#1763), no steps."},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-30, -20], "width": 60, "height": 40},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
@@ -10,6 +10,8 @@
   {"cmd": "add_feature", "def": {"type": "sketch", "entities": [
     {"id": "p1", "type": "point", "at": [0, 40]},
     {"id": "p2", "type": "point", "at": [30, 40]},
-    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}],
+    "constraints": [
+    {"id": "k4", "type": "horizontal", "line": "c3", "active": false}]}},
   {"expect": {"feature": "F4", "status": "ok"}}
 ]

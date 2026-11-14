@@ -210,11 +210,23 @@ public:
   // A dimension with a typed value; refused ones are left out.
   void addDimension(const QJsonObject& dimension, const QString& value);
   // A body edge or vertex in the sketch plane projected into the sketch,
-  // linked, for the dimension or point the action makes from it; or the
-  // entities of an existing projection of the same source that still match
-  // it, and within one action the projection made before (mitcad#256,
-  // mitcad#258). Empty when the model refused the projection (error()).
+  // linked, for the dimension, constraint or point the action makes from
+  // it; or the entities of an existing projection of the same source that
+  // still match it, and within one action the projection made before
+  // (mitcad#256, mitcad#258). Empty when the model refused the projection
+  // (error()).
   ProjectedItem projectBody(const BodyItem& item);
+  // The sketch entity a pick of a body item stands for, projected now
+  // (projectBody): a vertex's point, an edge's curve, and with `part` (start,
+  // end or center, BodyGeometry::item) the projected curve's end where the
+  // edge's is or its centre. Empty when the projection was refused or gave
+  // nothing to take.
+  QString bodyInput(const BodyItem& item, const QString& part = QString());
+  // The picks with those of body edges and vertices (BodyGeometry ids of
+  // the controller's bodyGeometryShown()) replaced by their projected
+  // entities (bodyInput), as a dimension's and a constraint's picks
+  // (mitcad#256, mitcad#1782); false when one could not be projected.
+  bool bodyInputs(QStringList& picks);
   // The entity of a pick of the sketch's origin or an axis (mitcad#500),
   // made now when the sketch lacks it (`sketch.axis`); any other id as it
   // is. Empty when the model refused (error()).
@@ -296,6 +308,10 @@ public:
 
   // --- Tools
   void startTool(std::unique_ptr<SketchTool> tool);
+  // Ends the running tool. Also without one (another tool or a command
+  // starts, the sketch finishes), a refused action's painted blocking items
+  // ("action", setConflict) go (mitcad#1761): the overlay shows the
+  // committed sketch again.
   void stopTool();
   // The icon of the tool command named `toolName` (as its tool names
   // itself), which the tool's cursor shows (mitcad#3).
@@ -379,11 +395,12 @@ public:
   void setShowDimensions(bool on);
   bool showConstraints() const { return m_showConstraints; }
   void setShowConstraints(bool on);
-  // Show points (mitcad#1705): off, the sketch's end, centre and lone points
-  // are drawn without markers; the point under the pointer and selected
-  // ones still are, and snaps, drags and picks of points work as before. A
-  // UI preference (QSettings sketch/showPoints, on by default), not in the
-  // design.
+  // Show points (mitcad#1705): off, the end, centre and lone points of the
+  // edited sketch and of every finished sketch shown (mitcad#1764) are
+  // drawn without markers; the point under the pointer and selected ones
+  // still are, and snaps, drags and picks of points work as before. A UI
+  // preference (QSettings sketch/showPoints, on by default), not in the
+  // design; a change applies to every document window.
   bool showPoints() const { return m_showPoints; }
   void setShowPoints(bool on);
   // Filled regions are rebuilt after a geometry drag, while curves stay live.
@@ -498,7 +515,8 @@ public:
   // their symbols and values and the curves and points they are on, in the
   // error's colour; in the hover's while the pointer is over the message
   // (`hovered`). `source` keeps the command panel's ("panel") apart from a
-  // sketch action's ("action"), which the next action clears. A sketch that
+  // sketch action's ("action"), which the next action clears, and Esc, the
+  // tool ending or another starting (mitcad#1761). A sketch that
   // does not solve paints its own conflicts as well (the Sketch Palette's
   // status, conflicts()). Logged when what is painted changes ("Sketch
   // conflict painted: k5 on c3, c6", "Sketch conflict painted: none").
@@ -575,6 +593,9 @@ public:
   const QString& lengthUnit() const { return m_unit; }
   // Millimetres per document length unit.
   double lengthScale() const { return m_unitScale; }
+  // Millimetres per length unit of this symbol (mm, cm, m, in, ft, um),
+  // for a sketch that is not edited (mitcad#1772).
+  static double lengthScaleOf(const QString& unit);
 
   // Model access for SketchOp: throws the model's error.
   QJsonObject runModel(const QJsonObject& command);
@@ -664,6 +685,10 @@ protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+  // Show points as another window's palette (or this one's) set it, without
+  // saving or logging it again: this window's view and palette follow
+  // (mitcad#1764).
+  void applyShowPoints(bool on);
   // The selection item of a point, curve, constraint or dimension of this
   // sketch (selectItems); false for an id the sketch lacks.
   bool selectionItemOf(const QString& id, SelectionItem& item) const;

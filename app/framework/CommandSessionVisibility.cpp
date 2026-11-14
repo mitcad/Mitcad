@@ -368,6 +368,12 @@ int CommandSession::keepPicks(const QStringList& inputs, const std::function<boo
 
 void CommandSession::setActivationNotice(const QString& text) {
   m_activationNotice = text;
+  if (text.isEmpty()) {
+    // The next preview's message follows without it.
+    qDebug().noquote() << QStringLiteral("Panel %1 notice cleared").arg(m_def.name);
+    showPanelMessage(QString(), NoticeLevel::Information);
+    return;
+  }
   QString logged = text;
   logged.replace(QLatin1Char('\n'), QStringLiteral(" "));
   qDebug().noquote() << QStringLiteral("Panel %1 notice: %2").arg(m_def.name, logged);

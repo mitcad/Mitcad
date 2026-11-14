@@ -12,7 +12,8 @@
 //!   can be;
 //! - tangent: the plane touching a cylinder or cone along the line where
 //!   the reference plane's normal, turned about the face's axis by the
-//!   angle, leaves the face; the normal points away from the axis;
+//!   angle, leaves the face; the normal points away from the axis; an
+//!   `offset` moves it along that normal, negative into the face;
 //! - midplane: halfway between parallel planes with the first plane's
 //!   normal and frame; between crossing planes the bisector through their
 //!   intersection with the normal along n1 - n2 (between two faces of a
@@ -22,7 +23,13 @@
 //!   (p2 - p1) × (p3 - p1); the frame starts at the first line or point
 //!   with x along it;
 //! - tangent at a point, along a path, normal at a point: the outward face
-//!   normal or the path's tangent, with the default x axis.
+//!   normal or the path's tangent, with the default x axis; a tangent
+//!   plane's `offset` moves it along the face normal, negative into the
+//!   face;
+//! - flange wall (mitcad#1776): the wall frame of the sheet-metal flange
+//!   whose profile sketch lies on the plane, its origin on the bend's
+//!   moving tangent line at the middle of the boundary, x along that line
+//!   and y along the wall.
 
 use std::collections::BTreeMap;
 
@@ -30,6 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{GeomRef, PathRef, Want, along_slot, distinct, finite};
 use crate::datum::{Datum, DatumAxis, DatumPlane, PathParameter, SurfaceGeometry, Vec3};
+use crate::features::pattern::none;
 use crate::features::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, is_false,
 };
@@ -83,6 +91,10 @@ pub enum PlaneDefinition<P = ParamId> {
         face: GeomRef,
         angle: P,
         plane: GeomRef,
+        /// Moves the plane along its normal (mm, mitcad#1779): positive
+        /// away from the face, negative into it; none is 0.
+        #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+        offset: Option<P>,
     },
     /// Midplane between two planes or planar faces.
     Midplane { plane1: GeomRef, plane2: GeomRef },
@@ -97,7 +109,13 @@ pub enum PlaneDefinition<P = ParamId> {
     /// Through a line and a point off it.
     EdgeAndPoint { line: GeomRef, point: GeomRef },
     /// Tangent to a face at the face point nearest to a point.
-    TangentAtPoint { face: GeomRef, point: GeomRef },
+    TangentAtPoint {
+        face: GeomRef,
+        point: GeomRef,
+        /// As [`PlaneDefinition::Tangent`]'s `offset`.
+        #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+        offset: Option<P>,
+    },
     /// Plane Along Path: normal to a path at a fraction of its length, or
     /// at a length (mm) from its start with `physical`.
     AlongPath {
@@ -119,6 +137,20 @@ pub enum PlaneDefinition<P = ParamId> {
     /// Offset through a point: parallel to a plane or planar face, through
     /// a point (a vertex or another point).
     OffsetThroughPoint { plane: GeomRef, point: GeomRef },
+    /// The wall of the sheet-metal flange whose profile sketch lies on the
+    /// plane (mitcad#1776): the wall's sketch frame
+    /// (`sheet::folded::flange_profile_frame`), worked out again at every
+    /// recompute from the sheet before the plane and the flange's boundary,
+    /// angle, radius and position, so that the profile stays on the wall
+    /// when the sheet's edge or the flange changes. The flange is the first
+    /// one in the timeline whose `profile` is a sketch on this plane; until
+    /// one names such a sketch (while a new flange's profile is drawn), the
+    /// plane is the stored frame, as a fixed plane.
+    FlangeWall {
+        origin: Vec3,
+        x_axis: Vec3,
+        y_axis: Vec3,
+    },
 }
 
 impl<P> ConstructionPlaneDef<P> {
@@ -150,10 +182,16 @@ impl<P> ConstructionPlaneDef<P> {
                 angle: f("definition.angle", angle)?,
                 plane: plane.clone(),
             },
-            D::Tangent { face, angle, plane } => D::Tangent {
+            D::Tangent {
+                face,
+                angle,
+                plane,
+                offset,
+            } => D::Tangent {
                 face: face.clone(),
                 angle: f("definition.angle", angle)?,
                 plane: plane.clone(),
+                offset: map_offset(offset, f)?,
             },
             D::Midplane { plane1, plane2 } => D::Midplane {
                 plane1: plane1.clone(),
@@ -176,9 +214,14 @@ impl<P> ConstructionPlaneDef<P> {
                 line: line.clone(),
                 point: point.clone(),
             },
-            D::TangentAtPoint { face, point } => D::TangentAtPoint {
+            D::TangentAtPoint {
+                face,
+                point,
+                offset,
+            } => D::TangentAtPoint {
                 face: face.clone(),
                 point: point.clone(),
+                offset: map_offset(offset, f)?,
             },
             D::AlongPath {
                 path,
@@ -206,6 +249,15 @@ impl<P> ConstructionPlaneDef<P> {
             D::OffsetThroughPoint { plane, point } => D::OffsetThroughPoint {
                 plane: plane.clone(),
                 point: point.clone(),
+            },
+            D::FlangeWall {
+                origin,
+                x_axis,
+                y_axis,
+            } => D::FlangeWall {
+                origin: *origin,
+                x_axis: *x_axis,
+                y_axis: *y_axis,
             },
         };
         Ok(ConstructionPlaneDef {
@@ -235,8 +287,8 @@ impl<P> ConstructionPlaneDef<P> {
                 (point3, Want::Point),
             ],
             D::EdgeAndPoint { line, point } => vec![(line, Want::Line), (point, Want::Point)],
-            D::TangentAtPoint { face, point } => vec![(face, Want::Face), (point, Want::Point)],
-            D::AlongPath { .. } | D::Fixed { .. } => Vec::new(),
+            D::TangentAtPoint { face, point, .. } => vec![(face, Want::Face), (point, Want::Point)],
+            D::AlongPath { .. } | D::Fixed { .. } | D::FlangeWall { .. } => Vec::new(),
             D::NormalAtPoint { point, .. } => vec![(point, Want::Point)],
             D::OffsetThroughPoint { plane, point } => {
                 vec![(plane, Want::Plane), (point, Want::Point)]
@@ -278,6 +330,11 @@ impl FeatureInfo for ConstructionPlaneDef {
             origin,
             x_axis,
             y_axis,
+        }
+        | PlaneDefinition::FlangeWall {
+            origin,
+            x_axis,
+            y_axis,
         } = &self.definition
         {
             fixed(*origin, *x_axis, *y_axis)?;
@@ -302,10 +359,16 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
                 let base = ctx.plane(plane)?;
                 at_angle(&line, &base, ctx.param(*angle)?)?
             }
-            D::Tangent { face, angle, plane } => {
+            D::Tangent {
+                face,
+                angle,
+                plane,
+                offset,
+            } => {
                 let surface = ctx.surface(face)?;
                 let base = ctx.plane(plane)?;
-                tangent(&surface, &base, ctx.param(*angle)?)?
+                let touching = tangent(&surface, &base, ctx.param(*angle)?)?;
+                offset_along_normal(touching, *offset, ctx)?
             }
             D::Midplane { plane1, plane2 } => midplane(&ctx.plane(plane1)?, &ctx.plane(plane2)?),
             D::TwoEdges { line1, line2 } => through_lines(&ctx.axis(line1)?, &ctx.axis(line2)?)?,
@@ -317,10 +380,15 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
             D::EdgeAndPoint { line, point } => {
                 through_line_and_point(&ctx.axis(line)?, ctx.point(point)?)?
             }
-            D::TangentAtPoint { face, point } => {
+            D::TangentAtPoint {
+                face,
+                point,
+                offset,
+            } => {
                 let point = ctx.point(point)?;
                 let touch = ctx.face_point(face, point)?;
-                DatumPlane::from_normal(touch.point, touch.normal, None)
+                let touching = DatumPlane::from_normal(touch.point, touch.normal, None);
+                offset_along_normal(touching, *offset, ctx)?
             }
             D::AlongPath {
                 path,
@@ -351,6 +419,18 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
                 let distance = base.distance_to(ctx.point(point)?);
                 base.translated(scale(base.normal(), distance))
             }
+            D::FlangeWall {
+                origin,
+                x_axis,
+                y_axis,
+            } => match crate::sheet::folded::flange_wall_plane(ctx)? {
+                Some(wall) => DatumPlane {
+                    origin: wall.origin,
+                    x_axis: wall.x_axis,
+                    y_axis: wall.y_axis,
+                },
+                None => fixed(*origin, *x_axis, *y_axis)?,
+            },
         };
         let plane = if self.flip {
             DatumPlane {
@@ -365,6 +445,33 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
             ..FeatureOutput::default()
         })
     }
+}
+
+/// The optional `offset` of a tangent plane mapped (slot
+/// `definition.offset`, after the definition's other values).
+fn map_offset<P, Q, E>(
+    offset: &Option<P>,
+    f: &mut dyn FnMut(&str, &P) -> Result<Q, E>,
+) -> Result<Option<Q>, E> {
+    offset
+        .as_ref()
+        .map(|value| f("definition.offset", value))
+        .transpose()
+}
+
+/// `plane` moved along its own normal by the optional `offset` (mitcad#1779;
+/// none leaves it where it is). The normal is the one the definition gives,
+/// before `flip`: positive is away from the face.
+fn offset_along_normal<K: Kernel>(
+    plane: DatumPlane,
+    offset: Option<ParamId>,
+    ctx: &mut EvalContext<'_, K>,
+) -> Result<DatumPlane, String> {
+    let Some(offset) = offset else {
+        return Ok(plane);
+    };
+    let distance = ctx.param(offset)?;
+    Ok(plane.translated(scale(plane.normal(), distance)))
 }
 
 /// A fixed plane from its origin and (nearly) perpendicular axes.

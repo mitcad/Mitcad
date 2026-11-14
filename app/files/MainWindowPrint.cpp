@@ -7,7 +7,9 @@
 // without a slicer, or when it does not start, the folder opens. With 3MF
 // the panel shows the design's Printer and Process (mitcad#655: chosen at
 // once, each an undo step; Edit… opens the profile editor; one another
-// design changed asked about once), and Import from Slicer… with its line
+// design changed asked about once; the Process the bodies sent print
+// with, Per body when they differ, chosen where it comes from,
+// mitcad#1799), and Import from Slicer… with its line
 // and Details…. Bed Face shows the face the bodies lie on (their print bed
 // face, else the automatic orientation's), drawn in the bed face's green;
 // a face picked there becomes the body's print bed face; Center on Plate
@@ -139,6 +141,30 @@ QStringList exportWarnings(const QJsonObject& result) {
   return warnings;
 }
 
+// The Process row while the bodies sent print with different processes
+// (mitcad#1799): a state, not a process (Command.hpp,
+// choiceHeadingPrefix), shown as Per body; the picker does not list it.
+QString perBodyProcess() { return choiceHeadingPrefix() + QStringLiteral("__per_body"); }
+
+// The process the bodies sent print with (mitcad#1799), each body in its
+// occurrence as the 3MF export resolves it: the row's value (the
+// process's key, empty for Slicer default, or perBodyProcess), the bodies
+// whose process comes from below the root (their own, an occurrence's or a
+// component's: a choice is set on them), those with one of their own (a
+// choice of Slicer default takes it away), whether some take the root's
+// or none (a choice is set on the root for them), and per process its
+// bodies, for the row's tooltip ("Fine: Body1; Draft: Body2").
+struct SentProcess {
+  QString value;
+  QStringList below;
+  QStringList own;
+  bool root = false;
+  QString tooltip;
+};
+
+// When the Process row's value is logged ("3D Print process: …").
+enum class ProcessLog { Quiet, Changed, Always };
+
 // What the panel keeps while it is open, besides its inputs.
 struct PrintPanel {
   QVector<Slicer> found; // when the command started
@@ -182,6 +208,11 @@ struct PrintPanel {
   bool materialsStale = true;
   QString materialsLogged;
   QString materialWarning;
+  // The process of the bodies sent (mitcad#1799), read again when they,
+  // the format, the plates or the design change, and the Per body
+  // tooltip as last logged.
+  SentProcess process;
+  QString processLogged;
 };
 
 // The 3MF export's `occurrences` (mitcad#856): each body's placements
@@ -553,6 +584,107 @@ CommandDef MainWindow::print3dCommand() {
     }
     return QString();
   };
+  // The process the bodies sent print with (mitcad#1799): each body in its
+  // occurrence as the 3MF export resolves it, by the model's
+  // `print_settings` query (the body, then its occurrences and their
+  // components, then the root). One process for all of them is the row's
+  // value, different ones Per body. With the design's plates sent, or no
+  // body, the design's own (the root's) as before.
+  const auto readProcess = [this, chosenKey, threeMf](const CommandState& state) {
+    SentProcess sent;
+    const Selection& items = state.items(QStringLiteral("bodies"));
+    const bool plates = threeMf(state) && state.checked(QStringLiteral("plates")) && printPlateCount() > 0;
+    if (plates || items.isEmpty()) {
+      sent.value = chosenKey(QStringLiteral("process"));
+      sent.root = true;
+      return sent;
+    }
+    const QVector<LibraryItem> processes = queryLibraryItems(model(), QStringLiteral("process"), projectFolder());
+    QStringList keys;
+    // Per process (by its name, in the order of first use), its bodies.
+    QVector<QPair<QString, QStringList>> groups;
+    for (const SelectionItem& item : items) {
+      QJsonObject settingsQuery{{QStringLiteral("query"), QStringLiteral("print_settings")},
+                                {QStringLiteral("body"), item.owner}};
+      if (!item.occurrence.isEmpty()) {
+        settingsQuery.insert(QStringLiteral("occurrence"), item.occurrence);
+      }
+      QJsonObject profile;
+      try {
+        profile = queryObject(settingsQuery)
+                      .value(QStringLiteral("process"))
+                      .toObject()
+                      .value(QStringLiteral("profile"))
+                      .toObject();
+      } catch (const std::exception&) {
+        // As a body without a process.
+      }
+      const QString id = profile.value(QStringLiteral("id")).toString();
+      const QString owner = profile.value(QStringLiteral("owner")).toString();
+      const LibraryItem* row = findDesignCopy(processes, id);
+      QString key;
+      QString name = tr("Slicer default");
+      if (!id.isEmpty()) {
+        key = row != nullptr ? row->key() : QStringLiteral("design/") + id;
+        name = row != nullptr ? row->name : profile.value(QStringLiteral("name")).toString(id);
+      }
+      if (!keys.contains(key)) {
+        keys << key;
+      }
+      if (!id.isEmpty() && owner != QLatin1String("C0")) {
+        if (!sent.below.contains(item.owner)) {
+          sent.below << item.owner;
+        }
+        if (profile.value(QStringLiteral("level")).toString() == QLatin1String("body") &&
+            !sent.own.contains(item.owner)) {
+          sent.own << item.owner;
+        }
+      } else {
+        sent.root = true;
+      }
+      const QString body = bodyName(item.owner);
+      auto group = std::find_if(groups.begin(), groups.end(),
+                                [&name](const QPair<QString, QStringList>& g) { return g.first == name; });
+      if (group == groups.end()) {
+        groups.append(qMakePair(name, QStringList{body}));
+      } else if (!group->second.contains(body)) {
+        group->second << body;
+      }
+    }
+    sent.value = keys.size() == 1 ? keys.first() : perBodyProcess();
+    QStringList parts;
+    for (const auto& group : std::as_const(groups)) {
+      parts << tr("%1: %2").arg(group.first, group.second.join(QStringLiteral(", ")));
+    }
+    sent.tooltip = parts.join(QStringLiteral("; "));
+    return sent;
+  };
+  // The Process row shows what the bodies sent print with (mitcad#1799):
+  // when the panel opens, when what is sent changes, after a choice and
+  // when the design changes (an undo, the Make card). Logged as `log`
+  // says: not when the panel opens (as before), when it changes, or
+  // always (after a choice); Per body's bodies whenever they change.
+  const auto showProcess = [panel, readProcess](CommandState& state, ProcessLog log) {
+    panel->process = readProcess(state);
+    const QString value = panel->process.value;
+    const bool changed = state.choice(QStringLiteral("process")) != value;
+    if (changed) {
+      state.setChoice(QStringLiteral("process"), value);
+    }
+    if ((changed && log == ProcessLog::Changed) || log == ProcessLog::Always) {
+      qDebug().noquote() << QStringLiteral("3D Print process: %1")
+                                .arg(value == perBodyProcess() ? QStringLiteral("per body")
+                                     : value.isEmpty()         ? QStringLiteral("slicer default")
+                                                               : value);
+    }
+    const QString perBody = value == perBodyProcess() ? panel->process.tooltip : QString();
+    if (perBody != panel->processLogged) {
+      panel->processLogged = perBody;
+      if (!perBody.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("3D Print process per body: %1").arg(perBody);
+      }
+    }
+  };
   // The design's printer or process saved in a library that another
   // design changed: asked once (mitcad#655), when the panel opens or it
   // is chosen. Use the changes or Keep these, one undo step either way.
@@ -589,60 +721,179 @@ CommandDef MainWindow::print3dCommand() {
       }
     });
   };
+  // The commands that give the bodies sent a process where what they print
+  // with comes from (mitcad#1799): `named` the process (`value`, with
+  // `library` and `project` for a library's item; empty: Slicer default).
+  // Set on the bodies whose process comes from below the root (Slicer
+  // default takes their own away), on the root for those that take its
+  // or none.
+  const auto processCommands = [chosenKey](const SentProcess& sent, const QJsonObject& named) {
+    const auto command = [&named](const QString& who) {
+      QJsonObject out{{QStringLiteral("cmd"), named.isEmpty() ? QStringLiteral("remove_property")
+                                                              : QStringLiteral("set_property")},
+                      {QStringLiteral("owner"), who},
+                      {QStringLiteral("set"), QStringLiteral("Print Process")},
+                      {QStringLiteral("key"), QStringLiteral("profile")}};
+      for (auto field = named.begin(); field != named.end(); ++field) {
+        out.insert(field.key(), field.value());
+      }
+      return out;
+    };
+    QJsonArray commands;
+    for (const QString& body : named.isEmpty() ? sent.own : sent.below) {
+      commands.append(command(body));
+    }
+    if (sent.root && (!named.isEmpty() || !chosenKey(QStringLiteral("process")).isEmpty())) {
+      commands.append(command(QStringLiteral("C0")));
+    }
+    return commands;
+  };
+  // The bodies a process choice reaches, for the log: "Body1, Body2", and
+  // "the design" when the root's choice changes.
+  const auto processTargets = [this](const QJsonArray& commands) {
+    QStringList names;
+    for (const QJsonValue& command : commands) {
+      const QString owner = command.toObject().value(QStringLiteral("owner")).toString();
+      names << (owner == QLatin1String("C0") ? QStringLiteral("the design") : bodyName(owner));
+    }
+    return names.join(QStringLiteral(", "));
+  };
   // A choice changes the design at once, one undo step ("Use Printer …");
-  // Cancel does not take it back.
-  const auto choose = [this, chosenKey, askChanges](const QString& kind, CommandState& state) {
+  // Cancel does not take it back. The printer is the design's (the root's,
+  // as the Make card and the Printers manager choose it); the process is
+  // written where the one the row shows comes from (mitcad#1799,
+  // processCommands), so that the 3MF gets what the row shows.
+  const auto choose = [this, chosenKey, askChanges, readProcess, showProcess, processCommands,
+                       processTargets](const QString& kind, CommandState& state) {
+    const bool process = kind == QStringLiteral("process");
     const QString value = state.choice(kind);
-    const QString before = chosenKey(kind);
+    const SentProcess sent = process ? readProcess(state) : SentProcess{};
+    const QString before = process ? sent.value : chosenKey(kind);
     if (value == before) {
       return;
     }
+    // Per body is a state, not a choice.
+    if (value.startsWith(choiceHeadingPrefix()) || isChoiceSeparator(value)) {
+      state.setChoice(kind, before);
+      return;
+    }
+    const QString current = before.startsWith(choiceHeadingPrefix()) ? QString() : before;
     if (value == QLatin1String(kEditProfiles)) {
       // The Printers or Processes manager on the chosen one (its design
-      // copy, mitcad#1135); on Slicer default with none selected
-      // (mitcad#1134, as the pencil did, mitcad#655). The choice stays.
+      // copy, mitcad#1135); on Slicer default or Per body with none
+      // selected (mitcad#1134, as the pencil did, mitcad#655). The choice
+      // stays.
       state.setChoice(kind, before);
       qDebug().noquote() << QStringLiteral("3D Print %1 edit: %2")
-                                .arg(kind, before.isEmpty() ? QStringLiteral("slicer default") : before);
-      m_controller->openProfiles(kind, before.contains(QLatin1Char('/')) ? before : QString());
+                                .arg(kind, before == perBodyProcess() ? QStringLiteral("per body")
+                                           : current.isEmpty()        ? QStringLiteral("slicer default")
+                                                                      : current);
+      m_controller->openProfiles(kind, current.contains(QLatin1Char('/')) ? current : QString());
       return;
     }
     if (value == QLatin1String(kNewProfile)) {
-      const QString made = newDesignProfile(kind, before);
-      state.setChoice(kind, chosenKey(kind));
+      QString made;
+      if (process && !sent.below.isEmpty()) {
+        // Bodies with a process of their own (mitcad#1799): the new one
+        // in this design, given to them (and to the root for the others)
+        // in the same undo step; the root's choice stays otherwise.
+        const int depth = undoDepth();
+        QJsonObject result;
+        if (runModelCommand({{QStringLiteral("cmd"), QStringLiteral("create_print_profile")},
+                             {QStringLiteral("kind"), kind}},
+                            &result)) {
+          const QString id = result.value(QStringLiteral("id")).toString();
+          const QJsonArray commands = processCommands(sent, QJsonObject{{QStringLiteral("value"), id}});
+          const QVector<LibraryItem> items = queryLibraryItems(model(), kind, projectFolder());
+          const LibraryItem* row = findDesignCopy(items, id);
+          const QString name = row != nullptr ? row->name : id;
+          const QString label = tr("Create Profile %1").arg(name);
+          if (runModelCommands(commands, label)) {
+            if (undoDepth() > depth + 1) {
+              runCommand({{QStringLiteral("cmd"), QStringLiteral("merge_undo")},
+                          {QStringLiteral("depth"), depth},
+                          {QStringLiteral("label"), label}});
+            }
+            made = row != nullptr ? row->key() : QStringLiteral("design/") + id;
+            qDebug().noquote() << QStringLiteral("3D Print %1 new: %2 (%3)").arg(kind, name, made);
+            qInfo().noquote() << QStringLiteral("3D Print process set on: %1").arg(processTargets(commands));
+          } else {
+            // Refused (shown as any model command's): no new process either.
+            runCommand({{QStringLiteral("cmd"), QStringLiteral("undo")}});
+          }
+        }
+      } else {
+        made = newDesignProfile(kind, before);
+      }
+      if (process) {
+        showProcess(state, ProcessLog::Quiet);
+      } else {
+        state.setChoice(kind, chosenKey(kind));
+      }
       if (!made.isEmpty()) {
         m_controller->openProfiles(kind, made);
       }
       return;
     }
     const QString project = projectFolder();
-    const QString set =
-        kind == QStringLiteral("printer") ? QStringLiteral("Print Printer") : QStringLiteral("Print Process");
-    QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_property")},
-                        {QStringLiteral("owner"), QStringLiteral("C0")},
-                        {QStringLiteral("set"), set},
-                        {QStringLiteral("key"), QStringLiteral("profile")}};
-    if (value.isEmpty()) {
-      command.insert(QStringLiteral("cmd"), QStringLiteral("remove_property"));
-    } else {
+    QJsonObject named;
+    QString chosenName;
+    if (!value.isEmpty()) {
       const QVector<LibraryItem> items = queryLibraryItems(model(), kind, project);
       const LibraryItem* item = findItem(items, value);
       if (item == nullptr) {
         state.setChoice(kind, before);
         return;
       }
-      nameItem(command, *item, project, QStringLiteral("value"));
+      nameItem(named, *item, project, QStringLiteral("value"));
+      chosenName = item->name;
     }
-    runModelCommand(command);
-    state.setChoice(kind, chosenKey(kind));
-    qDebug().noquote() << QStringLiteral("3D Print %1: %2")
-                              .arg(kind, state.choice(kind).isEmpty() ? QStringLiteral("slicer default")
-                                                                      : state.choice(kind));
+    if (process) {
+      // One undo step however many owners it reaches ("Use Process …").
+      const QJsonArray commands = processCommands(sent, named);
+      const QString label =
+          chosenName.isEmpty() ? tr("Use Slicer Default") : tr("Use Process %1").arg(chosenName);
+      bool done = false;
+      if (commands.size() == 1) {
+        done = runModelCommand(commands.first().toObject());
+      } else if (!commands.isEmpty()) {
+        done = runModelCommands(commands, label);
+      }
+      if (done) {
+        qInfo().noquote() << QStringLiteral("3D Print process set on: %1").arg(processTargets(commands));
+      }
+      showProcess(state, ProcessLog::Always);
+    } else {
+      QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("set_property")},
+                          {QStringLiteral("owner"), QStringLiteral("C0")},
+                          {QStringLiteral("set"), QStringLiteral("Print Printer")},
+                          {QStringLiteral("key"), QStringLiteral("profile")}};
+      if (value.isEmpty()) {
+        command.insert(QStringLiteral("cmd"), QStringLiteral("remove_property"));
+      }
+      for (auto field = named.begin(); field != named.end(); ++field) {
+        command.insert(field.key(), field.value());
+      }
+      runModelCommand(command);
+      state.setChoice(kind, chosenKey(kind));
+      qDebug().noquote() << QStringLiteral("3D Print %1: %2")
+                                .arg(kind, state.choice(kind).isEmpty() ? QStringLiteral("slicer default")
+                                                                        : state.choice(kind));
+    }
     TestSync::singleShot(0, this, askChanges);
   };
   const auto profileRow = [&](const QString& kind, const QString& label) {
     return choiceInput(kind, label, {}, QString())
-        .withChoices([choices, kind](const CommandState&) { return choices(kind); })
+        // Per body first while the bodies sent print with different
+        // processes (mitcad#1799): a state, its label the field's tooltip
+        // (per process, its bodies).
+        .withChoices([choices, kind, panel](const CommandState& state) {
+          QVector<QPair<QString, QString>> options = choices(kind);
+          if (state.choice(kind) == perBodyProcess()) {
+            options.prepend(qMakePair(perBodyProcess(), panel->process.tooltip));
+          }
+          return options;
+        })
         // No icons: a drop-down that elides a long name in the middle, never
         // wider than the panel (mitcad#655).
         .withChoiceIcon([](const QString&) { return ChoiceIcon{}; })
@@ -650,7 +901,15 @@ CommandDef MainWindow::print3dCommand() {
         // names need; the closed field shows the model and the nozzle
         // (mitcad#1108). No pencil beside it (mitcad#1134): the field is
         // the row's only control, editing is the picker's last row.
-        .withChoicePicker([pickerRows, kind](const CommandState&) { return pickerRows(kind); })
+        .withChoicePicker([pickerRows, kind](const CommandState& state) {
+          QVector<ChoicePickerRow> rows = pickerRows(kind);
+          // The closed field's text for Per body (mitcad#1799); the picker
+          // does not list it.
+          if (state.choice(kind) == perBodyProcess()) {
+            rows.append(ChoicePickerRow{perBodyProcess(), QString(), tr("Per body"), QString(), QString()});
+          }
+          return rows;
+        })
         .withOnChange([choose, kind](CommandState& state, const CommandContext&) { choose(kind, state); })
         .withEnabled(threeMf); // disabled with STL, not hidden (mitcad#655)
   };
@@ -1009,9 +1268,12 @@ CommandDef MainWindow::print3dCommand() {
   };
   // What is sent changed: asked no more (mitcad#857), the bed planned
   // again (mitcad#1109).
-  const auto sentChanged = [this, askNoMore, planBed, threeMf](CommandState& state, const CommandContext& context) {
+  const auto sentChanged = [this, askNoMore, planBed, threeMf, showProcess](CommandState& state,
+                                                                           const CommandContext& context) {
     askNoMore(state, context);
     planBed(state, {});
+    // The Process row: what the bodies sent now print with (mitcad#1799).
+    showProcess(state, ProcessLog::Changed);
     // The view's print colours follow the bodies and the format (mitcad#1643).
     filamentChangesChanged(printedBodies(state), threeMf(state));
   };
@@ -1263,7 +1525,12 @@ CommandDef MainWindow::print3dCommand() {
       // by default when the design has plates, with 3MF only.
       checkInput(QStringLiteral("plates"), tr("Send the Design's Plates"), false)
           .withTextBeside()
-          .withVisible([this, threeMf](const CommandState& state) { return threeMf(state) && printPlateCount() > 0; }),
+          .withVisible([this, threeMf](const CommandState& state) { return threeMf(state) && printPlateCount() > 0; })
+          // With the plates sent, the Process row shows the design's
+          // process (mitcad#1799, readProcess).
+          .withOnChange([showProcess](CommandState& state, const CommandContext&) {
+            showProcess(state, ProcessLog::Changed);
+          }),
       bedRow,
       // The question while Send asks for a print bed face (mitcad#857
       // review): in the panel's own text, naming the piece and the count,
@@ -1589,23 +1856,24 @@ CommandDef MainWindow::print3dCommand() {
       def.inputs.insert(at++, row);
     }
   }
-  // The Printer and Process boxes show the design's, also after the
-  // profile editor, an import or Update changed them.
+  // The Printer box shows the design's, the Process box what the bodies
+  // sent print with (mitcad#1799), also after the profile editor, an
+  // import, Update, an undo or the Make card changed them.
   // So does the print bed (mitcad#1109): a print bed face set, cleared or
   // undone meanwhile. The material rows read the bodies' materials again
   // (mitcad#1141: Materials beside the panel, an undo).
-  def.modelChanged = [this, panel, chosenKey, planBed, threeMf](CommandState& state, const CommandContext&) {
+  def.modelChanged = [this, panel, chosenKey, planBed, threeMf, showProcess](CommandState& state,
+                                                                             const CommandContext&) {
     panel->materialsStale = true;
     // The filament changes' rows and the view's colours (mitcad#1643).
     filamentChangesChanged(printedBodies(state), threeMf(state));
-    for (const QString& kind : {QStringLiteral("printer"), QStringLiteral("process")}) {
-      const QString key = chosenKey(kind);
-      if (state.choice(kind) != key) {
-        state.setChoice(kind, key);
-        qDebug().noquote() << QStringLiteral("3D Print %1: %2")
-                                  .arg(kind, key.isEmpty() ? QStringLiteral("slicer default") : key);
-      }
+    const QString printer = chosenKey(QStringLiteral("printer"));
+    if (state.choice(QStringLiteral("printer")) != printer) {
+      state.setChoice(QStringLiteral("printer"), printer);
+      qDebug().noquote() << QStringLiteral("3D Print printer: %1")
+                                .arg(printer.isEmpty() ? QStringLiteral("slicer default") : printer);
     }
+    showProcess(state, ProcessLog::Changed);
     planBed(state, {});
   };
   // The faces asked about, in the bed face's green on every occurrence
@@ -1723,8 +1991,8 @@ CommandDef MainWindow::print3dCommand() {
     }
   };
   // The choices of the last send (the settings), and the slicers there are.
-  def.init = [this, panel, chosenKey, askChanges, planBed, threeMf](CommandState& state,
-                                                                    const CommandContext& context) {
+  def.init = [this, panel, chosenKey, askChanges, planBed, threeMf, showProcess](CommandState& state,
+                                                                                 const CommandContext& context) {
     // The last import's line is the last panel's (mitcad#655): gone now;
     // so are the print bed faces chosen (mitcad#857).
     panel->imported->summary = PrintImportSummary();
@@ -1769,9 +2037,11 @@ CommandDef MainWindow::print3dCommand() {
     for (const auto& choice : slicerChoices(panel->found, panel->saved, panel->other)) {
       slicers << choice.second;
     }
-    // The design's printer and process (mitcad#655): what a 3MF carries.
+    // The design's printer (mitcad#655) and the process the bodies sent
+    // print with (mitcad#1799): what a 3MF carries.
     state.setChoice(QStringLiteral("printer"), chosenKey(QStringLiteral("printer")));
-    state.setChoice(QStringLiteral("process"), chosenKey(QStringLiteral("process")));
+    panel->processLogged.clear();
+    showProcess(state, ProcessLog::Quiet);
     // A saved one another design changed: asked once, after the panel shows.
     TestSync::singleShot(0, this, askChanges);
     panel->imported = std::make_shared<PrintImport>();

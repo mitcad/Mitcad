@@ -16,8 +16,9 @@
 #      dimension.
 #   5. Sketch2 (F2): two horizontal lines and a parallel between them that
 #      their horizontals imply. Edited, the Sketch Palette shows the
-#      redundant constraint as a warning (mitcad#1051) that counts it
-#      ("Redundant: 1 constraint follows from the others", mitcad#1171), a
+#      redundant constraint as a warning (mitcad#1051) that says in words
+#      what it follows from ("Redundant: the Parallel between two lines
+#      follows from ...", mitcad#1171, mitcad#1774), a
 #      link whose click selects the two lines; the log keeps its id.
 #   6. Sketch3 (F3): a 60 x 40 outline with corners rounded by 10, fixed
 #      reference lines and arcs as a projection makes them (mitcad#1171).
@@ -174,8 +175,8 @@ Write-Host '--- Redundant constraints: a warning that counts them (mitcad#1051, 
 Ui-Mark
 Ui-Step 'edit Sketch2 (double-click)'    { Ui-DoubleClickLogged 'Timeline Sketch2' }
 Ui-ExpectNew 'Editing sketch F2 (Sketch2)' 'Sketch2 edited' 30
-Ui-ExpectNew 'Sketch Palette warnings: Redundant: 1 constraint follows from the others' `
-  'the Sketch Palette shows the redundant constraint as a warning that counts it'
+Ui-ExpectNew 'Sketch Palette warnings: Redundant: the Parallel between two lines follows from' `
+  'the Sketch Palette shows the redundant constraint as a warning that says what it follows from'
 Ui-ExpectNew 'Sketch Palette redundant: k9' 'the log keeps its id'
 Ui-ExpectNew 'Palette warning 0 at' 'the warning is a link'
 Start-Sleep -Milliseconds 300

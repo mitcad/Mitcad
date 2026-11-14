@@ -143,6 +143,12 @@ pub struct CutTargetRow {
     /// extrusion's own component with several occurrences (mitcad#769).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// An automatic scope leaves the row out only because it moves against
+    /// the context through joints (mitcad#1667): the Affected components
+    /// list lets it be checked, which turns the scope explicit with it
+    /// (mitcad#1789). Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub joint_motion: bool,
     pub bodies: Vec<CutBody>,
 }
 
@@ -490,7 +496,7 @@ impl CutScope {
 /// What an automatic scope leaves alone that moves against the cut's own
 /// occurrence through joints (mitcad#1667), as its row's reason.
 pub(crate) const MOVES_THROUGH_JOINTS: &str =
-    "Moves relative to this component through joints; use Select none, then check it to cut it.";
+    "Moves against this component through joints, so it is left out; check it to cut it as well.";
 
 /// Which occurrences the design's joints let move against each other
 /// (mitcad#1667). A unit is what the joint solver moves as one: an
@@ -757,6 +763,7 @@ fn row(assembly: &Assembly, target: &ComponentTarget, reason: Option<String>) ->
         partial: false,
         reason,
         note: None,
+        joint_motion: false,
         bodies: Vec::new(),
     }
 }
@@ -837,7 +844,9 @@ impl CutScope {
                     None
                 };
                 let world = resolve(ctx, &target)?;
+                let joint_motion = reason.as_deref() == Some(MOVES_THROUGH_JOINTS);
                 let mut target_row = row(&effective, &target, reason);
+                target_row.joint_motion = joint_motion;
                 if own && occurrences > 1 {
                     target_row.note = Some(format!(
                         "Component being edited; the cut changes all {occurrences} occurrences."

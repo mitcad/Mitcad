@@ -1,0 +1,16 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A saved Corner Round beside a bend (mitcad#1766; tools/ui-sheet-corner-edit-test.sh and its Windows twin), the design of tools/cli/tests/sheet_corner_beside_bend.json (mitcad#1765): sheet rules F1 (t = 2, r = 3, K = 0.3, back reference), Sketch1 F2 with a 35 x 20 rectangle, the sheet Face F3 (F3.b0), a Flange F6 on its side x = 5 drawn by the profile Sketch2 F5 whose side c2 slants 45 degrees inward from the bend line, and SheetCornerRound1 F7 of r = 5 at the corner between the flange wall's root on the bend line (the flange's curve 53) and c2: the edge through the thickness between the wall c2 and the bend's side (the bend's curve 40)."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"back","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-30,0],"width":35,"height":20},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd":"sheet_flange_profile","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c2[c1,c3]"}},"angle":1.5707963267948966,"length":{"mode":"outer_tangent","value":15},"position":"side_tangent"}},
+  {"expect":{"feature":"F5","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c2[c1,c3]"}},"angle":1.5707963267948966,"length":{"mode":"outer_tangent","value":15},"position":"side_tangent","profile":"F5"}},
+  {"cmd":"sketch.remove","sketch":"F5","items":["k1"]},
+  {"cmd":"sketch.add_dimension","sketch":"F5","dimension":{"type":"angle","a":"c1","b":"c2","reverse_a":false,"reverse_b":false},"value":2.356194490192345},
+  {"expect":{"feature":"F6","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"sheet_corner_round","body":"F3.b0","corners":[{"panel":{"feature":"F6","slot":0},"incoming":{"type":"generated","feature":"F6","slot":53},"outgoing":{"type":"sketch","sketch":"F5","segment":"c2[c1,c3]"}}],"radius":5}},
+  {"expect":{"feature":"F7","status":"ok","bodies":1}}
+]

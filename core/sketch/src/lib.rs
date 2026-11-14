@@ -127,6 +127,9 @@ pub mod order;
 // The work steps that made a sketch's items, for sketch mode's list
 // (mitcad#1750).
 pub mod steps;
+// A linked projection whose source edge was merged with, or split from,
+// edges on the same curve (mitcad#1784).
+pub mod successor;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`

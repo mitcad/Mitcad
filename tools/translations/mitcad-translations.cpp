@@ -39,6 +39,12 @@
 // A language's model_<code>.ts (the model's messages, mitcad#1284) is
 // checked with its mitcad_<code>.ts and counted in its baseline.
 //
+// English, the source language, has mitcad_en.ts too (mitcad#1756): only
+// the plural messages (%n), with English's two forms, so that the English
+// interface says "1 degree of freedom" and "17 degrees of freedom" where
+// the source says "degree(s)". check finds a message there that is not a
+// plural one, or a form that keeps a bracketed plural.
+//
 // The .ts files are lupdate's XML; this reads them with a small scanner of
 // its own (the elements context, name, message, source, comment,
 // translation and numerusform, the five named entities, numeric character
@@ -390,6 +396,40 @@ Counts examine(const Catalogue& catalogue) {
   return counts;
 }
 
+// Whether a text writes a plural as a word with its ending in brackets:
+// "body(ies)", "face(s)", "crash(es)".
+bool hasBracketedPlural(const std::string& text) {
+  for (const char* ending : {"(s)", "(es)", "(ies)"}) {
+    for (std::size_t at = text.find(ending); at != std::string::npos; at = text.find(ending, at + 1)) {
+      const char before = at > 0 ? text[at - 1] : ' ';
+      if ((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z')) return true;
+    }
+  }
+  return false;
+}
+
+// The English catalogue (mitcad#1756, mitcad_en.ts: the source language's
+// plural forms, lupdate -pluralonly): plural messages only, each form a
+// real English one, never the source's "(s)".
+std::vector<std::string> pluralCatalogueProblems(const Catalogue& catalogue) {
+  std::vector<std::string> problems;
+  for (const Context& context : catalogue.contexts) {
+    for (const Message& message : context.messages) {
+      const std::string where = context.name + " \"" + message.source + "\"";
+      if (!message.numerus) {
+        problems.push_back(where + ": not a plural message (the English catalogue has plural forms only)");
+        continue;
+      }
+      for (const std::string& text : message.translations) {
+        if (hasBracketedPlural(text)) {
+          problems.push_back(where + ": the form \"" + text + "\" keeps a bracketed plural");
+        }
+      }
+    }
+  }
+  return problems;
+}
+
 struct Listed {
   std::string code;
   int baseline = -1;
@@ -475,6 +515,10 @@ int checkLanguages(const fs::path& list, bool write) {
       continue;
     }
     Counts found = examine(catalogue);
+    if (entry.code == "en") {
+      const std::vector<std::string> plural = pluralCatalogueProblems(catalogue);
+      found.problems.insert(found.problems.end(), plural.begin(), plural.end());
+    }
     for (const std::string& problem : found.problems) {
       std::cerr << file.string() << ": " << problem << "\n";
     }
@@ -1507,6 +1551,36 @@ std::set<std::string> withCleanedForms(const std::set<std::string>& templates) {
   return all;
 }
 
+// Whether a template puts a count before a word whose plural is in brackets
+// ("%1 face(s)", "%2 new object file(s)"; mitcad#1759): the brackets would
+// stay in every language, and the template has no count the catalogues could
+// give their forms. core/ writes one whole message for one and for several
+// ("a face is ...", "{n} faces are ...") or puts the count after a colon. Up
+// to two words may stand between; a determiner or a word that ends a noun
+// phrase between ("%1 of the face(s)") makes the value a name, not a count.
+bool countedBracketedPlural(const std::string& text) {
+  for (std::size_t at = text.find('%'); at != std::string::npos; at = text.find('%', at + 1)) {
+    std::size_t i = at + 1;
+    const std::size_t number = i;
+    while (i < text.size() && asciiDigit(text[i])) ++i;
+    if (i == number) continue;
+    for (int words = 0; words < 3 && i < text.size() && text[i] == ' '; ++words) {
+      const std::size_t start = ++i;
+      while (i < text.size() && (asciiLetter(text[i]) || text[i] == '-')) ++i;
+      if (i == start) break;
+      for (const char* ending : {"(s)", "(es)", "(ies)"}) {
+        if (text.compare(i, std::strlen(ending), ending) == 0 && asciiLetter(text[i - 1])) return true;
+      }
+      const std::string word = lowerAscii(text.substr(start, i - start));
+      if (listedWord(word, kCleanedDeterminers, std::size(kCleanedDeterminers)) ||
+          listedWord(word, kPhraseEnds, std::size(kPhraseEnds))) {
+        break;
+      }
+    }
+  }
+  return false;
+}
+
 // A template as one line: its backslashes doubled, its line breaks \n (the
 // order of the generated list).
 std::string lineForm(const std::string& text) {
@@ -1586,6 +1660,21 @@ int messages(const fs::path& root, bool write) {
   const fs::path list = root / kTemplatesFile;
   if (files == 0) {
     std::cerr << (root / "core").string() << ": no Rust sources\n";
+    return 1;
+  }
+  // No count before a bracketed plural (mitcad#1759): refused before the
+  // list is written or compared.
+  int counted = 0;
+  for (const std::string& text : scanned) {
+    if (countedBracketedPlural(text)) {
+      std::cerr << "count before (s): " << lineForm(text) << "\n";
+      ++counted;
+    }
+  }
+  if (counted != 0) {
+    std::cerr << counted
+              << " model message templates put a count before a bracketed plural: write one whole message "
+                 "for one and for several in core/, or the count after a colon (docs/translations.md)\n";
     return 1;
   }
   if (write) {
@@ -1670,6 +1759,29 @@ int selfTest() {
                                           std::to_string(counts.problems.size()));
   expect(placeholders("%1 and %L2, %n, 100%") == std::set<std::string>{"%1", "%2", "%n"}, "placeholders");
   expect(hasAccelerator("&File") && !hasAccelerator("A && B") && !hasAccelerator("A & B"), "accelerators");
+  // The English catalogue's plural forms (mitcad#1756): the planted one's
+  // non-plural messages are problems, its forms have no bracketed plural.
+  expect(hasBracketedPlural("%n body(ies)") && hasBracketedPlural("Face(s)") && !hasBracketedPlural("f (s) x") &&
+             !hasBracketedPlural("%n bodies"),
+         "bracketed plurals");
+  {
+    const std::string english =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE TS>\n<TS version=\"2.1\" language=\"en\" "
+        "sourcelanguage=\"en\">\n<context>\n    <name>QObject</name>\n"
+        "    <message numerus=\"yes\">\n        <source>%n body(ies)</source>\n        <translation>\n            "
+        "<numerusform>%n body</numerusform>\n            <numerusform>%n bodies</numerusform>\n        "
+        "</translation>\n    </message>\n"
+        "    <message numerus=\"yes\">\n        <source>%n face(s)</source>\n        <translation>\n            "
+        "<numerusform>%n face</numerusform>\n            <numerusform>%n face(s)</numerusform>\n        "
+        "</translation>\n    </message>\n"
+        "    <message>\n        <source>Sweep</source>\n        <translation>Sweep</translation>\n    </message>\n"
+        "</context>\n</TS>\n";
+    Catalogue plural;
+    expect(parse(english, plural, error), "the English catalogue parses: " + error);
+    expect(pluralCatalogueProblems(plural).size() == 2,
+           "two problems in the English catalogue (a bracketed form, a message that is no plural), not " +
+               std::to_string(pluralCatalogueProblems(plural).size()));
+  }
   const std::string prepared_ = prepared(ts, catalogue);
   expect(prepared_.find(std::string("<name>") + kAnyContext + "</name>") != std::string::npos, "the context-free copy");
   Catalogue again;
@@ -1714,6 +1826,17 @@ int selfTest() {
   expect(messageTemplate("{a}0 mm left over").empty(), "a digit after a placeholder");
   expect(messageTemplate("at 5%2 of the length").empty(), "a percent and a digit");
   expect(messageTemplate("a tab\there in it").empty(), "a control character");
+  // A count before a bracketed plural is refused (mitcad#1759); a name before
+  // one, a plural of its own and a count after a colon are not.
+  expect(countedBracketedPlural("%1 face(s) left out") && countedBracketedPlural("%1: %2 key(s) of the scan") &&
+             countedBracketedPlural("and %1 more fastener warning(s)") &&
+             countedBracketedPlural("%4 new object file(s) removed") && countedBracketedPlural("%1 body(ies)") &&
+             countedBracketedPlural("%2 sketch(es) moved"),
+         "a count before a bracketed plural");
+  expect(!countedBracketedPlural("%1 of the face(s) moved") && !countedBracketedPlural("%1 faces left out") &&
+             !countedBracketedPlural("faces left out: %1") && !countedBracketedPlural("%1 (s) and face(s)") &&
+             !countedBracketedPlural("the %n face(s)") && !countedBracketedPlural("%1 is one of four new face(s)"),
+         "no count before a bracketed plural");
   {
     const std::string rust =
         "fn f() {\n"

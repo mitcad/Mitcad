@@ -1,0 +1,54 @@
+{
+  "format": "mitcad",
+  "version": 2,
+  "units": { "length": "mm", "angle": "deg" },
+  "parameters": [
+    { "name": "nut_d", "expression": "35 mm", "unit": "mm", "comment": "ER20 collet nut diameter" },
+    { "name": "nut_l", "expression": "20 mm", "unit": "mm", "comment": "ER20 collet nut length, from the gauge line up" },
+    { "name": "nose_d", "expression": "40 mm", "unit": "mm", "comment": "Spindle nose diameter" },
+    { "name": "nose_l", "expression": "12 mm", "unit": "mm", "comment": "Spindle nose length" },
+    { "name": "nose_z", "expression": "nut_l", "unit": "mm", "comment": "Where the nose starts" },
+    { "name": "body_d", "expression": "80 mm", "unit": "mm", "comment": "Spindle body diameter" },
+    { "name": "body_l", "expression": "190 mm", "unit": "mm", "comment": "Spindle body length" },
+    { "name": "body_z", "expression": "nut_l + nose_l", "unit": "mm", "comment": "Where the body starts" },
+    { "name": "mount_w", "expression": "110 mm", "unit": "mm", "comment": "Mount width along X" },
+    { "name": "mount_depth", "expression": "120 mm", "unit": "mm", "comment": "Mount depth along Y, towards the Z axis plate" },
+    { "name": "mount_h", "expression": "60 mm", "unit": "mm", "comment": "Mount height" },
+    { "name": "mount_z", "expression": "body_z + 90 mm", "unit": "mm", "comment": "Where the mount starts" },
+    { "name": "tool_d", "expression": "6 mm", "unit": "mm", "comment": "The reference tool's diameter (each operation's tool replaces it)" },
+    { "name": "tool_h", "expression": "-20 mm", "unit": "mm", "comment": "The reference tool's stick-out, down from the gauge line" }
+  ],
+  "root_component": "Router spindle",
+  "components": [
+    { "uid": "C1", "name": "Nut" },
+    { "uid": "C2", "name": "Spindle" },
+    { "uid": "C3", "name": "Mount" },
+    { "uid": "C4", "name": "Tool" }
+  ],
+  "occurrences": [
+    { "uid": "O1", "component": "C1", "parent": "C0", "number": 1 },
+    { "uid": "O2", "component": "C2", "parent": "C0", "number": 1 },
+    { "uid": "O3", "component": "C3", "parent": "C0", "number": 1 },
+    { "uid": "O4", "component": "C4", "parent": "C0", "number": 1 }
+  ],
+  "features": [
+    { "uid": "F1", "name": "Collet nut", "component": "C1", "type": "cylinder", "plane": "xy",
+      "center": [0, 0], "diameter": "nut_d", "height": "nut_l", "operation": "new_body" },
+    { "uid": "F2", "name": "Nose plane", "component": "C2", "type": "construction_plane",
+      "definition": { "type": "offset", "plane": "xy", "distance": "nose_z" } },
+    { "uid": "F3", "name": "Nose", "component": "C2", "type": "cylinder", "plane": "F2",
+      "center": [0, 0], "diameter": "nose_d", "height": "nose_l", "operation": "new_body" },
+    { "uid": "F4", "name": "Body plane", "component": "C2", "type": "construction_plane",
+      "definition": { "type": "offset", "plane": "xy", "distance": "body_z" } },
+    { "uid": "F5", "name": "Body", "component": "C2", "type": "cylinder", "plane": "F4",
+      "center": [0, 0], "diameter": "body_d", "height": "body_l", "operation": "join",
+      "participants": ["F3.b0"] },
+    { "uid": "F6", "name": "Mount plane", "component": "C3", "type": "construction_plane",
+      "definition": { "type": "offset", "plane": "xy", "distance": "mount_z" } },
+    { "uid": "F7", "name": "Mount", "component": "C3", "type": "box", "plane": "F6",
+      "corner": [-55, -50], "length": "mount_w", "width": "mount_depth", "height": "mount_h",
+      "operation": "new_body" },
+    { "uid": "F8", "name": "End mill", "component": "C4", "type": "cylinder", "plane": "xy",
+      "center": [0, 0], "diameter": "tool_d", "height": "tool_h", "operation": "new_body" }
+  ]
+}

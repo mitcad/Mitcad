@@ -16,6 +16,10 @@
 // port's patch 1110 (mitcad#1117), checked with OCCT's dressups alone too.
 // A wedge of 45 degrees whose knife edge is rounded so that the rounding
 // takes a face 2.4 times its radius wide away leaves no strip (mitcad#1150).
+// The feet of an octagon prism standing on a disc with its corners on the
+// disc's rim, chamfered as wide as the segments of the disc's top beside
+// them (and a little wider or narrower), take those segments away, cut by
+// the rim (mitcad#1783).
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +28,7 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
@@ -35,6 +40,7 @@
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 
@@ -603,9 +609,146 @@ void test_strip_with_many_faces_beside_it_stays() {
   CHECK(detail::without_strips(*many, *input, 2.0) == nullptr);
 }
 
+// A disc of radius 31.5, 3 thick, with a regular octagon prism on it whose
+// corners lie on the disc's rim (mitcad#1783): the disc's top face is left
+// as eight segments between the octagon's sides and the rim, each
+// R (1 - cos 22.5 degrees) wide at its side's middle and ending in a point
+// at the side's ends.
+constexpr double kDiscRadius = 31.5;
+
+ShapePtr octagon_on_disc() {
+  const ShapePtr disc = extrude("F1", {circle(1, 0, 0, kDiscRadius)}, 0, 3);
+  std::vector<gp_Pnt2d> corners;
+  for (int i = 0; i < 8; ++i) {
+    const double a = kPi / 4 * i;
+    corners.emplace_back(kDiscRadius * std::cos(a), kDiscRadius * std::sin(a));
+  }
+  const ShapePtr prism = extrude("F2", {polygon(11, corners)}, 3, 20);
+  return boolean(BooleanOp::Join, {disc.get()}, *prism).pieces.at(0).shape;
+}
+
+// What the chamfer of `d` of one octagon side's foot adds: the space under
+// its plane over the segment between the side and the rim, the plane d high
+// at the side and meeting the floor d out: the integral over the segment
+// (x from the side, a = R cos 22.5 degrees, out to a + d or the rim) of
+// (d + a - x) 2 sqrt(R^2 - x^2).
+double octagon_side_chamfer(double d) {
+  const double r = kDiscRadius;
+  const double a = r * std::cos(kPi / 8);
+  const double b = std::min(r, a + d);
+  const auto root = [r](double x) { return std::sqrt(std::max(0.0, r * r - x * x)); };
+  // Antiderivatives of sqrt(R^2 - x^2) and x sqrt(R^2 - x^2).
+  const auto plain = [&](double x) { return 0.5 * (x * root(x) + r * r * std::asin(std::min(1.0, x / r))); };
+  const auto moment = [&](double x) { return -std::pow(root(x), 3) / 3.0; };
+  return 2.0 * ((d + a) * (plain(b) - plain(a)) - (moment(b) - moment(a)));
+}
+
+// The faces of the shape on the plane z = 3 facing up (the disc's top).
+int faces_on_disc_top(const Shape& shape) {
+  int count = 0;
+  for (int f = 0; f < shape.face_count(); ++f) {
+    const BRepAdaptor_Surface surface(shape.face(f));
+    if (surface.GetType() != GeomAbs_Plane) {
+      continue;
+    }
+    const gp_Pln plane = surface.Plane();
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(shape.face(f), props);
+    if (std::abs(plane.Axis().Direction().Z()) > 1.0 - 1e-9 && std::abs(props.CentreOfMass().Z() - 3.0) < 1e-6) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// The smallest face's area.
+double smallest_face(const Shape& shape) {
+  double smallest = 1e300;
+  for (int f = 0; f < shape.face_count(); ++f) {
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(shape.face(f), props);
+    smallest = std::min(smallest, props.Mass());
+  }
+  return smallest;
+}
+
+// The octagon's feet chamfered (mitcad#1783): a chamfer as wide as the
+// segments at their middles, 1e-3 wider and 1e-3 narrower, and one clearly
+// wider takes them away, cut by the disc's rim, with nothing of the disc's
+// top face left and no sliver: valid, at its size, with no note or info,
+// the volume the exact shape's (1e-3 narrower: less a sliver of about
+// 3e-4 mm2 by the middle of each side, taken away with the face). One
+// narrower than the segments (2) leaves their middles, each named after its
+// segment, the chamfer cut by the rim near the corners. Each foot's chamfer
+// face is named after the foot as the input names it. Before, every one
+// of these failed or was built 0.1 % smaller, crumpled at the corners.
+void test_octagon_on_disc() {
+  const ShapePtr body = octagon_on_disc();
+  CHECK(valid(*body));
+  CHECK(faces_on_disc_top(*body) == 8);
+  const double ring = kDiscRadius * (1.0 - std::cos(kPi / 8));
+  std::vector<std::string> feet;
+  std::vector<std::string> segments;
+  for (int i = 0; i < 8; ++i) {
+    const double a = kPi / 4 * (i + 0.5);
+    const double m = kDiscRadius * std::cos(kPi / 8);
+    feet.push_back(edge_at(*body, gp_Pnt(m * std::cos(a), m * std::sin(a), 3)));
+    CHECK(!feet.back().empty());
+    // The segment's name: the foot's other face but the octagon's side.
+    for (int f = 0; f < body->face_count(); ++f) {
+      const BRepAdaptor_Surface surface(body->face(f));
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(body->face(f), props);
+      const gp_Pnt c = props.CentreOfMass();
+      if (surface.GetType() == GeomAbs_Plane && std::abs(c.Z() - 3.0) < 1e-6 &&
+          std::abs(std::atan2(c.Y(), c.X()) - std::remainder(a, 2 * kPi)) < 1e-6) {
+        segments.push_back(body->face_names(f).front());
+      }
+    }
+  }
+  CHECK(segments.size() == 8);
+  const double before = volume_of(*body);
+  for (const double d : {ring, ring + 1e-3, ring - 1e-3, 2.4}) {
+    ChamferSet bevel;
+    bevel.edges = feet;
+    bevel.spec.distance = d;
+    const ShapePtr out = chamfer("F3", *body, {bevel});
+    CHECK(valid(*out));
+    CHECK(faces_on_disc_top(*out) == 0);
+    CHECK(smallest_face(*out) > 1e-3);
+    CHECK(out->face_count() == 19);
+    CHECK(out->notes().empty());
+    CHECK(out->infos().empty());
+    CHECK_NEAR_TOL(volume_of(*out), before + 8 * octagon_side_chamfer(d), 1e-9);
+    // Each foot's chamfer face, named after the foot (the edge's name in
+    // the input), the segments gone (where a sliver was taken away, its
+    // names held by the chamfer's face beside it, as after the 0.1 %
+    // smaller retry).
+    for (std::size_t i = 0; i < feet.size() && i < segments.size(); ++i) {
+      CHECK(faces_named(*out, "F3:chamfer(" + feet[i] + ")") == 1);
+      CHECK(faces_holding(*out, segments[i]) == (d < ring ? 1 : 0));
+    }
+  }
+  ChamferSet narrower;
+  narrower.edges = feet;
+  narrower.spec.distance = 2;
+  const ShapePtr out = chamfer("F3", *body, {narrower});
+  CHECK(valid(*out));
+  CHECK(faces_on_disc_top(*out) == 8);
+  CHECK(smallest_face(*out) > 1e-3);
+  CHECK(out->notes().empty());
+  CHECK(out->infos().empty());
+  CHECK_NEAR_TOL(volume_of(*out), before + 8 * octagon_side_chamfer(2), 1e-9);
+  for (std::size_t i = 0; i < feet.size() && i < segments.size(); ++i) {
+    CHECK(faces_named(*out, "F3:chamfer(" + feet[i] + ")") == 1);
+    CHECK(faces_named(*out, segments[i]) == 1);
+  }
+}
+
 } // namespace
 
 void dressup_takes_face_tests() {
+  guarded("octagon on disc", test_octagon_on_disc);
   guarded("step", test_step);
   guarded("wall then a rounding along the outer wall", test_wall_then_a_rounding_along_the_outer_wall);
   guarded("tray", test_tray);

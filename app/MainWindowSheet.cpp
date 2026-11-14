@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Sheet metal in the main window (mitcad#210): Edit Sheet Rules, Show Flat
-// Pattern and Export Flat Pattern, the actions of the SHEET METAL group
-// besides its feature commands (commands/SheetCommands.cpp).
+// Sheet metal in the main window (mitcad#210): Edit Sheet Rules and Show
+// Flat Pattern, the actions of the SHEET METAL group besides its feature
+// commands (commands/SheetCommands.cpp, which registers them in their
+// sections), and Export Flat Pattern (the Make tab).
 #include "MainWindow.hpp"
 
 #include <QDir>
@@ -78,7 +79,6 @@ void MainWindow::registerSheetActions() {
   });
   rules.tooltip = tr("Edits the selected sheet's thickness, bend radius, K-factor and reliefs");
   rules.keywords = {QStringLiteral("sheet metal"), QStringLiteral("thickness"), QStringLiteral("k-factor")};
-  m_registry->add(rules);
 
   CommandDef show = action("sheet.show_flat", tr("Show Flat Pattern"), "flat-pattern", [this] {
     const QJsonObject sheet = sheetBody(true);
@@ -90,7 +90,9 @@ void MainWindow::registerSheetActions() {
   });
   show.tooltip = tr("Shows the selected sheet flat, or folded again");
   show.keywords = {QStringLiteral("sheet metal"), QStringLiteral("folded"), QStringLiteral("flat")};
-  m_registry->add(show);
+  // The group's features with these two in their sections (mitcad#1778):
+  // Edit Sheet Rules after Sheet Rules, Show Flat Pattern after Flat Pattern.
+  registerSheetMetalCommands(*m_registry, *this, rules, show);
 
   CommandDef exporting = action("sheet.export_dxf", tr("Export Flat Pattern…"), "export-dxf", [this] {
     QJsonObject sheet = sheetBody(true);

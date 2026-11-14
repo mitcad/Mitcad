@@ -126,17 +126,17 @@ expect_shown "O1" "only Component1:1 shown again"
 echo "--- Undo and Redo step through the isolation"
 ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
-ui_expect_new "Undo: Isolate 1 item(s)" "one undo step takes the removal back"
+ui_expect_new "Undo: Isolate an item" "one undo step takes the removal back"
 ui_expect_new "Browser eye Root/Component2:1: isolated in" "Component2:1's eye on again"
 expect_shown "O1 O2" "Component2:1 shown again"
 ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
-ui_expect_new "Undo: Isolate 2 item(s)" "the next takes the addition back"
+ui_expect_new "Undo: Isolate 2 items" "the next takes the addition back"
 ui_expect_new "Browser eye Root/Component2:1: isolated out" "Component2:1's eye off"
 expect_shown "O1" "only Component1:1 shown"
 ui_mark
 ui_step "redo (Ctrl+Y)"                  ui_key ctrl+y
-ui_expect_new "Redo: Isolate 2 item(s)" "Redo adds Component2:1 again"
+ui_expect_new "Redo: Isolate 2 items" "Redo adds Component2:1 again"
 ui_expect_new "Browser eye Root/Component2:1: isolated in" "its eye on"
 expect_shown "O1 O2" "Component1:1 and Component2:1 shown"
 

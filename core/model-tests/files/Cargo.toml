@@ -19,3 +19,5 @@ serde_json.workspace = true
 mitcad-3mf = { path = "../../3mf" }
 mitcad-dxf = { path = "../../dxf" }
 mitcad-usdz = { path = "../../usdz" }
+# The design zip of a report, read back (mitcad#1795).
+mitcad-zip = { path = "../../zip" }

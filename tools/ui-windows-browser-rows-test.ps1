@@ -123,14 +123,6 @@ function Browser-HeightBecomes([string]$Relation, [int]$Height, [string]$Descrip
 # Scroll-Range: the rows' last logged vertical scroll range.
 function Scroll-Range { return [int](Ui-LastMatch '^Browser scroll range (\d+)$') }
 
-# Place-Valid "text": whether the last line about it gives its place
-# ("<text> at x,y") and not "<text> out of sight".
-function Place-Valid([string]$Text) {
-  $last = [string](Ui-LogLines | Where-Object { $_.Contains("$Text at ") -or $_.Contains("$Text out of sight") } |
-    Select-Object -Last 1)
-  return ($last -ne '' -and -not $last.EndsWith(' out of sight'))
-}
-
 # The default layout: Floating (mitcad#429).
 Ui-StartApp 'browser-rows' @('--open', $design) -DefaultChrome
 Ui-ExpectLog "Chrome: floating (the platform's default)" 'Floating by default'
@@ -143,9 +135,9 @@ Ui-ExpectLog 'Browser opened folded: ' 'the design opens folded'
 # open before the fold, never logged when the fold came before the
 # panel's first layout (which of the two depends on the start's timing).
 Ui-Sync
-for ($i = 0; $i -lt 30 -and (Place-Valid 'Browser Root/Sketches/Sketch1'); $i++) { Start-Sleep -Milliseconds 200 }
-if (Place-Valid 'Browser Root/Sketches/Sketch1') { Ui-Fail "Sketch1's row is still in sight after the fold" }
-if (-not (Place-Valid 'Browser Root/Sketches')) { Ui-Fail 'the Sketches folder is not in sight' }
+for ($i = 0; $i -lt 30 -and (Ui-PlaceValid 'Browser Root/Sketches/Sketch1'); $i++) { Start-Sleep -Milliseconds 200 }
+if (Ui-PlaceValid 'Browser Root/Sketches/Sketch1') { Ui-Fail "Sketch1's row is still in sight after the fold" }
+if (-not (Ui-PlaceValid 'Browser Root/Sketches')) { Ui-Fail 'the Sketches folder is not in sight' }
 Write-Host 'ok   the sketches folded away'
 Ui-ExpectLog 'Browser arrow Root/Bodies at' "the Bodies folder's arrow"
 Ui-Mark
@@ -207,7 +199,7 @@ if ($browser[1] + $browser[3] -ge $timelineTop - 8) {
   Ui-Fail "the card reaches the timeline ($($browser[1]) + $($browser[3]), timeline at $timelineTop)"
 }
 if ((Scroll-Range) -ne 0) { Ui-Fail "the rows scroll ($(Scroll-Range)) before the card reaches the timeline" }
-if (Place-Valid 'Browser scroll bar') { Ui-Fail 'a scroll bar before the card reaches the timeline' }
+if (Ui-PlaceValid 'Browser scroll bar') { Ui-Fail 'a scroll bar before the card reaches the timeline' }
 Write-Host 'ok   no scroll bar while the rows fit'
 Ui-Mark
 Ui-Step 'open Sketches'                     { Ui-ClickLogged 'Browser arrow Root/Sketches' }
@@ -224,11 +216,11 @@ if ($bottom -ne $timelineTop - 8) {
 }
 Write-Host "ok   the card grew down to the timeline ($bottom, the timeline at $timelineTop)"
 for ($i = 0; $i -lt 25; $i++) {
-  if ((Scroll-Range) -gt 0 -and (Place-Valid 'Browser scroll bar')) { break }
+  if ((Scroll-Range) -gt 0 -and (Ui-PlaceValid 'Browser scroll bar')) { break }
   Start-Sleep -Milliseconds 200
 }
 if ((Scroll-Range) -le 0) { Ui-Fail 'the rows do not scroll' }
-if (-not (Place-Valid 'Browser scroll bar')) { Ui-Fail 'no scroll bar once the rows overflow' }
+if (-not (Ui-PlaceValid 'Browser scroll bar')) { Ui-Fail 'no scroll bar once the rows overflow' }
 $bar = Ui-LoggedAt 'Browser scroll bar'
 $root = Ui-LoggedAt 'Browser Root'
 if ($bar[0] -ge $root[0]) { Ui-Fail "the scroll bar at x $($bar[0]) is not left of the rows (Root at $($root[0]))" }

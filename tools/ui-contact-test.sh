@@ -11,7 +11,8 @@
 # the pin touches it (tx = 10):
 #   - Drive Joint to 20 mm: the panel says where it stopped; kept, saved
 #     and checked by mitcad-cli.
-#   - Animate Joint: the animation ends at the contact.
+#   - Animate Joint: the animation turns back at the contact on every pass
+#     (mitcad#1790), the status bar saying where once, until Esc.
 #   - The study played: the playback stops at step 5.
 #   - Contact Set's panel edits the set (suppressed): the pin drives
 #     through the wall.
@@ -109,13 +110,30 @@ ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: Drive Joint1" "back at the start"
 
-echo "--- Animate Joint into the wall"
+echo "--- Animate Joint into the wall: it turns back at the contact on every pass"
 ui_mark
 ui_step "animate (search)"               ui_command "Animate Joint"
-ui_expect_new "Animating Joint1 tx: 36 frames" "the animation starts"
-ui_expect_new "Animation of Joint1 stopped by contact at tx " "the animation stops at the contact" 30
-between "Animation of Joint1 stopped by contact at tx " 's/.* at tx \([-0-9.]*\) mm: .*/\1/p' 9.99 10.011 \
-  "the pin stopped at tx = 10"
+ui_expect_new "Animating Joint1 tx: back and forth from -25 mm to 25 mm" "the animation starts"
+ui_expect_new "Animation of Joint1 turned back by contact at tx " "the animation turns back at the contact" 30
+between "Animation of Joint1 turned back by contact at tx " 's/.* at tx \([-0-9.]*\) mm: .*/\1/p' 9.99 10.011 \
+  "the pin turned back at tx = 10"
+# Two passes that end at the wall (mitcad#1790): the stop shows on every
+# pass; the status bar said where once.
+contacts=0
+for _ in $(seq 1 300); do
+  contacts=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -cF -e "Animation of Joint1: pass " | tr -d ' ')
+  [ "$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Animation of Joint1: pass " | grep -cF " (contact), ")" -ge 2 ] && break
+  sleep 0.1
+done
+passes=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Animation of Joint1: pass ")
+[ "$(grep -cF " (contact), " <<< "$passes")" -ge 2 ] || ui_fail "fewer than two passes ended at the wall: '$passes'"
+grep -q " down to " <<< "$passes" || ui_fail "the pin did not go back from the wall: '$passes'"
+[ "$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -cF "Animation of Joint1 turned back by contact")" = 1 ] ||
+  ui_fail "the contact was said more than once"
+echo "ok   two passes turned back at the wall ($contacts passes), said once"
+ui_mark
+ui_step "stop (Esc)"                     ui_key Escape
+ui_expect_new "Animation of Joint1 stopped: Esc (" "Esc stops it"
 
 echo "--- The study played into the wall"
 ui_mark

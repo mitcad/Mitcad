@@ -261,26 +261,6 @@ function Pick-Of([string]$Pattern) {
   }
   return $null
 }
-# Browser-Reveal "Browser <path>": wheel steps down the browser until the
-# row is in sight (session 0's window is small: rows below the ones in
-# sight are not logged), as tools/ui-windows-browser-test.ps1 does.
-function Row-InSight([string]$Text) {
-  $last = "$(Ui-LogLines | Where-Object { $_.Contains("$Text at ") -or $_.EndsWith("$Text out of sight") } |
-    Select-Object -Last 1)"
-  return ($last.Length -gt 0) -and -not $last.EndsWith(' out of sight')
-}
-function Browser-Reveal([string]$Text) {
-  for ($i = 0; $i -lt 20 -and -not (Row-InSight $Text); $i++) {
-    $line = "$(Ui-LogLines | Where-Object { $_ -match '^Browser (eye |radio )?Root.* at \d+,\d+$' } | Select-Object -Last 1)"
-    if ($line -notmatch ' at (\d+),(\d+)$') { Ui-Fail 'no browser row in sight' }
-    $x = [int]$Matches[1]; $y = [int]$Matches[2]
-    [UiInput]::Move($script:UiWindow, $x, $y, 0x04)
-    Start-Sleep -Milliseconds 80
-    [UiInput]::Wheel($script:UiWindow, $x, $y, -3)
-    Ui-Sync
-  }
-  if (-not (Row-InSight $Text)) { Ui-Fail "'$Text' cannot be scrolled into sight" }
-}
 function Number([double]$Value) { return $Value.ToString('R', [Globalization.CultureInfo]::InvariantCulture) }
 
 Ui-StartApp 'mount' @('--open', $scene)
@@ -532,7 +512,8 @@ Ui-Step 'close (Escape)'                   { Ui-Key 'Escape' }
 Ui-Mark
 Ui-Step 'Joint (F11)'                      { Ui-Key 'F11' }
 Ui-ExpectNew 'Command Joint started' 'Joint started'
-Browser-Reveal 'Browser Root/Lamp:1/Joints/mount:base'
+# The frame's row is wheeled into sight first (Ui-LoggedAt): session 0's
+# browser shows few rows and logs none below them.
 Ui-Step "the lamp's frame in the browser"  { Ui-ClickLogged 'Browser Root/Lamp:1/Joints/mount:base' }
 Ui-ExpectNew 'Joint Origin A: 1 ' 'origin A is the mount frame'
 Ui-Step "the plate's top"                  { Ui-ClickPick 'face F1.b0/F1:top' }

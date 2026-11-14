@@ -2416,18 +2416,27 @@ fn paste<K: Kernel>(
     // plane) left out.
     let mut warnings: Vec<String> = Vec::new();
     let left = pasted.left_out.saturating_sub(copy_left_out);
-    if left > 0 {
-        warnings.push(format!(
-            "{left} relation(s) and dimension(s) left out: they name geometry the copied \
-             geometry lacks"
-        ));
+    // One whole message for one and for several: no "(s)" (mitcad#1759).
+    match left {
+        0 => {}
+        1 => warnings.push(
+            "a relation or dimension left out: it names geometry the copied geometry lacks"
+                .to_owned(),
+        ),
+        n => warnings.push(format!(
+            "{n} relations and dimensions left out: they name geometry the copied geometry lacks"
+        )),
     }
-    if pasted.dropped > 0 {
-        warnings.push(format!(
-            "{} link(s) to geometry outside the copy left out: this sketch cannot use their \
-             sources",
-            pasted.dropped
-        ));
+    match pasted.dropped {
+        0 => {}
+        1 => warnings.push(
+            "a link to geometry outside the copy left out: this sketch cannot use its source"
+                .to_owned(),
+        ),
+        n => warnings.push(format!(
+            "{n} links to geometry outside the copy left out: this sketch cannot use their \
+             sources"
+        )),
     }
     if !pasted.values.is_empty() {
         // Counted for a person, the ids for agents (mitcad#1612).

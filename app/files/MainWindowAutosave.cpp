@@ -11,6 +11,8 @@
 #include "../WindowManager.hpp"
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <utility>
 
 #include <QByteArray>
@@ -18,6 +20,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLockFile>
 #include <QMessageBox>
@@ -29,6 +32,7 @@
 #include "../framework/Dialogs.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/ResultCache.hpp"
 #include "../view/ViewController.hpp"
 #include "Autosave.hpp"
 #include "F3dImport.hpp"
@@ -67,6 +71,26 @@ void MainWindow::createAutosave() {
                                           : document.to_json();
     return AutosaveManager::Snapshot{QByteArray(json.data(), static_cast<qsizetype>(json.size())),
                                      documentName(), m_filePath};
+  };
+  // The results computed since the last save go to the result store with
+  // each autosave (mitcad#1796): taken here with the snapshot, written on
+  // the autosave's thread.
+  m_autosave->results = [this]() -> std::function<QByteArray()> {
+    if (resultStoreDirectory().isEmpty()) {
+      return {};
+    }
+    auto taken =
+        std::make_shared<rust::Box<ResultWrites>>(idleDocument().take_results_to_write(resultStoreMinMs()));
+    if ((*taken)->count() == 0) {
+      return {};
+    }
+    return [taken] {
+      const rust::String json = (*taken)->write_taken();
+      return QByteArray(json.data(), static_cast<qsizetype>(json.size()));
+    };
+  };
+  m_autosave->resultsStored = [this](const QByteArray& json) {
+    reportStored({}, QJsonDocument::fromJson(json).object());
   };
   m_autosave->apply(GeneralSettings::load());
   m_viewController->generalChanged = [this] {

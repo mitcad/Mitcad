@@ -75,10 +75,12 @@ impl FontData {
             Err(e) => return Err(format!("it is not a font that can be read ({e})")),
         };
         if index >= count {
-            return Err(format!(
-                "it has {count} font(s), not a font number {}",
-                index + 1
-            ));
+            // One whole message for one and for several: no "(s)" (mitcad#1759).
+            return Err(if count == 1 {
+                format!("it has one font, not a font number {}", index + 1)
+            } else {
+                format!("it has {count} fonts, not a font number {}", index + 1)
+            });
         }
         FontRef::from_index(&bytes, index)
             .map_err(|e| format!("it is not a font that can be read ({e})"))?;

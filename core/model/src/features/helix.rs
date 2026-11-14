@@ -10,10 +10,12 @@
 use serde::{Deserialize, Serialize};
 
 use super::extrude::{
-    Operation, ProfileRef, apply_operation, check_participants, check_profiles, participant_bodies,
+    Operation, ProfileRef, apply_operation, check_participants, participant_bodies,
     profile_references, profile_regions,
 };
 use super::geom_ref::{GeomRef, Want};
+use super::path::SketchCurves;
+use super::surface_sweeps;
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
     ToolUse, is_false,
@@ -26,8 +28,13 @@ use crate::sweeps::HelixSpec;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HelixDef<P = ParamId> {
-    /// Regions of one sketch, a set (see `extrude::selected_regions`).
-    #[serde(deserialize_with = "super::extrude::profile_set")]
+    /// Regions of one sketch, a set (see `extrude::selected_regions`); none
+    /// for a surface helix of curves only (mitcad#1777).
+    #[serde(
+        default,
+        deserialize_with = "super::extrude::profile_set",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub profiles: Vec<ProfileRef>,
     /// A sketch line, an origin or construction axis, a straight edge or a
     /// fixed axis: the profiles move along its direction.
@@ -80,6 +87,16 @@ pub struct HelixDef<P = ParamId> {
     /// `.ipt` import's coils that give the file's state only so).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub piece_shift: f64,
+    /// A surface helix (mitcad#1777, as a surface revolution): the
+    /// profiles' walls without their caps and the curves' surfaces, new
+    /// surface bodies.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub surface: bool,
+    /// Sketch curves a surface helix moves by its screw motion beside or
+    /// instead of the profiles, open chains or closed loops (a line gives a
+    /// helicoid).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curves: Option<SketchCurves>,
 }
 
 fn is_zero(value: &f64) -> bool {
@@ -168,6 +185,8 @@ impl<P> HelixDef<P> {
                 .map(|e| e.map_params(f, "end"))
                 .transpose()?,
             piece_shift: self.piece_shift,
+            surface: self.surface,
+            curves: self.curves.clone(),
         })
     }
 
@@ -205,6 +224,9 @@ impl FeatureInfo for HelixDef {
     fn references(&self) -> References {
         let mut references = References::default();
         profile_references(&self.profiles, &mut references);
+        if let Some(curves) = &self.curves {
+            curves.add_references(&mut references);
+        }
         self.axis.add_to(&mut references);
         for body in &self.participants {
             references.body(*body);
@@ -213,7 +235,27 @@ impl FeatureInfo for HelixDef {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
-        check_profiles(ctx, &self.profiles)?;
+        // Profiles, or with `surface` also curves (mitcad#1777).
+        surface_sweeps::check_inputs(
+            ctx,
+            self.surface,
+            self.operation,
+            &self.profiles,
+            self.curves.as_ref(),
+            "helix",
+        )?;
+        if self.surface {
+            if self.growth.is_some() || self.start.is_some() || self.end.is_some() {
+                return Err(
+                    "a surface helix keeps its radius and pitch: it has no growth and no flat \
+                     ends"
+                        .to_owned(),
+                );
+            }
+            if self.construction == Some(HelixConstruction::Freecad) || self.piece_shift != 0.0 {
+                return Err("a surface helix is built by MitCad's construction".to_owned());
+            }
+        }
         check_participants(ctx, self.operation, &self.participants)?;
         self.axis.check(ctx, Want::Line)
     }
@@ -267,6 +309,9 @@ impl FeatureInfo for HelixDef {
 
 impl<K: Kernel> Evaluate<K> for HelixDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
+        if self.surface {
+            return self.surface_output(ctx);
+        }
         let (sketch, regions) = profile_regions(ctx, &self.profiles)?;
         let participants = participant_bodies(ctx, self.operation, &self.participants)?;
         let line = ctx.axis(&self.axis)?;
@@ -354,6 +399,62 @@ impl<K: Kernel> Evaluate<K> for HelixDef {
                 first
             }
         }
+    }
+}
+
+impl HelixDef {
+    /// A surface helix's bodies (mitcad#1777, as a surface revolution's):
+    /// the profiles' walls (the solid helix without its caps), then the
+    /// curves' surfaces moved by the screw motion.
+    fn surface_output<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<FeatureOutput<K::Shape>, String> {
+        let (sketch, regions) = match (&self.curves, self.profiles.is_empty()) {
+            (Some(curves), true) => (ctx.sketch(curves.sketch)?, Vec::new()),
+            _ => profile_regions(ctx, &self.profiles)?,
+        };
+        let frame = sketch.frame;
+        let chains = match &self.curves {
+            Some(curves) => Some(surface_sweeps::chains(ctx, curves, &frame)?),
+            None => None,
+        };
+        let line = ctx.axis(&self.axis)?;
+        let length = line.direction.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if length.is_nan() || length <= 1e-12 {
+            return Err("the helix's axis has no direction".to_owned());
+        }
+        let sign = if self.flip { -1.0 } else { 1.0 };
+        let mut spec = HelixSpec {
+            feature: ctx.uid,
+            frame,
+            regions: &regions,
+            origin: line.origin,
+            direction: line.direction.map(|v| sign * v / length),
+            pitch: positive(ctx.param(self.pitch)?, "pitch")?,
+            revolutions: positive(ctx.param(self.revolutions)?, "revolutions")?,
+            left_handed: self.left_handed,
+            growth: 0.0,
+            flip: self.flip,
+            freecad: false,
+            bodies: &[],
+            ends: [0.0; 4],
+            piece_shift: 0.0,
+        };
+        let mut sheets = Vec::new();
+        if !regions.is_empty() {
+            let tool = ctx.kernel.helix(&spec).map_err(|e| e.to_string())?;
+            sheets.push(surface_sweeps::walls(ctx, &tool)?);
+        }
+        if let Some(chains) = &chains {
+            spec.regions = &[];
+            sheets.push(
+                ctx.kernel
+                    .helix_sheet(&spec, chains)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
+        surface_sweeps::output(ctx, sheets)
     }
 }
 

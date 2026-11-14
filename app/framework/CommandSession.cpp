@@ -1157,6 +1157,9 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   actions.messageHovered = [this](bool on) { hoverMessage(on); };
   // The pointer over a note row (mitcad#1643): what the row is about.
   actions.noteHovered = [this](const QString& key, bool on) { hoverNote(key, on); };
+  // The pointer over a row of a choice's list (mitcad#1794): what the
+  // row's option is about.
+  actions.choiceHovered = [this](const QString& key, const QString& value) { hoverChoice(key, value); };
   // The button beside the message (mitcad#1634): Activate <component>
   // beside the refusal of picks of several components; once the model is
   // idle, the host activates it and keeps only its picks.
@@ -1697,6 +1700,9 @@ void CommandSession::advanceIfFull() {
 
 void CommandSession::selectionChanged(const QString& key) {
   autoOperationOverruled(key);
+  // The picks moved or went: which are gone is known again from the next
+  // preview (mitcad#1780).
+  clearMissingPicks(key);
   // A new size from the picks (mitcad#1298): the last settings of the same
   // size, before the selection's own reaction (Thread's side keeps the
   // class on it).
@@ -3163,6 +3169,30 @@ void CommandSession::hoverNote(const QString& key, bool on) {
   updateHighlights();
 }
 
+void CommandSession::hoverChoice(const QString& key, const QString& value) {
+  QJsonArray places;
+  if (!value.isEmpty()) {
+    if (const auto slot = slotOf(key);
+        slot && slot->def->type == InputDef::Type::Choice && slot->def->choicePlaces) {
+      places = slot->def->choicePlaces(scopeOf(*slot), value);
+    }
+  }
+  const QString row = places.isEmpty() ? QString() : key + QLatin1Char('=') + value;
+  if (row == m_hoveredChoice) {
+    return;
+  }
+  // For the UI tests: what the row paints, and when it stops.
+  if (row.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 choice %2 left").arg(m_def.name, m_hoveredChoice);
+  } else {
+    qDebug().noquote()
+        << QStringLiteral("Panel %1 choice %2 hovered: %3 places").arg(m_def.name, row).arg(places.size());
+  }
+  m_hoveredChoice = row;
+  // The panel's own source: the places go with the command (mitcad#1327).
+  m_host.hoverNoticePlaces(QStringLiteral("panel"), places, std::vector<BodyDisplay>());
+}
+
 void CommandSession::hoverMessage(bool on) {
   if (on == m_messageHovered && !on) {
     return;
@@ -3264,6 +3294,10 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
   if (!targets.isEmpty()) { m_previewOk = m_previewOk && targets.value(QStringLiteral("can_commit")).toBool(); }
   m_failed = !m_previewOk;
   if (m_previewOk) {
+    // No pick is gone (mitcad#1780).
+    if (clearMissingPicks()) {
+      m_presenter->refresh(m_state);
+    }
     showPreview(preview, built.def.value(QStringLiteral("operation")).toString());
     scheduleRefinement();
     // A feature that succeeds with a caveat says so (P9), not in red.
@@ -3299,7 +3333,25 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
     // log keeps the model's own text.
     const QStringList shown = noticeMessages(preview.report, QStringLiteral("error"));
     // Without a notice, still only what a person reads (mitcad#1612).
-    m_presenter->setMessage(shown.isEmpty() ? userText(problem) : shown.join(QLatin1Char('\n')), NoticeLevel::Error);
+    const QString said = shown.isEmpty() ? userText(problem) : shown.join(QLatin1Char('\n'));
+    // A pick the error names that is gone from the model (mitcad#1780):
+    // the message names its input first ("A face of Faces is gone: pick
+    // it again"), its chip and list mark it. That reads the model, so
+    // while a job computes it the message follows once it is idle.
+    const auto showGone = [this, said](const QJsonObject& failed) {
+      const QString gone = markMissingPicks(failed);
+      m_presenter->setMessage(gone.isEmpty() ? said : gone + QLatin1Char('\n') + said, NoticeLevel::Error);
+    };
+    if (!m_host.modelBusy()) {
+      showGone(preview.report);
+    } else {
+      m_presenter->setMessage(said, NoticeLevel::Error);
+      m_host.whenIdle(this, [this, showGone, key, failed = preview.report] {
+        if (!m_done && m_presenter && m_failed && m_shownKey == key) {
+          showGone(failed);
+        }
+      });
+    }
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
   }
   // The places the message's notices name, and the bodies they are on
@@ -5388,7 +5440,7 @@ void CommandSession::featuresInserted(int count, int depth) {
   qDebug().noquote() << QStringLiteral("%1: %2 feature(s) added before it").arg(m_def.name).arg(count);
 }
 
-void CommandSession::suspend() {
+void CommandSession::suspend(const QString& why) {
   if (m_done || m_suspended) {
     return;
   }
@@ -5397,7 +5449,10 @@ void CommandSession::suspend() {
   m_refineTimer.stop();
   ++m_generation;
   clearPreview();
-  qDebug().noquote() << QStringLiteral("%1 set aside while a sketch is edited").arg(m_def.name);
+  // Nothing is shown now: resume() shows the preview again, from the cache
+  // when the inputs are as they were (mitcad#1790), not "already shown".
+  m_shownKey.clear();
+  qDebug().noquote() << QStringLiteral("%1 set aside %2").arg(m_def.name, why);
 }
 
 void CommandSession::resume() {
@@ -5433,6 +5488,24 @@ bool CommandSession::ask(const QString& key, const QString& message) {
   showPanelMessage(QString(), NoticeLevel::Hint);
   qDebug().noquote() << QStringLiteral("Panel %1 asks: %2").arg(m_def.name, message);
   m_host.showHint(message);
+  updateHighlights();
+  return true;
+}
+
+bool CommandSession::pickInWindow(const QString& key) {
+  if (m_done) {
+    return false;
+  }
+  if (key.isEmpty()) {
+    activateFirstNeeded();
+    updateHighlights();
+    return true;
+  }
+  const auto slot = slotOf(key);
+  if (!slot || slot->def->type != InputDef::Type::Selection || !slot->def->windowPick || !isShown(*slot)) {
+    return false;
+  }
+  activate(key);
   updateHighlights();
   return true;
 }

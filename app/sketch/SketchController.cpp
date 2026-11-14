@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <utility>
 
 #include <QAction>
@@ -41,6 +42,14 @@
 
 namespace mitcad::sketch {
 namespace {
+
+// The sketch modes of every open document window: Show points is one
+// setting per user (mitcad#1764), so a change in one window draws or hides
+// the points in the others too.
+std::vector<SketchController*>& liveControllers() {
+  static std::vector<SketchController*> controllers;
+  return controllers;
+}
 
 // A press that moves further than this starts a drag.
 constexpr double kDragPixels = 4.0;
@@ -542,6 +551,55 @@ ProjectedItem SketchOp::projectBody(const BodyItem& item) {
   return out;
 }
 
+QString SketchOp::bodyInput(const BodyItem& item, const QString& part) {
+  const ProjectedItem projected = projectBody(item);
+  if (projected.empty()) {
+    return QString();
+  }
+  if (part.isEmpty()) {
+    return item.isPoint() ? projected.point : projected.curve;
+  }
+  const SketchModel& now = model();
+  const CurveData* curve = now.curve(projected.curve);
+  if (curve == nullptr) {
+    return QString();
+  }
+  if (part == QStringLiteral("center")) {
+    return curve->center;
+  }
+  // The projected curve's end where the edge's is.
+  const V2 want = part == QStringLiteral("start") ? item.curve.startPoint() : item.curve.endPoint();
+  QString entity;
+  double nearest = std::numeric_limits<double>::max();
+  for (const QString& end : {curve->start, curve->end}) {
+    const auto at = now.pointAt(end);
+    if (at && dist(*at, want) < nearest) {
+      nearest = dist(*at, want);
+      entity = end;
+    }
+  }
+  return entity;
+}
+
+bool SketchOp::bodyInputs(QStringList& picks) {
+  // The items as they are now: projecting reads the sketch again.
+  std::vector<std::tuple<int, BodyItem, QString>> refs; // index, item, part
+  for (int i = 0; i < static_cast<int>(picks.size()); ++i) {
+    QString part;
+    if (const BodyItem* item = m_c.bodyGeometryShown().item(picks[i], &part)) {
+      refs.emplace_back(i, *item, part);
+    }
+  }
+  for (const auto& [index, item, part] : refs) {
+    const QString entity = bodyInput(item, part);
+    if (entity.isEmpty()) {
+      return false;
+    }
+    picks[index] = entity;
+  }
+  return true;
+}
+
 QString SketchOp::axisInput(const QString& pick) {
   const QString name = axisPickName(pick);
   if (name.isEmpty()) {
@@ -634,6 +692,10 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
                     : dimensionText == QStringLiteral("name_value") ? DimensionText::NameValue
                                                                     : DimensionText::Value;
   m_showPoints = QSettings().value(QStringLiteral("sketch/showPoints"), true).toBool();
+  // Off, every shown sketch's points are drawn without markers, finished
+  // sketches too (mitcad#1764).
+  viewer.setSketchPointsHidden(!m_showPoints);
+  liveControllers().push_back(this);
   viewer.installEventFilter(this);
   // After the frame, which may have moved the camera.
   connect(
@@ -645,6 +707,28 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
         m_overlay->update();
         placeFields();
         logView();
+      },
+      Qt::QueuedConnection);
+  // The badge follows the cards over the view and the sketch's status, also
+  // where the view never paints (Windows session 0, mitcad#1787; the paint
+  // places it elsewhere). Queued, as an update() is: the room it gives the
+  // view moves the navigation bar, which moves the cards again.
+  for (const auto signal : {&OcctViewer::coveredChanged, &OcctViewer::overlayInsetsChanged}) {
+    connect(
+        &viewer, signal, m_overlay,
+        [this] {
+          if (isActive()) {
+            m_overlay->placeBadge();
+          }
+        },
+        Qt::QueuedConnection);
+  }
+  connect(
+      this, &SketchController::changed, m_overlay,
+      [this] {
+        if (isActive()) {
+          m_overlay->placeBadge();
+        }
       },
       Qt::QueuedConnection);
   // Without a tool, the curve or point a click would select is drawn over
@@ -692,7 +776,10 @@ SketchController::SketchController(SketchHost& host, OcctViewer& viewer, Command
   TestSync::watch(&m_pointerTimer);
 }
 
-SketchController::~SketchController() = default;
+SketchController::~SketchController() {
+  std::vector<SketchController*>& controllers = liveControllers();
+  controllers.erase(std::remove(controllers.begin(), controllers.end(), this), controllers.end());
+}
 
 void SketchController::enter(const QString& uid) {
   m_uid = uid;
@@ -706,8 +793,10 @@ void SketchController::enter(const QString& uid) {
   // (mitcad#1670); the palette's checkbox changes it for this sketch only.
   // Set before reload(), whose `changed` refreshes the palette.
   m_showProfiles = showProfilesOnOpen();
-  // Its points drawn as the palette's Show points says (mitcad#1705).
-  m_viewer.setHiddenSketchPoints(m_showPoints ? QString() : uid);
+  // Its points drawn as the palette's Show points says (mitcad#1705), as
+  // they were before it opened (mitcad#1764: the view follows the setting).
+  // What a body hides of it is drawn through it, dimmed (mitcad#1762).
+  m_viewer.setSketchThrough(uid);
   reload();
   qDebug().noquote() << QStringLiteral("Sketch %1 opens with Show profiles %2")
                             .arg(m_model.name, m_showProfiles ? QStringLiteral("on") : QStringLiteral("off"));
@@ -745,8 +834,9 @@ void SketchController::leave() {
   m_movedPointer.clear();
   m_cursorValid = false;
   m_overlay->hide();
-  // Its points drawn again wherever it is shown (mitcad#1705).
-  m_viewer.setHiddenSketchPoints(QString());
+  // Its points stay as Show points says wherever it is shown (mitcad#1764):
+  // the view keeps the setting after the sketch is finished.
+  m_viewer.setSketchThrough(QString());
   m_uid.clear();
   m_model = SketchModel();
   ++m_modelRevision;
@@ -959,6 +1049,8 @@ void SketchController::logView() {
   // The origin and axes the overlay draws (mitcad#739), also where the
   // view never paints (Windows session 0).
   m_overlay->logAxes();
+  // And its badge (mitcad#1787).
+  m_overlay->placeBadge();
 }
 
 void SketchController::logGlyphs() {
@@ -1030,6 +1122,11 @@ void SketchController::stopTool() {
   // An editor's accept callback can capture the tool. Retire it before
   // releasing the tool, including a controller-owned dimension editor.
   closeEditor();
+  // A refused action's blocking items are not painted beyond the tool or
+  // the command that refused it (mitcad#1761): Esc, a right-click, another
+  // tool or command, Finish Sketch put the overlay back to the committed
+  // sketch (its own conflicts, if any, stay: conflicts()).
+  setConflict(QStringLiteral("action"), {});
   if (!m_tool) {
     return;
   }
@@ -1077,6 +1174,11 @@ bool SketchController::cancel() {
   if (!isActive()) {
     return false;
   }
+  // Every Esc (and a tool's right-click) takes away what a refused action
+  // painted (mitcad#1761): a constraint tool's refused pick, a constraint
+  // applied to the selection. It then goes on to the editor, the tool, the
+  // selection or the sketch as before.
+  setConflict(QStringLiteral("action"), {});
   if (m_editor) {
     // An editor the tool opened (the Dimension tool's value) sends the tool
     // back a step; one opened from a context menu (Edit Dimension, with
@@ -1266,7 +1368,10 @@ bool SketchController::selectionHasProjected() const {
     }
     const PointData* p = m_model.point(item.name);
     const CurveData* c = m_model.curve(item.name);
-    return (p != nullptr && p->reference) || (c != nullptr && c->reference);
+    // A curve an offset made converts too: the offset's curves are freed
+    // from its source (mitcad#1755).
+    const bool offsetCurve = c != nullptr && m_model.offsetOf(c->id) != nullptr;
+    return (p != nullptr && p->reference) || (c != nullptr && c->reference) || offsetCurve;
   });
 }
 
@@ -1288,7 +1393,7 @@ void SketchController::convertProjected() {
     }
   }
   if (entities.isEmpty()) {
-    hint(tr("Convert to Sketch Geometry: select projected curves or points first."));
+    hint(tr("Convert to Sketch Geometry: select projected geometry or a curve an offset made first."));
     return;
   }
   SketchOp op(*this);
@@ -1319,6 +1424,11 @@ void SketchController::convertProjected() {
   const QStringList warnings = shownTexts(result, QStringLiteral("warnings"), QStringLiteral("warning_messages"));
   if (!warnings.isEmpty()) {
     hint(tr("Convert to Sketch Geometry: %1").arg(warnings.join(QStringLiteral("; "))));
+  }
+  // An offset freed from its source with its curves (mitcad#1755).
+  const QStringList notes = shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"));
+  if (!notes.isEmpty()) {
+    notice(tr("Convert to Sketch Geometry: %1").arg(notes.join(QStringLiteral("; "))), NoticeLevel::Information);
   }
   updateConvertAction();
 }
@@ -1739,13 +1849,26 @@ void SketchController::setShowPoints(bool on) {
   if (on == m_showPoints) {
     return;
   }
-  m_showPoints = on;
   QSettings().setValue(QStringLiteral("sketch/showPoints"), on);
   // For UI tests (mitcad#1705).
   qDebug().noquote() << QStringLiteral("Show points %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
-  if (isActive()) {
-    m_viewer.setHiddenSketchPoints(on ? QString() : m_uid);
+  // One setting per user (mitcad#1764): every document window follows it.
+  for (SketchController* controller : liveControllers()) {
+    if (controller != this) {
+      controller->applyShowPoints(on);
+    }
   }
+  applyShowPoints(on);
+}
+
+void SketchController::applyShowPoints(bool on) {
+  if (on == m_showPoints) {
+    return;
+  }
+  m_showPoints = on;
+  // Every shown sketch's points, the edited one's and finished ones'
+  // (mitcad#1764).
+  m_viewer.setSketchPointsHidden(!on);
   emit optionsChanged();
   m_overlay->update();
   // The markers over a selected curve's highlight come and go with them.
@@ -2036,9 +2159,9 @@ std::optional<V2> SketchController::sketchAtF(const QPointF& screen) const {
   if (m_viewer.width() <= 0 || m_viewer.height() <= 0) {
     return std::nullopt;
   }
-  // Input picking uses OCCT's integer device-pixel convention. Layout
-  // instead inverts toWidgetF's continuous camera projection, including
-  // half-pixel editor centres and odd-sized viewports.
+  // Point placement uses OCCT's integer device-pixel convention. Layout
+  // and hit distances instead invert toWidgetF's continuous projection,
+  // including half-pixel editor centres and odd-sized viewports.
   const double x = 2.0 * screen.x() / m_viewer.width() - 1.0;
   const double y = 1.0 - 2.0 * screen.y() / m_viewer.height();
   const auto& camera = m_viewer.viewCamera();
@@ -2052,6 +2175,8 @@ std::optional<V2> SketchController::sketchAtF(const QPointF& screen) const {
   const gp_XYZ hit = rayOrigin.XYZ() + direction * ((m_model.frame.origin.XYZ() - rayOrigin.XYZ()).Dot(normal) / along);
   return toSketch(m_model.frame, gp_Pnt(hit));
 }
+
+double SketchController::lengthScaleOf(const QString& unit) { return unitScale(unit); }
 
 double SketchController::pixel() const {
   const QPointF o = toScreen(V2{});
@@ -2114,7 +2239,11 @@ QString SketchController::entityAt(const QPointF& screen, unsigned filter) const
     }
   }
   if (filter & PickCurves) {
-    const auto raw = sketchAt(screen);
+    // Points, out-of-plane items and axes measure distance in toScreen's
+    // continuous camera projection. Use its inverse for curves too: the
+    // integer OCCT ray can move the hit by a pixel and let a coincident
+    // axis win over a body edge despite the deliberate tie priorities.
+    const auto raw = sketchAtF(screen);
     if (!raw) {
       return best;
     }
@@ -2495,6 +2624,14 @@ QStringList SketchController::conflicts() const {
       }
     }
   }
+  // A line distance between lines that are not parallel holds only the
+  // middle of one of them (mitcad#1774): drawn as in conflict, its lines
+  // painted on hover.
+  for (const QString& id : m_model.notParallel) {
+    if (m_model.dimension(id) != nullptr) {
+      add(id);
+    }
+  }
   return items;
 }
 
@@ -2776,6 +2913,9 @@ void SketchController::setPointerText(const QString& text) {
   }
   m_pointerText = text;
   m_overlay->update();
+  // The pointer's place over the badge, also where the view never paints
+  // (Windows session 0, mitcad#1787).
+  m_overlay->placeBadge();
   if (!text.isEmpty()) {
     m_movedPointer = text;
     m_pointerTimer.start(); // again: logged once the pointer rests

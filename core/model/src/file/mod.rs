@@ -228,6 +228,17 @@
 //! [`crate::print_changes`]. Builds without them treat the field as
 //! unknown; builds before mitcad#1643 refuse a file with `at`.
 //!
+//! CAM (mitcad#1013), when the design has setups or machines: `cam`
+//! (`version`, `machines`: `[{"id", "machine", "tools": {"tools"},
+//! "origin"}]`, `setups`: `[{"id", "name", "bodies", "stock", "wcs",
+//! "work_offset", "safe_height", "machine", "dialect", "post",
+//! "probe_work_zero", "placement", "operations": [{"id", "name", "kind",
+//! "tool", "inputs", "depths", "heights", "cutting", ..., "generated"}]}]`,
+//! `next_id`), see [`crate::cam`]: `generated` is the fingerprint of the
+//! inputs an operation's toolpath was last generated from; toolpaths are
+//! not saved. Read tolerantly: fields a newer MitCad adds inside the
+//! section are ignored. Builds without CAM treat the field as unknown.
+//!
 //! Drawings of the root and the components (mitcad#707), when there are
 //! any: `drawings` (`uid` `D<n>`, `name`, `component` unless the root's,
 //! `sheets`: `name`, `size`, `orientation`, `projection`, `title_block`,
@@ -262,8 +273,11 @@
 //! [`crate::render_settings`].
 //!
 //! The display state (P9), when it is not the default: `display` with
-//! `"origin": true` (the Origin folder shown) and `isolated` (`body` and
-//! `occurrence`, or an `occurrence` path); a favourite parameter has
+//! `"origin": true` (the Origin folder shown), `isolated` (`body` and
+//! `occurrence`, or an `occurrence` path), `hidden` (View › Show,
+//! mitcad#1287) and `folders` (the components' folders hidden by their
+//! eyes, mitcad#1771: `{"C0": {"sketches": true}}`; a design without it
+//! has every folder shown); a favourite parameter has
 //! `"favorite": true`; timeline groups are `groups` (`name`, `features`).
 //!
 //! A modelled thread stores how its ends are cut (`ends`: `run_out` or
@@ -874,6 +888,9 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
     state
         .settle_references()
         .map_err(|e| FileError::Invalid(e.to_string()))?;
+    // A flange's profile sketch on a fixed plane of its own follows the
+    // flange's wall from now on (mitcad#1776).
+    state.settle_flange_profiles();
     Ok(Loaded {
         state,
         warnings,

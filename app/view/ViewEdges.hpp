@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,10 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_TShape.hxx>
+
+namespace mitcad::geometry {
+class Shape;
+} // namespace mitcad::geometry
 
 namespace mitcad {
 
@@ -70,20 +75,40 @@ void giveViewEdgePolygons(const TopoDS_Shape& own);
 // shown body's, so that a highlight of its edge lies on the polyline the
 // body is drawn with), else made, in parallel. Built when a body is shown,
 // dropped with it (OcctViewer::BodyEntry::edges).
+//
+// Smooth seams (mitcad#1773, mitcad/geometry/smooth_seams.hpp) are left
+// out of what is drawn: an edge with one surface on both sides (a
+// cylinder's or a sphere's seam, the edge between two pieces of one face
+// that a split left; with `named`, the Shape whose occt() `shape` is, by
+// their names too) across which the surface runs on smoothly. They keep
+// their copies (a highlight of such an edge, selected through the model,
+// is drawn), but are not drawn with the shape in any visual style, and its
+// FineEdges objects do not pick them (dropSmoothSeams). A cache whose
+// source is the same shape gives its seams, so a highlight of the whole
+// body leaves out what the body leaves out.
 class ViewEdges {
 public:
-  explicit ViewEdges(const TopoDS_Shape& shape, const std::vector<const ViewEdges*>& caches = {});
+  explicit ViewEdges(const TopoDS_Shape& shape, const std::vector<const ViewEdges*>& caches = {},
+                     const geometry::Shape* named = nullptr);
 
   // The shape the copies are of.
   const TopoDS_Shape& source() const { return m_source; }
   // What is drawn for it: a compound of the copies, each where and as the
-  // source has its edge, and the source's free vertices.
+  // source has its edge, but its smooth seams, and the source's free
+  // vertices.
   const TopoDS_Shape& drawn() const { return m_drawn; }
   // The copy of the source's edge (any of its places), unlocated; null when
   // the source has no such edge or it is drawn as it is.
   TopoDS_Edge copyOf(const TopoDS_Shape& edge) const;
   // How many of the source's edges have a copy.
   std::size_t size() const { return m_copies.size(); }
+  // How many of the source's edges are drawn, and how many are left out as
+  // smooth seams (mitcad#1773).
+  std::size_t drawnCount() const { return m_drawnCount; }
+  std::size_t seamCount() const { return m_seams.size(); }
+  // Whether the source's edge (any of its places) is a smooth seam, left
+  // out of what is drawn and picked.
+  bool smoothSeam(const TopoDS_Shape& edge) const;
   // For UI tests: of this shape's edges, how many `body` has too, and how
   // many of those are drawn with `body`'s own copy.
   std::pair<std::size_t, std::size_t> sharedWith(const ViewEdges& body) const;
@@ -94,6 +119,9 @@ private:
   TopoDS_Shape m_source;
   TopoDS_Shape m_drawn;
   std::unordered_map<const TopoDS_TShape*, TopoDS_Edge> m_copies;
+  // The smooth seams, by the source edge's TShape.
+  std::unordered_set<const TopoDS_TShape*> m_seams;
+  std::size_t m_drawnCount = 0;
 };
 
 // Draws `drawn` (ViewEdges::drawn) into a presentation as lines, with the
@@ -153,9 +181,16 @@ protected:
   std::shared_ptr<const ViewEdges> m_edges;
 };
 
+// Takes the smooth seams of `edges` (ViewEdges::smoothSeam) out of the
+// selection: their decomposed edge owners' sensitive entities are dropped,
+// so that no line is hovered or picked where none is drawn (mitcad#1773).
+// The faces at them and the whole shape stay pickable there.
+void dropSmoothSeams(const occ::handle<SelectMgr_Selection>& selection, const ViewEdges& edges);
+
 // An interactive shape (AIS_Shape, AIS_ColoredShape) drawn as FineLines,
 // whose faces' and edges' hover is drawn so too (drawOwnersFrom). Picking
-// and selection stay the model's faces and edges.
+// and selection stay the model's faces and edges, but for its smooth
+// seams, which are not picked (dropSmoothSeams).
 template <class Base>
 class FineEdges : public FineLines<Base> {
 public:
@@ -165,6 +200,7 @@ protected:
   void ComputeSelection(const occ::handle<SelectMgr_Selection>& selection, const int mode) override {
     Base::ComputeSelection(selection, mode);
     if (this->m_edges) {
+      dropSmoothSeams(selection, *this->m_edges);
       drawOwnersFrom(selection, this->m_edges);
     }
   }

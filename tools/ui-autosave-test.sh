@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/files app/framework/QuickAccessGroup.cpp
+# check-all sources: app/files app/framework/QuickAccessGroup.cpp app/framework/ResultCache.cpp core/model/src/store.rs
 # Autosave (P8) through the real UI, every 2 s (MITCAD_TEST_AUTOSAVE_SECONDS):
 #   1. A changed document is written to the recovery folder in the user's
 #      data ($XDG_DATA_HOME/Mitcad/Mitcad/autosave): the project file and
@@ -22,7 +22,11 @@
 #      Overwrite writes. A lock left without files goes; a damaged session
 #      can only be discarded; an untitled one is restored untitled, and a
 #      normal end leaves nothing.
-#   4. Preferences, General: autosave off in the settings writes nothing;
+#   4. Results (mitcad#1796): with the result store on, the results computed
+#      after the design was opened and changed go to the store with the
+#      autosave; killed and recovered, the design takes them from the
+#      store and evaluates none of its solid features again.
+#   5. Preferences, General: autosave off in the settings writes nothing;
 #      switched on, it writes; switched off again, it is saved off.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh, which gives every test a data
@@ -393,6 +397,40 @@ expect_exit "exited without saving"
 expect_files "$FOLDER" "nothing is left in the folder"
 unset MITCAD_AUTOSAVE_DIR
 FOLDER=$XDG_DATA_HOME/Mitcad/Mitcad/autosave
+
+echo "--- Results computed after the last save go to the store with the autosave (mitcad#1796)"
+# Every result is stored, however quick.
+export MITCAD_RESULT_STORE=$UI_RESULTS MITCAD_RESULT_STORE_MIN_MS=0
+ui_start_app --open "$FILE" --set d3=27
+ui_expect_log "Opened $FILE" "opened"
+ui_expect_log "Autosaved block.mitcad: " "the change was written"
+stored=""
+for _ in $(seq 1 100); do
+  stored=$(grep -E "Result store: restored 0, evaluated 0; stored [1-9]" "$UI_LOG" | head -n 1)
+  [ -n "$stored" ] && break
+  sleep 0.1
+done
+[ -n "$stored" ] || ui_fail "the results computed after the change were not stored with the autosave"
+echo "ok   the change's results were stored with the autosave"
+ui_stop_app
+UI_RECOVERY=1 ui_start_app
+ui_expect_log "Recovery: 1 document(s) found" "the killed session is found"
+focus_dialog '^Recover Unsaved Work$'
+ui_mark
+ui_step "restore (Enter)"                ui_key Return
+ui_focus_main
+ui_expect_new "Recovered block.mitcad from autosave of " "restored"
+ui_expect_new "; stored 0 " "the recovered design's solid features came from the store: none evaluated to store"
+tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -E "Result store: restored [1-9]" > /dev/null ||
+  ui_fail "the recovered design restored nothing from the store"
+echo "ok   restored from the store"
+ui_step "exit (Ctrl+Q)"                  ui_key ctrl+q
+focus_dialog '^MitCad$'
+ui_key d # Don't Save: the app ends
+expect_exit "exited without saving"
+expect_files "$FOLDER" "nothing is left in the folder"
+unset MITCAD_RESULT_STORE_MIN_MS
+export MITCAD_RESULT_STORE=off
 
 echo "--- Preferences: General"
 mkdir -p "$XDG_CONFIG_HOME/Mitcad"

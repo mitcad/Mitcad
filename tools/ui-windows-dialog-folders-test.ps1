@@ -63,7 +63,7 @@ Ui-Mark
 Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
 Ui-ExpectNew "Dialog folder export: $(Logged $designs)" "Export starts in the design's folder at first"
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Export$' $step }
-Ui-ExpectNew "Exported ${step}: step, 1 body(ies)" 'exported'
+Ui-ExpectNew "Exported ${step}: step, 1 body" 'exported'
 Ui-ExpectNew "Dialog folder export remembered: $(Logged $exports)" 'the Export group remembers its folder'
 
 $part = Join-Path $imports 'part.step'

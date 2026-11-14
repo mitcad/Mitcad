@@ -40,6 +40,18 @@ fn last_spec(doc: &Document<MockKernel>) -> String {
         .unwrap_or_default()
 }
 
+/// A feature's definition as saved, its values by their parameters' names.
+fn saved_def(doc: &Document<MockKernel>, uid: FeatureUid) -> Value {
+    let params = doc.parameters();
+    let def = doc
+        .feature(uid)
+        .unwrap()
+        .def
+        .map_params(&mut |_, id| Ok::<_, ()>(params.name(*id)))
+        .unwrap();
+    serde_json::to_value(&def).unwrap()
+}
+
 /// A line of a sketch; its curve id.
 fn line(doc: &mut Document<MockKernel>, sketch: FeatureUid, a: [f64; 2], b: [f64; 2]) -> String {
     let result = command(
@@ -905,6 +917,158 @@ fn ribs_and_webs_join_the_bodies() {
         message.contains("the rib's thickness must be greater than zero"),
         "{message}"
     );
+}
+
+/// Extend Ends and End Offset (mitcad#1746) reach the kernel; a rib saved
+/// without them keeps its ends as drawn, and a web refuses them. An end the
+/// kernel could not continue is the rib's warning.
+#[test]
+fn rib_ends_extend_to_the_bodies() {
+    let (mut b, _) = with_path();
+    // Without the field: as drawn, as ribs made before it.
+    let old = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 6}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, old), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        "rib F5 chains c1 thickness 4 Symmetric depth Some(6.0) flip false bodies 1"
+    );
+    let saved = saved_def(&b.doc, old);
+    assert!(saved.get("extend_ends").is_none(), "{saved}");
+    assert!(saved.get("end_offset").is_none(), "{saved}");
+
+    const NOTE: &str = "the start of the rib's curves meets no face of the bodies when continued along \
+                        its curve; it stays where it is drawn";
+    b.doc
+        .kernel()
+        .notes
+        .borrow_mut()
+        .insert("rib", NOTE.to_owned());
+    let rib = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 6},
+               "extend_ends": true, "end_offset": "0.5 mm * 3"}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, rib), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        "rib F6 chains c1 thickness 4 Symmetric depth Some(6.0) flip false bodies 1 \
+         extend_ends offset 1.5"
+    );
+    assert_eq!(b.doc.warnings(rib), [NOTE.to_owned()]);
+    let saved = saved_def(&b.doc, rib);
+    assert_eq!(saved["extend_ends"], json!(true), "{saved}");
+    assert!(saved.get("end_offset").is_some(), "{saved}");
+
+    // On without an offset: 0.
+    b.doc.kernel().notes.borrow_mut().clear();
+    let plain = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "to_next"}, "extend_ends": true}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, plain), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).ends_with("extend_ends offset 0"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    assert!(b.doc.warnings(plain).is_empty());
+
+    // A web's curves end where they are drawn.
+    let message = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}, "extend_ends": true}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        message.contains("Extend Ends and End Offset are a rib's"),
+        "{message}"
+    );
+}
+
+/// A rib's Direction (mitcad#1746): the sketch's axes and a picked line or
+/// axis reach the kernel as a unit vector in the sketch plane; Perpendicular
+/// to Chord is written as nothing and sends none; one across the plane is
+/// refused, and a web refuses any.
+#[test]
+fn rib_direction_reaches_the_kernel() {
+    let (mut b, _) = with_path();
+    let rib = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "to_next"}, "direction": "sketch_y",
+               "flip": true, "extend_ends": true}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, rib), FeatureStatus::Ok);
+    assert_eq!(
+        last_spec(&b.doc),
+        "rib F5 chains c1 thickness 4 Symmetric depth None flip true bodies 1 \
+         extend_ends offset 0 direction [0, 1, 0]"
+    );
+    assert_eq!(saved_def(&b.doc, rib)["direction"], json!("sketch_y"));
+
+    // Along the X axis, from the bend line.
+    let along = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c4"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 5},
+               "direction": {"along": "x"}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, along), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).ends_with("bodies 1 direction [1, 0, 0]"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    assert_eq!(saved_def(&b.doc, along)["direction"], json!({"along": "x"}));
+
+    // Perpendicular to Chord, said or not: nothing saved, none sent.
+    let square = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 5},
+               "direction": "perpendicular"}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, square), FeatureStatus::Ok);
+    assert!(!last_spec(&b.doc).contains("direction"));
+    assert!(saved_def(&b.doc, square).get("direction").is_none());
+
+    // The Z axis runs across the XY sketch's plane.
+    let across = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "depth", "depth": 5},
+               "direction": {"along": "z"}}),
+    )
+    .unwrap();
+    assert!(
+        error(&b.doc, across).contains("must lie in or parallel to its sketch plane"),
+        "{}",
+        error(&b.doc, across)
+    );
+
+    // A web grows along the sketch normal.
+    let message = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}, "direction": "sketch_x"}),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(message.contains("Direction is a rib's"), "{message}");
 }
 
 #[test]

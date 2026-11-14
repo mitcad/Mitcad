@@ -16,3 +16,5 @@ mitcad-mcp = { path = "../../mcp" }
 mitcad-model = { workspace = true, features = ["testing"] }
 mitcad-model-api = { path = "../../model-api" }
 serde_json.workspace = true
+# The spindle model the CAM reader gives (mitcad#1013).
+mitcad-cam = { path = "../../cam" }

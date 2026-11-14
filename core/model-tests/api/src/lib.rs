@@ -75,9 +75,17 @@ mod sketch3d_relations_tests;
 mod sketch3d_clipboard_tests;
 // The `bodies` query's last feature of each body (mitcad#1704).
 mod body_last_features_tests;
+// The CNC spindle's design read into the CAM spindle model (mitcad#1013).
+mod cam_spindle_tests;
 // The `parameter_range` query: the design at a parameter's limits on a copy
 // (mitcad#1730).
 mod parameter_range_tests;
 // How large construction planes and axes are drawn: their resize handles' size
 // (mitcad#1748).
 mod datum_display_size_tests;
+// The eyes of each component's Bodies, Sketches and Construction folders
+// (mitcad#1771).
+mod folder_eye_tests;
+// Show Dimensions of a sketch's row: its dimensions drawn outside sketch
+// mode, kept as display state (mitcad#1772).
+mod sketch_dimensions_shown_tests;

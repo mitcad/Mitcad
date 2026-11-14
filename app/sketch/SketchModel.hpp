@@ -160,6 +160,19 @@ struct OffsetData {
   QString expression; // of its distance
   bool left = false;
   bool derived = false;
+  bool round = false; // Corners: Round (mitcad#1774)
+};
+
+// An edge that could have taken the place of a lost projection's source
+// (the query's `candidates` and `candidate_curves`, mitcad#1794): Project
+// Again offers each by its kind and size, never its name.
+struct SuccessorData {
+  QString edge; // its name, for the model's `successor` and the hover's place
+  QString type; // line, arc or circle; empty: another kind
+  double length = 0.0;
+  double radius = 0.0;
+  QString body;       // its projection's body (empty: any body)
+  QString occurrence; // its projection's link's source (another component's)
 };
 
 // A linked projection of the sketch (the `sketch` query's `projections`): its
@@ -173,6 +186,9 @@ struct ProjectionData {
   QStringList entities;
   bool stale = false; // it did not follow its source all the way (kept, lost, unfollowed, stale)
   bool section = false; // section curves: where the sketch's plane cuts the source face (mitcad#389)
+  // Its source edge is gone and these could have taken its place, none
+  // alone (mitcad#1794): Project Again asks which.
+  std::vector<SuccessorData> candidates;
 };
 
 class SketchModel {
@@ -200,9 +216,13 @@ public:
   // entities that found nothing): Clean Up Stale Projections tidies them,
   // and the palette offers it (mitcad#252).
   bool staleProjections = false;
-  // Of them, those whose sources are there (not lost): Project Again
+  // Of them, those whose sources are there (not lost), or lost with edges
+  // that could have taken their places (mitcad#1794): Project Again
   // projects them anew (mitcad#1303), and the palette offers it.
   bool projectAgain = false;
+  // The edges every lost projection could follow instead, in the order of
+  // the projections (mitcad#1794): Project Again's list of them.
+  std::vector<SuccessorData> successors() const;
   int dof = 0;
   std::vector<PointData> points;
   std::vector<CurveData> curves;
@@ -221,6 +241,9 @@ public:
   // redundant constraints.
   QJsonArray notices;
   QStringList redundant;
+  // The line distances between lines that are not parallel (the `sketch`
+  // query's `not_parallel`, mitcad#1774): drawn as in conflict.
+  QStringList notParallel;
   // The regions a text's contours bound, by region key (the Profile pick's
   // name): the text they belong to, for a letter and its counter alike
   // (the `sketch` query's regions with a `text`, mitcad#1369).

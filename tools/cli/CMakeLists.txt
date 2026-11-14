@@ -108,7 +108,8 @@ if(BUILD_TESTING)
 
   # Sweeps, lofts, pipes, coils, ribs and webs (F3): the T0 models' volumes
   # and analytic ones, names through parameter edits, failures.
-  foreach(script f3_sweep f3_loft f3_pipe_coil f3_rib_web f3_names_follow_parameters f3_failures)
+  foreach(script f3_sweep f3_loft f3_pipe_coil f3_rib_web f3_names_follow_parameters f3_failures
+                 f3_rib_extend_ends f3_rib_direction)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
   endforeach()
   # Plastic part features and plastic rules (mitcad#459): analytic volumes,
@@ -136,6 +137,11 @@ if(BUILD_TESTING)
   # Mortise and Tenon (mitcad#1012): crossing boards, blind, through and with
   # rounded corners, the mortise the tenon grown by the clearance; refusals.
   add_test(NAME cli.mortise_tenon COMMAND mitcad-cli run "${scripts}/mortise_tenon.json")
+  # The curve tools (mitcad#1777): a Helix Curve on a cylinder's face and a
+  # growing one about an axis, pipes along them; a surface Helix of a line,
+  # the helicoid's area; its Intersection Curve with a cylinder, a pipe along
+  # it as along the Helix Curve.
+  add_test(NAME cli.curve_tools COMMAND mitcad-cli run "${scripts}/curve_tools.json")
 
   # Components and occurrences (F6): placements, subassemblies, timeline
   # moves, components made by features and copies, with world-space
@@ -346,6 +352,12 @@ if(BUILD_TESTING)
   file(MAKE_DIRECTORY "${usdz_animation}")
   add_test(NAME cli.export_usdz_animation COMMAND mitcad-cli run "${scripts}/usdz_animation.json")
   set_tests_properties(cli.export_usdz_animation PROPERTIES WORKING_DIRECTORY "${usdz_animation}")
+  # Exports in a coordinate system's frame (mitcad#1775): a block written
+  # to STEP, IGES and STL in a frame at its corner and read back there.
+  set(coordinate_system "${CMAKE_CURRENT_BINARY_DIR}/coordinate-system")
+  file(MAKE_DIRECTORY "${coordinate_system}")
+  add_test(NAME cli.export_coordinate_system COMMAND mitcad-cli run "${scripts}/coordinate_system.json")
+  set_tests_properties(cli.export_coordinate_system PROPERTIES WORKING_DIRECTORY "${coordinate_system}")
   # The bodies in their components' coordinates (mitcad#19).
   add_test(NAME cli.export_component
     COMMAND mitcad-cli export "${exchange}/exchange.mitcad" "${exchange}/local-out.step"
@@ -1658,6 +1670,18 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# A chamfer as wide as the face beside it (mitcad#1783): an octagon prism's
+# feet on a disc whose rim runs through its corners, bevelled as wide as
+# the segments of the disc's top beside them, a little wider and narrower:
+# the segments taken away, the volumes the exact shapes'.
+if(BUILD_TESTING)
+  add_test(NAME cli.chamfer_takes_segment COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/chamfer_takes_segment.json")
+  if(WIN32)
+    set_property(TEST cli.chamfer_takes_segment APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
 # Parallel planes: the main plane gap and the separate closest-point
 # minimum, including a synthetic stepped shell (mitcad#1161).
 if(BUILD_TESTING)
@@ -2058,6 +2082,23 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# A contour corner where a flange's bend starts (mitcad#1765): Corner Round
+# and Corner Chamfer in the developed outline, through the bend and into the
+# panel's side beyond it, with the Flat Pattern's area; the edge between
+# the wall's and the bend's sides picked as that corner, and an ordinary
+# Fillet and Chamfer on it keeping the sheet; the edge `sheet_corner_edges`
+# gives for the stored corner (mitcad#1766).
+if(BUILD_TESTING)
+  foreach(name sheet_corner_beside_bend sheet_corner_beside_bend_fillet)
+    add_test(NAME cli.${name}
+      COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/${name}.json")
+    if(WIN32)
+      set_property(TEST cli.${name} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+  endforeach()
+endif()
+
 # The body geometry in sketch planes (mitcad#1656): two sketches'
 # plane_geometry answers, in the plane and out of it, over bodies of many
 # kinds, as the listing before mitcad#1656 gave them (enclosing boxes first,
@@ -2140,6 +2181,26 @@ if(BUILD_TESTING)
   add_test(NAME cli.f1_taper_curves COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/f1_taper_curves.json")
   if(WIN32)
     set_property(TEST cli.f1_taper_curves APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Annotations rolled back with the timeline (mitcad#1756), on the owner's
+# reported design under MITCAD_MITCAD_REPORTED (sketch-mode-overlays/,
+# copied into the build folder): with the marker right after the edited
+# sketch its material labels on later features' bodies are rolled back and
+# none is a warning; at the end none is rolled back (skipped without the
+# report's folder).
+if(BUILD_TESTING)
+  add_test(NAME cli.annotations_rolled_back_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/annotations-rolled-back-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/annotations-rolled-back-reported-test.cmake")
+  set_tests_properties(cli.annotations_rolled_back_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "annotations rolled back reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.annotations_rolled_back_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
 endif()

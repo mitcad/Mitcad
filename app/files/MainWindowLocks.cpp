@@ -124,6 +124,10 @@ bool MainWindow::readOnlyModelCommand(const QString& name) {
       QStringLiteral("delete_center_of_mass"),
       // View › Show of the whole design (mitcad#1287): display state.
       QStringLiteral("set_view_show"),
+      // The eyes of a component's folders (mitcad#1771): display state.
+      QStringLiteral("set_folder_visible"),
+      // Show Dimensions of a sketch's row (mitcad#1772): display state.
+      QStringLiteral("set_sketch_dimensions_shown"),
   };
   return allowed.contains(name);
 }

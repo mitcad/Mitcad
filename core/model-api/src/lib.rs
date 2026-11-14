@@ -158,8 +158,16 @@ mod sketch3d;
 mod design_review;
 // Filament changes and pauses at print heights (mitcad#1596).
 mod filament_changes;
+// CAM setups, operations, machines, toolpaths and G-code (mitcad#1013).
+mod cam;
+// The CNC spindle as a design, read into the CAM collision check's spindle
+// model (mitcad#1013).
+pub mod cam_spindle;
 // The design at a parameter's limits, tried on a copy (mitcad#1730).
 mod parameter_range;
+// The design and the files it refers to packed into a zip for a report
+// (mitcad#1795).
+mod design_package;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -587,6 +595,21 @@ named_enum! {
             #[serde(default)]
             sketches: Option<bool>,
         },
+        // The eye of a component's Bodies, Sketches or Construction folder
+        // (mitcad#1771, `document/display.rs`): the component by id or
+        // name, the root's when left out.
+        "set_folder_visible" => SetFolderVisible {
+            #[serde(default)]
+            component: Option<String>,
+            folder: mitcad_model::Folder,
+            visible: bool,
+        },
+        // Show Dimensions of a sketch's row (mitcad#1772,
+        // `document/display.rs`): its dimensions drawn outside sketch mode.
+        "set_sketch_dimensions_shown" => SetSketchDimensionsShown {
+            sketch: FeatureUid,
+            shown: bool,
+        },
         // A body drawn see-through (mitcad#1093).
         "set_body_transparent" => SetBodyTransparent {
             uid: BodyUid,
@@ -942,6 +965,12 @@ named_enum! {
             moving: mitcad_model::sheet::PanelId,
         },
         "sheet_bodies" => SheetBodies,
+        // The thickness edge each stored corner of Corner Round or Corner
+        // Chamfer lies on (mitcad#1766): an edit highlights them.
+        "sheet_corner_edges" => SheetCornerEdges {
+            body: BodyUid,
+            corners: Vec<mitcad_model::features::sheet_folded::SheetCorner>,
+        },
         // Design policy (mitcad#220, `policy.rs`): one owner's settings and
         // violations, every owner's, and whose geometry sketches may attach to.
         "policy" => Policy(policy::PolicyQuery),
@@ -1170,6 +1199,20 @@ named_enum! {
         },
         // Animate Joint's frames without a recompute (mitcad#1701, `joints.rs`).
         "joint_poses" => JointPoses(joints::JointPosesQuery),
+        // CAM (mitcad#1013, `cam.rs`): the setups with their operations'
+        // states, a setup's operations, its toolpaths computed now, its
+        // G-code, the design's machines, the dialects and the machine
+        // library's files.
+        "cam_setups" => CamSetups,
+        "cam_operations" => CamOperations(cam::OperationsQuery),
+        "cam_toolpaths" => CamToolpaths(cam::ToolpathsQuery),
+        "cam_post" => CamPost(cam::PostQuery),
+        "cam_machines" => CamMachines,
+        "cam_dialects" => CamDialects,
+        "cam_library" => CamLibrary(cam::LibraryQuery),
+        // The stock simulation (mitcad#1013, phase 3, `cam.rs`): a setup's
+        // program cut out of its stock on a height map.
+        "cam_simulate" => CamSimulate(cam::SimulateQuery),
         // The design at values of a parameter, tried on a copy (mitcad#1730,
         // `parameter_range.rs`).
         "parameter_range" => ParameterRange(parameter_range::ParameterRangeQuery),
@@ -1180,6 +1223,9 @@ named_enum! {
             #[serde(default)]
             base: Option<String>,
         },
+        // The design and the files it refers to written into a zip for a
+        // report (mitcad#1795, `design_package.rs`).
+        "design_package" => DesignPackage(design_package::DesignPackageQuery),
     }
 }
 
@@ -1291,6 +1337,29 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                         "construction": !hidden.construction,
                         "sketches": !hidden.sketches,
                     });
+                }
+                // The folders the components' own eyes hide (mitcad#1771),
+                // while one does: by component, each folder shown or not.
+                let folders = &self.display().folders;
+                if !folders.is_empty() {
+                    let mut shown = serde_json::Map::new();
+                    for (component, hidden) in folders {
+                        shown.insert(
+                            component.to_string(),
+                            json!({
+                                "bodies": !hidden.bodies,
+                                "sketches": !hidden.sketches,
+                                "construction": !hidden.construction,
+                            }),
+                        );
+                    }
+                    value["display"]["folders"] = Value::Object(shown);
+                }
+                // The sketches whose dimensions are drawn outside sketch
+                // mode (mitcad#1772), while there are any.
+                let sketch_dimensions = self.sketches_with_dimensions_shown();
+                if !sketch_dimensions.is_empty() {
+                    value["display"]["sketch_dimensions"] = json!(sketch_dimensions);
                 }
                 // A hybrid assembly allowed without asking (mitcad#171).
                 if self.hybrid_assembly() {
@@ -1540,15 +1609,18 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     .map_err(ApiError)?;
                 let mut answer = json!({"origin": plane.origin, "normal": plane.normal,
                     "occurrence": occurrence});
-                // The axis turned about (mitcad#823), in design coordinates.
-                if let (Some(reference), Some(axis)) =
-                    (&query.axis, self.section_axis(&query).map_err(ApiError)?)
-                {
-                    let axis_occurrence = self
-                        .analysis_axis_occurrence(reference, query.axis_occurrence.as_ref())
-                        .map_err(ApiError)?;
+                // The axis turned about (mitcad#823), in design coordinates:
+                // the Axis, else the axis of a face round about one or of a
+                // circular edge picked as the plane (mitcad#1769), which
+                // has no occurrence of its own.
+                if let Some(axis) = self.section_turn_axis(&query).map_err(ApiError)? {
                     answer["axis"] = json!({"origin": axis.origin, "direction": axis.direction});
-                    answer["axis_occurrence"] = json!(axis_occurrence);
+                    if let Some(reference) = &query.axis {
+                        let axis_occurrence = self
+                            .analysis_axis_occurrence(reference, query.axis_occurrence.as_ref())
+                            .map_err(ApiError)?;
+                        answer["axis_occurrence"] = json!(axis_occurrence);
+                    }
                 }
                 answer
             }
@@ -1643,6 +1715,9 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 .sheet_seam_json(body, stationary, moving)
                 .map_err(ApiError)?,
             Query::SheetBodies => self.sheet_bodies_json(),
+            Query::SheetCornerEdges { body, corners } => self
+                .sheet_corner_edges_json(body, &corners)
+                .map_err(ApiError)?,
             Query::Policy(query) => self.policy_query_json(&query)?,
             Query::Policies => self.policies_json()?,
             Query::SketchSupports(query) => self.sketch_supports_json(&query)?,
@@ -1818,10 +1893,22 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::PlaneGeometryKey { sketch } => self.plane_geometry_key_json(sketch)?,
             // Animate Joint's frames without a recompute (mitcad#1701).
             Query::JointPoses(query) => self.joint_poses_json(&query)?,
+            // CAM (mitcad#1013).
+            Query::CamSetups => self.cam_setups_json(),
+            Query::CamOperations(query) => cam::operations(self, &query)?,
+            Query::CamToolpaths(query) => cam::toolpaths(self, &query)?,
+            Query::CamPost(query) => cam::post(self, &query)?,
+            Query::CamMachines => self.cam_machines_json(),
+            Query::CamDialects => cam::dialects(),
+            Query::CamLibrary(query) => cam::library_json(self, &query),
+            // The stock simulation (mitcad#1013, phase 3).
+            Query::CamSimulate(query) => cam::simulate(self, query)?,
             // The design at values of a parameter, on a copy (mitcad#1730).
             Query::ParameterRange(query) => parameter_range::query(self, &query)?,
             // Whether a link to a file would be followed (mitcad#1719).
             Query::LinkCheck { path, base } => components::link_check_json(&path, base.as_deref())?,
+            // The design packed into a zip for a report (mitcad#1795).
+            Query::DesignPackage(query) => design_package::query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2647,6 +2734,23 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 sketches,
             } => {
                 self.set_view_show(origins, construction, sketches)?;
+                json!({})
+            }
+            Command::SetFolderVisible {
+                component,
+                folder,
+                visible,
+            } => {
+                let component = component
+                    .as_deref()
+                    .map(|c| self.component_ref(c))
+                    .transpose()?
+                    .unwrap_or(mitcad_model::ids::ComponentUid::ROOT);
+                self.set_folder_visible(component, folder, visible)?;
+                json!({})
+            }
+            Command::SetSketchDimensionsShown { sketch, shown } => {
+                self.set_sketch_dimensions_shown(sketch, shown)?;
                 json!({})
             }
         })

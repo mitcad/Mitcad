@@ -4,12 +4,13 @@
 # (tools/testrun, mitcad#790; with the build's programs: build\dev\ on
 # Windows, build/dev/core/ on Linux and macOS) and the file managers'
 # thumbnailer mitcad-thumbnailer (thumbnailer/, mitcad#1539; the Linux
-# AppImage carries it, cmake/AppImage.cmake). On Windows also the static
-# library mitcad_thumbnailer_capi (thumbnailer-capi/, mitcad#1695): the
-# thumbnailer's C ABI, which Explorer's thumbnail handler links
-# (app/thumbnails).
+# AppImage carries it, cmake/AppImage.cmake). On Windows and macOS also the
+# static library mitcad_thumbnailer_capi (thumbnailer-capi/, mitcad#1695):
+# the thumbnailer's C ABI, which Explorer's thumbnail handler
+# (app/thumbnails) and the Finder's Quick Look extension (mitcad#1696,
+# cmake/MacQuickLook.cmake) link.
 set(mitcad_rust_crates mitcad-ffi mitcad-update mitcad-testrun mitcad-thumbnailer)
-if(WIN32)
+if(WIN32 OR APPLE)
   list(APPEND mitcad_rust_crates mitcad-thumbnailer-capi)
 endif()
 corrosion_import_crate(MANIFEST_PATH Cargo.toml CRATES ${mitcad_rust_crates})
@@ -18,11 +19,11 @@ if(MITCAD_RUST_CACHE_ENVIRONMENT)
   corrosion_set_env_vars(mitcad-release ${MITCAD_RUST_CACHE_ENVIRONMENT})
   corrosion_set_env_vars(mitcad-testrun ${MITCAD_RUST_CACHE_ENVIRONMENT})
   corrosion_set_env_vars(mitcad-thumbnailer ${MITCAD_RUST_CACHE_ENVIRONMENT})
-  if(WIN32)
+  if(WIN32 OR APPLE)
     corrosion_set_env_vars(mitcad_thumbnailer_capi ${MITCAD_RUST_CACHE_ENVIRONMENT})
   endif()
 endif()
-if(WIN32)
+if(WIN32 OR APPLE)
   target_include_directories(mitcad_thumbnailer_capi INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/thumbnailer-capi/include")
 endif()
@@ -674,6 +675,27 @@ if(BUILD_TESTING)
   # The file managers' thumbnailer of designs (mitcad#1539; no OCCT, no
   # Qt): the preview of a design saved with one, at the sizes asked for.
   mitcad_cargo_test(core.thumbnailer mitcad-thumbnailer)
+  # CAM: the 2.5-axis operations' toolpaths, the machine check and the
+  # post-processors' golden G-code (mitcad#1013; no OCCT).
+  mitcad_cargo_test(core.cam mitcad-cam)
+  # CAM setups, operations and machines in the design, its file and the
+  # api, on the mock kernel (mitcad#1013, core/model-tests/cam).
+  mitcad_cargo_test(core.model.cam mitcad-model-tests-cam)
+  # The posts' G-code run through the controllers' own code
+  # (core/cam/tests/controller_sim.rs, ignored in core.cam): grbl 1.1's
+  # parser and planner on the host (MITCAD_GRBL_SIM) and grblHAL's
+  # simulator (MITCAD_GRBLHAL_SIM), both GPL programs run apart, never
+  # linked; skipped without the variable (docs/cam.md, "Simulation and
+  # checks").
+  foreach(sim grbl grblhal)
+    add_test(NAME core.cam_${sim}_sim
+      COMMAND "${CMAKE_COMMAND}" "-DLIST=${CMAKE_CURRENT_BINARY_DIR}/cargo-test/tests-debug.tsv"
+              "-DTEST_NAME=core.cam_${sim}_sim"
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/cargo-tests.cmake" -- run mitcad-cam ${sim}_sim:: --ignored
+              --nocapture --test-threads=1)
+    set_tests_properties(core.cam_${sim}_sim PROPERTIES FIXTURES_REQUIRED cargo_tests_debug
+      SKIP_REGULAR_EXPRESSION "the controller simulator: skipped" TIMEOUT 1200)
+  endforeach()
 
   # The fixtures that build the test binaries, and the documentation tests
   # (cargo with the fixture's packages, so that it builds nothing again).

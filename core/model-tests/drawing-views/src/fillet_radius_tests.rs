@@ -3,7 +3,8 @@
 //! (mitcad#1694) on the mock kernel: the fillet's torus face offers its
 //! outline's arc either side of its axis, a click with the Dimension
 //! tool's Auto on either picks that arc (not the end of an edge merely
-//! within reach) and makes a radius of the fillet's.
+//! within reach) and makes a radius of the fillet's; its arrow sits on its
+//! leader wherever its text is placed (mitcad#1770).
 
 use serde_json::{Value, json};
 
@@ -215,4 +216,146 @@ fn a_fillet_seen_from_the_side_is_dimensioned_on_either_side_by_auto() {
         )
         .expect_err("a torus face without its side");
     assert!(error.to_string().contains("side of its axis"), "{error}");
+}
+
+/// The drawn items of annotation `id` on the sheet.
+fn drawn(doc: &Document<MockKernel>, id: &Value) -> Vec<Value> {
+    let group = format!("A{id}");
+    sheet(doc)["groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == group.as_str())
+        .unwrap_or_else(|| panic!("no group {group}"))["items"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+fn length(a: [f64; 2]) -> f64 {
+    a[0].hypot(a[1])
+}
+
+fn unit(a: [f64; 2]) -> [f64; 2] {
+    let l = length(a);
+    [a[0] / l, a[1] / l]
+}
+
+fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+#[test]
+fn a_fillets_radius_arrow_sits_on_its_leader_wherever_its_text_is() {
+    // mitcad#1770 (GitHub #323): the radius of the fillet between the boss
+    // and the flange, picked on either side, its text placed in each
+    // quadrant round the arc's centre: in the arc's sweep (out over the
+    // corner it rounds), on its hollow side (up and out, where the report
+    // had it) and beyond either end. The sheet draws one arrow, its tip on
+    // the arc (within 0.01 sheet mm) at the end of the leader from the
+    // text, pointing along the leader's last segment (within half a
+    // degree).
+    let (mut doc, _) = turned();
+    let tube = BOSS + FILLET;
+    let off = FILLET * std::f64::consts::FRAC_1_SQRT_2;
+    let cos_half_degree = 0.5_f64.to_radians().cos();
+    // Each side: a point on its arc, its centre, and its sweep (degrees,
+    // counter-clockwise on the sheet): on the right from the boss's side
+    // (180) down to the flange's (270), on the left from the flange's
+    // (270) round to the boss's (360).
+    for (on_arc, center, sweep) in [
+        ([tube - off, tube - off], [tube, tube], (180.0, 270.0)),
+        ([-tube + off, tube - off], [-tube, tube], (270.0, 360.0)),
+    ] {
+        let at = on_front(&doc, on_arc);
+        let picked = query(
+            &doc,
+            json!({"query": "drawing_pick", "drawing": "D1", "view": 1, "at": at,
+                   "type": "radius"}),
+        );
+        let c = on_front(&doc, center);
+        for degrees in [45.0_f64, 135.0, 225.0, 315.0, 20.0, 110.0, 200.0, 290.0] {
+            let (s, co) = degrees.to_radians().sin_cos();
+            let text_at = [c[0] + 12.0 * co, c[1] + 12.0 * s];
+            let case = format!("sweep {sweep:?}, text at {degrees} degrees");
+            let added = command(
+                &mut doc,
+                json!({"cmd": "add_drawing_annotation", "drawing": "D1", "view": 1,
+                       "type": "radius", "picks": [picked["pick"]], "at": text_at}),
+            );
+            let id = added["annotation"].clone();
+            let entry = annotation(&doc, &id);
+            assert_eq!(entry["broken"], false, "{case}: {entry}");
+            assert!(
+                near(entry["value"].as_f64().unwrap(), FILLET),
+                "{case}: {entry}"
+            );
+            let items = drawn(&doc, &id);
+            let arrows: Vec<Vec<[f64; 2]>> = items
+                .iter()
+                .filter_map(|i| i.get("fill"))
+                .map(|f| f.as_array().unwrap().iter().map(point).collect())
+                .collect();
+            assert_eq!(arrows.len(), 1, "{case}: one arrow: {items:?}");
+            let tip = arrows[0][0];
+            let base = [
+                (arrows[0][1][0] + arrows[0][2][0]) / 2.0,
+                (arrows[0][1][1] + arrows[0][2][1]) / 2.0,
+            ];
+            let along = unit(sub(tip, base));
+            // Its tip on the arc.
+            let r = sub(tip, c);
+            assert!(
+                (length(r) - FILLET).abs() < 0.01,
+                "{case}: the tip {tip:?} is off the arc's circle"
+            );
+            let angle = r[1].atan2(r[0]).to_degrees();
+            assert!(
+                (angle - sweep.0 + 1e-6).rem_euclid(360.0) <= sweep.1 - sweep.0 + 2e-6,
+                "{case}: the tip at {angle} degrees is off the arc"
+            );
+            // The one line that ends at the tip: the leader's last
+            // segment, along the arrow towards the arc.
+            let ending: Vec<[f64; 2]> = items
+                .iter()
+                .filter_map(|i| i.get("line"))
+                .filter_map(|l| {
+                    let (a, b) = (point(&l[0]), point(&l[1]));
+                    if length(sub(b, tip)) < 1e-9 {
+                        Some(a)
+                    } else if length(sub(a, tip)) < 1e-9 {
+                        Some(b)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(ending.len(), 1, "{case}: {items:?}");
+            let from = ending[0];
+            assert!(
+                dot(unit(sub(tip, from)), along) >= cos_half_degree,
+                "{case}: the arrow {along:?} is not along the leader's last segment \
+                 {from:?}-{tip:?}"
+            );
+            // That leader reaches the text: straight, or through a bend.
+            let reaches = length(sub(from, text_at)) < 1e-6
+                || items.iter().filter_map(|i| i.get("line")).any(|l| {
+                    let (a, b) = (point(&l[0]), point(&l[1]));
+                    (length(sub(a, text_at)) < 1e-6 && length(sub(b, from)) < 1e-9)
+                        || (length(sub(b, text_at)) < 1e-6 && length(sub(a, from)) < 1e-9)
+                });
+            assert!(
+                reaches,
+                "{case}: the leader does not reach the text: {items:?}"
+            );
+            command(
+                &mut doc,
+                json!({"cmd": "delete_drawing_annotation", "drawing": "D1", "annotation": id}),
+            );
+        }
+    }
 }

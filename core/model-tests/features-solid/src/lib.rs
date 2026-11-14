@@ -24,3 +24,5 @@ mod thread_end_tests;
 mod same_surface_join_tests;
 // Circular Pattern about two axes; copies that add nothing (mitcad#1588).
 mod two_axis_pattern_tests;
+// Coordinate System: frames at a point and exports in them (mitcad#1775).
+mod coordinate_system_tests;

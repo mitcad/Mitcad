@@ -578,7 +578,6 @@ bool captureOwnWindows(const QString& path, QRectF* capturedBounds) {
   return saved;
 }
 
-#ifdef MITCAD_MAC_UI
 bool chooseTestPopup(const QString& title, const std::function<void()>& open,
                      const std::function<bool()>& qtPopupVisible, QString& error,
                      const std::function<void()>& nativeClosed) {
@@ -643,6 +642,7 @@ bool chooseTestPopup(const QString& title, const std::function<void()>& open,
   return true;
 }
 
+#ifdef MITCAD_MAC_UI
 void showAboutPanel(const QString& credits) {
   NSMutableDictionary* options = [NSMutableDictionary dictionary];
   // The program's name, not the application name "Mitcad" that keys the

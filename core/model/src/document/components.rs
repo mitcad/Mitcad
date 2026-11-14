@@ -282,7 +282,15 @@ impl<K: Kernel> Document<K> {
                         .get(&i.body)
                         .cloned()
                         .unwrap_or_else(|| i.body.to_string()),
-                    visible: i.visible && attributes.is_none_or(|b| b.visible),
+                    // A component's Bodies folder hidden by its eye hides
+                    // them all, their own light bulbs as they are
+                    // (mitcad#1771).
+                    visible: i.visible
+                        && attributes.is_none_or(|b| b.visible)
+                        && self
+                            .state
+                            .display
+                            .folder_shown(i.component, super::display::Folder::Bodies),
                     // A component's transparency applies to its contents,
                     // its sub-components included (mitcad#1093).
                     transparent: attributes.is_some_and(|b| b.transparent)

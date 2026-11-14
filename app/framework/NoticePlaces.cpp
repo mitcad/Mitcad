@@ -47,6 +47,10 @@ QString placesText(const QJsonArray& places) {
       parts << QStringLiteral("occurrence %1").arg(place.value(QStringLiteral("path")).toString());
       continue;
     }
+    if (kind == QStringLiteral("joint")) {
+      parts << QStringLiteral("joint %1").arg(place.value(QStringLiteral("feature")).toString());
+      continue;
+    }
     // A face's, an edge's or a vertex's body; a region's sketch (mitcad#1334).
     const QString body = place.value(QStringLiteral("body")).toString();
     const QString owner = body.isEmpty() ? place.value(QStringLiteral("sketch")).toString() : body;

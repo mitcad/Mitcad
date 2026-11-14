@@ -83,6 +83,13 @@ struct BrowserNode {
     // rows, sketch empty), each with the sketches it uses under it (Sketch
     // rows whose `feature` is that feature).
     Features,
+    // CAM (mitcad#1013): the root's CAM folder, its setups (uid: the
+    // setup's id) and their operations in order (uid: the operation's id,
+    // camSetup: its setup's id). A setup's eye shows and hides its
+    // toolpaths in the view.
+    CamFolder,
+    CamSetup,
+    CamOperation,
   };
 
   Type type = Type::None;
@@ -108,13 +115,17 @@ struct BrowserNode {
   // (mitcad#1700): its eye is off whatever `visible` says (dimmed when only
   // the isolation hides it), and a click adds it to the isolation.
   bool isolatedOut = false;
+  // A CAM operation's row: its setup's id; its state (up_to_date,
+  // out_of_date, not_generated, suppressed).
+  QString camSetup;
+  QString camState;
 
   bool isValid() const { return type != Type::None; }
   bool isFolder() const {
     return type == Type::Bodies || type == Type::Sketches || type == Type::Construction ||
            type == Type::Origin || type == Type::Analyses || type == Type::Joints ||
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
-           type == Type::ImageReferences || type == Type::Features;
+           type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -207,13 +218,16 @@ public:
   // these bodies, sketches and occurrences (Body, Sketch and Component
   // items, by uid and occurrence path; a sketch's rows in every occurrence
   // when none is the item's) get a secondary mark, an outline of the accent
-  // colour without the selection's fill, in either layout and background.
-  // They are not selected: Delete and the row menus act on the selected
-  // rows alone. With scroll, when the marks changed and no selected or
-  // marked row is in sight, the tree scrolls to the row of the last body or
-  // sketch given (else of the last occurrence), opening its folded parents.
-  // Kept over rebuilds; an empty list takes them away. Logged when they
-  // change: "Browser owner marks: Root/Bodies/Body1, Root/Sketches/Sketch2"
+  // colour without the selection's fill, in either layout and background;
+  // so do the folders on each marked body's or sketch's path up to its
+  // component's row (mitcad#1792: Bodies, Sketches, Construction,
+  // Features), open or folded. They are not selected: Delete and the row
+  // menus act on the selected rows alone. With scroll, when the marks
+  // changed and no selected or marked row (a folder aside) is in sight,
+  // the tree scrolls to the row of the last body or sketch given (else of
+  // the last occurrence), opening its folded parents. Kept over rebuilds;
+  // an empty list takes them away. Logged when they change: "Browser owner
+  // marks: Root/Bodies, Root/Bodies/Body1, Root/Sketches, Root/Sketches/Sketch2"
   // (sorted), "Browser owner marks: none"; a scroll as showSelection's,
   // "Browser scrolled to <path>".
   void setOwnerMarks(const Selection& owners, bool scroll = true);
@@ -359,6 +373,12 @@ signals:
   // (`pinned` false) or it was clicked; `anchor` is the badge in global
   // coordinates. The controller shows the row's bindings card.
   void bindingsRequested(const mitcad::BrowserNode& node, const QRect& anchor, bool pinned);
+  // CAM (mitcad#1013): a CAM operation's row dragged onto another
+  // operation's row or a setup's row (Browser CAM drop: …), and the
+  // operation whose row is selected (0: none) after the rows' selection
+  // changed.
+  void camOperationDropped(const mitcad::BrowserNode& source, const mitcad::BrowserNode& target);
+  void camOperationSelected(int operation);
   // The rows' looks changed in place, without a rebuild (mitcad#1352): the
   // Make markers (setMakeMarkers) or an analysis row's note
   // (setAnalysisNotes). Another presentation reads presentationRows again.
@@ -470,6 +490,8 @@ private:
   QString m_loggedOwnerMarks = QStringLiteral("none"); // the marked rows' paths, as last logged
   // The rows logged last as left out by Isolate, by path (mitcad#1700).
   QSet<QString> m_loggedIsolatedOut;
+  // The CAM rows' states as last logged ("Browser CAM: …", mitcad#1013).
+  QString m_loggedCam;
   QSet<QString> m_shownSelection;  // what showSelection last selected (items and features)
   QSet<QString> m_foldedSelection; // the selection Collapse All left; showSelection does not reveal it again
   bool m_building = false;

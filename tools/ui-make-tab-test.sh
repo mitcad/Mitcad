@@ -17,8 +17,9 @@
 #     moved commands (Modify without Edit Materials…, Inspect without Print
 #     Analysis, Sheet Metal without Export Flat Pattern…, Render with Render
 #     Image… alone).
-#   - The Make tab's groups Materials, Annotate, 3D Print and Laser with
-#     their menus; no CNC group.
+#   - The Make tab's groups Materials, Annotate, 3D Print, CNC and Laser
+#     with their menus (CNC's commands listed, those that need a setup
+#     disabled, mitcad#1013).
 #   - Each moved command run from its new place: Edit Materials…,
 #     Printers… and Processes… (mitcad#1135), Print Analysis, Send to Slicer (once 3D
 #     Print) and Export Flat Pattern… (its DXF written); Export Face as
@@ -214,11 +215,9 @@ echo "--- The Make tab and its groups"
 ui_mark
 ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
 ui_expect_new "Ribbon tab shown: MAKE" "the Make tab shown"
-for group in MATERIALS ANNOTATE "3D PRINT" LASER; do
+for group in MATERIALS ANNOTATE "3D PRINT" CNC LASER; do
   ui_expect_new "Ribbon MAKE/$group at" "its $group group"
 done
-grep -F "Ribbon MAKE/CNC" "$UI_LOG" && ui_fail "a CNC group without commands"
-echo "ok   no CNC group"
 ui_expect_new "Browser Make markers: Root/Bodies/Body2: Own print settings: Walls" \
   "the Browser marks Body2, which sets Walls of its own"
 grep -F "Browser Make markers: " "$UI_LOG" | tail -1 | grep -qF "Body1" && ui_fail "Body1 marked"
@@ -227,6 +226,8 @@ group_menu "MAKE/MATERIALS" "Edit Materials… | Material"
 group_menu "MAKE/ANNOTATE" \
   "Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations…"
 group_menu "MAKE/3D PRINT" "Print Analysis | Send to Slicer | Printers… | Processes… | Plates…"
+group_menu "MAKE/CNC" \
+  "New Setup | - | Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill | 3D Roughing | Raster Finishing | Waterline Finishing | - | Generate | Simulate | Post Process… | - | Machines and Tools…"
 group_menu "MAKE/LASER" "Export Flat Pattern… | Export Face as DXF…"
 
 echo "--- The moved commands from their new places"
@@ -606,7 +607,7 @@ ui_start_app --open "$WORK/make.mitcad" --no-native-dialogs --chrome=docked
 ui_expect_log "Ribbon tab MAKE at" "the Make tab in the Docked layout"
 ui_mark
 ui_step "the Make tab"                     ui_click_logged "Ribbon tab MAKE"
-for group in MATERIALS ANNOTATE "3D PRINT" LASER; do
+for group in MATERIALS ANNOTATE "3D PRINT" CNC LASER; do
   ui_expect_new "Ribbon MAKE/$group at" "its $group group, Docked"
 done
 ui_mark

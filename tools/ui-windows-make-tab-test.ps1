@@ -12,7 +12,8 @@
 # counterbored hole (Body2) that sets Walls 5 of its own; the design prints
 # with the printer Bench and the process Standard.
 #   1. The tabs Solid, Build and Make; the Make tab's groups Materials,
-#      Annotate, 3D Print and Laser, their menus; no CNC group. The Browser
+#      Annotate, 3D Print, CNC and Laser, their menus (CNC's commands
+#      listed, those that need a setup disabled). The Browser
 #      marks Body2 on the Make tab.
 #   2. The moved commands from the Make tab's buttons: Edit Materials...,
 #      Printers... and Processes... (mitcad#1135), Print Analysis, Send to Slicer and
@@ -205,14 +206,14 @@ Ui-ExpectLog 'Ribbon tab MAKE at' 'the Make tab after Solid and Build'
 Ui-Mark
 Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
 Ui-ExpectNew 'Ribbon tab shown: MAKE' 'the Make tab shown'
-foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'LASER') {
+foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'CNC', 'LASER') {
   Ui-ExpectNew "Ribbon MAKE/$group at" "its $group group"
 }
-if (Ui-LastLineWith 'Ribbon MAKE/CNC') { Ui-Fail 'a CNC group without commands' }
 Ui-ExpectNew 'Browser Make markers: Root/Bodies/Body2: Own print settings: Walls' 'Body2 marked'
 Group-Menu 'MAKE/MATERIALS' 'Edit Materials... | Material'
 Group-Menu 'MAKE/ANNOTATE' 'Dimension | Note | Datum Label | Feature Control Frame | Hole Callout | Material | Process Note | - | Annotations...'
 Group-Menu 'MAKE/3D PRINT' 'Print Analysis | Send to Slicer | Printers... | Processes... | Plates...'
+Group-Menu 'MAKE/CNC' 'New Setup | - | Facing | Contour | Pocket | Adaptive Clearing | Rest Machining | Drill | 3D Roughing | Raster Finishing | Waterline Finishing | - | Generate | Simulate | Post Process... | - | Machines and Tools...'
 Group-Menu 'MAKE/LASER' 'Export Flat Pattern... | Export Face as DXF...'
 
 Write-Host '--- 2. The moved commands from their new places'
@@ -488,7 +489,7 @@ Ui-StartApp 'make-tab-floating' @('--open', $design, '--chrome=floating')
 Ui-ExpectLog 'Ribbon tab MAKE at' 'the Make tab in the Floating layout'
 Ui-Mark
 Ui-Step 'the Make tab'                     { Ui-ClickLogged 'Ribbon tab MAKE' }
-foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'LASER') {
+foreach ($group in 'MATERIALS', 'ANNOTATE', '3D PRINT', 'CNC', 'LASER') {
   Ui-ExpectNew "Ribbon MAKE/$group at" "its $group group, Floating"
 }
 Ui-Mark

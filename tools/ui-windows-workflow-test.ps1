@@ -270,7 +270,7 @@ $step = Join-Path $work 'block.step'
 Ui-Mark
 Ui-Step 'export (F9)'                    { Ui-Key 'F9' }
 Ui-Step 'type the path'                  { Type-Into-Dialog '^Export$' $step }
-Ui-ExpectNew "Exported ${step}: step, 1 body(ies)" 'the body written as STEP'
+Ui-ExpectNew "Exported ${step}: step, 1 body" 'the body written as STEP'
 if (-not (Test-Path $step)) { Ui-Fail 'no STEP file' }
 Write-Host '--- Export a web page (mitcad#423)'
 $html = Join-Path $work 'block.html'

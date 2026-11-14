@@ -3,7 +3,8 @@
 // model (commands.md, "construction_plane, construction_axis,
 // construction_point"), one command each in the menu. They share
 // one shape: a definition type with references and values, so they are
-// made from a table.
+// made from a table. Coordinate System (mitcad#1775) has a command of its
+// own at the end.
 #include "Commands.hpp"
 
 #include <cmath>
@@ -12,6 +13,7 @@
 
 #include <QDebug>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/ModelShapes.hpp"
@@ -35,6 +37,7 @@ enum class Field {
   Distance, // a length
   Angle,    // an angle
   Along,    // a fraction of a path, or a length along it
+  Offset,   // a length along the plane's normal, none when 0 (mitcad#1779)
 };
 
 struct FieldSpec {
@@ -75,7 +78,8 @@ const std::vector<Spec>& specs() {
        "construction_plane", "tangent",
        {{"face", QT_TRANSLATE_NOOP("QObject", "Face"), Field::Tangent},
         {"angle", QT_TRANSLATE_NOOP("QObject", "Angle"), Field::Angle},
-        {"plane", QT_TRANSLATE_NOOP("QObject", "Reference Plane"), Field::Plane}}},
+        {"plane", QT_TRANSLATE_NOOP("QObject", "Reference Plane"), Field::Plane},
+        {"offset", QT_TRANSLATE_NOOP("QObject", "Offset"), Field::Offset}}},
       {"construct.midplane", QT_TRANSLATE_NOOP("QObject", "Midplane"), "plane-mid",
        QT_TRANSLATE_NOOP("QObject", "A plane halfway between two planes"),
        "construction_plane", "midplane",
@@ -97,7 +101,8 @@ const std::vector<Spec>& specs() {
        QT_TRANSLATE_NOOP("QObject", "A plane touching a face where it is nearest to a point"),
        "construction_plane", "tangent_at_point",
        {{"face", QT_TRANSLATE_NOOP("QObject", "Face"), Field::Face},
-        {"point", QT_TRANSLATE_NOOP("QObject", "Point"), Field::Point}}},
+        {"point", QT_TRANSLATE_NOOP("QObject", "Point"), Field::Point},
+        {"offset", QT_TRANSLATE_NOOP("QObject", "Offset"), Field::Offset}}},
       {"construct.plane_along_path", QT_TRANSLATE_NOOP("QObject", "Plane Along Path"), "plane-path",
        QT_TRANSLATE_NOOP("QObject", "A plane across a path, part way along it"),
        "construction_plane", "along_path",
@@ -182,7 +187,46 @@ const std::vector<Spec>& specs() {
 }
 
 bool isSelection(Field kind) {
-  return kind != Field::Distance && kind != Field::Angle && kind != Field::Along;
+  return kind != Field::Distance && kind != Field::Angle && kind != Field::Along && kind != Field::Offset;
+}
+
+// Whether a value's text is a plain zero ("0", "0 mm", "-0.0 in"): a
+// tangent plane's offset is then left out of the definition (mitcad#1779),
+// so that the plane is saved as one without it.
+bool plainZero(const QString& text) {
+  static const QRegularExpression zero(QStringLiteral(R"(^\s*[-+]?(0+\.?0*|\.0+)\s*[A-Za-z"]*\s*$)"));
+  return text.trimmed().isEmpty() || zero.match(text).hasMatch();
+}
+
+// Where a tangent plane touches its face, and the normal there before Flip,
+// from the shown preview (CommandDef::previewReported): the previewed plane
+// moved back by its offset, for the offset's arrow (mitcad#1779). Nothing to
+// compute again.
+const QString kTouch = QStringLiteral("tangent_touch");
+
+bool keepTouch(QJsonObject& report, CommandState& state) {
+  QJsonObject touch;
+  const QJsonObject datum = report.value(QStringLiteral("datum")).toObject();
+  const QJsonArray origin = datum.value(QStringLiteral("origin")).toArray();
+  const QJsonArray normal = datum.value(QStringLiteral("normal")).toArray();
+  if (origin.size() == 3 && normal.size() == 3) {
+    double offset = state.value(QStringLiteral("offset"));
+    if (!std::isfinite(offset)) {
+      offset = 0.0;
+    }
+    const double sign = state.checked(QStringLiteral("flip")) ? -1.0 : 1.0;
+    QJsonArray at;
+    QJsonArray along;
+    for (int i = 0; i < 3; ++i) {
+      const double n = sign * normal.at(i).toDouble();
+      along.append(n);
+      at.append(origin.at(i).toDouble() - offset * n);
+    }
+    touch.insert(QStringLiteral("origin"), at);
+    touch.insert(QStringLiteral("normal"), along);
+  }
+  state.setObject(kTouch, touch);
+  return false;
 }
 
 InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
@@ -243,6 +287,9 @@ InputDef fieldInput(const FieldSpec& field, const CommandContext& context) {
     return valueInput(key, name, ValueKind::Length, QStringLiteral("10 mm"));
   case Field::Angle:
     return valueInput(key, name, ValueKind::Angle, QStringLiteral("45 deg"));
+  case Field::Offset:
+    return valueInput(key, name, ValueKind::Length, QStringLiteral("0 mm"))
+        .withTooltip(QObject::tr("Moves the plane along its normal: away from the face, or into it when negative"));
   case Field::Along:
     break;
   }
@@ -480,6 +527,15 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
   def.featureType = QString::fromLatin1(spec.featureType);
   const QString type = QString::fromLatin1(spec.type);
   const bool plane = def.featureType == QStringLiteral("construction_plane");
+  // The menu's sections (mitcad#1778): the planes, the axes, the points,
+  // as the table lists them.
+  if (plane) {
+    def.section = QStringLiteral("planes");
+  } else if (def.featureType == QStringLiteral("construction_axis")) {
+    def.section = QStringLiteral("axes");
+  } else {
+    def.section = QStringLiteral("points");
+  }
   const QString base = firstSelection(spec);
   for (const FieldSpec& field : spec.fields) {
     InputDef input = fieldInput(field, context);
@@ -505,6 +561,21 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
         }
         return arrow(*center, frame->normal);
       });
+    } else if (field.kind == Field::Offset) {
+      // An arrow along the plane's normal from where it touches the face,
+      // as Offset Plane's distance has (mitcad#1779).
+      input.withManipulator([](const CommandState& state, const CommandContext&) -> std::optional<Manipulator> {
+        const QJsonObject touch = state.object(kTouch);
+        if (touch.isEmpty()) {
+          return std::nullopt; // no preview shown yet
+        }
+        const gp_Vec normal = vectorOf(touch.value(QStringLiteral("normal")));
+        if (normal.Magnitude() < 1e-9) {
+          return std::nullopt;
+        }
+        return arrow(pointOf(touch.value(QStringLiteral("origin"))), gp_Dir(normal));
+      });
+      def.previewReported = keepTouch;
     } else if (field.kind == Field::Angle) {
       // A ring about the line (or the face's axis).
       input.withManipulator([base](const CommandState& state,
@@ -615,6 +686,11 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
       case Field::Angle:
         definition.insert(key, state.expression(key));
         break;
+      case Field::Offset:
+        if (!plainZero(state.expression(key))) {
+          definition.insert(key, state.expression(key));
+        }
+        break;
       case Field::Along:
         if (state.checked(QStringLiteral("physical"))) {
           definition.insert(key, state.expression(QStringLiteral("length")));
@@ -658,6 +734,7 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
       switch (field.kind) {
       case Field::Distance:
       case Field::Angle:
+      case Field::Offset: // none: the input's 0 mm
         loadValue(state, key, slot, feature, context);
         break;
       case Field::Along:
@@ -783,12 +860,188 @@ CommandDef construction(const Spec& spec, const CommandContext& context) {
   return def;
 }
 
+// ---------------------------------------------------------------------------
+// Coordinate System (mitcad#1775): a frame at a point with its axes along
+// edges, axes or faces (commands.md, "coordinate_system").
+
+// What gives an axis's direction: an axis, a straight or circular edge, a
+// sketch line, a cylinder, cone or torus face, a plane or a planar face.
+bool givesDirection(const SelectionItem& item) {
+  return isAxial(item) || isPlanar(item);
+}
+
+InputDef directionInput(const QString& key, const QString& label, const QString& tooltip) {
+  return selectionInput(key, label, kAxisKinds | SelectKind::Plane, 0, 1)
+      .withTooltip(tooltip)
+      .withAccepts(givesDirection);
+}
+
+// Why a pick cannot be used: geometry of another component than the
+// coordinate system's own, which it reads only in its component (empty
+// when it can).
+QString foreignPick(const SelectionItem& item, const DatumHome& home, const CommandContext& context) {
+  QString component;
+  if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
+    component = occurrenceComponent(item.occurrence, context);
+  } else if (onDatumOrSketch(item)) {
+    static const QStringList originDatums = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
+                                             QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z"),
+                                             QStringLiteral("origin")};
+    if (originDatums.contains(item.owner)) {
+      return QString();
+    }
+    try {
+      component = context
+                      .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                    {QStringLiteral("uid"), item.owner}})
+                      .value(QStringLiteral("component"))
+                      .toString(QStringLiteral("C0"));
+    } catch (const std::exception&) {
+      return QString(); // left to the model
+    }
+  }
+  if (component.isEmpty() || component == home.component) {
+    return QString();
+  }
+  return QObject::tr("Select geometry of %1 itself.").arg(componentName(home.component, context));
+}
+
+CommandDef coordinateSystem(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("construct.coordinate_system");
+  def.name = QObject::tr("Coordinate System");
+  def.icon = QStringLiteral("coordinate-system");
+  def.tooltip = QObject::tr("A frame at a point with its axes along edges, for sketches, joints and exports");
+  def.group = QStringLiteral("CONSTRUCT");
+  def.keywords = {QStringLiteral("frame"), QStringLiteral("triad"), QStringLiteral("ucs"),
+                  QStringLiteral("datum"), QStringLiteral("construction")};
+  def.featureType = QStringLiteral("coordinate_system");
+  def.inputs = {
+      selectionInput(QStringLiteral("origin"), QObject::tr("Origin"), kPointKinds | SelectKind::Edge, 1, 1)
+          .withTooltip(QObject::tr("A vertex, a point, a circle's center or a sketch point"))
+          .withAccepts([](const SelectionItem& item) { return item.kind != SelectKind::Edge || isCircular(item); }),
+      directionInput(QStringLiteral("z_axis"), QObject::tr("Z Axis"),
+                     QObject::tr("An edge, an axis, a plane (its normal) or a cylinder (its axis); the "
+                                 "component's Z when empty")),
+      flipInput(QStringLiteral("flip_z"), QObject::tr("Flip Z")).withTooltip(QObject::tr("Turn the Z axis round")),
+      directionInput(QStringLiteral("x_axis"), QObject::tr("X Axis"),
+                     QObject::tr("An edge, an axis, a plane or a cylinder, turned square to Z; the component's X "
+                                 "when empty")),
+      flipInput(QStringLiteral("flip_x"), QObject::tr("Flip X")).withTooltip(QObject::tr("Turn the X axis round")),
+      valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("Along the Z axis")),
+      valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
+          .withTooltip(QObject::tr("About the Z axis")),
+  };
+
+  def.build = [](const CommandState& state, const CommandContext& context) {
+    const DatumHome home = homeOf(state, context);
+    for (const QString& key : {QStringLiteral("origin"), QStringLiteral("z_axis"), QStringLiteral("x_axis")}) {
+      for (const SelectionItem& item : state.items(key)) {
+        const QString refusal = foreignPick(item, home, context);
+        if (!refusal.isEmpty()) {
+          return Built::failure(refusal, key);
+        }
+      }
+    }
+    QJsonObject frame{{QStringLiteral("type"), QStringLiteral("coordinate_system")},
+                      {QStringLiteral("origin"), state.items(QStringLiteral("origin")).first().reference()}};
+    for (const QString& key : {QStringLiteral("z_axis"), QStringLiteral("x_axis")}) {
+      const Selection& items = state.items(key);
+      if (!items.isEmpty()) {
+        frame.insert(key, items.first().reference());
+      }
+    }
+    for (const QString& key : {QStringLiteral("flip_z"), QStringLiteral("flip_x")}) {
+      if (state.checked(key)) {
+        frame.insert(key, true);
+      }
+    }
+    for (const QString& key : {QStringLiteral("offset"), QStringLiteral("angle")}) {
+      if (nonZero(state, key)) {
+        frame.insert(key, state.expression(key));
+      }
+    }
+    return Built::of(frame);
+  };
+
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    state.setItems(QStringLiteral("origin"), {itemOf(feature.value(QStringLiteral("origin")), context)});
+    for (const QString& key : {QStringLiteral("z_axis"), QStringLiteral("x_axis")}) {
+      if (feature.contains(key)) {
+        state.setItems(key, {itemOf(feature.value(key), context)});
+      }
+    }
+    for (const QString& key : {QStringLiteral("flip_z"), QStringLiteral("flip_x")}) {
+      state.setChecked(key, feature.value(key).toBool());
+    }
+    for (const QString& key : {QStringLiteral("offset"), QStringLiteral("angle")}) {
+      loadValue(state, key, feature.value(key), feature, context);
+    }
+    // The coordinate system's own component, for homeOf().
+    try {
+      const QString component = context
+                                    .queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
+                                                  {QStringLiteral("uid"), feature.value(QStringLiteral("uid")).toString()}})
+                                    .value(QStringLiteral("component"))
+                                    .toString(QStringLiteral("C0"));
+      state.setObject(kHome, QJsonObject{{QStringLiteral("component"), component}});
+    } catch (const std::exception&) {
+      // Not known: the active component, as for a new one.
+    }
+  };
+
+  def.canEdit = [&context](const QJsonObject& feature) {
+    for (const char* key : {"origin", "z_axis", "x_axis"}) {
+      const QJsonValue ref = feature.value(QLatin1String(key));
+      if (!ref.isUndefined() && !isShowable(ref, context)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  def.describe = [](const CommandState&, const CommandContext& context) {
+    // The newest coordinate system's frame, for logs and UI tests.
+    const QJsonArray features = context.queryObject({{QStringLiteral("query"), QStringLiteral("timeline")}})
+                                    .value(QStringLiteral("features"))
+                                    .toArray();
+    QJsonObject made;
+    for (const QJsonValue& value : features) {
+      if (str(value.toObject(), "type") == QStringLiteral("coordinate_system")) {
+        made = value.toObject();
+      }
+    }
+    if (made.isEmpty()) {
+      return QStringLiteral("Added coordinate system");
+    }
+    QJsonObject datum;
+    try {
+      datum = context.queryObject({{QStringLiteral("query"), QStringLiteral("datum")}, {QStringLiteral("uid"), str(made, "uid")}});
+    } catch (const std::exception&) {
+      return QStringLiteral("Added coordinate system %1: no frame").arg(str(made, "name"));
+    }
+    const auto xyz = [&datum](const char* key) {
+      QStringList parts;
+      for (const QJsonValue& c : datum.value(QLatin1String(key)).toArray()) {
+        parts << QString::number(std::abs(c.toDouble()) < 1e-9 ? 0.0 : c.toDouble(), 'g', 6);
+      }
+      return QStringLiteral("(%1)").arg(parts.join(QStringLiteral(", ")));
+    };
+    return QStringLiteral("Added coordinate system %1: origin %2, x %3, y %4, z %5")
+        .arg(str(made, "name"), xyz("origin"), xyz("x_axis"), xyz("y_axis"), xyz("normal"));
+  };
+  return def;
+}
+
 } // namespace
 
 void registerConstructCommands(CommandRegistry& registry, const CommandContext& context) {
   for (const Spec& spec : specs()) {
     registry.add(construction(spec, context));
   }
+  // Coordinate System (mitcad#1775), after the planes, axes and points.
+  registry.add(coordinateSystem(context));
 }
 
 } // namespace mitcad

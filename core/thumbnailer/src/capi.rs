@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! The thumbnails' C ABI (mitcad#1695): what Windows Explorer's thumbnail
-//! handler (`app/thumbnails`, a C++ COM DLL) calls to read a design file's
-//! preview, so that it has no reader of its own. The static library
+//! handler (`app/thumbnails`, a C++ COM DLL) and the Finder's Quick Look
+//! extension (mitcad#1696, `app/platform/macos/QuickLookThumbnail.cpp`)
+//! call to read a design file's preview, so that they have no reader of
+//! their own. The static library
 //! `mitcad_thumbnailer_capi` (`core/thumbnailer-capi`) carries these
 //! functions; their C declarations are in
 //! `core/thumbnailer-capi/include/mitcad_thumbnailer.h`.

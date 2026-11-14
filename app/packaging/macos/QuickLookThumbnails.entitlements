@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Entitlements of the Quick Look thumbnail extension MitCadThumbnails.appex
+  (mitcad#1696), in every signature: the build's ad-hoc one
+  (cmake/MacQuickLook.cmake) and tools/package-macos.sh's, ad hoc or with
+  the Developer ID. macOS loads an app extension only in the App Sandbox.
+  It needs nothing else: Quick Look gives it read access to the file it
+  asks about, and it opens no other file, network or device.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+</dict>
+</plist>

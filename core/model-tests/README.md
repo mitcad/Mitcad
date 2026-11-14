@@ -28,6 +28,7 @@ content is its tests (`#![cfg(test)]`); its ctest is `core.model.<area>`.
 | `build-frames` | `core.model.build-frames` | BUILD: frames, placement, closing, sides and ends, junctions |
 | `build-timber` | `core.model.build-timber` | BUILD: timber, wall bearings and splices, fasteners, profiled boards, the cut list, bound lengths, library sources |
 | `imports` | `core.model.imports` | The imports' tests that need the api (mitcad#831): the `.ipt` reader's test designs replayed by the import, the IFC import's property set levels, the `.solidcraft` import's contact sets, motion studies and motion links |
+| `cam` | `core.model.cam` | CAM (mitcad#1013): setups, operations, machines and tool libraries, toolpaths from faces, profiles and points, out-of-date marks, G-code in millimetres and inches, the design file's `cam` section, the machine library's files |
 | `support` | — | Not tests: BUILD's test library of synthetic parts, shared by the BUILD crates |
 
 ## Where a new test goes

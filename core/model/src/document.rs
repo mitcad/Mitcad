@@ -222,7 +222,7 @@ pub use appearances::DeletedAppearance;
 pub use bodies::{BodyAttributes, FaceAppearance};
 pub use components::{InsertOptions, InstanceView};
 pub use datums::{DatumView, DocResolver};
-pub use display::{DisplayState, Isolated};
+pub use display::{DisplayState, Folder, Isolated};
 pub use groups::TimelineGroup;
 pub use views::NamedView;
 
@@ -391,6 +391,9 @@ pub struct DocState {
     /// Filament changes at print heights (mitcad#1596): the design's own
     /// schedule and print plates' own, at most one per plate.
     pub(crate) filament_changes: Vec<crate::print_changes::ChangeSchedule>,
+    /// CAM setups, their operations and the machines they use
+    /// (mitcad#1013), kept with the design and off the timeline.
+    pub(crate) cam: crate::cam::CamState,
 }
 
 impl Default for DocState {
@@ -438,6 +441,7 @@ impl Default for DocState {
             next_comment: 1,
             print_plates: Vec::new(),
             filament_changes: Vec::new(),
+            cam: Default::default(),
         }
     }
 }
@@ -1349,12 +1353,11 @@ pub(crate) fn check_components(
         };
         // An Intersection Curve's curve is in its component's coordinates
         // too (mitcad#1417): another component's only through a link.
-        // So is a 3D sketch's geometry (mitcad#1543).
+        // So is a 3D sketch's geometry (mitcad#1543), and a Helix Curve's
+        // curve (mitcad#1777).
         let placed = crate::joints::placed_geometry(&other.def)
-            || matches!(
-                other.def,
-                FeatureDef::IntersectionCurve(_) | FeatureDef::SpatialSketch(_)
-            );
+            || other.def.makes_curve()
+            || matches!(other.def, FeatureDef::SpatialSketch(_));
         if let Some((_, link)) = linked.iter().find(|(u, _)| *u == uid) {
             if let Ok(component) = link.source_component(assembly)
                 && placed
@@ -2240,14 +2243,37 @@ impl<K: Kernel> Document<K> {
         self.write_results(store, None)
     }
 
+    /// Takes the results [`Document::persist_results`] would write to the
+    /// document's result store (mitcad#1796): the features that succeeded,
+    /// not written yet, whose evaluation took at least `min_time` or less
+    /// with shapes small for its time, their shapes as the kernel writes
+    /// them, and marks them written. [`ResultWrites::write`] then writes
+    /// them on any thread while the document goes on: the application
+    /// stores what was computed since the last save at each autosave this
+    /// way, so that a design recovered after the program was killed finds
+    /// its results. Taking costs the shapes' bytes, not their compression
+    /// nor the files. Without a store, nothing.
+    pub fn take_results_to_write(&self, min_time: Duration) -> ResultWrites {
+        match self.cache.store.clone() {
+            Some(store) => self.take_results(store, Some(min_time)),
+            None => ResultWrites::default(),
+        }
+    }
+
     /// Writes the results of the last recompute that succeeded and that
     /// the store takes: with `min_time`, those not written yet whose
     /// evaluation took at least that long or that are worth storing
     /// although quicker ([`ResultStore::worth_storing`]), marked written;
     /// without, all.
     fn write_results(&self, store: &ResultStore, min_time: Option<Duration>) -> PersistReport {
+        self.take_results(store.clone(), min_time).write()
+    }
+
+    /// The results [`Document::write_results`] writes, taken for
+    /// [`ResultWrites::write`].
+    fn take_results(&self, store: ResultStore, min_time: Option<Duration>) -> ResultWrites {
         let start = Instant::now();
-        let mut report = PersistReport::default();
+        let mut writes = ResultWrites::default();
         let params = &self.state.parameters;
         // (By uid at once: a search per result was quadratic.)
         let entries: HashMap<FeatureUid, &FeatureEntry> =
@@ -2279,24 +2305,22 @@ impl<K: Kernel> Document<K> {
             {
                 continue;
             }
-            match store.write(&self.kernel, entry, output, params) {
-                Ok((bytes, shapes)) => {
+            match store.prepare(&self.kernel, entry, output, params) {
+                Ok(pending) => {
                     if min_time.is_some() {
                         output.persisted.set(true);
                     }
-                    report.results += 1;
-                    report.quick += usize::from(quick);
-                    report.shapes += shapes;
-                    report.bytes += bytes;
+                    writes.pending.push((pending, quick));
                 }
                 Err(error) => {
-                    report.failed += 1;
-                    report.errors.push(error);
+                    writes.report.failed += 1;
+                    writes.report.errors.push(error);
                 }
             }
         }
-        report.time = start.elapsed();
-        report
+        writes.report.time = start.elapsed();
+        writes.store = Some(store);
+        writes
     }
 
     pub fn status(&self, uid: FeatureUid) -> Option<&FeatureStatus> {
@@ -4732,7 +4756,11 @@ impl<K: Kernel> Document<K> {
             instance.visible &= state
                 .body_attributes
                 .get(&instance.body)
-                .is_none_or(|a| a.visible);
+                .is_none_or(|a| a.visible)
+                // A Bodies folder hidden by its eye (mitcad#1771).
+                && state
+                    .display
+                    .folder_shown(instance.component, display::Folder::Bodies);
         }
         let old_instances: BTreeSet<_> = self
             .instances()
@@ -5089,7 +5117,62 @@ pub use thread_fit::{AutoFixFit, NoFit, SharedChoice};
 // A sheet-metal flange's profile sketch made on its wall, or moved back
 // onto it (mitcad#1648).
 mod flange_profile;
+// CAM setups, operations, machines and their toolpaths (mitcad#1013).
+mod cam;
 // Linked designs from outside the project: whether a link would be
 // followed, and the file copied into the project to link (mitcad#1719).
 mod link_copies;
 pub use link_copies::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+// The design and the files it refers to packed into a zip for a report
+// (mitcad#1795).
+mod design_package;
+pub use design_package::{DesignPackage, PackageExtra, UNSAVED_DESIGN_NAME};
+
+/// Results taken from a document for its result store
+/// ([`Document::take_results_to_write`], mitcad#1796), written by
+/// [`ResultWrites::write`] on any thread.
+#[derive(Debug, Default)]
+pub struct ResultWrites {
+    store: Option<ResultStore>,
+    /// Each result and whether it is a quick one (mitcad#882).
+    pending: Vec<(store::PendingResult, bool)>,
+    /// What taking them found (results the kernel could not write) and
+    /// how long it took.
+    report: PersistReport,
+}
+
+impl ResultWrites {
+    /// The results taken, to be written.
+    pub fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// Writes the results taken to the store; what was written (its time
+    /// that of taking them and writing them).
+    pub fn write(self) -> PersistReport {
+        let start = Instant::now();
+        let mut report = self.report;
+        if let Some(store) = &self.store {
+            for (pending, quick) in self.pending {
+                match store.finish(pending) {
+                    Ok((bytes, shapes)) => {
+                        report.results += 1;
+                        report.quick += usize::from(quick);
+                        report.shapes += shapes;
+                        report.bytes += bytes;
+                    }
+                    Err(error) => {
+                        report.failed += 1;
+                        report.errors.push(error);
+                    }
+                }
+            }
+        }
+        report.time += start.elapsed();
+        report
+    }
+}

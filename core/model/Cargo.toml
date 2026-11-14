@@ -39,6 +39,11 @@ mitcad-model-testkit = { path = "../model-testkit", optional = true }
 # The general sketch below the model's core, re-exported as
 # `mitcad_model::sketch` (mitcad#780).
 mitcad-sketch = { path = "../sketch" }
+# CAM: toolpaths, machines and the post-processors (mitcad#1013), below
+# the model; re-exported as `mitcad_model::cam::engine`.
+mitcad-cam = { path = "../cam" }
+# The design packed into a zip for a report (mitcad#1795).
+mitcad-zip = { path = "../zip" }
 
 [dev-dependencies]
 # The mock kernel of the model's own unit tests (mitcad#777).

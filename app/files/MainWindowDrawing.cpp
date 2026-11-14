@@ -197,11 +197,14 @@ void MainWindow::exportDrawing() {
                            .arg(bodies)
                            .arg(sheet, scale, fileUnits.isEmpty() ? QString() : QStringLiteral(", in %1").arg(fileUnits));
   const int sheets = result.value(QStringLiteral("sheets")).toInt();
-  showHint(tr("Exported %1 (%2 view(s) of %3 body(ies), %4 at %5%6).")
-               .arg(QDir::toNativeSeparators(choice->path))
-               .arg(views)
-               .arg(bodies)
-               .arg(QString(sheet).replace(QLatin1Char('_'), QLatin1Char(' ')), scale,
+  // Each count in a text of its own (mitcad#1758): "%n view(s) of %1" with
+  // the bodies' count in it, the whole in the export's message.
+  const QString viewsOfBodies =
+      tr("%n view(s) of %1", "Exported drawing: the views and the bodies they show", views)
+          .arg(tr("%n body(ies)", "Exported drawing: the bodies the views show", static_cast<int>(bodies)));
+  showHint(tr("Exported %1 (%2, %3 at %4%5).")
+               .arg(QDir::toNativeSeparators(choice->path), viewsOfBodies,
+                    QString(sheet).replace(QLatin1Char('_'), QLatin1Char(' ')), scale,
                     sheets > 1 ? tr(", %1 sheets").arg(sheets) : QString()));
 }
 

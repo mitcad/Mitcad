@@ -154,9 +154,29 @@ public:
   // Opens an analysis kept in the document in its command's panel
   // (mitcad#41: Section Analysis with its plane, offset and flip).
   virtual void editAnalysis(const QString& name) = 0;
-  // Shows a joint's first free motion through its range in the view, then
-  // the design as it is (mitcad#55: previews, nothing changes).
+  // Shows a joint's first free motion back and forth through its range in
+  // the view until stopped, then the design as it is (mitcad#55: previews,
+  // nothing changes; mitcad#1790). Again on the joint that plays stops it.
   virtual void animateJoint(const QString& uid) = 0;
+  // Animate in the Joint and Assembly Constraint panels (mitcad#1790): the
+  // panel's feature previewed with `motion` at one value after another,
+  // back and forth between `low` and `high` from `start`, without end and
+  // without changing anything, until Esc, the panel's Animate again, an
+  // input change or the panel's end. A second call while it plays stops it.
+  struct PanelMotion {
+    QString label;      // for the log: "Joint rz", "Constraint 1 offset"
+    QString motion;     // a joint's motion ("rz", "tx") or a row's value ("offset", "angle")
+    bool turn = false;  // radians, else millimetres
+    double start = 0.0; // where it is in the panel's preview
+    double low = 0.0;
+    double high = 0.0;
+    // The panel's definition (its `build`) with the motion at `value`.
+    std::function<QJsonObject(const QJsonObject& def, double value)> at;
+    // What a change of the panel's inputs changes (the definition and the
+    // motion chosen): a change stops the animation.
+    std::function<QByteArray(const CommandState&, const CommandContext&)> inputs;
+  };
+  virtual void animatePanelMotion(const PanelMotion& /*motion*/) {}
   // The pointer over a joint's row in the browser (mitcad#523): the view
   // previews the joint's highlight lightly, its component placed by
   // `occurrence`; an empty uid when the pointer left the joint rows.
@@ -266,6 +286,16 @@ public:
   // design's when `component` is empty (Update All Links).
   virtual void openLinkedDesign(const QString& /*component*/) {}
   virtual void updateLink(const QString& /*component*/) {}
+
+  // CAM (mitcad#1013, cam/MainWindowCam.cpp): a setup or an operation (by
+  // id) edited in its panel; a setup's toolpaths generated, simulated or
+  // posted (`action` generate, simulate, post); the operation whose
+  // toolpath is the current one (0: none). A setup's eye is a model
+  // command (cam_setup_edit's `visible`), as a body's.
+  virtual void editCamSetup(int /*setup*/) {}
+  virtual void editCamOperation(int /*operation*/) {}
+  virtual void runCamAction(const QString& /*action*/, int /*setup*/) {}
+  virtual void setCurrentCamOperation(int /*operation*/) {}
 };
 
 } // namespace mitcad

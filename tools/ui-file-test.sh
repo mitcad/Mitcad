@@ -135,8 +135,8 @@ echo "--- Reopen with --open, change a parameter, Save"
 ui_stop_app
 ui_start_app --open "$FILE" --set d3=35 --no-native-dialogs
 ui_expect_log "Opened $FILE" "opened with --open"
-ui_expect_log "Recomputed 3 feature(s)" "sketch, extrude and fillet recomputed"
-ui_expect_log "Recomputed 2 feature(s)" "d3 change recomputed extrude and fillet"
+ui_expect_log "Recomputed 3 features " "sketch, extrude and fillet recomputed"
+ui_expect_log "Recomputed 2 features " "d3 change recomputed extrude and fillet"
 expect_title "block.mitcad* - MitCad"
 # The "*" follows the model's revisions: undo back to the state opened
 # takes it away, redo brings it back.
@@ -191,7 +191,7 @@ ui_mark
 ui_step "open (Ctrl+O)"                  ui_key ctrl+o
 ui_step "type the path, Enter"           type_path "Open" "$FILE"
 ui_expect_log "Opened $FILE" "opened through the dialog"
-ui_expect_log "Recomputed 3 feature(s)" "sketch, extrude and fillet recomputed"
+ui_expect_log "Recomputed 3 features " "sketch, extrude and fillet recomputed"
 expect_title "block.mitcad - MitCad"
 no_new_design_since_mark "the opened file"
 checksum=$(sha256sum "$FILE")
@@ -258,7 +258,7 @@ cat > "$FILE" << 'EOF'
 EOF
 ui_start_app --open "$FILE"
 ui_expect_log "Opened $FILE" "opened a part with a join and a cut"
-ui_expect_log "Recomputed 6 feature(s)" "join, cut and fillet recomputed"
+ui_expect_log "Recomputed 6 features " "join, cut and fillet recomputed"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 expect_title "boss.mitcad - MitCad"
 # Save is disabled while the design is unchanged (mitcad#1090): a change of

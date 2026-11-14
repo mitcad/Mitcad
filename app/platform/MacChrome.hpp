@@ -59,7 +59,21 @@ void setThreadQuality(ThreadQuality quality);
 // Before model/section workers start: sets each default OCCT pool thread's
 // quality explicitly. Does not change the caller's quality or the pool size.
 void initializeComputeThreads();
+// Saves what is on the screen of the application's own windows, as the window
+// server composes them (child windows and glass included; the Qt widgets'
+// grab() has neither), as a PNG. No screen recording permission is needed for
+// a process's own windows. Optional bounds are logical screen coordinates,
+// with the window server's top-left origin, including the captured shadows.
+// False if it failed.
 bool captureOwnWindows(const QString& path, QRectF* capturedBounds = nullptr);
+// Native Qt popup tracking is a system input service in the shared Qt UI too.
+// In-process UI driver only (MITCAD_TEST_INPUT): Qt can show a combo with
+// an AppKit menu even in the ordinary Qt frontend. Select its actual
+// enabled item after tracking starts. False with no error means that Qt
+// displayed its own item view, which the driver clicks instead.
+bool chooseTestPopup(const QString& title, const std::function<void()>& open,
+                     const std::function<bool()>& qtPopupVisible, QString& error,
+                     const std::function<void()>& nativeClosed = {});
 #else
 inline void setThreadQuality(ThreadQuality) {}
 inline void initializeComputeThreads() {}
@@ -68,6 +82,11 @@ inline void ProcessActivity::stop() {}
 inline ThreadQualityScope::ThreadQualityScope(ThreadQuality) {}
 inline ThreadQualityScope::~ThreadQualityScope() = default;
 inline bool captureOwnWindows(const QString&, QRectF* = nullptr) { return false; }
+inline bool chooseTestPopup(const QString&, const std::function<void()>& open,
+                            const std::function<bool()>&, QString&, const std::function<void()>& = {}) {
+  open();
+  return false;
+}
 #endif
 
 #ifdef MITCAD_MAC_UI
@@ -132,30 +151,11 @@ void attachGlassWindow(QWidget* card, QWidget* mainWindow, qreal cornerRadius);
 // The radius of the card's glass (a capsule's follows its height).
 void setGlassCornerRadius(QWidget* card, qreal cornerRadius);
 
-// Saves what is on the screen of the application's own windows, as the window
-// server composes them (child windows and glass included; the Qt widgets'
-// grab() has neither), as a PNG. No screen recording permission is needed for
-// a process's own windows. Optional bounds are logical screen coordinates,
-// with the window server's top-left origin, including the captured shadows.
-// False if it failed.
-// In-process UI driver only (MITCAD_TEST_INPUT): Qt can show a combo with
-// an AppKit menu even in the ordinary Qt frontend. Select its actual
-// enabled item after tracking starts. False with no error means that Qt
-// displayed its own item view, which the driver clicks instead.
-bool chooseTestPopup(const QString& title, const std::function<void()>& open,
-                     const std::function<bool()>& qtPopupVisible, QString& error,
-                     const std::function<void()>& nativeClosed = {});
-
 #else
 
 inline bool glassAvailable() { return false; }
 inline void attachGlassWindow(QWidget*, QWidget*, qreal) {}
 inline void setGlassCornerRadius(QWidget*, qreal) {}
-inline bool chooseTestPopup(const QString&, const std::function<void()>& open,
-                            const std::function<bool()>&, QString&, const std::function<void()>& = {}) {
-  open();
-  return false;
-}
 inline QIcon symbolIcon(const QString&, const QIcon& fallback = {}) { return fallback; }
 inline void showMenuImages(QMenu*) {}
 inline void hideNativeTitle(QWidget*) {}

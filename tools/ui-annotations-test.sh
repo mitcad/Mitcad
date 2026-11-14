@@ -256,7 +256,7 @@ ui_expect_new "Annotations selected: AxisDistance1, Diameter1" "both rows select
 ui_expect_new "Annotations highlighted: AxisDistance1, Diameter1" "both highlighted in the view"
 ui_mark
 ui_step "Colour… (Alt+C)"                  ui_key alt+c
-ui_expect_new "Annotation Colour dialog opened: 2 annotation(s) auto (Auto | Black | Dark Gray | Custom…)" \
+ui_expect_new "Annotation Colour dialog opened: 2 annotations auto (Auto | Black | Dark Gray | Custom…)" \
   "the colours offered: a technical drawing's, no bright presets (mitcad#902)"
 ui_focus_dialog '^Annotation Color$'
 ui_step "Dark Gray (Down x2, Enter)"       ui_key Down Down Return
@@ -269,7 +269,7 @@ echo "ok   both rows still selected after the refresh"
 ui_mark
 focus_window
 ui_step "Decimals… (Alt+D)"                ui_key alt+d
-ui_expect_new "Annotation Decimals dialog opened: 2 dimension(s) null" "the decimals offered"
+ui_expect_new "Annotation Decimals dialog opened: 2 dimensions null" "the decimals offered"
 ui_focus_dialog '^Annotation Decimals$'
 ui_step "2 (Down x3, Enter)"               ui_key Down Down Down Return
 ui_expect_new "Annotations drawn: AxisDistance1 = 50.00 ±0.1 (#495057) | Diameter1 = Ø10.00 H7 (#495057)" \
@@ -277,7 +277,7 @@ ui_expect_new "Annotations drawn: AxisDistance1 = 50.00 ±0.1 (#495057) | Diamet
 ui_mark
 focus_window
 ui_step "Group… (Alt+R)"                   ui_key alt+r
-ui_expect_new "Annotation Group dialog opened: 2 annotation(s)" "the group asked for"
+ui_expect_new "Annotation Group dialog opened: 2 annotations" "the group asked for"
 ui_focus_dialog '^Annotation Group$'
 ui_step "Shop"                             ui_type_text "Shop"
 ui_step "OK (Enter)"                       ui_key Return

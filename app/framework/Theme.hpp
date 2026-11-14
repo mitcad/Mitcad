@@ -138,6 +138,12 @@ enum class ColorRole {
   RuleLogic,
   RuleAction,
   RuleText,
+  // Simulate's stock (mitcad#1013): the stock, the material left from thin
+  // to thick, and a cut into the part, with the legend in its window.
+  CamStock,
+  CamLeftThin,
+  CamLeftThick,
+  CamGouge,
 };
 
 // How a role is used, for the contrast test: text (at least 4.5:1 on a

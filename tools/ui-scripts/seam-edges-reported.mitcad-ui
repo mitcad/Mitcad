@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# Seam edges (mitcad#1773) on the reported design of the private test files
+# (MITCAD_MITCAD_REPORTED, seam-edges/; never committed): a lattice of
+# balls and rods (Revolve, Pipe along a 3D sketch, Circular Pattern,
+# Fillet) in one body, F2.b0. The rods' and balls' seams (at least the 20
+# along the rods) are left out; the fillets' boundaries and the joints of
+# rods and balls are still drawn.
+# Run by tools/ui-seam-edges-test.sh when the design is there.
+expect-ever 'View area'
+wait-idle
+
+expect-view-seams F2.b0 1+ 20+

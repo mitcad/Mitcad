@@ -1579,9 +1579,15 @@ impl<K: Kernel> AnnotationsLocal<K> for Document<K> {
                 if under(annotation) == pass {
                     *value = self.annotation_json(annotation, units, measure_hidden, &mut laid);
                     // A broken annotation is a warning about it
-                    // (mitcad#1040); `error` keeps the reason.
+                    // (mitcad#1040); `error` keeps the reason. One whose
+                    // picks are on features after the timeline marker is
+                    // rolled back with them (mitcad#1756): no warning.
                     if let Some(error) = value["error"].as_str().map(str::to_owned) {
-                        add_annotation_notice(value, &annotation.name, &error);
+                        if self.annotation_rolled_back(annotation) {
+                            value["rolled_back"] = json!(true);
+                        } else {
+                            add_annotation_notice(value, &annotation.name, &error);
+                        }
                     }
                 }
             }

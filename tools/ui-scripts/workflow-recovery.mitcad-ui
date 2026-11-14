@@ -80,7 +80,7 @@ type "${MITCAD_TEST_WORK}/block.step"
 sleep 300
 key Return
 focus-main
-expect-log 'Exported ${MITCAD_TEST_WORK:re}/block\.step: step, 1 body\(ies\)' 20
+expect-log 'Exported ${MITCAD_TEST_WORK:re}/block\.step: step, 1 body, mm, design coordinates' 20
 expect-file "${MITCAD_TEST_WORK}/block.step"
 key ctrl+n
 expect-log 'New document'

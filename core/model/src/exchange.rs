@@ -72,6 +72,9 @@ pub enum Coordinates {
     Design,
     /// Each body once, in its own component's coordinates.
     Component,
+    /// Where the design shows them, in the frame of a coordinate system
+    /// (mitcad#1775): `{"frame": "F5"}`.
+    Frame(FeatureUid),
 }
 
 /// Which placements of the bodies [`Document::export_bodies`] writes.
@@ -585,6 +588,27 @@ impl<K: Kernel> Document<K> {
                 ));
             }
         }
+        // A coordinate system's frame (mitcad#1775): the design's
+        // placements taken into it, for the formats that write placements
+        // or placed meshes.
+        let frame = match placement.coordinates {
+            Some(Coordinates::Frame(uid)) => {
+                if placement.on_bed || placement.plates.is_some() || placement.plan_only {
+                    return Err(invalid(
+                        "bodies are put on the print bed from the design's coordinates, not in a \
+                         coordinate system",
+                    ));
+                }
+                if format == ExportFormat::Usdz {
+                    return Err(invalid(
+                        "a USDZ file keeps the design's coordinates: a coordinate system is for \
+                         STEP, IGES, BRep, OBJ, STL and 3MF files",
+                    ));
+                }
+                Some(self.export_frame(uid)?)
+            }
+            _ => None,
+        };
         // The design's print plates (mitcad#1050, `plates.rs`).
         if let Some(files) = placement.plates {
             return self.export_plates(path, bodies, options, colors, placement, files);
@@ -727,17 +751,20 @@ impl<K: Kernel> Document<K> {
                 shown
             }
         };
+        // In a coordinate system's frame (mitcad#1775), each placement
+        // taken on into it.
+        let into_frame = |t: Transform| frame.map_or(t, |f| f.after(&t));
         let placed_at = |body: BodyUid| {
             let mut out: Vec<BodyPlacement> = instances_of(body)
                 .iter()
                 .map(|i| BodyPlacement {
-                    transform: i.transform,
+                    transform: into_frame(i.transform),
                     name: i.path_name.clone(),
                 })
                 .collect();
             if out.is_empty() {
                 out.push(BodyPlacement {
-                    transform: Transform::IDENTITY,
+                    transform: into_frame(Transform::IDENTITY),
                     name: String::new(),
                 });
             }
@@ -941,6 +968,42 @@ impl<K: Kernel> Document<K> {
             bodies: chosen.iter().map(|b| b.uid).collect(),
             ..Exported::default()
         })
+    }
+
+    /// The map from the design's coordinates into a coordinate system's
+    /// frame (mitcad#1775), for an export in it: the inverse of the frame's
+    /// placement in the design, a component's coordinate system where the
+    /// component's first occurrence places it (as the view shows it). An
+    /// error for another feature and for one without a frame at the
+    /// timeline marker.
+    pub fn export_frame(&self, uid: FeatureUid) -> Result<Transform, ModelError> {
+        let entry = self
+            .feature(uid)
+            .ok_or_else(|| invalid("the coordinate system of the export does not exist"))?;
+        if !matches!(entry.def, FeatureDef::CoordinateSystem(_)) {
+            return Err(invalid(format!(
+                "{} is not a coordinate system",
+                entry.name
+            )));
+        }
+        let Some(crate::datum::Datum::Plane(plane)) = self.datum(uid) else {
+            return Err(invalid(format!(
+                "{} has no frame at the timeline marker",
+                entry.name
+            )));
+        };
+        let normal = plane.normal();
+        // Its axes as the columns: from the frame's coordinates into its
+        // component's.
+        let local = Transform {
+            linear: std::array::from_fn(|r| [plane.x_axis[r], plane.y_axis[r], normal[r]]),
+            translation: plane.origin,
+        };
+        let placed = match self.assembly().paths_to(entry.component).first() {
+            Some(path) => self.path_transform(path).after(&local),
+            None => local,
+        };
+        Ok(crate::assembly::inverse(&placed))
     }
 
     /// A body's triangle mesh for a mesh file: the kernel's within the

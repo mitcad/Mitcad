@@ -64,6 +64,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images). |
+| `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC). No model, no OCCT; offsets by cavalier_contours. |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
 | `geometry` (`mitcad_geometry`) | C++ | OCCT facade: profiles, features, booleans, name transfer, queries, file formats, ASM bodies, analyses. No Qt. |
@@ -1093,9 +1094,12 @@ design in a project.
   asked for ([app/COMMANDS.md](../app/COMMANDS.md), "The preview in the
   design's file"). Windows Explorer's thumbnail handler
   `mitcad-thumbnails.dll` (mitcad#1695, `app/thumbnails`, a C++ COM DLL)
-  reads it through the same crate's C ABI (`thumbnailer/src/capi.rs`,
-  linked as the static library `mitcad_thumbnailer_capi` of
-  `core/thumbnailer-capi`, Windows only).
+  and the Finder's Quick Look extension `MitCadThumbnails.appex`
+  (mitcad#1696, `app/platform/macos/QuickLookThumbnailProvider.mm`, in the
+  bundle's `Contents/PlugIns`, `cmake/MacQuickLook.cmake`) read it through
+  the same crate's C ABI (`thumbnailer/src/capi.rs`, linked as the static
+  library `mitcad_thumbnailer_capi` of `core/thumbnailer-capi`, Windows
+  and macOS).
 - **Reorient Design** (mitcad#502, `core/model/src/reorient.rs`,
   `document/reorient.rs`): the whole design turned by quarter turns as a
   rewrite of its definition, every component but linked ones in its own
@@ -1821,11 +1825,15 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   dropping the sketch's constraints (mitcad#721).
 - **Stored positions** are the last solution and the next solve's start,
   so the same definition always gives the same geometry.
-- **Implied constraints:** a new constraint the others imply in full is
+- **Implied constraints:** a new constraint the others imply in full (it
+  raises the redundant count and takes no degree of freedom away) is
   refused; one they imply only in part replaces the older geometric
   constraints it makes redundant (never a dimension, a fixed entity or a
   constraint on projected geometry), in one undo step (mitcad#287,
-  `SketchEdit::drop_implied`).
+  `SketchEdit::drop_implied`), else it is kept with its redundant part
+  listed (mitcad#1774, `SketchEdit::require_needed`, `edit::Freedom`).
+- **Line distances between lines that are not parallel** are listed in
+  the status (`not_parallel`) and warned about (mitcad#1774).
 - **Conflicts in words** (mitcad#1566, `sketch/conflict.rs`): a conflict
   is told by constraint types, the entities they are on and dimension
   values, never by ids; fixed geometry summarised. An edit refused for a
@@ -1951,6 +1959,27 @@ nearest once the outline's bounds are laid over the new ones is tried
 circle the source now lists as one arc of their sweep: when the pairing
 leaves anything over, that arc is split as the projection's run is, at
 the same angles (`split_like`, mitcad#1325).
+A projection of one edge whose source was merged with, or split from,
+edges on the same curve (mitcad#1784, `sketch/successor.rs`) follows the
+edges on that carrier: for a lost source the model lists the edges
+between the faces it lay between, as the shape names them now
+(`features/projection_successors.rs`, through `Kernel::edges` and
+`Kernel::curves_of`; no kernel method of its own), and for a name that now
+finds pieces of nothing like its curve those pieces; they must lie on one
+circle or one line of its curve's kind, and its used points must have one
+place among them. It keeps its entities' kinds but one: an arc of what is
+now one whole circle, nothing on its ends and nothing on it that needs an
+arc, becomes that circle (mitcad#1794); the evaluated definition keeps the
+arc's ends as loose points so that it pairs entity for entity with the
+stored one, and `project::with_moved` (the sketch as it evaluated, which
+queries show and edits start from) takes the kind change and leaves the
+ends out. It says so as information (`ProjectionFollow::successor`), and
+otherwise stays lost with the edges listed for Project Again
+(`ProjectionFollow::candidates`, `sketch.project_again` with `successor`,
+which the application's Project Again offers as a list, mitcad#1794). A 3D
+sketch's kept projections follow the same way, and its linked reference
+records take the one line or round edge between a gone edge's faces
+(`spatial_sketch.rs`, `successor_edge`).
 Two kinds of linked record share this machinery (mitcad#389): section
 curves (`Projection::section`, `sketch.project` with `section`), where
 the sketch's plane cuts a face, computed by the kernel
@@ -1996,7 +2025,11 @@ entities and constraints, shared by the UI and the imports.
 - **Offsets** (`sketch/offset.rs`): lines, arcs and circles are offset
   exactly with constraints. Chains with ellipses or splines are derived
   after each solve as a C1 cubic B-spline within 1e-4 mm; they are not
-  solver unknowns, and dragging them moves the source chain.
+  solver unknowns, and dragging them moves the source chain. Corners:
+  Round (mitcad#1774, `SketchOffset::round`) puts an arc about the
+  source's corner at each outer corner of an exact offset where lines or
+  arcs meet at an angle (mitcad#1786), held tangent by the offset's own
+  bindings.
 - **Equal spacing** (`sketch/spacing.rs`, mitcad#221): one constraint on
   independent objects' anchors (points, circle and arc centres, line
   midpoints) in a stored order; the solver's `EqualSpacing` makes each
@@ -2734,7 +2767,15 @@ not recompute.
   polyline cut at 0.001 mm and at most 4° a step, whatever the body's
   size; a highlight of a body's edge takes the body's copy, so that it
   lies on the line it highlights, and the hover's owners draw their face
-  or edge so too. Plates draw bodies no job meshed through a copy, and the
+  or edge so too. Smooth seams (mitcad#1773,
+  `geometry/include/mitcad/geometry/smooth_seams.hpp`: an edge with the
+  same face on both sides, or between two pieces of one face on one
+  surface, by OCCT's surface or the faces' names, where the normals agree
+  within 0.01 rad) keep their copies but are left out of the drawn lines in
+  every style and out of the edge selection (`dropSmoothSeams`), so no line
+  is hovered where none is drawn; `model_render`'s raster leaves them out
+  by the same rule (`Mesh::face_surfaces` and the seam copies' normals).
+  Plates draw bodies no job meshed through a copy, and the
   section clips made on the UI thread clip detached copies
   (`prepare_clips`); an edge highlight that meshed the body's own edge
   there damaged the heap under a run's join
@@ -3137,7 +3178,13 @@ not recompute.
   the top frames as module and function, with the handlers' own frames
   and addresses left out, so the same crash in another run, folder or
   machine gives the same key; an internal error's is a hash of its
-  message with numbers and paths replaced.
+  message with numbers and paths replaced. Send Feedback's Include the
+  design (mitcad#1795) adds no delivery of its own: the model's
+  `design_package` query (`core/model/src/document/design_package.rs`)
+  writes a zip of the open design and the files it refers to inside its
+  project, with the report, the screenshot and the log, into `reports`;
+  the user attaches it to the issue or e-mails it, and the body only
+  names it.
 - **3D view** (`app/OcctViewer`): an OCCT `V3d_View` in a
   `QOpenGLWidget`; OCCT renders into FBOs and needs a native drawable to
   make Qt's context current on. Linux: a GLX 4.5 compatibility context
@@ -4296,7 +4343,11 @@ metadata file and a session lock to a recovery folder in the user's local
 app data, never into the project (format: [app/COMMANDS.md](../app/COMMANDS.md),
 Files). It writes only when the revision changed. On start the app offers
 sessions whose lock is stale; a recovered document keeps its file path
-but is modified and has no undo history.
+but is modified and has no undo history. With the design, each autosave
+writes the results computed since the last save to the result store
+(mitcad#1796): taken on the UI thread with the snapshot (their shapes'
+bytes, `Document::take_results_to_write`), compressed and written on the
+autosave's thread, so that a recovered design opens from the store.
 
 ## Imports with history
 

@@ -388,8 +388,8 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
     }
   }
   // A filament change at a construction or origin plane, or at a flat face
-  // of a printed body (mitcad#1643): Send to Slicer opens with a change
-  // row at it.
+  // of a printed body (mitcad#1643): Send to Slicer opens, then Filament
+  // Change on a change with the plane or face picked (mitcad#1800).
   if (selection.size() == 1 && !windowReadOnly() &&
       (first.kind == SelectKind::Plane ||
        (first.kind == SelectKind::Face && first.geometry == QStringLiteral("plane") && !surfaces))) {

@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: MIT
+# CAM's CNC group (mitcad#1013, app/COMMANDS.md "The CNC group"), the
+# shared input script of tools/ui-cam-test.sh (Linux) and
+# tools/ui-windows-cam-test.ps1, on tools/ui-scripts/cam.json (a 40 x 30
+# block h = 10 high, a second sketch's rectangle, a router on grbl with a
+# 6 mm flat end mill and a 5 mm drill):
+#
+#   1. New Setup from the Make tab, the stock 1 mm above the block;
+#   2. Facing (the stock), Contour (the block's top face selected first),
+#      Pocket (the second sketch's profile, 3 mm deep) and Drill (a
+#      vertex), each added to the setup, none generated;
+#   3. Generate: every operation up to date, its toolpath drawn
+#      (the wrappers compare the moves logged per operation with the
+#      total drawn); Setup 1's eye hides its toolpaths (one undo step,
+#      kept in the design) and Undo shows them again;
+#   4. h changed: every operation out of date, drawn muted;
+#   5. Simulate played to its end, the tool drawn, the stock as cut drawn
+#      and at the end shaded by the material left over the block (its
+#      summary logged), cleared when Simulate closes;
+#   6. Post Process… to grbl in millimeters (the wrappers read the file's
+#      first lines);
+#   7. Machines and Tools…: the router with its two tools, a third added;
+#   8. the Browser's CAM rows: Drill 1 dragged before Facing 1, Contour 1
+#      suppressed from its menu, Pocket 1 opened in its panel by a double
+#      click;
+#   9. the 3-axis operations (phase 3): 3D Roughing and Waterline
+#      Finishing from their panels on the setup's bodies within the stock,
+#      generated up to date with the others.
+wait-idle
+command view.fit
+wait-idle
+
+mark
+click-logged '^Ribbon tab MAKE at '
+wait-log '^Ribbon tab shown: MAKE$'
+
+# 1. New Setup: the router chosen for the design's only machine.
+mark
+command make.cam_setup
+wait-log '^Command New Setup started'
+wait-log '^CAM setup panel: machine router$'
+type-in '^Panel New Setup input top at ' '1 mm'
+key Return
+wait-log '^CAM setup added: Setup 1$'
+wait-log '^CAM states: Setup 1: no operations$'
+wait-log '^Browser CAM: Setup 1 \[\]$'
+
+# 2. The operations, each with the setup and its tool by default.
+mark
+command make.cam_facing
+wait-log '^Command Facing started'
+wait-log '^CAM operation panel facing: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Facing 1 to Setup 1$'
+
+mark
+click-pick-offset 'face F2[.]b0/F2:end' 0 0 '^face F2:end'
+wait-log '^Selected: 1 face'
+command make.cam_contour
+wait-log '^Command Contour started'
+wait-log '^CAM operation panel contour: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Contour 1 to Setup 1$'
+
+mark
+command make.cam_pocket
+wait-log '^Command Pocket started'
+click-pick 'profile F3/'
+wait-log '^Pocket Areas: 1 profile'
+type-in '^Panel Pocket input bottom at ' '-3 mm'
+key Return
+wait-log '^CAM operation added: Pocket 1 to Setup 1$'
+
+mark
+command make.cam_drill
+wait-log '^Command Drill started'
+wait-log '^CAM operation panel drill: setup Setup 1, tool 2$'
+click-pick 'vertex F2[.]b0/'
+wait-log '^Drill Holes: 1 vertex'
+key Return
+wait-log '^CAM operation added: Drill 1 to Setup 1$'
+wait-log '^CAM states: Setup 1: Facing 1 not_generated, Contour 1 not_generated, Pocket 1 not_generated, Drill 1 not_generated$'
+wait-log '^Browser CAM: Setup 1 \[Facing 1 not_generated, Contour 1 not_generated, Pocket 1 not_generated, Drill 1 not_generated\]$'
+
+# 3. Generate: up to date, the toolpaths drawn (rapids, cuts and entries).
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: Facing 1 up_to_date, [1-9][0-9]* moves, .*; Contour 1 up_to_date, [1-9][0-9]* moves, .*; Pocket 1 up_to_date, [1-9][0-9]* moves, .*; Drill 1 up_to_date, [1-9][0-9]* moves, .*$' 60
+wait-log '^CAM states: Setup 1: Facing 1 up_to_date, Contour 1 up_to_date, Pocket 1 up_to_date, Drill 1 up_to_date$' 30
+wait-log '^CAM toolpaths drawn: 4 operation\(s\), [1-9][0-9]* moves$' 30
+wait-log '^CAM toolpath overlay: [0-9]+ groups, [1-9][0-9]* segments \(rapid [1-9][0-9]*, feed [1-9][0-9]*, entry [1-9][0-9]*, stale 0\)$'
+expect-never 'CAM generate .* failed'
+
+# 3b. Setup 1's eye: kept in the design (cam_setup_edit's visible), one
+# undo step; its toolpaths hidden, back on Undo, the operations still up
+# to date.
+mark
+capture-undo-depth before_eye
+click-logged '^Browser eye Root/CAM/Setup 1 at '
+wait-log '^Visibility Root/CAM/Setup 1: hidden$'
+wait-log '^CAM toolpaths drawn: 0 operation\(s\), 0 moves$' 30
+expect-undo-depth ${before_eye} 1
+mark
+command edit.undo
+wait-log '^CAM toolpaths drawn: 4 operation\(s\), [1-9][0-9]* moves$' 30
+expect-undo-depth ${before_eye} 0
+expect-no-log '^CAM states: .*out_of_date'
+
+# 4. h changed: the model under every operation changed.
+mark
+model-command '{"cmd":"set_parameter","name":"h","value":12}'
+wait-log '^CAM states: Setup 1: Facing 1 out_of_date, Contour 1 out_of_date, Pocket 1 out_of_date, Drill 1 out_of_date$' 30
+wait-log '^CAM toolpath overlay: [0-9]+ groups, [1-9][0-9]* segments \(rapid 0, feed 0, entry 0, stale [1-9][0-9]*\)$' 30
+
+# 5. Simulate to the end: the last operation's last move, the tool drawn.
+mark
+command make.cam_simulate
+wait-log '^CAM simulate: Setup 1, 4 operations, [1-9][0-9]* points$' 30
+wait-log '^CAM stock: Setup 1, [1-9][0-9]* x [1-9][0-9]* nodes, [1-9][0-9]* snapshots$' 30
+wait-log '^CAM stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles, plain$'
+focus-dialog '^Simulate$'
+focus-widget camSimulateSlider
+key End
+wait-log '^CAM simulate at ([0-9]+) of \1: Drill 1, move [0-9]+$'
+wait-log '^CAM toolpath overlay: .*; tool at '
+wait-log '^CAM remaining material: Setup 1: max [0-9.]+, mean [0-9.]+, gouge [0-9.]+, beside [0-9.]+, [0-9]+ place\(s\)$'
+wait-log '^CAM stock overlay: [1-9][0-9]* vertices, [1-9][0-9]* triangles, by the material left$'
+key Escape
+wait-log '^CAM simulate closed$'
+wait-log '^CAM stock overlay: none$'
+wait-log '^CAM toolpath overlay: [0-9]+ groups, [0-9]+ segments \([^;]*\)$'
+
+# 6. Post Process… to grbl in millimeters.
+mark
+command make.cam_post
+focus-dialog '^Post Process$'
+wait-log '^CAM post dialog: the notice that CAM is highly experimental is shown$'
+wait-log '^CAM post dialog: setup Setup 1, grbl, millimetres$'
+qt-choice camPostDialect 'grbl'
+button '^Post'
+focus-dialog '^Save G-code$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/setup1.nc"
+key Return
+wait-log '^CAM post written: .*setup1[.]nc: grbl, millimetres, [1-9][0-9]* lines$' 30
+expect-file "${MITCAD_TEST_WORK}/setup1.nc"
+
+# 7. Machines and Tools…: a 3 mm flat end mill added as tool 3.
+mark
+command make.cam_machines
+focus-dialog '^Machines and Tools$'
+wait-log '^CAM machines dialog: 1 machine\(s\): router 2 tool\(s\)$'
+wait-log '^CAM machine shown: router: T1 6 mm flat end mill [|] T2 5 mm drill$'
+button '.*' camAddTool
+focus-dialog '^Add Tool$'
+focus-widget camToolDiameter
+key Ctrl+a
+type '3 mm'
+button '^OK$'
+wait-log '^CAM tool set: router T3 3 mm flat end mill$' 30
+wait-log '^CAM machines dialog: 1 machine\(s\): router 3 tool\(s\)$'
+focus-dialog '^Machines and Tools$'
+key Escape
+wait-log '^CAM machines dialog closed$'
+
+# 8. The Browser's CAM rows.
+mark
+drag-logged '^Browser Root/CAM/Setup 1/Drill 1 at ' '^Browser Root/CAM/Setup 1/Facing 1 at '
+wait-log '^Browser CAM drop: Drill 1 onto Facing 1$'
+wait-log '^CAM operation Drill 1 moved to 1 of Setup 1$'
+wait-log '^CAM states: Setup 1: Drill 1 [a-z_]+, Facing 1 [a-z_]+, Contour 1 [a-z_]+, Pocket 1 [a-z_]+$' 30
+
+mark
+context-menu-logged '^Browser Root/CAM/Setup 1/Contour 1 at ' 'Suppress'
+wait-log '^CAM operation Contour 1 suppressed$'
+wait-log '^CAM states: Setup 1: Drill 1 [a-z_]+, Facing 1 [a-z_]+, Contour 1 suppressed, Pocket 1 [a-z_]+$' 30
+
+mark
+dblclick-logged '^Browser Root/CAM/Setup 1/Pocket 1 at '
+wait-log '^Editing CAM operation Pocket 1 with Pocket$'
+key Escape
+wait-idle
+
+# 9. The 3-axis operations: no picks (the setup's bodies, the stock's
+# outline), the flat end mill by default.
+mark
+command make.cam_roughing_3d
+wait-log '^Command 3D Roughing started'
+wait-log '^CAM operation panel roughing_3d: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: 3D Roughing 1 to Setup 1$'
+
+mark
+command make.cam_waterline_finish
+wait-log '^Command Waterline Finishing started'
+wait-log '^CAM operation panel waterline_finish: setup Setup 1, tool 1$'
+key Return
+wait-log '^CAM operation added: Waterline Finishing 1 to Setup 1$'
+
+mark
+command make.cam_generate
+wait-log '^CAM generate Setup 1: .*; 3D Roughing 1 up_to_date, [1-9][0-9]* moves, [^;]*; Waterline Finishing 1 up_to_date, [1-9][0-9]* moves, ' 120
+wait-log '^CAM states: Setup 1: .*3D Roughing 1 up_to_date, Waterline Finishing 1 up_to_date$' 30
+expect-never 'TestDriver: FAIL|CAM operation refused|CAM setup refused|CAM post refused'

@@ -405,8 +405,13 @@ pub(crate) fn describe(out: &mut String, answer: &Value) {
         let _ = write!(out, ", shown as \"{name}\"");
     }
     let count = |key: &str| answer[key].as_u64().unwrap_or(0);
-    if count("ahead") > 0 {
-        let _ = write!(out, ", {} version(s) to send", count("ahead"));
+    // One whole text for one and for several: no "(s)" (mitcad#1759).
+    match count("ahead") {
+        0 => {}
+        1 => out.push_str(", one version to send"),
+        n => {
+            let _ = write!(out, ", {n} versions to send");
+        }
     }
     if count("behind") > 0 {
         let _ = write!(out, ", {} newer on the remote", count("behind"));

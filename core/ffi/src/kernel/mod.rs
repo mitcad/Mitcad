@@ -2841,6 +2841,88 @@ impl Kernel for OcctKernel {
             })
             .collect())
     }
+
+    // Curve tools: helical curves, sections of faces and bodies, and helices
+    // of sketch curves (mitcad#1777; intersection_curve.rs, surface_sweeps.rs).
+
+    fn helix_curve(
+        &self,
+        spec: &mitcad_model::kernel::HelixCurveSpec,
+    ) -> Result<Vec<mitcad_model::Curve3>, KernelError> {
+        let input = intersection_curve::ffi::HelixCurveInput {
+            origin: spec.origin,
+            direction: spec.direction,
+            x_axis: spec.x_axis,
+            radius: spec.radius,
+            pitch: spec.pitch,
+            revolutions: spec.revolutions,
+            left_handed: spec.left_handed,
+            growth: spec.growth,
+        };
+        let curves = intersection_curve::ffi::helix_curve(&input).map_err(failed)?;
+        Ok(curves.iter().map(intersection_curve::curve).collect())
+    }
+
+    fn shape_section(
+        &self,
+        first: &[mitcad_model::kernel::SectionPart<'_, Self::Shape>],
+        second: &[mitcad_model::kernel::SectionPart<'_, Self::Shape>],
+    ) -> Result<Vec<mitcad_model::Curve3>, KernelError> {
+        type Side = (
+            cxx::UniquePtr<shape::ffi::ShapeList>,
+            Vec<String>,
+            Vec<usize>,
+        );
+        let side = |parts: &[mitcad_model::kernel::SectionPart<'_, Self::Shape>]| -> Result<Side, KernelError> {
+            let mut list = shape::ffi::new_shape_list();
+            let mut faces = Vec::new();
+            let mut counts = Vec::with_capacity(parts.len());
+            for part in parts {
+                occt(part.shape)?;
+                list.pin_mut().push(part.shape.clone());
+                faces.extend(part.faces.iter().map(ToString::to_string));
+                counts.push(part.faces.len());
+            }
+            Ok((list, faces, counts))
+        };
+        let (first_list, first_faces, first_counts) = side(first)?;
+        let (second_list, second_faces, second_counts) = side(second)?;
+        let curves = intersection_curve::ffi::shape_section(
+            &first_list,
+            &first_faces,
+            &first_counts,
+            &second_list,
+            &second_faces,
+            &second_counts,
+        )
+        .map_err(failed)?;
+        Ok(curves.iter().map(intersection_curve::curve).collect())
+    }
+
+    fn helix_sheet(
+        &self,
+        spec: &mitcad_model::HelixSpec<'_, Self::Shape>,
+        chains: &[Vec<mitcad_model::PathCurve>],
+    ) -> Result<Self::Shape, KernelError> {
+        if spec.growth != 0.0 || spec.ends.iter().any(|a| *a != 0.0) || spec.piece_shift != 0.0 {
+            return Err(KernelError::Unsupported(
+                "a surface helix of curves that grows or has flat ends",
+            ));
+        }
+        let (curves, counts) = surface_sweeps::chains(chains);
+        let [x, y, z] = spec.origin;
+        let [dx, dy, dz] = spec.direction;
+        surface_sweeps::ffi::helix_sheet(
+            &spec.feature.to_string(),
+            &curves,
+            &counts,
+            &[x, y, z, dx, dy, dz],
+            spec.pitch,
+            spec.revolutions,
+            spec.left_handed,
+        )
+        .map_err(failed)
+    }
 }
 
 /// Face or edge indices for the bridge (mitcad#714).

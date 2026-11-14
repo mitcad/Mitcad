@@ -453,6 +453,10 @@ pub enum Read {
     /// The layer height the design prints with (as bits), None without one
     /// (print-bridged holes, mitcad#1516).
     PrintLayer(Option<u64>),
+    /// The flange a flange-wall plane (the first feature) lies on, by its
+    /// uid and definition (`sheet::folded::wall_flange_key`), None without
+    /// one (mitcad#1776): a definition later in the timeline.
+    WallFlange(FeatureUid, Option<u128>),
 }
 
 /// A body's print bed face as it was assigned (mitcad#731), for
@@ -522,6 +526,10 @@ impl Read {
             )),
             Self::PrintBed(uid, face) => print_bed_of(env.body_attributes, *uid) == face.as_ref(),
             Self::PrintLayer(bits) => env.layer_height.map(f64::to_bits) == *bits,
+            Self::WallFlange(plane, key) => {
+                crate::sheet::folded::wall_flange_key(env.features, env.index, env.params, *plane)
+                    == *key
+            }
         }
     }
 
@@ -607,6 +615,11 @@ impl Read {
             Self::PrintLayer(bits) => {
                 fingerprint.u8(16).option(*bits, |f, b| {
                     f.u64(b);
+                });
+            }
+            Self::WallFlange(plane, key) => {
+                fingerprint.u8(17).u64(plane.0).option(*key, |f, k| {
+                    f.u128(k);
                 });
             }
         }
@@ -2125,6 +2138,16 @@ fn resume_point<'b, S>(before: &'b Recomputed<S>, state: &DocState) -> Option<&'
                 print_bed_of(&state.body_attributes, *uid) == face.as_ref()
             }
             Read::PrintLayer(bits) => state.design_layer_height().map(f64::to_bits) == *bits,
+            // A flange appended after the features may name a profile on a
+            // flange-wall plane among them (mitcad#1776).
+            Read::WallFlange(plane, key) => {
+                crate::sheet::folded::wall_flange_key(
+                    &state.features,
+                    &state.feature_index,
+                    params,
+                    *plane,
+                ) == *key
+            }
             // What earlier features made and the assembly: the same.
             _ => true,
         });

@@ -1046,12 +1046,19 @@ impl LibraryCache {
             // Closed first: Windows removes no file that is open.
             drop(repo);
             let removed = remove_new_objects(dir, &before);
-            log.push(format!(
-                "{shown}: {} MB after the fetch, more than {} MB: {removed} new object \
-                 file(s) removed, the versions fetched before kept",
-                size >> 20,
-                self.max_size >> 20
-            ));
+            // One whole message for one and for several: no "(s)" (mitcad#1759).
+            let (mb, max) = (size >> 20, self.max_size >> 20);
+            log.push(if removed == 1 {
+                format!(
+                    "{shown}: {mb} MB after the fetch, more than {max} MB: a new object file \
+                     removed, the versions fetched before kept"
+                )
+            } else {
+                format!(
+                    "{shown}: {mb} MB after the fetch, more than {max} MB: {removed} new object \
+                     files removed, the versions fetched before kept"
+                )
+            });
             return Err(RemoteError::new(
                 ErrorClass::TooLarge,
                 format!(

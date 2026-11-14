@@ -28,6 +28,8 @@
 #include "browser/BrowserPanel.hpp"
 #include "browser/DocumentHost.hpp"
 #include "browser/DocumentSnapshot.hpp"
+#include "cam/CamStock.hpp"
+#include "cam/CamToolpaths.hpp"
 #include "commands/MeasureHistory.hpp"
 #include "files/ProjectDialogs.hpp"
 #include "files/Projects.hpp"
@@ -57,6 +59,7 @@ class QKeyEvent;
 class QMenu;
 class QResizeEvent;
 class QStackedWidget;
+class QTimer;
 class QToolButton;
 
 namespace mitcad {
@@ -100,6 +103,7 @@ class SectionWorker;
 class ViewController;
 class SpaceMouseController;
 class StartPage;
+class CamSimulateDialog;
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -121,6 +125,7 @@ class SketchPalette;
 class Sketch3dController; // 3D sketches (mitcad#1524)
 class Sketch3dPalette;
 class SketchItemList; // in the timeline's place while sketching (mitcad#1492)
+class ShownDimensions; // a shown sketch's dimensions outside sketch mode (mitcad#1772)
 }
 namespace mcp {
 class AgentIndicator;
@@ -380,6 +385,7 @@ public:
   void convertSketchTo2d(const QString& sketch) override;
   void editAnalysis(const QString& name) override;
   void animateJoint(const QString& uid) override;
+  void animatePanelMotion(const PanelMotion& motion) override; // mitcad#1790
   void previewJoint(const QString& uid, const QString& occurrence) override;
   void previewBodies(const QString& row, const QString& body, const QString& occurrence) override;
   // The places a notice names, painted while the pointer is over it
@@ -558,6 +564,9 @@ private:
   // belongs there, logging "Sketch item list in the timeline's place" and
   // "Timeline back in its place".
   QWidget* createTimelinePlace();
+  // Floating: lets the place follow the height of its page in sight
+  // (mitcad#1760); Docked: the panel keeps the timeline's height.
+  void sizeTimelinePlace(bool sketching);
   void updateTimelinePlace();
   int commandContentHeight() const;
   void updateCommandCard();
@@ -670,6 +679,13 @@ private:
   void showProfiles();
   void refreshAutoselect();
   void showSketches();
+  // Show Dimensions of a sketch's row (mitcad#1772): the dimensions of the
+  // shown sketches that have it on and are not edited, drawn over the view
+  // where showSketches draws the sketches (called at its end).
+  void showSketchDimensions();
+  // A double-click on such a dimension: its sketch opened and the
+  // dimension's value editor.
+  void editShownDimension(const QString& sketch, const QString& dimension);
   void showDatums();
   // The datums' pick places for UI tests (showDatums; again when the camera
   // comes to rest, when they changed).
@@ -734,11 +750,20 @@ private:
   void occurrenceDragged(const gp_Pnt& target);
   void occurrenceDragFinished(const gp_Pnt& target, bool cancelled);
   // Animate Joint: the joint selected in the timeline that has free
-  // motions, else the newest one.
+  // motions, else the newest one; Animate Joint while one plays stops it.
   void animateSelectedJoint();
+  // A joint's first motion, back and forth until stopped (mitcad#1790), or
+  // `once` (scripts: an agent's ui_command).
+  void startJointAnimation(const QString& uid, bool once);
   // The animation's clock ticked: the frame due now shown (those behind it
   // skipped), from its joint solver placements or previewed.
   void animationFrame();
+  void scheduleAnimationFrame(qint64 wait);
+  // Why the animation stops now (another command, the selection, an edit,
+  // the panel's inputs); empty while it goes on.
+  QString animationStops() const;
+  // A back-and-forth pass ended at `value` (`why`: a contact).
+  void animationPassEnded(double value, const QString& why);
   void stopAnimation(const QString& why);
 
   // Selection outside commands.
@@ -1608,20 +1633,31 @@ private:
   // lists it (read again after a model change, the last one while a job
   // computes), a row's place and what happens there in words; Filament
   // Change (FilamentChangeDialog) on a row (-1 a new change, -2 a new
-  // pause); the whole schedule set, one undo step (refused: why, in the
-  // dialog or the status bar); a change at a plane or face picked (Change
-  // At) or, with the dialog open, its event moved there; the view's print
-  // colours and rings while the panel is open (`bodies` sent, `shown` with
-  // 3MF), cleared at its end; Filament Change Here… of the context menu,
-  // which opens the panel and adds the change when it shows.
+  // pause; `here` a plane or face picked: a new change at it); the whole
+  // schedule set, one undo step (refused: why, in the dialog or the status
+  // bar); the dialog's To Object (mitcad#1800): the view's picks given to
+  // it through the panel's `change_at` input that the panel does not draw
+  // (`m_filamentChangePicking` while it wants them), a plane or face picked
+  // there with the height it gives (`filamentTrialPlace`, the query's
+  // `trial`); the view's print colours and rings while the panel is open
+  // (`bodies` sent, `shown` with 3MF), cleared at its end; Filament Change
+  // Here… of the context menu, which opens the panel and, when it shows,
+  // Filament Change with the plane or face picked.
   std::vector<InputDef> filamentChangeInputs(const std::function<bool(const CommandState&)>& threeMf);
   QJsonObject filamentChangesNow() const;
   QString filamentChangePlace(int row) const;
   QString filamentChangeText(int row) const;
   QString filamentReferenceName(const SelectionItem& item) const;
-  void editFilamentChange(int row);
+  void editFilamentChange(int row, const SelectionItem& here = SelectionItem());
   bool setFilamentChanges(const QJsonArray& events, FilamentChangeDialog* dialog);
   void filamentChangeAt(const SelectionItem& item);
+  void filamentChangePicks(bool wanted);
+  void followFilamentChangePicks();
+  // Filament Change's words for an event at `reference` (measured from
+  // `body` when it names one): its name and the height it gives ("Plane1:
+  // 15 mm above the bed"), and why it would be left out (empty: none).
+  std::pair<QString, QString> filamentTrialPlace(const QJsonValue& reference, const QJsonValue& body,
+                                                 bool pause) const;
   void filamentChangesChanged(const QStringList& bodies, bool shown, const QString& plate = QString());
   void showFilamentChangePreview();
   void endFilamentChanges();
@@ -1634,6 +1670,7 @@ private:
   mutable bool m_filamentChangesStale = true;
   mutable QString m_filamentChangesLogged;
   QPointer<FilamentChangeDialog> m_filamentChangeDialog;
+  bool m_filamentChangePicking = false;
   SelectionItem m_filamentChangeHere;
   QStringList m_filamentPreviewBodies;
   bool m_filamentPreviewShown = false;
@@ -1820,6 +1857,7 @@ private:
   UpdateController* m_updates = nullptr; // automatic updates (mitcad#9)
   ReportCenter* m_reports = nullptr;     // feedback and error reports (mitcad#61, mitcad#62)
   sketch::SketchController* m_sketch = nullptr;
+  sketch::ShownDimensions* m_shownDimensions = nullptr; // (mitcad#1772)
   sketch::SketchPalette* m_palette = nullptr;
   QStackedWidget* m_timelinePlace = nullptr;   // the timeline or the sketch's items
   sketch::SketchItemList* m_sketchItems = nullptr; // (mitcad#1492)
@@ -2051,25 +2089,44 @@ private:
   std::optional<OccurrenceDragState> m_drag;
   QString m_dragHint; // the hover's drag hint shown (mitcad#150)
   // A joint being animated (mitcad#55): its definition, the motion and the
-  // values still to show; the document stays as it is. Its frames are the
+  // values to show; the document stays as it is. Its frames are the
   // joint solver's placements (`joint_poses`, mitcad#1701), else previews
-  // (contact sets), each shown when the clock says.
+  // (contact sets, a panel's motion), each shown when the clock says. It
+  // plays back and forth until stopped (mitcad#1790), or once.
   struct JointAnimation {
-    QString uid;
-    QString name;
+    QString uid;  // the joint's; empty for a panel's motion
+    QString name; // the joint's name, or the panel's motion's label
     QString motion;
-    QJsonObject def;
+    bool turn = false; // radians, else millimetres
+    QJsonObject def;   // the joint's, or the panel's definition
+    // Once: the frames in order. Back and forth: the sweep from the low end
+    // to the high one, both included.
     QVector<double> frames;
+    bool once = false;  // one pass (scripts): to one end, the other and back
     double start = 0.0; // where the motion was before the first frame
-    int next = 0;       // the first frame not shown yet
+    double shownValue = 0.0; // the value shown last (where a contact held it)
     int last = -1;      // the frame shown last
+    int index = 0;      // back and forth: the sweep's frame it is at
+    int direction = 1;  // back and forth: towards the high end, or -1
+    qint64 steps = 0;   // the frame times passed on the clock
+    int passes = 0;     // back and forth: passes ended
+    int passShown = 0;  // frames shown in the pass under way
+    bool contactSaid = false; // the status bar said where a contact holds it
+    QStringList selection; // the timeline's selection when it began
+    qint64 revision = -1;  // the document's revision when it began
     std::vector<BodyDisplay> bodies; // as shown when it began
     QJsonArray poses; // per frame its `placements`; empty: previews
     QElapsedTimer clock; // since it began
     int shown = 0;       // frames shown (those behind the clock skipped)
     int previews = 0;    // frames computed as previews
+    // A panel's motion (mitcad#1790): its panel, set aside meanwhile, and
+    // the panel's inputs when it began.
+    std::optional<DocumentHost::PanelMotion> panel;
+    QPointer<CommandSession> session;
+    QByteArray inputs;
   };
   std::optional<JointAnimation> m_animation;
+  QTimer* m_animationTimer = nullptr; // the next frame (not the tests' sync)
   // A motion preview's placements (Animate Joint, a study's playback;
   // mitcad#454) shown on `bodies`, the bodies as shown before it.
   void showPreviewPlacements(const QJsonObject& report, const std::vector<BodyDisplay>& bodies);
@@ -2081,8 +2138,9 @@ private:
   // "Body2 (Pin:1) and Body3 (Wall:1) in Contact1".
   static QString contactText(const QJsonObject& contact);
 
-  // Sheet metal (mitcad#210, MainWindowSheet.cpp): Edit Sheet Rules, Show
-  // Flat Pattern and Export Flat Pattern; the sheet-metal body the
+  // Sheet metal (mitcad#210, MainWindowSheet.cpp): the SHEET METAL group
+  // with Edit Sheet Rules and Show Flat Pattern in its sections
+  // (mitcad#1778), and Export Flat Pattern; the sheet-metal body the
   // selection stands for (else the only one, or the first with a Flat
   // Pattern when `flat`), and the bodies shown flat.
   void registerSheetActions();
@@ -2492,6 +2550,94 @@ private:
   StartPage* m_startPage = nullptr;
   QStringList m_startHiddenDocks; // the Docked layout's docks it hid
 
+  // CAM (mitcad#1013; cam/MainWindowCam.cpp, app/COMMANDS.md "The CNC
+  // group"): the Make tab's CNC group. New Setup and the operations'
+  // panels (application panels whose OK runs cam_setup_add,
+  // cam_operation_add or, opened from a Browser row, their edits), Generate,
+  // Simulate, Post Process… and Machines and Tools…; the panels' data on
+  // the design (setups, machines with their tools, dialects) and the setup
+  // a new operation goes into (the last one added or edited).
+  void registerCamCommands();
+  CommandDef camSetupCommand();
+  CommandDef camOperationCommand(const QString& type);
+  bool acceptCamSetup(const CommandState& state);
+  bool acceptCamOperation(const CommandState& state, const QString& type);
+  QJsonObject camPanelData() const;
+  int camDefaultSetup() const;
+  // The Browser's CAM rows (DocumentHost).
+  void editCamSetup(int setup) override;
+  void editCamOperation(int operation) override;
+  void runCamAction(const QString& action, int setup) override;
+  void setCurrentCamOperation(int operation) override;
+  // Generate: cam_generate of a setup (0: every one), its result per
+  // operation logged ("CAM generate Setup 1: Contour 1 up_to_date, 40
+  // moves, …"), failures and the machine check's findings in words.
+  void generateCam(int setup);
+  // After each refresh: the states logged ("CAM states: Setup 1: Facing 1
+  // up_to_date, …"), the toolpaths read again (cam_toolpaths of the shown
+  // setups' generated operations, "CAM toolpaths drawn: …") when the
+  // setups or their eyes (the model's `visible`) changed, and drawn (the
+  // current operation's highlighted, Simulate's tool).
+  void followCam();
+  void updateCamToolpaths();
+  void drawCamScene();
+  // Simulate: a setup's toolpaths played back in CamSimulateDialog, the
+  // tool drawn at the place its slider gives.
+  void simulateCam(int setup);
+  void camSimulateAt(int index);
+  // Simulate's stock (mitcad#1013, phase 3; cam/MainWindowCamStock.cpp):
+  // cam_simulate read once with snapshots at places along the playback
+  // ("CAM stock: …"), the stock as cut drawn at the slider's place
+  // (OcctViewer::setCamStock), at the end shaded by the material left over
+  // the part, with the material left in words and the legend in the
+  // window ("CAM remaining material: …"); cleared when Simulate closes.
+  void loadCamStock(int setup, const QString& name, const cam::WorkFrame& frame);
+  void showCamStock(int index);
+  void clearCamStock();
+  QString camRemainingText(const QJsonObject& remaining) const;
+  struct CamStockPlayback {
+    QString setup;
+    cam::StockGrid grid;
+    cam::WorkFrame frame;
+    std::vector<float> initial;
+    std::vector<float> part; // empty: the setup has no bodies
+    std::vector<int> places; // each snapshot's place in the playback
+    std::vector<QJsonArray> changes;
+    QJsonObject remaining;
+    std::vector<float> heights; // the snapshot shown
+    int shown = -1;             // its index; -1 the stock before the cut
+    bool atEnd = false;
+    bool remainingLogged = false;
+  };
+  std::optional<CamStockPlayback> m_camStock;
+  // Post Process…: the setup, its controller and units asked (its own by
+  // default), cam_post written through the save dialog with the dialect's
+  // extension ("CAM post written: <path>: grbl, millimetres, 40 lines").
+  void postProcessCam(int setup);
+  void openCamMachines();
+  struct CamLines {
+    int setup = 0;
+    int operation = 0;
+    bool stale = false; // out of date: drawn muted
+    cam::PathLines lines;
+  };
+  struct CamPlaybackOperation {
+    int id = 0;
+    QString name;
+    double diameter = 0.0;
+    int moves = 0;
+  };
+  std::vector<CamLines> m_camLines;
+  std::vector<cam::PlaybackPoint> m_camPlayback;
+  std::vector<CamPlaybackOperation> m_camPlaybackOperations;
+  cam::Point3 m_camPlaybackAxis{0.0, 0.0, 1.0};
+  std::optional<cam::ToolpathScene::Tool> m_camTool; // Simulate's
+  QPointer<CamSimulateDialog> m_camSimulate;
+  int m_camCurrentSetup = 0;      // the setup new operations go into
+  int m_camCurrentOperation = 0;  // its Browser row selected, or Simulate's
+  int m_camEditedOperation = 0;   // its panel open
+  QByteArray m_camDrawnKey;       // the setups and eyes the toolpaths were read for
+  QString m_loggedCamStates;      // the last "CAM states: …" line
   // Live MCP's input tools (mitcad#1735; MainWindowMcpInput.cpp), only in a
   // run started with --mcp-folder: ui_click and ui_type post mouse and key
   // events to the window as Qt events; ui_dialog opens a window that

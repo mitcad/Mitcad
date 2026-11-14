@@ -8,6 +8,7 @@
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QLocale>
 #include <QRegularExpression>
 #include <QSysInfo>
 #include <QtGlobal>
@@ -433,6 +434,12 @@ QString reportBody(const Report& report, const QString& version) {
     }
     parts << part;
   }
+  if (!report.designZip.isEmpty()) {
+    // Its name only: the zip is attached by the user, or e-mailed.
+    parts << QStringLiteral("### Design\n\nA zip of the design was made for this report: `%1`. It is attached "
+                            "below, or sent to %2.")
+                 .arg(report.designZip, QLatin1String(kTestFileAddress));
+  }
   QString footer = QStringLiteral("<sub>Sent from MitCad %1").arg(version);
   if (!report.key.isEmpty()) {
     footer += QStringLiteral(" · duplicate key `mitcad-%1`").arg(report.key);
@@ -440,6 +447,42 @@ QString reportBody(const Report& report, const QString& version) {
   footer += QStringLiteral("</sub>");
   parts << footer;
   return parts.join(QStringLiteral("\n\n")) + QLatin1Char('\n');
+}
+
+QString designZipName(const QString& title, const QDateTime& time) {
+  QString slug;
+  bool dash = false;
+  for (const QChar c : title) {
+    if (c.unicode() < 128 && c.isLetterOrNumber()) {
+      if (dash && !slug.isEmpty()) {
+        slug += QLatin1Char('-');
+      }
+      slug += c;
+      dash = false;
+    } else {
+      dash = true;
+    }
+  }
+  if (slug.size() > 60) {
+    slug.truncate(60);
+    while (slug.endsWith(QLatin1Char('-'))) {
+      slug.chop(1);
+    }
+  }
+  if (slug.isEmpty()) {
+    slug = QStringLiteral("feedback");
+  }
+  return slug + QLatin1Char('-') + time.toString(QStringLiteral("yyyyMMdd-HHmmss")) + QStringLiteral(".zip");
+}
+
+qint64 attachmentLimit() {
+  bool ok = false;
+  const qint64 set = qEnvironmentVariable("MITCAD_TEST_ATTACHMENT_LIMIT").toLongLong(&ok);
+  return ok && set > 0 ? set : kAttachmentLimit;
+}
+
+QString designZipSizeText(qint64 bytes) {
+  return QLocale().formattedDataSize(bytes, 1, QLocale::DataSizeSIFormat);
 }
 
 namespace {

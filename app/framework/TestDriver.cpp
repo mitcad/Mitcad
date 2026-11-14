@@ -190,6 +190,8 @@ const StepSpec kSpecs[] = {
     {"hover-logged", 1, 1, kInputOfMain},
     {"timeline-leave", 0, 0, kInputOfMain},
     {"leave-widget", 1, 1, kInputOfMain},
+    {"hover-row", 2, 2, kInputOfMain},
+    {"click-row", 2, 2, kInputOfMain},
     {"expect-timeline-hover", 1, 1, kIdle},
     {"expect-timeline-tooltip", 1, 1, kIdle},
     {"capture-view-image", 1, 1, kIdle},
@@ -340,7 +342,9 @@ const StepSpec kSpecs[] = {
     {"expect-view-own-shapes", 0, 0, kIdle},
     {"expect-view-origin", 1, 1, kIdle},
     {"expect-view-edges", 2, 3, kIdle},
+    {"expect-view-seams", 3, 3, kIdle},
     {"expect-sketch-highlights-on-curves", 1, 1, kIdle},
+    {"expect-sketch-point-markers", 2, 2, kIdle},
     {"expect-native-dialog-gone", 1, 2, kPlain},
     {"focus-dialog", 1, 2, kPlain},
     {"focus-main", 0, 0, kPlain},
@@ -489,6 +493,15 @@ const StepSpec kSpecs[] = {
     // (mitcad#1641: the BUILD lists' Copy as Text and Save as Text…).
     {"expect-clipboard", 1, 2, kPlain},
     {"expect-clipboard-file", 1, 2, kPlain},
+    // The orbit's center (mitcad#1791, TestDriverOrbitCenter.cpp).
+    {"view-orbit-center", 1, 1, kIdle},
+    {"capture-view-orbit-center", 2, 2, kIdle},
+    {"expect-view-orbit-center", 1, 1, kIdle},
+    {"capture-view-point", 2, 2, kIdle},
+    {"capture-view-place", 3, 3, kIdle},
+    {"expect-view-point", 4, 4, kIdle},
+    {"click-view-point", 1, 3, kInputOfMain},
+    {"drag-view-point", 3, 5, kInputOfMain},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -1918,6 +1931,10 @@ void TestDriver::run(const Step& step) {
   if (runWalkStep(name, a, line)) {
     return;
   }
+  // The orbit's center (mitcad#1791).
+  if (runOrbitCenterStep(name, a, line)) {
+    return;
+  }
 
   // --- Keys and text
   bool stepMatched = true;
@@ -2612,6 +2629,48 @@ void TestDriver::run(const Step& step) {
       qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
       return true;
     }, 6, QStringLiteral("the lines of %1 are not drawn finely from its copies").arg(uid));
+  } else if (name == QLatin1String("expect-view-seams")) {
+    // expect-view-seams <body> <drawn edges> <seams left out>: the view
+    // draws that many of the body's edges and leaves that many out as
+    // smooth seams (mitcad#1773, ViewEdges::seamCount); each count exact,
+    // or at least the number with a "+" after it ("20+").
+    const QString uid = a.at(0);
+    const auto count = [](const QString& text, int& value, bool& atLeast) {
+      atLeast = text.endsWith(QLatin1Char('+'));
+      bool ok = false;
+      value = (atLeast ? text.chopped(1) : text).toInt(&ok);
+      return ok && value >= 0;
+    };
+    int drawn = 0;
+    int seams = 0;
+    bool drawnAtLeast = false;
+    bool seamsAtLeast = false;
+    if (!count(a.at(1), drawn, drawnAtLeast) || !count(a.at(2), seams, seamsAtLeast)) {
+      fail(line, QStringLiteral("expect-view-seams <body> <drawn edges>[+] <seams left out>[+]"));
+      return;
+    }
+    whenReady([this, uid, drawn, seams, drawnAtLeast, seamsAtLeast] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const OcctViewer::EdgeDrawing drawing = window->viewer().edgeDrawing(uid.toStdString());
+      if (!drawing.shown) {
+        m_waitDetail = QStringLiteral("body %1 is not drawn from copies of its edges").arg(uid);
+        return false;
+      }
+      const QString counts = QStringLiteral("body %1: %2 of %3 edges drawn, smooth seams left out: %4")
+                                 .arg(uid)
+                                 .arg(drawing.drawnEdges)
+                                 .arg(drawing.drawnEdges + drawing.seams)
+                                 .arg(drawing.seams);
+      m_waitDetail = counts;
+      const bool drawnOk = drawnAtLeast ? drawing.drawnEdges >= drawn : drawing.drawnEdges == drawn;
+      const bool seamsOk = seamsAtLeast ? drawing.seams >= seams : drawing.seams == seams;
+      if (!drawnOk || !seamsOk) {
+        return false;
+      }
+      qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
+      return true;
+    }, 6, QStringLiteral("the view does not draw the expected edges of %1").arg(uid));
   } else if (name == QLatin1String("expect-sketch-highlights-on-curves")) {
     // expect-sketch-highlights-on-curves <curves>: at least that many
     // highlighted sketch curves, each highlight's polyline on the shown
@@ -2637,6 +2696,33 @@ void TestDriver::run(const Step& step) {
       qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
       return true;
     }, 6, QStringLiteral("a sketch curve's highlight lies off the curve"));
+  } else if (name == QLatin1String("expect-sketch-point-markers")) {
+    // expect-sketch-point-markers <sketch uid> drawn|hidden: the view shows
+    // points of that sketch, every one with its marker (drawn) or every one
+    // without (hidden, Show points off; mitcad#1764), also outside sketch
+    // mode. Logged as "TestDriver: sketch F1 point markers: <n> drawn, <m>
+    // hidden".
+    const QString sketch = a.at(0);
+    const bool drawn = a.at(1) == QLatin1String("drawn");
+    if (!drawn && a.at(1) != QLatin1String("hidden")) {
+      fail(line, QStringLiteral("expect-sketch-point-markers <sketch uid> drawn|hidden"));
+      return;
+    }
+    whenReady([this, sketch, drawn] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      if (!window || window->modelBusy()) return false;
+      const OcctViewer::SketchPointMarkers markers = window->viewer().sketchPointMarkers(sketch);
+      const QString counts = QStringLiteral("sketch %1 point markers: %2 drawn, %3 hidden")
+                                 .arg(sketch)
+                                 .arg(markers.drawn)
+                                 .arg(markers.hidden);
+      m_waitDetail = counts;
+      if ((drawn ? markers.drawn : markers.hidden) == 0 || (drawn ? markers.hidden : markers.drawn) != 0) {
+        return false;
+      }
+      qInfo().noquote() << QStringLiteral("TestDriver: %1").arg(counts);
+      return true;
+    }, 6, QStringLiteral("the sketch's points are not all %1").arg(a.at(1)));
   } else if (name == QLatin1String("expect-native-history-wheel")) {
     QString error;
     if (!mac::test::historyWheel(error)) { fail(line, error); }
@@ -2800,6 +2886,40 @@ void TestDriver::run(const Step& step) {
     }
     QEvent leave(QEvent::Leave);
     QCoreApplication::sendEvent(widget, &leave);
+  } else if (name == QLatin1String("hover-row") || name == QLatin1String("click-row")) {
+    // The pointer over a row of a list by its object name and the row's
+    // number from 0 (mitcad#1794: a choice's rows, whose hovered row paints
+    // what it is about): a move to the middle of the row sent to the list's
+    // viewport itself, as the pointer's moves reach it, whatever widget a
+    // logged place finds in a session without a desktop; click-row then
+    // presses and releases the left button there, which chooses the row as
+    // a click does.
+    QWidget* widget = m_main->findChild<QWidget*>(a.at(0));
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+      if (widget == nullptr && top != nullptr) {
+        widget = top->findChild<QWidget*>(a.at(0));
+      }
+    }
+    auto* list = qobject_cast<QTreeWidget*>(widget);
+    if (list == nullptr) { fail(line, QStringLiteral("no list named '%1'").arg(a.at(0))); return; }
+    bool ok = false;
+    const int index = a.at(1).toInt(&ok);
+    QTreeWidgetItem* item = ok ? list->topLevelItem(index) : nullptr;
+    if (item == nullptr) { fail(line, QStringLiteral("list '%1' has no row %2").arg(a.at(0), a.at(1))); return; }
+    QWidget* viewport = list->viewport();
+    const QPoint local = list->visualItemRect(item).center();
+    const QPoint global = viewport->mapToGlobal(local);
+    const QPointF scene(viewport->window()->mapFromGlobal(global));
+    const auto send = [&](QEvent::Type kind, Qt::MouseButton button, Qt::MouseButtons buttons) {
+      QMouseEvent event(kind, QPointF(local), scene, QPointF(global), button, buttons, Qt::NoModifier,
+                        QPointingDevice::primaryPointingDevice());
+      QCoreApplication::sendEvent(viewport, &event);
+    };
+    send(QEvent::MouseMove, Qt::NoButton, Qt::NoButton);
+    if (name == QLatin1String("click-row")) {
+      send(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+      send(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    }
   } else if (name == QLatin1String("expect-timeline-hover")) {
     auto* timeline = m_main->findChild<TimelineWidget*>();
     const QString actual = timeline ? timeline->hoveredFeatures().join(QLatin1Char(',')) : QStringLiteral("missing");

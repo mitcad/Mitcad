@@ -37,3 +37,6 @@ mod inserted_cut_scope_tests;
 mod nut_pocket_insert_tests;
 // Print bridging of counterbores that open toward the bed (mitcad#1516).
 mod print_bridging_tests;
+// The curve tools: Helix Curve, Intersection Curve of faces and bodies, a
+// surface Helix of sketch curves (mitcad#1777).
+mod curve_tools_tests;

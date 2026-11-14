@@ -876,21 +876,108 @@ function Ui-ViewClick([double]$Px, [double]$Py, [int]$Button = 1) {
   Ui-Click $at[0] $at[1] $Button
 }
 
+# Ui-PlaceLine "text": the last line about "<text>": the one that gives its
+# place ("<text> at x,y") or the one that says the thing left it ("<text>
+# out of sight": a row of the browser scrolled away, folded or gone,
+# BrowserPanel::logLayout; a panel's result row, a palette's button);
+# $null while neither is logged.
+function Ui-PlaceLine([string]$Text) {
+  $log = Ui-LogText
+  if (-not $log) { return $null }
+  $at = [Math]::Max($log.LastIndexOf("$Text at ", [StringComparison]::Ordinal),
+                    $log.LastIndexOf("$Text out of sight", [StringComparison]::Ordinal))
+  if ($at -lt 0) { return $null }
+  $begin = 0
+  if ($at -gt 0) { $begin = $log.LastIndexOf("`n", $at - 1, [StringComparison]::Ordinal) + 1 }
+  $end = $log.IndexOf("`n", $at, [StringComparison]::Ordinal)
+  if ($end -lt 0) { $end = $log.Length }
+  return $log.Substring($begin, $end - $begin).TrimEnd("`r")
+}
+
+# Ui-PlaceValid "text": whether the last line about "<text>" gives its
+# place and not that it is out of sight (Ui-PlaceLine); false while
+# neither is logged. As ui_place_valid in tools/ui-test-lib.sh.
+function Ui-PlaceValid([string]$Text) {
+  $line = "$(Ui-PlaceLine $Text)"
+  return ($line -ne '') -and -not $line.EndsWith(' out of sight')
+}
+
+# Ui-BrowserWheel steps: wheel steps over the last row place the browser
+# logged (negative: down the rows; one message, as the rows scroll by its
+# whole delta), then the sync; false when no row is in sight. As
+# ui_browser_wheel in tools/ui-test-lib.sh.
+function Ui-BrowserWheel([int]$Steps) {
+  $log = "$(Ui-LogText)"
+  $row = [regex]::Match($log, '(?m)^Browser (?:eye |radio )?Root[^\r\n]* at (\d+),(\d+)\r?$', 'RightToLeft')
+  if (-not $row.Success) { return $false }
+  $x = [int]$row.Groups[1].Value
+  $y = [int]$row.Groups[2].Value
+  [UiInput]::Move($script:UiWindow, $x, $y, 0)
+  Start-Sleep -Milliseconds 80
+  [UiInput]::Wheel($script:UiWindow, $x, $y, $Steps)
+  Ui-Sync
+  return $true
+}
+
+# Ui-BrowserReveal "Browser <path>" (or "Browser eye|radio|arrow <path>"):
+# the browser's rows scrolled with the wheel until that row is in sight,
+# that is, until the app logs its place (it logs "... out of sight" for a
+# row that scrolls away, and nothing for one below the rows in sight that
+# was never shown). Down first, then up, as ui_browser_reveal in
+# tools/ui-test-lib.sh: up to 16 rounds of 4 steps each way, a way given
+# up at the end of the rows ("Browser scroll <n>" at its range, or 0). In
+# session 0's 1024x768 desktop the browser shows few rows, and its card
+# changes its height (while a sketch is edited), so a row's last place may
+# be where another row is by then (mitcad#1787, mitcad#1804). Nothing when
+# the row is in sight or no row is; the caller (Ui-LoggedAt) fails on a row
+# still out of sight.
+function Ui-BrowserReveal([string]$Text) {
+  if (Ui-PlaceValid $Text) { return }
+  # A place a busy app logs a moment late (mitcad#255) is waited for: the
+  # sync answers once the input before it is handled and the rows laid out.
+  Ui-Sync
+  foreach ($steps in @(-4, 4)) {
+    for ($round = 0; $round -lt 16; $round++) {
+      if (Ui-PlaceValid $Text) { return }
+      $log = "$(Ui-LogText)"
+      $scroll = [regex]::Match($log, '(?m)^Browser scroll (\d+)\r?$', 'RightToLeft')
+      $range = [regex]::Match($log, '(?m)^Browser scroll range (\d+)\r?$', 'RightToLeft')
+      if ($scroll.Success -and $range.Success) {
+        $value = [int]$scroll.Groups[1].Value
+        if ($steps -lt 0 -and $value -ge [int]$range.Groups[1].Value) { break }
+        if ($steps -gt 0 -and $value -le 0) { break }
+      }
+      if (-not (Ui-BrowserWheel $steps)) { return }
+    }
+  }
+}
+
 # Ui-LoggedAt "text": the last "<text> at x,y" place, waited for (up to
 # 6 s): a busy app (other tests beside it) may log it a moment after the
-# line the test waited for (mitcad#255).
+# line the test waited for (mitcad#255). A row of the browser is scrolled
+# into sight first (Ui-BrowserReveal); a place that "<text> out of sight"
+# says the thing has left is never given: the test fails instead of
+# clicking where it was, as ui_logged_at in tools/ui-test-lib.sh does
+# (mitcad#1804: a double-click on a row's old place, where another row was
+# by then).
 function Ui-LoggedAt([string]$Text) {
+  if ($Text.StartsWith('Browser ')) { Ui-BrowserReveal $Text }
+  $gone = $false
   $clock = [Diagnostics.Stopwatch]::StartNew()
   do {
-    $line = Ui-LastLineWith "$Text at "
     # "$line", not [string]$line: the .NET method gets null for the latter
     # while nothing is logged yet, and the exception ended the script (the
     # app, left running with ctest's output pipe, kept ctest waiting until
     # its time-out).
-    $match = [regex]::Match("$line", ' at (\d+),(\d+)')
-    if ($match.Success) { return @([int]$match.Groups[1].Value, [int]$match.Groups[2].Value) }
+    $line = "$(Ui-PlaceLine $Text)"
+    $gone = $line.EndsWith(' out of sight')
+    if (-not $gone) {
+      $match = [regex]::Match($line, ' at (\d+),(\d+)')
+      if ($match.Success) { return @([int]$match.Groups[1].Value, [int]$match.Groups[2].Value) }
+    }
     Start-Sleep -Milliseconds 50
   } while ($clock.ElapsedMilliseconds -lt 6000)
+  if ($gone) { Ui-Fail "'$Text' is out of sight (scrolled away, folded or gone): its last place is not clicked" }
   Ui-Fail "no place logged for '$Text'"
 }
 

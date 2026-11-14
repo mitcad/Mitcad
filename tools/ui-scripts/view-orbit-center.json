@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A block for the orbit's center (mitcad#1791, tools/ui-view-orbit-center-test.sh): a 60 x 40 rectangle about the origin extruded 20 (F2.b0), its middle at 0,0,10, its top front right corner at 30,-20,20."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F1","corner":[-30,-20],"width":60,"height":40},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent":{"type":"distance","distance":20},"operation":"new_body"}},
+  {"expect":{"body":"F2.b0","volume":48000}}
+]

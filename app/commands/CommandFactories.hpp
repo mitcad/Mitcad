@@ -27,6 +27,8 @@ CommandDef pipeCommand(const CommandContext& context);
 CommandDef helixCommand(const CommandContext& context);
 // Intersection Curve: a 3D curve from two sketches, a path (mitcad#1405).
 CommandDef intersectionCurveCommand(const CommandContext& context);
+// Helix Curve: a helical 3D curve about an axis, a path (mitcad#1777).
+CommandDef helixCurveCommand(const CommandContext& context);
 
 // HoleCommands.cpp
 CommandDef holeCommand(const CommandContext& context);

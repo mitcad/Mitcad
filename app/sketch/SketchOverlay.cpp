@@ -17,11 +17,14 @@
 #include <QPainterPath>
 #include <QRegularExpression>
 #include <QSet>
+#include <QWindow>
 
 #include "GlyphRows.hpp"
 #include "PointMarkers.hpp"
 #include "SketchController.hpp"
 #include "SketchTool.hpp"
+#include "../framework/GlassCard.hpp"
+#include "../framework/TestSync.hpp"
 #include "../framework/UiSizes.hpp"
 
 namespace mitcad::sketch {
@@ -30,6 +33,13 @@ namespace {
 // The sketch's roles of the role table (mitcad#1041), one value for the 3D
 // view and this overlay; selection and hover as everywhere.
 QColor sketchRole(ColorRole role, bool dark = false) { return viewColor(role, dark); }
+
+// What a body hides of the edited sketch (mitcad#1762): its dimensions
+// and constraint symbols drawn at about a third of their opacity, as the
+// view draws its curves and points; an item found behind a body is found
+// again where it moved this many pixels.
+constexpr double kThroughOpacity = 0.35;
+constexpr double kSightMovePixels = 2.0;
 
 const QColor kDimensionColor = sketchRole(ColorRole::SketchDimension);
 const QColor kDrivenColor = sketchRole(ColorRole::SketchDriven);
@@ -77,6 +87,34 @@ QColor labelBox(int alpha) {
 }
 // A sketch origin this near the design's (mm) is the design's.
 constexpr double kOriginTolerance = 1e-6;
+
+// Where the sketch's badge with the pointer's place above it (`block`)
+// goes in the Floating layout (mitcad#1756): clear of the cards and rows
+// floating over the view (`covered`, OcctViewer::coveredRects) with a gap,
+// within `free`, as the version watermark keeps clear of them. A card
+// along the left edge in its way (the Browser's) puts it right of the
+// card, where the view has the room; anything else in its way (the
+// navigation bar, the status pill), or a left card too wide to pass, puts
+// it above. With no room clear of them it stays where it was.
+QRectF clearOfCards(QRectF block, const QRectF& free, const std::vector<QRect>& covered) {
+  constexpr qreal kGap = 8.0;
+  const QRectF start = block;
+  for (int step = 0; step < 16 && free.contains(block); ++step) {
+    const QRectF around = block.adjusted(-kGap, -kGap, kGap, kGap);
+    const auto hit = std::find_if(covered.begin(), covered.end(),
+                                  [&around](const QRect& card) { return QRectF(card).intersects(around); });
+    if (hit == covered.end()) {
+      return block;
+    }
+    const QRectF card(*hit);
+    if (card.left() <= block.left() && card.right() + kGap + block.width() <= free.right()) {
+      block.moveLeft(card.right() + kGap);
+    } else {
+      block.moveBottom(card.top() - kGap);
+    }
+  }
+  return start;
+}
 
 constexpr double kGlyphSize = 15.0;
 constexpr double kGlyphStep = 17.0;
@@ -735,6 +773,78 @@ SketchOverlay::SketchOverlay(SketchController& controller, QWidget* view)
   small.setPointSizeF(9.0 * uiTextScale()); // at Text size (mitcad#1556)
   setFont(small);
   connect(&m_c.viewer(), &OcctViewer::backgroundToneChanged, this, &SketchOverlay::logDimensionHalos);
+  // The badge keeps clear of the cards over the view (mitcad#1756): it
+  // follows them as they move, grow and fold.
+  connect(&m_c.viewer(), &OcctViewer::coveredChanged, this, qOverload<>(&QWidget::update));
+  connect(&m_c.viewer(), &OcctViewer::overlayInsetsChanged, this, qOverload<>(&QWidget::update));
+  // What lies behind the bodies (mitcad#1762) is found again once the
+  // camera rests (not on every frame of an orbit) and when the bodies
+  // change (Hide Above Sketch, an edit).
+  m_sightTimer.setSingleShot(true);
+  m_sightTimer.setInterval(150);
+  connect(&m_sightTimer, &QTimer::timeout, this, [this] {
+    m_behind.clear();
+    m_sightCamera = cameraKey();
+    update();
+  });
+  TestSync::watch(&m_sightTimer);
+  connect(&m_c.viewer(), &OcctViewer::viewChanged, this, [this] {
+    if (m_c.isActive() && cameraKey() != m_sightCamera) {
+      m_sightTimer.start();
+    }
+  });
+  connect(&m_c.viewer(), &OcctViewer::bodiesChanged, this, [this] {
+    m_behind.clear();
+    update();
+  });
+}
+
+QString SketchOverlay::cameraKey() const {
+  const occ::handle<Graphic3d_Camera>& camera = m_c.viewer().viewCamera();
+  const gp_Pnt eye = camera->Eye();
+  const gp_Pnt center = camera->Center();
+  const gp_Dir up = camera->Up();
+  return QStringLiteral("%1 %2 %3 %4 %5 %6 %7 %8 %9 %10 %11 %12x%13")
+      .arg(eye.X(), 0, 'g', 9)
+      .arg(eye.Y(), 0, 'g', 9)
+      .arg(eye.Z(), 0, 'g', 9)
+      .arg(center.X(), 0, 'g', 9)
+      .arg(center.Y(), 0, 'g', 9)
+      .arg(center.Z(), 0, 'g', 9)
+      .arg(up.X(), 0, 'g', 6)
+      .arg(up.Y(), 0, 'g', 6)
+      .arg(up.Z(), 0, 'g', 6)
+      .arg(camera->Scale(), 0, 'g', 9)
+      .arg(camera->IsOrthographic() ? 0 : 1)
+      .arg(width())
+      .arg(height());
+}
+
+bool SketchOverlay::behindBodies(const QString& key, const QPointF& at) {
+  const auto known = m_behind.find(key);
+  // While the camera moves or geometry is dragged, as it was found last.
+  if (known != m_behind.end() && (m_sightTimer.isActive() || m_c.draggingGeometry() ||
+                                  QLineF(known->second.first, at).length() < kSightMovePixels)) {
+    return known->second.second;
+  }
+  if (m_behind.empty()) {
+    m_sightCamera = cameraKey();
+  }
+  bool behind = false;
+  if (const std::optional<V2> point = m_c.sketchAtF(at)) {
+    behind = !m_c.viewer().inSight(toModel(m_c.model().frame, *point));
+  }
+  m_behind[key] = {at, behind};
+  return behind;
+}
+
+void SketchOverlay::logThrough(int dimensions, int glyphs) {
+  const QString line =
+      QStringLiteral("%1 dimension(s), %2 constraint symbol(s) dimmed").arg(dimensions).arg(glyphs);
+  if (line != m_loggedThrough) {
+    m_loggedThrough = line;
+    qDebug().noquote() << QStringLiteral("Sketch overlay through the bodies: %1").arg(line);
+  }
 }
 
 void SketchOverlay::logDimensionHalos() {
@@ -756,9 +866,26 @@ Projection SketchOverlay::projection() const {
   return {[this](const V2& p) { return m_c.toScreen(p); }, m_c.pixel()};
 }
 
+namespace {
+
+// As SketchController::formatLength and formatAngle write them.
+QString lengthText(double mm, double lengthScale) {
+  return QString::number(mm / (lengthScale > 0.0 ? lengthScale : 1.0), 'f', 2);
+}
+QString angleText(double radians) { return QString::number(radians * 180.0 / kPi, 'f', 1) + QStringLiteral("°"); }
+
+} // namespace
+
 QString SketchOverlay::dimensionText(const DimensionData& d) const {
-  QString value = d.type == QStringLiteral("angle") ? m_c.formatAngle(d.measured)
-                                                    : m_c.formatLength(d.measured);
+  return dimensionText(d, m_c.lengthScale(), static_cast<int>(m_c.dimensionTextMode()));
+}
+
+QString SketchOverlay::dimensionTooltip(const DimensionData& d) const {
+  return dimensionTooltip(d, m_c.lengthScale(), m_c.lengthUnit());
+}
+
+QString SketchOverlay::dimensionText(const DimensionData& d, double lengthScale, int textMode) {
+  QString value = d.type == QStringLiteral("angle") ? angleText(d.measured) : lengthText(d.measured, lengthScale);
   if (d.type == QStringLiteral("radius")) {
     value = QStringLiteral("R") + value;
   } else if (d.type == QStringLiteral("diameter") || d.type == QStringLiteral("linear_diameter")) {
@@ -774,7 +901,7 @@ QString SketchOverlay::dimensionText(const DimensionData& d) const {
   }
   // The name instead of the value, or before it (mitcad#231).
   if (!d.parameter.isEmpty()) {
-    switch (m_c.dimensionTextMode()) {
+    switch (static_cast<SketchController::DimensionText>(textMode)) {
     case SketchController::DimensionText::Value:
       break;
     case SketchController::DimensionText::Name:
@@ -788,10 +915,10 @@ QString SketchOverlay::dimensionText(const DimensionData& d) const {
   return d.driven ? QStringLiteral("(%1)").arg(value) : value;
 }
 
-QString SketchOverlay::dimensionTooltip(const DimensionData& d) const {
+QString SketchOverlay::dimensionTooltip(const DimensionData& d, double lengthScale, const QString& lengthUnit) {
   const bool angle = d.type == QStringLiteral("angle");
-  const QString value = angle ? m_c.formatAngle(d.measured)
-                              : QStringLiteral("%1 %2").arg(m_c.formatLength(d.measured), m_c.lengthUnit());
+  const QString value =
+      angle ? angleText(d.measured) : QStringLiteral("%1 %2").arg(lengthText(d.measured, lengthScale), lengthUnit);
   QString text = d.parameter.isEmpty() ? QString() : d.parameter + QStringLiteral(" = ");
   if (d.driven) {
     // A reference's comment already says it (mitcad#231).
@@ -872,7 +999,10 @@ void SketchOverlay::logInactive() {
 }
 
 QRectF SketchOverlay::textRect(const QPointF& at, const QString& text) const {
-  const QFontMetricsF metrics(font());
+  return dimensionTextRect(QFontMetricsF(font()), at, text);
+}
+
+QRectF SketchOverlay::dimensionTextRect(const QFontMetricsF& metrics, const QPointF& at, const QString& text) {
   const double w = metrics.horizontalAdvance(text) + 8.0;
   const double h = metrics.height() + 2.0;
   return QRectF(at.x() - w / 2.0, at.y() - h / 2.0, w, h);
@@ -1252,7 +1382,7 @@ void SketchOverlay::paintGlyph(QPainter& painter, const Glyph& glyph, bool selec
 }
 
 void SketchOverlay::paintDimensionHalo(QPainter& painter, const DimensionShape& placed,
-                                       const QColor& halo) const {
+                                       const QColor& halo) {
   const DimensionShape shape = onDevicePixels(placed, painter);
   painter.setPen(QPen(halo, kDimensionHaloWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
   painter.setBrush(Qt::NoBrush);
@@ -1272,7 +1402,7 @@ void SketchOverlay::paintDimensionHalo(QPainter& painter, const DimensionShape& 
 
 void SketchOverlay::paintDimension(QPainter& painter, const DimensionShape& placed,
                                    const QRectF& rect, const QColor& color, const QColor& lines,
-                                   bool driven, bool inactive) const {
+                                   bool driven, bool inactive) {
   const DimensionShape shape = onDevicePixels(placed, painter);
   // An inactive one (mitcad#721) dashed, its value on pink.
   painter.setPen(QPen(lines, 1.0, inactive ? Qt::DashLine : Qt::SolidLine));
@@ -1293,6 +1423,18 @@ void SketchOverlay::paintDimension(QPainter& painter, const DimensionShape& plac
   painter.drawRoundedRect(rect, 3, 3);
   painter.setPen(color);
   painter.drawText(rect, Qt::AlignCenter, shape.text);
+}
+
+std::pair<QColor, QColor> SketchOverlay::dimensionColors(bool driven, bool inactive, bool hovered, bool dark) {
+  const QColor color = hovered    ? kHoverColor
+                       : inactive ? kInactiveColor
+                       : driven   ? kDrivenColor
+                                  : kDimensionColor;
+  const QColor lines = !dark || hovered ? color
+                       : inactive       ? kInactiveColorDark
+                       : driven         ? kDrivenColorDark
+                                        : kDimensionColorDark;
+  return {color, lines};
 }
 
 std::vector<std::pair<QString, QColor>> SketchOverlay::idleHighlights() const {
@@ -1767,17 +1909,32 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   // A refused edit's blocking constraints and dimensions (mitcad#1566).
   const QStringList conflicts = m_c.conflicts();
   const bool conflictHovered = m_c.conflictHovered();
+  // Those behind a body drawn dimmed through it (mitcad#1762); a selected,
+  // hovered or conflicting one as before.
+  int dimmedDimensions = 0;
+  int dimmedGlyphs = 0;
   if (m_c.showDimensions()) {
     const bool dark = m_c.viewer().backgroundDark();
     const std::vector<DimensionLayout> layouts = dimensions();
+    std::vector<bool> dimmed;
+    dimmed.reserve(layouts.size());
+    for (const DimensionLayout& layout : layouts) {
+      const bool marked = isSelected(QStringLiteral("dimension"), layout.id) || hover == layout.id ||
+                          conflicts.contains(layout.id);
+      dimmed.push_back(!marked && behindBodies(QStringLiteral("dimension ") + layout.id, layout.textRect.center()));
+      dimmedDimensions += dimmed.back() ? 1 : 0;
+    }
     // All the halos first, then the lines, so that a halo never cuts
     // another dimension's line (mitcad#633).
     const QColor halo = m_c.viewer().sketchHaloColor();
-    for (const DimensionLayout& layout : layouts) {
-      paintDimensionHalo(painter, layout.shape, halo);
+    for (std::size_t i = 0; i < layouts.size(); ++i) {
+      painter.setOpacity(dimmed[i] ? kThroughOpacity : 1.0);
+      paintDimensionHalo(painter, layouts[i].shape, halo);
     }
+    painter.setOpacity(1.0);
     logDimensionHalos();
-    for (const DimensionLayout& layout : layouts) {
+    for (std::size_t i = 0; i < layouts.size(); ++i) {
+      const DimensionLayout& layout = layouts[i];
       const DimensionData* d = model.dimension(layout.id);
       const bool selected = isSelected(QStringLiteral("dimension"), layout.id);
       const bool driven = d != nullptr && d->driven;
@@ -1785,6 +1942,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
       const bool conflicted = conflicts.contains(layout.id);
       const bool hovered = hover == layout.id || (conflicted && conflictHovered);
       const bool marked = selected || hovered || conflicted;
+      painter.setOpacity(dimmed[i] ? kThroughOpacity : 1.0);
       const QColor color = selected ? kSelectedColor
                            : hovered ? kHoverColor
                            : conflicted ? kConflictColor
@@ -1797,6 +1955,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
                                            : kDimensionColorDark;
       paintDimension(painter, layout.shape, layout.textRect, color, lines, driven, inactive);
     }
+    painter.setOpacity(1.0);
   }
   logInactive();
   if (m_c.showConstraints()) {
@@ -1806,9 +1965,16 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
       const bool conflicted = !g.constraint.isEmpty() && conflicts.contains(g.constraint);
       const bool hovered = (g.constraint.isEmpty() ? hover == g.entity : hover == g.constraint) ||
                            (conflicted && conflictHovered);
+      const bool dimmed =
+          !selected && !hovered && !conflicted &&
+          behindBodies(QStringLiteral("glyph %1 %2 %3").arg(g.constraint, g.entity, g.type), g.rect.center());
+      dimmedGlyphs += dimmed ? 1 : 0;
+      painter.setOpacity(dimmed ? kThroughOpacity : 1.0);
       paintGlyph(painter, g, selected, hovered, conflicted);
     }
+    painter.setOpacity(1.0);
   }
+  logThrough(dimmedDimensions, dimmedGlyphs);
   // Equal spacings' chains (mitcad#221), numbered in the order the model
   // keeps: a selected or hovered one's, and the one an Equal Spacing panel
   // previews (its objects in the panel's order until the model has it).
@@ -1873,6 +2039,28 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
   // (mitcad#1563).
   paintCommandPicks(painter);
 
+  const BadgeLayout layout = badgeLayout();
+  if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
+    viewer->setBadgeWidth(layout.room);
+  }
+  painter.setPen(QPen(layout.color.lighter(160), 1.0));
+  painter.setBrush(labelBox(220));
+  painter.drawRoundedRect(layout.badge, 4, 4);
+  painter.setPen(layout.color);
+  painter.drawText(layout.badge, Qt::AlignCenter, layout.status);
+  if (!layout.pointer.isEmpty()) {
+    painter.setPen(QPen(kGuideColor, 1.0));
+    painter.setBrush(labelBox(220));
+    painter.drawRoundedRect(layout.place, 4, 4);
+    painter.setPen(kStatusFixed);
+    painter.drawText(layout.place, Qt::AlignCenter, layout.pointer);
+  }
+  logBadge(layout.status, layout.badge.toAlignedRect(), layout.place.toAlignedRect());
+}
+
+SketchOverlay::BadgeLayout SketchOverlay::badgeLayout() const {
+  const SketchModel& model = m_c.model();
+  BadgeLayout out;
   // Degrees of freedom, as the sketch palette shows them.
   QString status = model.fullyConstrained()
                        ? tr("%1: fully constrained").arg(model.name)
@@ -1882,41 +2070,96 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     status = tr("%1: conflicting constraints").arg(model.name);
     statusColor = kStatusConflict; // an error (mitcad#1041), not the trim's red
   }
+  out.status = status;
+  out.color = statusColor;
   const QFontMetricsF metrics(font());
   // Above what floats over the bottom of the view (the timeline card).
   int bottomInset = 0;
+  int topInset = 0;
+  std::vector<QRect> covered;
   auto* viewer = qobject_cast<OcctViewer*>(parentWidget());
   if (viewer != nullptr) {
     bottomInset = viewer->overlayInsets().bottom();
-    // The status pill of the floating layout keeps right of the badge.
-    viewer->setBadgeWidth(bottomInset > 0 ? static_cast<int>(metrics.horizontalAdvance(status)) + 14 + 14 : 0);
+    topInset = viewer->overlayInsets().top();
+    covered = viewer->coveredRects();
   }
-  // At the left then, clear of the command card on the right.
-  const qreal badgeLeft = bottomInset > 0 ? 14.0 : width() - metrics.horizontalAdvance(status) - 22.0;
-  const QRectF badge(badgeLeft, height() - bottomInset - metrics.height() - 14.0,
-                     metrics.horizontalAdvance(status) + 14.0, metrics.height() + 6.0);
-  painter.setPen(QPen(statusColor.lighter(160), 1.0));
-  painter.setBrush(labelBox(220));
-  painter.drawRoundedRect(badge, 4, 4);
-  painter.setPen(statusColor);
-  painter.drawText(badge, Qt::AlignCenter, status);
-
+  const QString pointer = m_c.pointerText();
+  out.pointer = pointer;
   // The pointer's place in the sketch's coordinates (mitcad#254), above the
   // badge, at least as wide as a place of three digits so that it does not
   // jump as the pointer moves.
-  const QString pointer = m_c.pointerText();
-  if (!pointer.isEmpty()) {
-    const qreal pointerWidth =
-        std::max(metrics.horizontalAdvance(pointer),
-                 metrics.horizontalAdvance(QStringLiteral("x -000.00, y -000.00 ") + m_c.lengthUnit())) +
-        14.0;
-    const QRectF place(bottomInset > 0 ? badge.left() : badge.right() - pointerWidth,
-                       badge.top() - badge.height() - 4.0, pointerWidth, badge.height());
-    painter.setPen(QPen(kGuideColor, 1.0));
-    painter.setBrush(labelBox(220));
-    painter.drawRoundedRect(place, 4, 4);
-    painter.setPen(kStatusFixed);
-    painter.drawText(place, Qt::AlignCenter, pointer);
+  const qreal pointerWidth =
+      std::max(metrics.horizontalAdvance(pointer),
+               metrics.horizontalAdvance(QStringLiteral("x -000.00, y -000.00 ") + m_c.lengthUnit())) +
+      14.0;
+  const qreal badgeWidth = metrics.horizontalAdvance(status) + 14.0;
+  const qreal rowHeight = metrics.height() + 6.0;
+  QRectF badge;
+  QRectF place;
+  if (bottomInset > 0) {
+    // Floating: at the lower left, above the timeline card, the pointer's
+    // place above the badge; both clear of the cards and rows over the view
+    // (mitcad#1756: the Browser card, the navigation bar, the chat panel),
+    // as the version watermark is.
+    QRectF block(14.0, height() - bottomInset - 8.0 - (2.0 * rowHeight + 4.0), std::max(badgeWidth, pointerWidth),
+                 2.0 * rowHeight + 4.0);
+    const QRectF free(0.0, topInset, width(), height() - topInset - bottomInset);
+    block = clearOfCards(block, free, covered);
+    place = QRectF(block.left(), block.top(), pointerWidth, rowHeight);
+    badge = QRectF(block.left(), block.bottom() - rowHeight, badgeWidth, rowHeight);
+    // The navigation bar and the status pill keep right of it.
+    out.room = static_cast<int>(std::ceil(block.right()));
+  } else {
+    // Docked: at the lower right, clear of the command card on the right.
+    badge = QRectF(width() - badgeWidth - 8.0, height() - metrics.height() - 14.0, badgeWidth, rowHeight);
+    place = QRectF(badge.right() - pointerWidth, badge.top() - badge.height() - 4.0, pointerWidth, rowHeight);
+    out.room = 0;
+  }
+  out.badge = badge;
+  out.place = place;
+  return out;
+}
+
+void SketchOverlay::placeBadge() {
+  // An exposed window paints the overlay, and its paint places and logs
+  // the badge.
+  const QWindow* handle = window()->windowHandle();
+  if (!m_c.isActive() || !isVisible() || (handle != nullptr && handle->isExposed())) {
+    return;
+  }
+  const BadgeLayout layout = badgeLayout();
+  if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
+    viewer->setBadgeWidth(layout.room);
+  }
+  logBadge(layout.status, layout.badge.toAlignedRect(), layout.place.toAlignedRect());
+}
+
+void SketchOverlay::logBadge(const QString& status, const QRect& badge, const QRect& place) {
+  // In the main window's coordinates, as the floating cards log theirs.
+  if (window() == nullptr || !window()->isVisible()) {
+    return;
+  }
+  const QPoint at = GlassCard::mapToHost(this, badge.topLeft());
+  const QPoint above = GlassCard::mapToHost(this, place.topLeft());
+  const QPoint view = GlassCard::mapToHost(this, QPoint(0, 0));
+  const QString line = QStringLiteral("Sketch badge '%1' at %2,%3 %4x%5, pointer place %6,%7 %8x%9, view "
+                                      "%10,%11 %12x%13")
+                           .arg(status)
+                           .arg(at.x())
+                           .arg(at.y())
+                           .arg(badge.width())
+                           .arg(badge.height())
+                           .arg(above.x())
+                           .arg(above.y())
+                           .arg(place.width())
+                           .arg(place.height())
+                           .arg(view.x())
+                           .arg(view.y())
+                           .arg(width())
+                           .arg(height());
+  if (line != m_loggedBadge) {
+    m_loggedBadge = line;
+    qDebug().noquote() << line;
   }
 }
 
@@ -2027,6 +2270,9 @@ void SketchOverlay::hideEvent(QHideEvent* event) {
   QWidget::hideEvent(event);
   m_loggedAxes.clear(); // the next sketch edit logs its axes again
   m_loggedHighlights.clear(); // and its highlights
+  m_loggedBadge.clear();      // and its badge's place
+  m_loggedThrough.clear();    // and what it draws dimmed (mitcad#1762)
+  m_behind.clear();
   if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
     viewer->setBadgeWidth(0); // no badge: the status pill may use the corner
   }

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 // CommandSession: parameter names picked from the view into a value field,
-// and a value field's full tooltip (mitcad#250). The rest of the session is
-// in CommandSession.cpp.
+// a value field's full tooltip (mitcad#250), and the picks a failed
+// preview's error names that are gone from the model (mitcad#1780). The
+// rest of the session is in CommandSession.cpp.
+#include <algorithm>
 #include <exception>
 #include "ModelMessages.hpp"
 #include <utility>
 #include <vector>
 
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QRegularExpression>
@@ -201,6 +204,151 @@ QString CommandSession::limitHint(const QString& key, const QString& text) {
     qDebug().noquote() << QStringLiteral("%1 %2: %3 %4").arg(m_def.name, own, text, about);
   }
   return hint;
+}
+
+// ---------------------------------------------------------------------------
+// Picks that are gone (mitcad#1780)
+
+namespace {
+
+// Whether a place of a notice (core/model-api/src/commands.md, "Notices")
+// is the pick: a face, edge or vertex by its name on its body, a profile by
+// its region in its sketch (a place that names no body or sketch: by the
+// name alone).
+bool namesPick(const QJsonObject& place, const SelectionItem& item) {
+  const QString kind = place.value(QStringLiteral("kind")).toString();
+  const QString name = place.value(QStringLiteral("name")).toString();
+  if (name.isEmpty() || name != item.name) {
+    return false;
+  }
+  const auto owner = [&place, &item](const char* field) {
+    const QString value = place.value(QLatin1String(field)).toString();
+    return value.isEmpty() || value == item.owner;
+  };
+  switch (item.kind) {
+  case SelectKind::Face:
+    return kind == QStringLiteral("face") && owner("body");
+  case SelectKind::Edge:
+    return kind == QStringLiteral("edge") && owner("body");
+  case SelectKind::Vertex:
+    return kind == QStringLiteral("vertex") && owner("body");
+  case SelectKind::Profile:
+    return kind == QStringLiteral("region") && owner("sketch");
+  default:
+    return false;
+  }
+}
+
+// What the message says of an input's picks of one kind that are gone, the
+// input by its label: "A face of Faces is gone: pick it again".
+QString goneText(SelectKind kind, int count, const QString& input) {
+  const bool one = count == 1;
+  switch (kind) {
+  case SelectKind::Face:
+    return one ? QObject::tr("A face of %1 is gone: pick it again").arg(input)
+               : QObject::tr("Some faces of %1 are gone: pick them again").arg(input);
+  case SelectKind::Edge:
+    return one ? QObject::tr("An edge of %1 is gone: pick it again").arg(input)
+               : QObject::tr("Some edges of %1 are gone: pick them again").arg(input);
+  case SelectKind::Vertex:
+    return one ? QObject::tr("A vertex of %1 is gone: pick it again").arg(input)
+               : QObject::tr("Some vertices of %1 are gone: pick them again").arg(input);
+  case SelectKind::Profile:
+    return one ? QObject::tr("A profile of %1 is gone: pick it again").arg(input)
+               : QObject::tr("Some profiles of %1 are gone: pick them again").arg(input);
+  default:
+    return one ? QObject::tr("A pick of %1 is gone: pick it again").arg(input)
+               : QObject::tr("Some picks of %1 are gone: pick them again").arg(input);
+  }
+}
+
+} // namespace
+
+QString CommandSession::markMissingPicks(const QJsonObject& report) {
+  // The places the error notices name: the references the model did not
+  // find (a gone face is painted nowhere, but its place is still named).
+  std::vector<QJsonObject> places;
+  for (const QJsonValue& value : report.value(QStringLiteral("notices")).toArray()) {
+    const QJsonObject notice = value.toObject();
+    if (notice.value(QStringLiteral("level")).toString() == QStringLiteral("error")) {
+      for (const QJsonValue& place : notice.value(QStringLiteral("places")).toArray()) {
+        places.push_back(place.toObject());
+      }
+    }
+  }
+  QStringList lines;
+  bool changed = false;
+  for (const Slot& slot : slotsOf(false)) {
+    if (slot.def->type != InputDef::Type::Selection) {
+      continue;
+    }
+    const Selection& items = std::as_const(m_state).items(slot.key);
+    QList<int> missing;
+    for (int i = 0; i < items.size(); ++i) {
+      const SelectionItem& item = items[i];
+      const bool named = std::any_of(places.cbegin(), places.cend(), [&item](const QJsonObject& place) {
+        return namesPick(place, item);
+      });
+      // Named, and not in the model as the feature finds it (a face the
+      // error is about but which is there, too small or not round, is no
+      // missing pick).
+      if (named && m_host.itemShape(item).IsNull()) {
+        missing << i;
+      }
+    }
+    if (missing != m_state.missingItems(slot.key)) {
+      m_state.setMissingItems(slot.key, missing);
+      changed = true;
+    }
+    if (missing.isEmpty()) {
+      continue;
+    }
+    // By kind, in the order of the picks.
+    QList<SelectKind> kinds;
+    QHash<unsigned, int> counts;
+    QStringList logged;
+    for (const int index : std::as_const(missing)) {
+      const SelectKind kind = items[index].kind;
+      if (!kinds.contains(kind)) {
+        kinds << kind;
+      }
+      ++counts[static_cast<unsigned>(kind)];
+      logged << items[index].logDescription();
+    }
+    const QString label = slot.def->labelIn(scopeOf(slot));
+    for (const SelectKind kind : std::as_const(kinds)) {
+      lines << goneText(kind, counts.value(static_cast<unsigned>(kind)), label);
+    }
+    // The panel's list names each pick in words (mitcad#1741), the missing
+    // ones marked.
+    if (std::as_const(m_state).itemWords(slot.key).size() != items.size()) {
+      QStringList words;
+      for (const SelectionItem& item : items) {
+        words << m_host.itemText(item);
+      }
+      m_state.setItemWords(slot.key, words);
+    }
+    qDebug().noquote() << QStringLiteral("%1 %2: %3 of %4 pick(s) gone: %5")
+                              .arg(m_def.name, slot.def->label)
+                              .arg(missing.size())
+                              .arg(items.size())
+                              .arg(logged.join(QStringLiteral("; ")));
+  }
+  if (changed && m_presenter) {
+    m_presenter->refresh(m_state);
+  }
+  return lines.join(QLatin1Char('\n'));
+}
+
+bool CommandSession::clearMissingPicks(const QString& key) {
+  bool cleared = false;
+  for (const Slot& slot : slotsOf(false)) {
+    if ((key.isEmpty() || slot.key == key) && !m_state.missingItems(slot.key).isEmpty()) {
+      m_state.setMissingItems(slot.key, {});
+      cleared = true;
+    }
+  }
+  return cleared;
 }
 
 } // namespace mitcad

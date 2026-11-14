@@ -24,9 +24,10 @@ PickActivation activationOf(const DocumentSnapshot& snapshot, const QString& com
 } // namespace
 
 const QVector<ActivatingCommand>& activatingCommands() {
-  // One row per command whose feature changes the bodies it picks: the
-  // inputs that hold those picks. A command left out keeps the model's
-  // refusal for another component's body.
+  // One row per command whose feature changes the bodies it picks, or
+  // places a part by them (mitcad#1752): the inputs that hold those picks.
+  // A command left out keeps the model's refusal for another component's
+  // body.
   static const QVector<ActivatingCommand> table = {
       {QStringLiteral("solid.fillet"), {QStringLiteral("edges"), QStringLiteral("body")}},
       {QStringLiteral("solid.chamfer"), {QStringLiteral("edges"), QStringLiteral("body")}},
@@ -43,6 +44,16 @@ const QVector<ActivatingCommand>& activatingCommands() {
       {QStringLiteral("solid.hole"), {QStringLiteral("at")}},
       {QStringLiteral("solid.dogbone"), {QStringLiteral("picks")}},
       {QStringLiteral("solid.combine"), {QStringLiteral("target")}},
+      // Parts placed by a pick, by Place On (mitcad#1752): a shaft of
+      // another component goes in linked instead (linksShafts).
+      {QStringLiteral("solid.gear"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.pulley"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.bearing"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.coil"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.box"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.cylinder"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.sphere"), {QStringLiteral("at")}},
+      {QStringLiteral("solid.torus"), {QStringLiteral("at")}},
   };
   return table;
 }
@@ -119,6 +130,60 @@ QString activatedNotice(const QString& command, const QString& component, int dr
     notice += QLatin1Char('\n') + QObject::tr("%1 picks of other components dropped.").arg(dropped);
   }
   return notice;
+}
+
+bool linksShafts(const QString& command) {
+  // The parts of the table's last rows: each sits on a shaft as a part of
+  // its own (a gear, a pulley, a bearing, a spring, a spacer).
+  static const QStringList parts = {
+      QStringLiteral("solid.gear"),     QStringLiteral("solid.pulley"),   QStringLiteral("solid.bearing"),
+      QStringLiteral("solid.coil"),     QStringLiteral("solid.box"),      QStringLiteral("solid.cylinder"),
+      QStringLiteral("solid.sphere"),   QStringLiteral("solid.torus"),
+  };
+  return parts.contains(command);
+}
+
+bool isShaftPick(const SelectionItem& item) {
+  if (item.kind == SelectKind::Face) {
+    return item.geometry == QStringLiteral("cylinder");
+  }
+  if (item.kind == SelectKind::Edge) {
+    return item.geometry == QStringLiteral("circle") || item.geometry == QStringLiteral("arc");
+  }
+  return false;
+}
+
+bool pickActivates(const QString& command, const SelectionItem& item) {
+  return !(isShaftPick(item) && linksShafts(command));
+}
+
+Selection activatingPicks(const QString& command, const Selection& picks) {
+  Selection kept;
+  for (const SelectionItem& item : picks) {
+    if (pickActivates(command, item)) {
+      kept.append(item);
+    }
+  }
+  return kept;
+}
+
+QString linkedShaftNotice(const DocumentSnapshot& snapshot, const QString& command, const QString& name,
+                          const SelectionItem& item) {
+  if (pickActivates(command, item)) {
+    return QString();
+  }
+  const QString shaft = bodyComponent(snapshot, item);
+  const QString active = activeOf(snapshot);
+  if (shaft.isEmpty() || shaft == active) {
+    return QString();
+  }
+  return QObject::tr("%1 goes into %2 (active), linked to the shaft of %3: a part on a shaft stays out of the "
+                     "shaft's component.")
+      .arg(name, snapshot.componentName(active), snapshot.componentName(shaft));
+}
+
+QString keptNotice(const DocumentSnapshot& snapshot, const QString& name, const QString& shown) {
+  return shown == activatedNotice(name, snapshot.componentName(activeOf(snapshot)), 0) ? shown : QString();
 }
 
 } // namespace mitcad

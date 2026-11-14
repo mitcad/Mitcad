@@ -62,13 +62,13 @@ impl<K: Kernel> Document<K> {
         output.curve.clone()
     }
 
-    /// The curves of the Intersection Curves before the marker, in
-    /// timeline order, with their names (mitcad#1405).
+    /// The curves of the Intersection Curves (mitcad#1405) and Helix Curves
+    /// (mitcad#1777) before the marker, in timeline order, with their names.
     pub fn feature_curves(&self) -> Vec<FeatureCurveView> {
         self.state
             .features
             .iter()
-            .filter(|entry| matches!(entry.def, crate::features::FeatureDef::IntersectionCurve(_)))
+            .filter(|entry| entry.def.makes_curve())
             .filter_map(|entry| {
                 Some(FeatureCurveView {
                     uid: entry.uid,

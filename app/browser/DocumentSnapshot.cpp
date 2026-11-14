@@ -157,6 +157,14 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.drawings = model.queryArray(QStringLiteral("drawings"));
   // Image references (mitcad#782).
   snapshot.imageReferences = model.queryArray(QStringLiteral("image_references"));
+  // CAM setups with their operations' states (mitcad#1013): a model
+  // without CAM has none.
+  try {
+    const QJsonObject cam = model.queryObject({{QStringLiteral("query"), QStringLiteral("cam_setups")}});
+    snapshot.camSetups = cam.value(QStringLiteral("setups")).toArray();
+    snapshot.camMachines = cam.value(QStringLiteral("machines")).toArray();
+  } catch (const std::exception&) {
+  }
   const QJsonObject display = document.value(QStringLiteral("display")).toObject();
   snapshot.originShown = display.value(QStringLiteral("origin")).toBool();
   // View › Show (mitcad#1287).
@@ -164,6 +172,24 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
   snapshot.showOrigins = show.value(QStringLiteral("origins")).toBool(true);
   snapshot.showConstruction = show.value(QStringLiteral("construction")).toBool(true);
   snapshot.showSketches = show.value(QStringLiteral("sketches")).toBool(true);
+  // The folders the components' own eyes hide (mitcad#1771).
+  const QJsonObject folders = display.value(QStringLiteral("folders")).toObject();
+  for (auto entry = folders.begin(); entry != folders.end(); ++entry) {
+    const QJsonObject shown = entry.value().toObject();
+    QVector<Folder> hidden;
+    for (const Folder folder : {Folder::Bodies, Folder::Sketches, Folder::Construction}) {
+      if (!shown.value(folderKey(folder)).toBool(true)) {
+        hidden.append(folder);
+      }
+    }
+    if (!hidden.isEmpty()) {
+      snapshot.hiddenFolders.insert(entry.key(), hidden);
+    }
+  }
+  // The sketches whose dimensions are drawn outside sketch mode (mitcad#1772).
+  for (const QJsonValue& sketch : display.value(QStringLiteral("sketch_dimensions")).toArray()) {
+    snapshot.sketchDimensions << sketch.toString();
+  }
   // The Center of Mass marker (mitcad#1094): its place follows every
   // recompute, placement and material, so it is read with the rest.
   const QJsonValue centerMarker = display.value(QStringLiteral("center_of_mass"));
@@ -191,7 +217,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.namedViews, display, snapshot.analyses, snapshot.joints,
                                           snapshot.sheets, snapshot.motionStudies, snapshot.contactSets,
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
-                                          snapshot.centerOfMass})
+                                          snapshot.centerOfMass, snapshot.camSetups, snapshot.camMachines})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -369,12 +395,25 @@ bool DocumentSnapshot::isolationReaches(const Selection& isolation, const QStrin
   });
 }
 
+QString DocumentSnapshot::folderKey(Folder folder) {
+  switch (folder) {
+  case Folder::Bodies:
+    return QStringLiteral("bodies");
+  case Folder::Sketches:
+    return QStringLiteral("sketches");
+  case Folder::Construction:
+    return QStringLiteral("construction");
+  }
+  return QString();
+}
+
 bool DocumentSnapshot::kindHidden(const Feature& feature) const {
+  // The component's folder hidden by its eye too (mitcad#1771).
   if (feature.isAnySketch()) {
-    return !showSketches;
+    return !showSketches || !folderShown(feature.component, Folder::Sketches);
   }
   if (feature.isConstruction()) {
-    return !showConstruction;
+    return !showConstruction || !folderShown(feature.component, Folder::Construction);
   }
   return feature.type == QStringLiteral("joint_origin") && !showOrigins;
 }
@@ -538,6 +577,29 @@ QJsonObject DocumentSnapshot::imageReference(const QString& name) const {
   return QJsonObject();
 }
 
+QJsonObject DocumentSnapshot::camSetup(int id) const {
+  for (const QJsonValue& value : camSetups) {
+    if (value.toObject().value(QStringLiteral("id")).toInt() == id) {
+      return value.toObject();
+    }
+  }
+  return QJsonObject();
+}
+
+QJsonObject DocumentSnapshot::camOperation(int id, QJsonObject* setup) const {
+  for (const QJsonValue& value : camSetups) {
+    for (const QJsonValue& operation : value.toObject().value(QStringLiteral("operations")).toArray()) {
+      if (operation.toObject().value(QStringLiteral("id")).toInt() == id) {
+        if (setup != nullptr) {
+          *setup = value.toObject();
+        }
+        return operation.toObject();
+      }
+    }
+  }
+  return QJsonObject();
+}
+
 QJsonObject DocumentSnapshot::measurement(const QString& name) const {
   for (const QJsonValue& value : measurements) {
     if (value.toObject().value(QStringLiteral("name")).toString() == name) {
@@ -631,6 +693,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("construction_axis"), QStringLiteral("construction-axis")},
       {QStringLiteral("construction_point"), QStringLiteral("construction-point")},
       {QStringLiteral("intersection_curve"), QStringLiteral("sketch-intersect")},
+      {QStringLiteral("coordinate_system"), QStringLiteral("coordinate-system")},
+      {QStringLiteral("helix_curve"), QStringLiteral("helix")},
       {QStringLiteral("base"), QStringLiteral("base-feature")},
       {QStringLiteral("rectangular_pattern"), QStringLiteral("rectangular-pattern")},
       {QStringLiteral("circular_pattern"), QStringLiteral("circular-pattern")},

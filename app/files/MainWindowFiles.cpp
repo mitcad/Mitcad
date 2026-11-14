@@ -268,6 +268,8 @@ void MainWindow::registerFileCommands() {
                              tr("Places another MitCad design here, linked or as a copy"),
                              [this] { insertComponent(); });
   component.group = QStringLiteral("ASSEMBLE");
+  // The ASSEMBLE menu's last section, with Insert from Library (mitcad#1778).
+  component.section = QStringLiteral("insert");
   component.pinned = true;
   component.keywords = {QStringLiteral("assembly"), QStringLiteral("external"), QStringLiteral("mitcad")};
   m_registry->add(component);
@@ -1485,8 +1487,16 @@ void MainWindow::exportFile() {
       plates.dialect = designDialect();
     }
   }
-  const std::optional<ExportChoice> choice = askExport(this, suggested, static_cast<int>(selected.size()), sketches,
-                                                       sketch, !m_snapshot.occurrences.isEmpty(), lengthUnit(), plates);
+  // The coordinate systems the bodies can be written in (mitcad#1775).
+  QVector<QPair<QString, QString>> frames;
+  for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
+    if (feature.type == QStringLiteral("coordinate_system") && feature.isActive() && feature.succeeded()) {
+      frames.append({feature.uid, feature.name});
+    }
+  }
+  const std::optional<ExportChoice> choice =
+      askExport(this, suggested, static_cast<int>(selected.size()), sketches, sketch,
+                !m_snapshot.occurrences.isEmpty(), lengthUnit(), plates, frames);
   if (!choice) {
     return;
   }
@@ -1520,10 +1530,8 @@ void MainWindow::exportFile() {
                              .arg(page.bytes);
     // Its warnings as every export's (mitcad#1040).
     showDone(*this,
-             tr("Exported %1 (%2 body(ies), %3).")
-                 .arg(QDir::toNativeSeparators(choice->path))
-                 .arg(page.bodies)
-                 .arg(QLocale().formattedDataSize(page.bytes)),
+             tr("Exported %1 (%n body(ies), %2).", nullptr, page.bodies)
+                 .arg(QDir::toNativeSeparators(choice->path), QLocale().formattedDataSize(page.bytes)),
              page.warnings, QStringLiteral("Export"));
     return;
   }
@@ -1580,7 +1588,10 @@ void MainWindow::exportFile() {
     if (choice->format == QStringLiteral("stl")) {
       command.insert(QStringLiteral("ascii"), choice->ascii);
     }
-    if (!choice->coordinates.isEmpty()) {
+    if (choice->coordinates == QStringLiteral("frame")) {
+      // In a coordinate system's frame (mitcad#1775).
+      command.insert(QStringLiteral("coordinates"), QJsonObject{{QStringLiteral("frame"), choice->frame}});
+    } else if (!choice->coordinates.isEmpty()) {
       // Every format where the design shows the bodies, or in their
       // components' coordinates (mitcad#19).
       command.insert(QStringLiteral("coordinates"), choice->coordinates);
@@ -1593,7 +1604,8 @@ void MainWindow::exportFile() {
   }
   QString what = choice->format == QStringLiteral("dxf")
                      ? tr("%1 entities").arg(result.value(QStringLiteral("entities")).toInt())
-                     : tr("%1 body(ies)").arg(result.value(QStringLiteral("bodies")).toArray().size());
+                     : tr("%n body(ies)", nullptr,
+                          static_cast<int>(result.value(QStringLiteral("bodies")).toArray().size()));
   if (choice->format == QStringLiteral("step") || choice->format == QStringLiteral("iges")) {
     what += QStringLiteral(", ") + choice->unit;
   }
@@ -1606,11 +1618,16 @@ void MainWindow::exportFile() {
                 : tr(", construction geometry left out");
   }
   if (choice->format != QStringLiteral("dxf") && !choice->coordinates.isEmpty()) {
-    what += QStringLiteral(", %1 coordinates").arg(choice->coordinates);
+    what += choice->coordinates == QStringLiteral("frame")
+                ? QStringLiteral(", in %1").arg(m_snapshot.feature(choice->frame) != nullptr
+                                                    ? m_snapshot.feature(choice->frame)->name
+                                                    : choice->frame)
+                : QStringLiteral(", %1 coordinates").arg(choice->coordinates);
   }
   if (choice->format == QStringLiteral("usdz")) {
     // The materials, and textures written in their base colour.
-    what += tr(", %1 material(s)").arg(result.value(QStringLiteral("materials")).toArray().size());
+    what += tr(", %n material(s)", nullptr,
+               static_cast<int>(result.value(QStringLiteral("materials")).toArray().size()));
   }
   // The print plates written (mitcad#1679): a file per plate names the
   // folder of its files.
@@ -1621,8 +1638,9 @@ void MainWindow::exportFile() {
       files << value.toString();
     }
     const qsizetype plateCount = result.value(QStringLiteral("plates")).toArray().size();
-    what = files.size() > 1 ? tr("%1 plate(s) in %2 files").arg(plateCount).arg(files.size())
-                            : tr("%1 plate(s)").arg(plateCount);
+    what = files.size() > 1
+               ? tr("%n plate(s) in %1 files", nullptr, static_cast<int>(plateCount)).arg(files.size())
+               : tr("%n plate(s)", nullptr, static_cast<int>(plateCount));
     if (choice->plates == QStringLiteral("file_per_plate")) {
       shown = QFileInfo(choice->path).absolutePath();
     }

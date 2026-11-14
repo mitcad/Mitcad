@@ -53,7 +53,7 @@ ui_step "File > Export"                    file_menu e
 ui_expect_new "Dialog folder export: $DESIGNS" "Export starts in the design's folder at first"
 ui_step "type the path, Enter"             ui_type_path "Export" "$EXPORTS/block.step"
 ui_focus_main
-ui_expect_new "Exported $EXPORTS/block.step: step, 1 body(ies)" "exported"
+ui_expect_new "Exported $EXPORTS/block.step: step, 1 body" "exported"
 ui_expect_new "Dialog folder export remembered: $EXPORTS" "the Export group remembers its folder"
 
 cp "$EXPORTS/block.step" "$IMPORTS/part.step"

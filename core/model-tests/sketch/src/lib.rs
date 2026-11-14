@@ -83,3 +83,10 @@ mod sketch_order_1492_tests;
 mod sketch_svg_doctype_1721_tests;
 // The work steps that made a sketch's items (mitcad#1750).
 mod sketch_steps_1750_tests;
+// Trim, Convert to Sketch Geometry and deleting the offset free an offset's
+// curves from their source (mitcad#1755).
+mod sketch_offset_free_1755_tests;
+// A partly implied constraint kept, arcs touching their lines, line distances
+// between lines that are not parallel, arcs that keep their side, and
+// Offset's Corners: Round (mitcad#1774).
+mod sketch_rounded_offset_1774_tests;

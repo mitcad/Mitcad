@@ -44,6 +44,7 @@
 #include <NCollection_Array1.hxx>
 #include <NCollection_HArray1.hxx>
 #include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_IndexedMap.hxx>
 #include <NCollection_List.hxx>
 #include <NCollection_Map.hxx>
 #include <Precision.hxx>
@@ -242,6 +243,7 @@ detail::Strips detail::strips_to_remove(const Shape& smaller, const Shape& input
       }
     }
     if (static_cast<int>(around.size()) > kMostFacesBesideStrips) {
+      out.left.insert(out.left.end(), group.begin(), group.end());
       continue;
     }
     out.faces.insert(out.faces.end(), group.begin(), group.end());
@@ -322,8 +324,10 @@ namespace {
 // the strips that leaves (without_strips; `input` the body it dresses,
 // `contact()` how far from its edges it touches its faces at most, asked
 // only then) and with an info saying it is that much smaller (mitcad#1106:
-// 0.1 % is no reason for a warning); throws the first error when both
-// fail. `what`: "fillet" or "chamfer".
+// 0.1 % is no reason for a warning). Where a strip stays (the faces round
+// it cannot be grown to meet, or too many lie beside it), a warning instead
+// that says so, the strips painted (mitcad#1783). Throws the first error
+// when both fail. `what`: "fillet" or "chamfer".
 template <class Contact, class Attempt>
 ShapePtr with_shrink_retry(const char* what, const Shape& input, Contact&& contact, Attempt&& attempt) {
   std::exception_ptr first;
@@ -340,12 +344,33 @@ ShapePtr with_shrink_retry(const char* what, const Shape& input, Contact&& conta
   try {
     OCC_CATCH_SIGNALS
     ShapePtr smaller = attempt(kShrink);
-    if (ShapePtr whole = detail::without_strips(*smaller, input, contact())) {
+    const double reach = contact();
+    const detail::Strips strips = detail::strips_to_remove(*smaller, input, reach);
+    std::vector<int> staying = strips.left;
+    ShapePtr whole = strips.faces.empty() ? nullptr : detail::without_strips(*smaller, input, reach);
+    if (!whole) {
+      staying.insert(staying.end(), strips.faces.begin(), strips.faces.end());
+    }
+    std::vector<Shape::NotePlace> places;
+    for (const int f : staying) {
+      const NameList& names = smaller->face_names(f);
+      if (!names.empty()) {
+        places.push_back(Shape::NotePlace::of(Shape::NotePlace::Kind::Face, names.front()));
+      }
+    }
+    if (whole) {
       smaller = whole;
     }
-    smaller->add_info(std::string("the ") + what +
-                      " is built 0.1 % smaller than asked: at its exact size it takes a face away, "
-                      "which the geometry kernel cannot build");
+    if (staying.empty()) {
+      smaller->add_info(std::string("the ") + what +
+                        " is built 0.1 % smaller than asked: at its exact size it takes a face away, "
+                        "which the geometry kernel cannot build");
+    } else {
+      smaller->add_note(std::string("the ") + what +
+                            " is built 0.1 % smaller than asked and leaves a sliver of a face it should take "
+                            "away: at its exact size the geometry kernel cannot build it",
+                        std::move(places));
+    }
     return smaller;
   } catch (const Cancelled&) {
     throw;
@@ -3148,6 +3173,106 @@ ShapePtr over_cutouts(const Shape& input, const std::vector<FilletSet>& sets, co
   return detail::cut_out_again(rounded, *cutouts, *copy);
 }
 
+// A dressup of a body some of whose faces were merged before it was built
+// (fill_overflow: narrow faces of one surface joined across the space
+// filled past them, a face then holding the names of several, mitcad#1783),
+// with the names of the input's edges and vertices: where an edge or a
+// vertex of that body is named otherwise than the input's at the same place
+// (after the merged face's first name), the input's name stands for it in
+// every face name of the result (the dressup's faces named after the edges
+// they round).
+ShapePtr with_input_names(const ShapePtr& result, const Shape& built_on, const Shape& input) {
+  if (!result) {
+    return result;
+  }
+  const auto middle = [](const TopoDS_Edge& edge) {
+    const BRepAdaptor_Curve curve(edge);
+    return curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()));
+  };
+  std::vector<gp_Pnt> input_middles;
+  for (int e = 0; e < input.edge_count(); ++e) {
+    input_middles.push_back(BRep_Tool::Degenerated(input.edge(e)) ? gp_Pnt(1e300, 1e300, 1e300)
+                                                                   : middle(input.edge(e)));
+  }
+  constexpr double kSame = 1.0e-6;
+  std::vector<std::pair<std::string, std::string>> renames;
+  for (int i = 0; i < built_on.edge_count(); ++i) {
+    const std::string& own = built_on.edge_name(i);
+    if (own.empty() || BRep_Tool::Degenerated(built_on.edge(i))) {
+      continue;
+    }
+    const gp_Pnt p = middle(built_on.edge(i));
+    for (int e = 0; e < input.edge_count(); ++e) {
+      if (input_middles[static_cast<std::size_t>(e)].Distance(p) <= kSame) {
+        const std::string& theirs = input.edge_name(e);
+        if (!theirs.empty() && theirs != own) {
+          renames.emplace_back(own, theirs);
+        }
+        break;
+      }
+    }
+  }
+  std::vector<std::pair<gp_Pnt, std::string>> input_vertices;
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> vertices;
+  TopExp::MapShapes(input.occt(), TopAbs_VERTEX, vertices);
+  for (int v = 1; v <= vertices.Extent(); ++v) {
+    if (const auto name = input.name_of_vertex(vertices(v))) {
+      input_vertices.emplace_back(BRep_Tool::Pnt(TopoDS::Vertex(vertices(v))), *name);
+    }
+  }
+  vertices.Clear();
+  TopExp::MapShapes(built_on.occt(), TopAbs_VERTEX, vertices);
+  for (int v = 1; v <= vertices.Extent(); ++v) {
+    const auto own = built_on.name_of_vertex(vertices(v));
+    if (!own) {
+      continue;
+    }
+    const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(vertices(v)));
+    for (const auto& [q, theirs] : input_vertices) {
+      if (q.Distance(p) <= kSame) {
+        if (theirs != *own) {
+          renames.emplace_back(*own, theirs);
+        }
+        break;
+      }
+    }
+  }
+  std::sort(renames.begin(), renames.end());
+  renames.erase(std::unique(renames.begin(), renames.end()), renames.end());
+  if (renames.empty()) {
+    return result;
+  }
+  std::vector<Shape::NamedFace> faces;
+  for (int f = 0; f < result->face_count(); ++f) {
+    NameList names = result->face_names(f);
+    // (In one pass, so that a name put in is not renamed again.)
+    for (std::string& name : names) {
+      std::string renamed;
+      for (std::size_t at = 0; at < name.size();) {
+        const std::pair<std::string, std::string>* longest = nullptr;
+        for (const auto& rename : renames) {
+          if (name.compare(at, rename.first.size(), rename.first) == 0 &&
+              (longest == nullptr || rename.first.size() > longest->first.size())) {
+            longest = &rename;
+          }
+        }
+        if (longest != nullptr) {
+          renamed += longest->second;
+          at += longest->first.size();
+        } else {
+          renamed += name[at];
+          ++at;
+        }
+      }
+      name = renamed;
+    }
+    faces.push_back({result->face(f), names});
+  }
+  ShapePtr named = std::make_shared<Shape>(result->occt(), faces);
+  named->copy_notes(*result);
+  return named;
+}
+
 // A chamfer wider than a narrow face beside its edges (mitcad#1232,
 // cutouts.hpp's fill_overflow): `build` bevels the body with the narrow
 // faces continued past their far edges, and the space filled there is cut
@@ -3209,7 +3334,7 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
       }
       ShapePtr* const apart = pieces_apart ? &unmerged : nullptr;
       if (ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy, apart)) {
-        return result;
+        return with_input_names(result, *cutouts.body, *copy);
       }
     } catch (const Cancelled&) {
       throw;
@@ -3930,6 +4055,13 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
           std::string why;
           if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why, !tangent.empty())) {
             if (tangent.empty() || sound_at_tangent(feature, input, *over, selected, largest_size(sets))) {
+              // A strip of a narrow face narrower than 0.1 % of the chamfer
+              // left beside it, where the chamfer is that little narrower
+              // than the face (mitcad#1783), taken away with the face, as
+              // after the 0.1 % smaller retry.
+              if (ShapePtr whole = detail::without_strips(*over, input, largest_size(sets))) {
+                return whole;
+              }
               return over;
             }
           }

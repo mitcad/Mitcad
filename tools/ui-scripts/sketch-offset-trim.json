@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for Trim on an offset's curve (mitcad#1755): two free points that frame the view's fit (p1, p2), a line c3 from (-20, 0) to (10, 0) and an arc c6 about (10, 10) from its end p5 round to (20, 10), offset 4 mm outward (a line copy at y = -4 and an arc copy of radius 14 to (24, 10), held to the source with a helper line across the gap), and a line from (15, 5) to (30, 5) across the arc copy at (23.08, 5)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-20,0],"end":[10,0]},
+  {"cmd":"sketch.arc","sketch":"F1","mode":"three_point","start":"p5","through":[17.071067811865476,2.9289321881345245],"end":[20,10]},
+  {"cmd":"sketch.offset","sketch":"F1","curves":["c3","c6"],"distance":4},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[15,5],"end":[30,5]}
+]

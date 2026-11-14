@@ -7,5 +7,16 @@
     "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
     "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
   {"cmd": "sketch.create"},
-  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [40, 0], "width": 20, "height": 20}
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [40, 0], "width": 20, "height": 20},
+  {"comment": "mitcad#1792: Part:1 (O1, C1) placed 100 mm along X, hidden until the test shows it: its Sketch (F4) with a 10 x 10 rectangle extruded 10 mm (F5, F5.b0, 1000 mm3) and an unused sketch (F6) with a 10 x 10 rectangle 20 mm along X. The root is active when the design opens."},
+  {"cmd": "create_component", "name": "Part", "transform": [[1, 0, 0, 100], [0, 1, 0, 0], [0, 0, 1, 0]]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F4", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F4", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F6", "corner": [20, 0], "width": 10, "height": 10},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "set_occurrence_visible", "occurrence": "O1", "visible": false}
 ]

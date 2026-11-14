@@ -350,7 +350,7 @@ fn origin_isolation_and_favourites_are_saved_with_undo() {
     assert!(opened.is_favorite_parameter("width"));
 
     // Undo takes each back; an isolated body that is gone isolates nothing.
-    for label in ["Add Favorite d1", "Isolate 2 item(s)"] {
+    for label in ["Add Favorite d1", "Isolate 2 items"] {
         assert_eq!(command(doc, json!({"cmd": "undo"}))["label"], label);
     }
     assert_eq!(display(doc), json!({"origin": true, "isolated": []}));

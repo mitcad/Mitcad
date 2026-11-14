@@ -819,6 +819,41 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
       selectionInput(QStringLiteral("objects"), QObject::tr("Objects"), SelectKind::Body, 0, 0)
           .withTooltip(QObject::tr("The bodies it joins and stops at; none: all")),
   };
+  if (!web) {
+    // A rib's Direction (mitcad#1746), before Flip, which turns it:
+    // Perpendicular to Chord, the sketch's x or y, or along a picked line,
+    // edge or axis in the sketch plane.
+    const auto flipAt = def.inputs.size() - 2;
+    def.inputs.insert(flipAt,
+                      choiceInput(QStringLiteral("direction"), QObject::tr("Direction"),
+                                  {{QStringLiteral("perpendicular"), QStringLiteral("Perpendicular to Chord")},
+                                   {QStringLiteral("sketch_x"), QStringLiteral("Sketch X")},
+                                   {QStringLiteral("sketch_y"), QStringLiteral("Sketch Y")},
+                                   {QStringLiteral("along"), QStringLiteral("Along Line")}},
+                                  QStringLiteral("perpendicular"))
+                          .withTooltip(QObject::tr("The way the rib grows in the sketch plane; Flip turns it")));
+    def.inputs.insert(flipAt + 1,
+                      selectionInput(QStringLiteral("direction_line"), QObject::tr("Direction Line"),
+                                     SelectKind::Axis | SelectKind::Edge | SelectKind::SketchCurve, 0, 1)
+                          .withTooltip(QObject::tr("A straight line, edge or axis in or parallel to the sketch plane"))
+                          .withAccepts([](const SelectionItem& item) { return isStraightLine(item); })
+                          .withVisible([](const CommandState& s) {
+                            return s.choice(QStringLiteral("direction")) == QStringLiteral("along");
+                          }));
+    // A rib's ends continued to the bodies' faces (mitcad#1746), before
+    // Objects: on for a new rib; a rib saved without it loads it off.
+    const auto inputCount = def.inputs.size();
+    def.inputs.insert(inputCount - 1,
+                      checkInput(QStringLiteral("extend_ends"), QObject::tr("Extend Ends"), true)
+                          .withTooltip(QObject::tr("Continue the curves' open ends along their direction until "
+                                                   "the rib meets the bodies' faces")));
+    def.inputs.insert(inputCount,
+                      valueInput(QStringLiteral("end_offset"), QObject::tr("End Offset"), ValueKind::Length,
+                                 QStringLiteral("0 mm"))
+                          .withTooltip(QObject::tr("How much further the ends go into the faces they meet; "
+                                                   "negative stops them short"))
+                          .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("extend_ends")); }));
+  }
   def.enabled = [&context] { return hasSketches(context, true); };
   const QString type = def.featureType;
 
@@ -856,6 +891,24 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     if (state.checked(QStringLiteral("flip"))) {
       result.def.insert(QStringLiteral("flip"), true);
     }
+    if (type == QStringLiteral("rib") && state.checked(QStringLiteral("extend_ends"))) {
+      result.def.insert(QStringLiteral("extend_ends"), true);
+      result.def.insert(QStringLiteral("end_offset"), state.expression(QStringLiteral("end_offset")));
+    }
+    // A rib's Direction (mitcad#1746); Perpendicular to Chord is written as
+    // nothing, as ribs made before it.
+    const QString direction = state.choice(QStringLiteral("direction"));
+    if (type == QStringLiteral("rib") && direction == QStringLiteral("along")) {
+      const Selection& line = state.items(QStringLiteral("direction_line"));
+      if (line.isEmpty()) {
+        return Built::failure(QObject::tr("Select a line, edge or axis for the direction."),
+                              QStringLiteral("direction_line"));
+      }
+      result.def.insert(QStringLiteral("direction"), QJsonObject{{QStringLiteral("along"), line.first().reference()}});
+    } else if (type == QStringLiteral("rib") &&
+               (direction == QStringLiteral("sketch_x") || direction == QStringLiteral("sketch_y"))) {
+      result.def.insert(QStringLiteral("direction"), direction);
+    }
     const Selection& objects = state.items(QStringLiteral("objects"));
     if (!objects.isEmpty()) {
       result.def.insert(QStringLiteral("participants"), bodyUids(objects));
@@ -872,6 +925,22 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     state.setChoice(QStringLiteral("depth_type"), str(extent, "type"));
     loadValue(state, QStringLiteral("depth"), extent.value(QStringLiteral("depth")), feature, context);
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+    // A rib saved without Extend Ends keeps its ends as drawn (mitcad#1746).
+    state.setChecked(QStringLiteral("extend_ends"), feature.value(QStringLiteral("extend_ends")).toBool());
+    loadValue(state, QStringLiteral("end_offset"), feature.value(QStringLiteral("end_offset")), feature, context);
+    // Its Direction: absent is Perpendicular to Chord.
+    const QJsonValue direction = feature.value(QStringLiteral("direction"));
+    if (direction.isString()) {
+      state.setChoice(QStringLiteral("direction"), direction.toString());
+    } else if (direction.isObject()) {
+      state.setChoice(QStringLiteral("direction"), QStringLiteral("along"));
+      const SelectionItem line = itemOf(direction.toObject().value(QStringLiteral("along")), context);
+      if (line.isValid()) {
+        state.setItems(QStringLiteral("direction_line"), {line});
+      }
+    } else {
+      state.setChoice(QStringLiteral("direction"), QStringLiteral("perpendicular"));
+    }
     state.setItems(QStringLiteral("objects"), bodiesOf(feature.value(QStringLiteral("participants")).toArray()));
   };
 
@@ -1397,9 +1466,11 @@ CommandDef helixCommand(const CommandContext& context) {
     loadOperation(feature, state);
   };
 
-  // A fixed axis (the importer's) cannot be shown.
+  // A fixed axis (the importer's) cannot be shown; a surface helix is
+  // Surface Helix's to edit (mitcad#1777).
   def.canEdit = [&context](const QJsonObject& feature) {
-    return isShowable(feature.value(QStringLiteral("axis")), context);
+    return !feature.value(QStringLiteral("surface")).toBool() &&
+           isShowable(feature.value(QStringLiteral("axis")), context);
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {
@@ -1443,32 +1514,59 @@ CommandDef intersectionCurveCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("intersection_curve");
   // Curves of a 3D sketch too, swept along its support plane's normal
   // (mitcad#1550); its reference curves are none.
+  // Or faces, surface bodies and solid bodies, which meet as they are
+  // (mitcad#1777).
+  const auto takes = [&context](const SelectionItem& item) {
+    return item.kind == SelectKind::Face || item.kind == SelectKind::Body || pathTakes(item, context);
+  };
   def.inputs = {
-      selectionInput(QStringLiteral("first"), QObject::tr("First Curves"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Curves of one sketch or 3D sketch, swept along its normal"))
-          .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+      selectionInput(QStringLiteral("first"), QObject::tr("First Curves"),
+                     SelectKind::SketchCurve | SelectKind::Face | SelectKind::Body, 1, 0)
+          .withTooltip(QObject::tr("Curves of one sketch or 3D sketch, swept along its normal; or faces and "
+                                   "bodies"))
+          .withAccepts(takes)
           .withRefusedHint(
               [&context](const SelectionItem& item, const CommandState&) { return pathRefusal(item, context); }),
-      selectionInput(QStringLiteral("second"), QObject::tr("Second Curves"), SelectKind::SketchCurve, 1, 0)
-          .withTooltip(QObject::tr("Curves of another sketch, on a plane at an angle to the first"))
-          .withAccepts([&context](const SelectionItem& item) { return pathTakes(item, context); })
+      selectionInput(QStringLiteral("second"), QObject::tr("Second Curves"),
+                     SelectKind::SketchCurve | SelectKind::Face | SelectKind::Body, 1, 0)
+          .withTooltip(QObject::tr("Curves of another sketch at an angle to the first; or faces and bodies"))
+          .withAccepts(takes)
           .withRefusedHint(
               [&context](const SelectionItem& item, const CommandState&) { return pathRefusal(item, context); }),
       checkInput(QStringLiteral("chain"), QObject::tr("Chain Selection"), true)
           .withTooltip(QObject::tr("Also take the curves joined to the selected ones")),
   };
-  def.enabled = [&context] { return hasSketches(context, true); };
+  def.enabled = [&context] { return hasSketches(context, true) || hasBodies(context); };
 
-  def.build = [](const CommandState& state, const CommandContext&) {
+  // An input of faces and bodies as the model takes it: {"geometry": [...]}
+  // (mitcad#1777); else the sketch curves as a path.
+  const auto sideOf = [](const Selection& items, bool chain, Built& result, const QString& input) -> QJsonValue {
+    const auto shape = [](const SelectionItem& item) {
+      return item.kind == SelectKind::Face || item.kind == SelectKind::Body;
+    };
+    const auto shapes = std::count_if(items.cbegin(), items.cend(), shape);
+    if (shapes == 0) {
+      return pathOf(items, chain, result, input);
+    }
+    if (shapes != items.size()) {
+      result = Built::failure(QObject::tr("Select sketch curves, or faces and bodies, not both."), input);
+      return QJsonValue();
+    }
+    QJsonArray geometry;
+    for (const SelectionItem& item : items) {
+      geometry.append(item.reference());
+    }
+    return QJsonObject{{QStringLiteral("geometry"), geometry}};
+  };
+  def.build = [sideOf](const CommandState& state, const CommandContext&) {
     Built result;
     const bool chain = state.checked(QStringLiteral("chain"));
-    const QJsonValue first =
-        pathOf(state.items(QStringLiteral("first")), chain, result, QStringLiteral("first"));
+    const QJsonValue first = sideOf(state.items(QStringLiteral("first")), chain, result, QStringLiteral("first"));
     if (!result.error.isEmpty()) {
       return result;
     }
     const QJsonValue second =
-        pathOf(state.items(QStringLiteral("second")), chain, result, QStringLiteral("second"));
+        sideOf(state.items(QStringLiteral("second")), chain, result, QStringLiteral("second"));
     if (!result.error.isEmpty()) {
       return result;
     }
@@ -1479,14 +1577,230 @@ CommandDef intersectionCurveCommand(const CommandContext& context) {
   };
 
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
-    loadPath(feature.value(QStringLiteral("first")), state, QStringLiteral("first"), context);
-    loadPath(feature.value(QStringLiteral("second")), state, QStringLiteral("second"), context);
+    for (const QString& id : {QStringLiteral("first"), QStringLiteral("second")}) {
+      const QJsonValue side = feature.value(id);
+      // Faces and bodies (mitcad#1777).
+      if (side.toObject().contains(QStringLiteral("geometry"))) {
+        Selection items;
+        for (const QJsonValue& ref : side.toObject().value(QStringLiteral("geometry")).toArray()) {
+          const SelectionItem item = itemOf(ref, context);
+          if (item.isValid()) {
+            items.append(item);
+          }
+        }
+        state.setItems(id, items);
+        continue;
+      }
+      loadPath(side, state, id, context);
+    }
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {
     return QStringLiteral("Added intersection curve of %1 and %2 curve(s)")
         .arg(state.items(QStringLiteral("first")).size())
         .arg(state.items(QStringLiteral("second")).size());
+  };
+  return def;
+}
+
+// ---------------------------------------------------------------------------
+// Helix Curve (mitcad#1777): a helical 3D curve about an axis, a path for
+// the features after it as an Intersection Curve's curve is. On a
+// cylindrical or conical face it starts at the face's low end and, with
+// Radius from Face, lies on the face. Its pitch and turns go in as Helix's
+// do (a height as their ratio).
+
+namespace {
+
+// Whether a value's expression is a plain zero (left out of the model's
+// definition): empty, "0" or a zero with its unit.
+bool plainZero(const QString& expression) {
+  const QString text = expression.trimmed();
+  if (text.isEmpty()) {
+    return true;
+  }
+  bool number = false;
+  const double value = text.section(QLatin1Char(' '), 0, 0).toDouble(&number);
+  if (!number) {
+    // "0°" and the like.
+    QString digits = text;
+    digits.remove(QChar(0x00B0));
+    return digits.trimmed().toDouble(&number) == 0.0 && number;
+  }
+  return value == 0.0 && text.count(QLatin1Char(' ')) <= 1;
+}
+
+// Whether the axis picked is a face (its radius can come from it).
+bool helixCurveOnFace(const CommandState& state) {
+  const Selection& axis = state.items(QStringLiteral("axis"));
+  return !axis.isEmpty() && axis.first().kind == SelectKind::Face;
+}
+
+// Whether the radius is the picked face's.
+bool radiusFromFace(const CommandState& state) {
+  return helixCurveOnFace(state) && state.checked(QStringLiteral("face_radius"));
+}
+
+} // namespace
+
+CommandDef helixCurveCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("solid.helix_curve");
+  def.name = QObject::tr("Helix Curve");
+  def.icon = QStringLiteral("helix");
+  def.tooltip = QObject::tr("A helical 3D curve about an axis, a path for Sweep and Pipe");
+  def.group = QStringLiteral("CREATE");
+  def.section = QStringLiteral("primitives");
+  def.keywords = {QStringLiteral("3d curve"), QStringLiteral("curve"), QStringLiteral("path"),
+                  QStringLiteral("spiral"), QStringLiteral("thread")};
+  def.featureType = QStringLiteral("helix_curve");
+  const auto typeHas = [](const char* field) {
+    return [field = QString::fromLatin1(field)](const CommandState& state) {
+      return state.choice(QStringLiteral("type")).contains(field);
+    };
+  };
+  def.inputs = {
+      selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
+                     SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge | SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("An origin or construction axis, a straight edge, a sketch line, or a "
+                                   "cylindrical or conical face"))
+          .withAccepts([](const SelectionItem& item) {
+            return item.kind == SelectKind::Axis || isLine(item) ||
+                   (item.kind == SelectKind::Face && isAxial(item));
+          }),
+      checkInput(QStringLiteral("face_radius"), QObject::tr("Radius from Face"), true)
+          .withTooltip(QObject::tr("Take the picked face's radius, so that the curve lies on the face"))
+          .withVisible(helixCurveOnFace),
+      valueInput(QStringLiteral("radius"), QObject::tr("Radius"), ValueKind::Length, QStringLiteral("10 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The distance from the axis where the curve starts"))
+          .withVisible([](const CommandState& state) { return !radiusFromFace(state); }),
+      choiceInput(QStringLiteral("type"), QObject::tr("Type"),
+                  {{kRevolutionsAndHeight, QStringLiteral("Revolution and Height")},
+                   {kRevolutionsAndPitch, QStringLiteral("Revolution and Pitch")},
+                   {kHeightAndPitch, QStringLiteral("Height and Pitch")}},
+                  kRevolutionsAndPitch),
+      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("4"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The turns; need not be whole"))
+          .withVisible(typeHas("revolutions")),
+      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("20 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("How far the curve rises along the axis"))
+          .withVisible(typeHas("height")),
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("5 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The rise per turn"))
+          .withVisible(typeHas("pitch")),
+      valueInput(QStringLiteral("start_angle"), QObject::tr("Start Angle"), ValueKind::Angle,
+                 QStringLiteral("0 deg"))
+          .withTooltip(QObject::tr("Where the curve starts round the axis")),
+      valueInput(QStringLiteral("growth"), QObject::tr("Growth"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("How far the curve moves out from the axis per turn, a conical helix; "
+                                   "negative narrows it"))
+          .withVisible([](const CommandState& state) { return !radiusFromFace(state); }),
+      choiceInput(QStringLiteral("hand"), QObject::tr("Handedness"),
+                  {{QStringLiteral("right"), QStringLiteral("Right Hand")},
+                   {QStringLiteral("left"), QStringLiteral("Left Hand")}},
+                  QStringLiteral("right"))
+          .withTooltip(QObject::tr("The way the curve turns about the way it rises")),
+      flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withTooltip(QObject::tr("Rise against the axis direction")),
+  };
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    const Selection& axis = state.items(QStringLiteral("axis"));
+    if (axis.isEmpty()) {
+      return Built::failure(QObject::tr("Select an axis."), QStringLiteral("axis"));
+    }
+    const QString type = state.choice(QStringLiteral("type"));
+    QString pitch = state.expression(QStringLiteral("pitch"));
+    QString revolutions = state.expression(QStringLiteral("revolutions"));
+    if (type == kHeightAndPitch) {
+      revolutions = ratio(state.expression(QStringLiteral("height")), pitch);
+    } else if (type == kRevolutionsAndHeight) {
+      pitch = ratio(state.expression(QStringLiteral("height")), revolutions);
+    }
+    result.def = {{QStringLiteral("type"), QStringLiteral("helix_curve")},
+                  {QStringLiteral("axis"), axis.first().reference()},
+                  {QStringLiteral("pitch"), pitch},
+                  {QStringLiteral("revolutions"), revolutions}};
+    if (!radiusFromFace(state)) {
+      result.def.insert(QStringLiteral("radius"), state.expression(QStringLiteral("radius")));
+      if (!plainZero(state.expression(QStringLiteral("growth")))) {
+        result.def.insert(QStringLiteral("growth"), state.expression(QStringLiteral("growth")));
+      }
+    }
+    if (!plainZero(state.expression(QStringLiteral("start_angle")))) {
+      result.def.insert(QStringLiteral("start_angle"), state.expression(QStringLiteral("start_angle")));
+    }
+    if (state.choice(QStringLiteral("hand")) == QStringLiteral("left")) {
+      result.def.insert(QStringLiteral("left_handed"), true);
+    }
+    if (state.checked(QStringLiteral("flip"))) {
+      result.def.insert(QStringLiteral("flip"), true);
+    }
+    return result;
+  };
+
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    const SelectionItem axis = itemOf(feature.value(QStringLiteral("axis")), context);
+    if (axis.isValid()) {
+      state.setItems(QStringLiteral("axis"), {axis});
+    }
+    const QString uid = feature.value(QStringLiteral("uid")).toString();
+    const QString pitch = context.valueText(feature.value(QStringLiteral("pitch")), uid);
+    const QString revolutions = context.valueText(feature.value(QStringLiteral("revolutions")), uid);
+    if (const QString height = dividendOf(revolutions, pitch); !height.isEmpty()) {
+      state.setChoice(QStringLiteral("type"), kHeightAndPitch);
+      state.setText(QStringLiteral("height"), height);
+      state.setText(QStringLiteral("pitch"), pitch);
+    } else if (const QString rise = dividendOf(pitch, revolutions); !rise.isEmpty()) {
+      state.setChoice(QStringLiteral("type"), kRevolutionsAndHeight);
+      state.setText(QStringLiteral("height"), rise);
+      state.setText(QStringLiteral("revolutions"), revolutions);
+    } else {
+      state.setChoice(QStringLiteral("type"), kRevolutionsAndPitch);
+      state.setText(QStringLiteral("pitch"), pitch);
+      state.setText(QStringLiteral("revolutions"), revolutions);
+    }
+    state.setChecked(QStringLiteral("face_radius"), !feature.contains(QStringLiteral("radius")));
+    if (feature.contains(QStringLiteral("radius"))) {
+      state.setText(QStringLiteral("radius"), context.valueText(feature.value(QStringLiteral("radius")), uid));
+    }
+    if (feature.contains(QStringLiteral("growth"))) {
+      state.setText(QStringLiteral("growth"), context.valueText(feature.value(QStringLiteral("growth")), uid));
+    }
+    if (feature.contains(QStringLiteral("start_angle"))) {
+      state.setText(QStringLiteral("start_angle"),
+                    context.valueText(feature.value(QStringLiteral("start_angle")), uid));
+    }
+    state.setChoice(QStringLiteral("hand"), feature.value(QStringLiteral("left_handed")).toBool()
+                                                ? QStringLiteral("left")
+                                                : QStringLiteral("right"));
+    state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+  };
+
+  // A fixed axis (a script's) cannot be shown.
+  def.canEdit = [&context](const QJsonObject& feature) {
+    return isShowable(feature.value(QStringLiteral("axis")), context);
+  };
+
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    const QString type = state.choice(QStringLiteral("type"));
+    const double height = state.value(QStringLiteral("height"));
+    double pitch = state.value(QStringLiteral("pitch"));
+    double turns = state.value(QStringLiteral("revolutions"));
+    if (type == kHeightAndPitch) {
+      turns = height / pitch;
+    } else if (type == kRevolutionsAndHeight) {
+      pitch = height / turns;
+    }
+    return QStringLiteral("Added helix curve, %1 turns of %2, %3, %4")
+        .arg(number(turns), number(pitch),
+             radiusFromFace(state) ? QStringLiteral("radius from the face")
+                                   : QStringLiteral("radius %1").arg(number(state.value(QStringLiteral("radius")))),
+             state.choice(QStringLiteral("hand")) == QStringLiteral("left") ? QStringLiteral("left-handed")
+                                                                             : QStringLiteral("right-handed"));
   };
   return def;
 }

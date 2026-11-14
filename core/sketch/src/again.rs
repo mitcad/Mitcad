@@ -96,6 +96,20 @@ impl SketchEdit<'_> {
                     topo = projection.source
                 ));
             };
+            // Edges on its curve that could have taken its place, none of
+            // them alone (mitcad#1784): one of them is to be named.
+            if report.lost && !report.candidates.is_empty() {
+                let names: Vec<&str> = report
+                    .candidates
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                return Err(crate::said(
+                    "the projection of an edge cannot be projected again on its own: its source \
+                     is gone; name the edge on its curve that took its place as its successor",
+                    format!("its successor could be any of {}", names.join(", ")),
+                ));
+            }
             if report.lost || report.current.is_empty() {
                 return Err(format!(
                     "the projection of {topo} cannot be projected again: its source is gone \
@@ -106,6 +120,46 @@ impl SketchEdit<'_> {
             out.push(self.project_one_again(k, report)?);
         }
         Ok(out)
+    }
+
+    /// Projects the linked projection at `k`, whose source edge is gone,
+    /// again from `successor`, one of the edges on a curve of its kind that
+    /// could have taken its place as the last evaluation found them
+    /// ([`ProjectionFollow::candidates`], mitcad#1784): its source becomes
+    /// that edge, and it is projected anew from that edge's curves as
+    /// [`SketchEdit::project_again`] projects one. Fails when the last
+    /// evaluation found no such edge by that name.
+    pub fn project_again_from(
+        &mut self,
+        follow: &[ProjectionFollow],
+        k: usize,
+        successor: &str,
+    ) -> Result<ProjectedAgain, String> {
+        if k >= self.def.projections.len() {
+            return Err(crate::said(
+                "the sketch has no such projection",
+                format!("the sketch has no projection {k}"),
+            ));
+        }
+        let found = follow
+            .iter()
+            .find(|r| r.projection == k)
+            .and_then(|r| r.candidates.iter().find(|(name, _)| name == successor));
+        let source = found.and_then(|(name, _)| name.parse::<crate::topo::TopoName>().ok());
+        let (Some((_, current)), Some(source)) = (found, source) else {
+            return Err(crate::said(
+                "the edge named is none of those that could have taken the place of the \
+                 projection's source",
+                format!("its successor {successor} is not one of its candidates"),
+            ));
+        };
+        self.def.projections[k].source = source.into();
+        let report = ProjectionFollow {
+            projection: k,
+            current: current.clone(),
+            ..ProjectionFollow::default()
+        };
+        self.project_one_again(k, &report)
     }
 
     fn project_one_again(
@@ -450,7 +504,7 @@ fn as_ref_like(old: EntityUid, new: EntityUid, plan: &Plan) -> Ref {
 
 /// A constraint that holds for a circle as for an arc, so that it moves
 /// with an arc that became a circle or the other way round.
-fn round_constraint(kind: &ConstraintKind) -> bool {
+pub(crate) fn round_constraint(kind: &ConstraintKind) -> bool {
     matches!(
         kind,
         ConstraintKind::Coincident { .. }
@@ -462,7 +516,7 @@ fn round_constraint(kind: &ConstraintKind) -> bool {
 }
 
 /// A dimension that measures a circle as an arc (not an arc's length).
-fn round_dimension(kind: &DimensionKind) -> bool {
+pub(crate) fn round_dimension(kind: &DimensionKind) -> bool {
     matches!(
         kind,
         DimensionKind::Radius { .. }

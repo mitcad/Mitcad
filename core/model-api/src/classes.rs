@@ -373,6 +373,10 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("set_link_envelope", FileIo),
     // View › Show of the whole design (mitcad#1287): display state.
     ("set_view_show", Model),
+    // The eyes of a component's folders (mitcad#1771): display state.
+    ("set_folder_visible", Model),
+    // Show Dimensions of a sketch's row (mitcad#1772): display state.
+    ("set_sketch_dimensions_shown", Model),
     // Update Link reads a linked design's file again (mitcad#1416).
     ("update_link", FileIo),
     // The model's items in a drawing's views and kept as its own
@@ -426,6 +430,23 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // Several materials made from the bundled dataset at once
     // (mitcad#1706); into a library its files, see `command_class_with`.
     ("create_dataset_materials", Model),
+    // CAM setups, operations, machines and their tools (mitcad#1013); the
+    // machine library's files are read and written by path.
+    ("cam_setup_add", Model),
+    ("cam_setup_edit", Model),
+    ("cam_setup_delete", Model),
+    ("cam_setup_move", Model),
+    ("cam_operation_add", Model),
+    ("cam_operation_edit", Model),
+    ("cam_operation_delete", Model),
+    ("cam_operation_move", Model),
+    ("cam_machine_put", Model),
+    ("cam_machine_delete", Model),
+    ("cam_tool_put", Model),
+    ("cam_tool_delete", Model),
+    ("cam_generate", Model),
+    ("cam_machine_from_library", FileIo),
+    ("cam_machine_to_library", FileIo),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -488,6 +509,7 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("sheet_reference", Model),
     ("sheet_seam", Model),
     ("sheet_bodies", Model),
+    ("sheet_corner_edges", Model),
     ("policy", Model),
     ("policies", Model),
     ("sketch_supports", Model),
@@ -652,11 +674,24 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("filament_change_preview", Model),
     // Animate Joint's frames without a recompute (mitcad#1701).
     ("joint_poses", Model),
+    // CAM (mitcad#1013); the machine library reads its folders.
+    ("cam_setups", Model),
+    ("cam_operations", Model),
+    ("cam_toolpaths", Model),
+    ("cam_post", Model),
+    ("cam_machines", Model),
+    ("cam_dialects", Model),
+    ("cam_library", FileIo),
+    // The stock simulation (mitcad#1013, phase 3).
+    ("cam_simulate", Model),
     // The design at values of a parameter, tried on a copy (mitcad#1730).
     ("parameter_range", Model),
     // Whether a link to a file would be followed: it looks at the file
     // system (mitcad#1719).
     ("link_check", FileIo),
+    // The design packed into a zip for a report: it reads the design's
+    // files and writes the zip (mitcad#1795).
+    ("design_package", FileIo),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

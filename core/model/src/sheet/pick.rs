@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use super::folded::develop::chart_coordinates;
 use super::*;
+use crate::features::sheet_folded::SheetCorner;
 use crate::topo::SegmentKey;
 
 /// What one face name of a sheet body stands for.
@@ -292,6 +293,45 @@ fn corner(
     Ok(json!({"corner": corner, "straight": is_line(incoming) && is_line(outgoing)}))
 }
 
+/// The corner of `panel` where its wall along `curve` meets its tangent
+/// line to `bend` (mitcad#1765: the thickness edge between that wall and
+/// the bend's side), None when they do not meet there.
+fn corner_beside_bend(
+    state: &SheetState,
+    thickness: f64,
+    panel: PanelId,
+    bend: SheetDomainRef,
+    curve: &SheetCurveId,
+    at: Option<[f64; 3]>,
+) -> Option<Value> {
+    let domain = SheetDomainRef::Panel(panel);
+    let patch = chart(state, domain).ok()?;
+    let tangent = |edge: &MaterialEdge| {
+        state.joins.iter().any(|port| {
+            [(&port.first, &port.second), (&port.second, &port.first)]
+                .iter()
+                .any(|(own, other)| {
+                    own.boundary.domain == domain
+                        && own.boundary.piece == edge.piece
+                        && other.boundary.domain == bend
+                })
+        })
+    };
+    let mut line = None;
+    for (contour, i, edge) in edges(patch) {
+        if &edge.piece.curve != curve {
+            continue;
+        }
+        let n = contour.edges.len();
+        for next in [&contour.edges[(i + 1) % n], &contour.edges[(i + n - 1) % n]] {
+            if tangent(next) {
+                line.get_or_insert_with(|| next.piece.curve.clone());
+            }
+        }
+    }
+    corner(state, thickness, panel, curve, &line?, at).ok()
+}
+
 /// The corner whose thickness edge runs from `start` to `end` (mitcad#242:
 /// an edge named after an ordinary feature, of a body whose domains the
 /// sheet-domain adapter re-derived): the panel contour vertex where one
@@ -416,6 +456,21 @@ pub fn reference(
                         answer.as_object_mut().expect("an object").extend(found);
                     }
                 }
+                // The thickness edge where a panel's wall meets the side of
+                // a bend (mitcad#1765): the corner of the panel between
+                // that wall and its tangent line to the bend, which Corner
+                // Round and Corner Chamfer trim in the developed outline.
+                (PickedFace::Wall(SheetDomainRef::Panel(panel), curve), other)
+                | (other, PickedFace::Wall(SheetDomainRef::Panel(panel), curve))
+                    if matches!(other, PickedFace::Wall(SheetDomainRef::Bend(_), _)) =>
+                {
+                    answer["domain"] = json!(SheetDomainRef::Panel(*panel));
+                    if let Some(Value::Object(found)) =
+                        corner_beside_bend(state, thickness, *panel, other.domain(), curve, at)
+                    {
+                        answer.as_object_mut().expect("an object").extend(found);
+                    }
+                }
                 // A seam, or the edge between a panel and a bend: the
                 // first panel's domain.
                 _ => {
@@ -430,6 +485,82 @@ pub fn reference(
         _ => return Err("give either a face or an edge".into()),
     }
     Ok(answer)
+}
+
+/// The face name of the wall along `curve` of `panel`:
+/// `F3:sheet_side0(F2:sheet_curve(c2[c1,c3]))`.
+fn wall_name(panel: PanelId, curve: &SheetCurveId) -> String {
+    let key = match curve {
+        SheetCurveId::Sketch { sketch, segment } => format!("{sketch}:sheet_curve({segment})"),
+        SheetCurveId::Generated { feature, slot } => format!("{feature}:sheet_curve({slot})"),
+    };
+    format!("{}:sheet_side{}({key})", panel.feature, panel.slot)
+}
+
+/// Whether a corner `reference` found is the stored one: the same panel
+/// and curves, and the same pieces where both name them.
+fn same_corner(found: &SheetCorner, stored: &SheetCorner) -> bool {
+    let piece = |a: Option<u32>, b: Option<u32>| a.is_none() || b.is_none() || a == b;
+    found.panel == stored.panel
+        && found.incoming == stored.incoming
+        && found.outgoing == stored.outgoing
+        && piece(found.incoming_piece, stored.incoming_piece)
+        && piece(found.outgoing_piece, stored.outgoing_piece)
+}
+
+/// The thickness edge a stored corner of Corner Round or Corner Chamfer
+/// lies on in the body (the `sheet_corner_edges` query, mitcad#1766):
+/// among the body's edges (`listed`, with `at` a point on one), the edge
+/// between a wall of the corner's panel along one of its curves and
+/// another wall (of that panel, or the side of a bend for a corner beside
+/// a bend) that `reference` answers as this corner. A kernel that lists no
+/// edge between two walls gives the edge between the walls of the corner's
+/// two curves when `reference` answers that as the corner. None when the body
+/// has no edge there (a corner its round or bevel has taken away).
+pub fn corner_edge(
+    state: &SheetState,
+    thickness: f64,
+    corner: &SheetCorner,
+    listed: &[String],
+    at: &dyn Fn(&str) -> Option<[f64; 3]>,
+) -> Option<String> {
+    let panel = SheetDomainRef::Panel(corner.panel);
+    let own = |face: &PickedFace| match face {
+        PickedFace::Wall(domain, curve) => {
+            *domain == panel && (curve == &corner.incoming || curve == &corner.outgoing)
+        }
+        PickedFace::Surface(_) => false,
+    };
+    let answers = |name: &str, point: Option<[f64; 3]>| {
+        let Ok(answer) = reference(state, thickness, None, Some(name), point) else {
+            return false;
+        };
+        let found: Option<SheetCorner> = serde_json::from_value(answer["corner"].clone()).ok();
+        found.is_some_and(|c| same_corner(&c, corner))
+    };
+    // The listed edges between two walls, with the faces they join.
+    let between_walls: Vec<(&str, PickedFace, PickedFace)> = listed
+        .iter()
+        .filter_map(|name| {
+            let (a, b) = edge_faces(name)?;
+            let (a, b) = (parse_face(&a)?, parse_face(&b)?);
+            let walls = matches!(a, PickedFace::Wall(..)) && matches!(b, PickedFace::Wall(..));
+            walls.then_some((name.as_str(), a, b))
+        })
+        .collect();
+    if between_walls.is_empty() {
+        let mut walls = [
+            wall_name(corner.panel, &corner.incoming),
+            wall_name(corner.panel, &corner.outgoing),
+        ];
+        walls.sort();
+        let name = format!("E{{{}|{}}}", walls[0], walls[1]);
+        return answers(&name, None).then_some(name);
+    }
+    between_walls
+        .into_iter()
+        .find(|(name, a, b)| (own(a) || own(b)) && answers(name, at(name)))
+        .map(|(name, _, _)| name.to_owned())
 }
 
 /// The `sheet_seam` query: the boundaries of a registered seam between two

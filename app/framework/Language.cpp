@@ -59,9 +59,11 @@ LanguageState& state() {
 // the other, installed before Qt's own catalogue so that Qt's texts take
 // Qt's translation first, in the context-free part. Both note the English
 // source of what they translate.
+// English's plural forms (mitcad_en.qm, mitcad#1756) note no misses: every
+// other text is English already.
 class Catalogue : public QTranslator {
  public:
-  explicit Catalogue(bool primary) : m_primary(primary) {}
+  explicit Catalogue(bool primary, bool notesMisses = true) : m_primary(primary), m_notesMisses(notesMisses) {}
 
   QString translate(const char* context, const char* source, const char* disambiguation = nullptr,
                     int n = -1) const override {
@@ -79,7 +81,7 @@ class Catalogue : public QTranslator {
       text = QTranslator::translate(kAnyContext, source, disambiguation, n);
     }
     LanguageState& current = state();
-    if (!m_primary && current.logMisses) {
+    if (!m_primary && m_notesMisses && current.logMisses) {
       // Asked only when the catalogue in its contexts had no translation: a
       // text found here was found without its context (mitcad#1472).
       const QString key = QStringLiteral("%1: %2: %3")
@@ -109,6 +111,7 @@ class Catalogue : public QTranslator {
 
  private:
   bool m_primary;
+  bool m_notesMisses;
 };
 
 // "fi", "fi_FI", "fi-FI" and the like as the codes to look for, the most
@@ -252,8 +255,20 @@ QString startInterfaceLanguage(const QString& option) {
                                                QLocale::system().uiLanguages(), available);
   QString code = choice.code;
   QString reason = choice.reason;
+  const QDir folder(translationsFolder());
+  // English's plural forms (mitcad#1756) in every language, asked last:
+  // "1 degree of freedom", "17 degrees of freedom" where the source says
+  // "degree(s)", also for a text another language has not translated yet.
+  {
+    auto anyContext = std::make_unique<Catalogue>(false, false);
+    auto primary = std::make_unique<Catalogue>(true, false);
+    const QString file = folder.filePath(catalogueName(kEnglish));
+    if (QFileInfo::exists(file) && anyContext->load(file) && primary->load(file)) {
+      QCoreApplication::installTranslator(anyContext.release());
+      QCoreApplication::installTranslator(primary.release());
+    }
+  }
   if (code != kEnglish) {
-    const QDir folder(translationsFolder());
     // The context-free part first, then Qt's own catalogue, then the
     // catalogue in its contexts: the last installed is asked first.
     auto anyContext = std::make_unique<Catalogue>(false);

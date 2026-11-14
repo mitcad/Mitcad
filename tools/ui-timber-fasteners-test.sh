@@ -259,7 +259,7 @@ seats=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep '^Timber fastener .*: head to
 ui_step "close the panel (Escape)"         ui_key Escape
 ui_mark
 ui_step "undo"                             ui_key ctrl+z
-ui_expect_new "Undo: Swap 2 fastener(s) for Ring nail test 3.1x90" "one undo step takes the swap back"
+ui_expect_new "Undo: Swap 2 fasteners for Ring nail test 3.1x90" "one undo step takes the swap back"
 ui_stop_app
 
 echo "--- 3. Spacing with fasteners"

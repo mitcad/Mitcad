@@ -327,8 +327,6 @@ impl<K: Kernel> Evaluate<K> for ChamferDef {
                 set.reference_face = Some(ctx.face_on(self.body, &shape, face)?);
             }
         }
-        let uid = ctx.uid;
-        let bevelled = found.apply(ctx, uid, &shape, sizes)?;
         // The picked edges where they were, for the timeline (mitcad#957).
         let inputs = super::inputs::picked_edges(
             ctx.kernel,
@@ -338,6 +336,17 @@ impl<K: Kernel> Evaluate<K> for ChamferDef {
                 .iter()
                 .map(|set| (set.edges.as_slice(), set.faces.as_slice())),
         );
+        // Corners of a sheet beside a bend (mitcad#1765) are bevelled as
+        // Corner Chamfer bevels them, so that the body stays a sheet.
+        if let Some(edges) = found.sheet_corners(&sizes)
+            && let Some(mut output) =
+                crate::sheet::folded::dressup_corners(ctx, self.body, &shape, &edges)?
+        {
+            output.inputs = inputs;
+            return Ok(output);
+        }
+        let uid = ctx.uid;
+        let bevelled = found.apply(ctx, uid, &shape, sizes)?;
         Ok(FeatureOutput {
             changes: vec![BodyChange::Set(self.body, bevelled)],
             inputs,
@@ -358,6 +367,26 @@ impl ChamferDef {
     ) -> Result<K::Shape, String> {
         let sizes = self.sizes(ctx)?;
         self.apply(ctx, feature, shape, sizes)
+    }
+
+    /// The edges of a chamfer of equal distances, each with its distance,
+    /// as sheet corners take them (mitcad#1765); None for other chamfers.
+    fn sheet_corners(
+        &self,
+        sizes: &[ChamferSize],
+    ) -> Option<Vec<(EdgeName, crate::sheet::folded::CornerSize)>> {
+        let mut edges = Vec::new();
+        for (set, size) in self.sets.iter().zip(sizes) {
+            let ChamferSize::EqualDistance { distance } = size else {
+                return None;
+            };
+            if !set.faces.is_empty() || set.all_edges {
+                return None;
+            }
+            let corner = crate::sheet::folded::CornerSize::Chamfer([*distance, *distance]);
+            edges.extend(set.edges.iter().map(|e| (e.clone(), corner)));
+        }
+        Some(edges)
     }
 
     fn sizes<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Vec<ChamferSize>, String> {

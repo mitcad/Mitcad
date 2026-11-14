@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!--
+  Info.plist of the Quick Look thumbnail extension MitCadThumbnails.appex
+  (mitcad#1696, Contents/PlugIns of the application bundle):
+  cmake/MacQuickLook.cmake fills the placeholders between at signs. Its
+  identifier lies under the application's, and QLSupportedContentTypes is
+  the .mitcad type the application exports (Info.plist.in), so that Finder
+  asks it for those files' thumbnails. QLThumbnailMinimumDimension 0: every
+  icon size gets the preview.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>MitCad Thumbnails</string>
+  <key>CFBundleExecutable</key>
+  <string>@MITCAD_QUICKLOOK_EXECUTABLE@</string>
+  <key>CFBundleIdentifier</key>
+  <string>@MITCAD_BUNDLE_ID@.thumbnails</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>@MITCAD_QUICKLOOK_EXECUTABLE@</string>
+  <key>CFBundlePackageType</key>
+  <string>XPC!</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@PROJECT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@PROJECT_VERSION@</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>@MITCAD_MACOS_MIN_VERSION@</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright (c) MitCad contributors. MIT licence.</string>
+  <key>NSExtension</key>
+  <dict>
+    <key>NSExtensionPointIdentifier</key>
+    <string>com.apple.quicklook.thumbnail</string>
+    <key>NSExtensionPrincipalClass</key>
+    <string>MitCadThumbnailProvider</string>
+    <key>NSExtensionAttributes</key>
+    <dict>
+      <key>QLSupportedContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.project</string>
+      </array>
+      <key>QLThumbnailMinimumDimension</key>
+      <integer>0</integer>
+    </dict>
+  </dict>
+</dict>
+</plist>

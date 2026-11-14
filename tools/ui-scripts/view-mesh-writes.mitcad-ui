@@ -31,7 +31,7 @@ model-command '{"cmd":"set_parameter","name":"h","value":29}'
 wait-log '^Background evaluation started: 1 features after the marker$' 30
 click-pick 'edge F6[.]b0/E[{]F10:start[(]r[{]c1[}][)][|]F6:side'
 wait-log '^Selected: 1 edge' 30
-click-pick 'edge F6[.]b0/E[{]F10:side[(]c1[)][|]F10:side' ctrl
+click-pick 'edge F6[.]b0/E[{]F10:side[(]c1[)][|]F6:side' ctrl
 wait-log '^Selected: 2 edges' 30
 click-pick 'face F6[.]b0/F6:side[(]c1[)]' ctrl
 wait-log '^Selected: .*face F6:side[(]c1[)] of F6[.]b0' 30

@@ -165,6 +165,12 @@ pub mod ffi {
         has_depth: bool,
         depth: f64,
         flip: bool,
+        /// A rib's ends continued to the bodies' faces (mitcad#1746).
+        extend_ends: bool,
+        end_offset: f64,
+        /// The way a rib grows, when not at right angles to its chord.
+        has_direction: bool,
+        direction: [f64; 3],
     }
 
     unsafe extern "C++" {
@@ -606,6 +612,10 @@ pub fn rib(spec: &RibSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, Ker
         has_depth: spec.depth.is_some(),
         depth: spec.depth.unwrap_or(0.0),
         flip: spec.flip,
+        extend_ends: spec.extend_ends,
+        end_offset: spec.end_offset,
+        has_direction: spec.direction.is_some(),
+        direction: spec.direction.unwrap_or([0.0; 3]),
     };
     ffi::rib_solid(
         &spec.feature.to_string(),

@@ -29,12 +29,14 @@
 //! They change no geometry: adding, editing and deleting one is an undo
 //! step that recomputes nothing.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use super::{Document, ModelError, invalid};
 use crate::datum::Vec3;
 use crate::features::OccurrencePath;
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::topo::{EdgeName, FaceName, VertexName};
 
@@ -551,6 +553,35 @@ pub struct MeasurePick {
 }
 
 impl MeasurePick {
+    /// The features the pick names (mitcad#1756): its body's maker, the
+    /// features in its face's, edge's or vertex's name, and its datum when
+    /// that is a feature (`F5`; not the origin's planes and axes, `xy`).
+    pub fn features(&self) -> BTreeSet<FeatureUid> {
+        let mut features = BTreeSet::new();
+        if let Some(body) = self.body {
+            features.insert(body.feature);
+        }
+        if let Some(face) = &self.face {
+            features.extend(face.features());
+        }
+        if let Some(edge) = &self.edge {
+            features.extend(edge.features());
+        }
+        if let Some(vertex) = &self.vertex {
+            for face in vertex.faces() {
+                features.extend(face.features());
+            }
+        }
+        if let Some(uid) = self
+            .datum
+            .as_deref()
+            .and_then(|datum| datum.trim().parse::<FeatureUid>().ok())
+        {
+            features.insert(uid);
+        }
+        features
+    }
+
     /// Why the pick is no pick, if it is not one (not its geometry).
     fn check(&self) -> Result<(), String> {
         let names = [
@@ -1048,6 +1079,44 @@ impl<K: Kernel> Document<K> {
     /// The annotation of this name.
     pub fn annotation(&self, name: &str) -> Result<&Annotation, ModelError> {
         Ok(&self.state.annotations[self.annotation_index(name)?])
+    }
+
+    /// Whether the annotation's picks name a feature after the timeline
+    /// marker (mitcad#1756): its picks, its plane's pick and, for a frame
+    /// under a dimension, that dimension's picks. A pick that is not there
+    /// while so is rolled back with the marker, as those features are (a
+    /// sketch edited rolls the timeline back to it), not broken: it comes
+    /// back when the marker does. With the marker at the end nothing is
+    /// rolled back.
+    pub fn annotation_rolled_back(&self, annotation: &Annotation) -> bool {
+        let after: BTreeSet<FeatureUid> = self
+            .features()
+            .skip(self.marker())
+            .map(|feature| feature.uid)
+            .collect();
+        if after.is_empty() {
+            return false;
+        }
+        let mut picks: Vec<&MeasurePick> = vec![&annotation.a];
+        picks.extend(annotation.b.as_ref());
+        picks.extend(
+            annotation
+                .plane
+                .as_ref()
+                .and_then(|plane| plane.pick.as_ref()),
+        );
+        if annotation.kind == MeasureKind::Frame
+            && let Some(dimension) = annotation
+                .on
+                .as_deref()
+                .and_then(|on| self.annotation(on).ok())
+        {
+            picks.push(&dimension.a);
+            picks.extend(dimension.b.as_ref());
+        }
+        picks
+            .iter()
+            .any(|pick| !pick.features().is_disjoint(&after))
     }
 
     pub fn measurement(&self, name: &str) -> Result<&Annotation, ModelError> {

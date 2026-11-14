@@ -23,6 +23,20 @@ enum class NavigationScheme {
 enum class NavigationAction { None, Orbit, Pan, Zoom };
 enum class NavigationInput { LeftButton, MiddleButton, RightButton, TrackpadScroll };
 
+// What a mouse orbit turns about (mitcad#1791, `view/orbitCenter`): the
+// middle of what is shown, or the model point under the cursor where the
+// orbit starts (the middle when the cursor is over empty space). A fixed
+// center set from the view's context menu comes before either.
+enum class OrbitCenter { Model, Cursor };
+
+inline const char* orbitCenterId(OrbitCenter center) {
+  return center == OrbitCenter::Cursor ? "cursor" : "model";
+}
+
+inline OrbitCenter orbitCenterFromId(const QString& id) {
+  return id == QLatin1String("cursor") ? OrbitCenter::Cursor : OrbitCenter::Model;
+}
+
 struct NavigationBinding {
   NavigationInput input = NavigationInput::MiddleButton;
   Qt::KeyboardModifiers modifiers = Qt::NoModifier;
@@ -46,6 +60,8 @@ struct NavigationSettings {
   // The arrow keys' turn of the view (mitcad#1211, `view/turnStep`), in
   // degrees, 1 to 90.
   double turnStep = 15.0;
+  // What an orbit turns about (mitcad#1791).
+  OrbitCenter orbitCenter = OrbitCenter::Model;
 };
 
 // The arrow keys' step: 1 to 90 degrees, 15 when it is no number.
@@ -196,6 +212,7 @@ inline void loadNavigationDetails(const QSettings& store, NavigationSettings& se
   bool stepOk = false;
   const double step = store.value(prefix + QStringLiteral("turnStep"), 15.0).toDouble(&stepOk);
   settings.turnStep = stepOk ? sanitizeTurnStep(step) : 15.0;
+  settings.orbitCenter = orbitCenterFromId(store.value(prefix + QStringLiteral("orbitCenter")).toString());
   loadSpaceMouseSettings(store, settings.spaceMouse);
   QVector<NavigationBinding> bindings;
   const QJsonDocument document = QJsonDocument::fromJson(
@@ -238,6 +255,7 @@ inline void saveNavigationDetails(QSettings& store, const NavigationSettings& se
   store.setValue(prefix + QStringLiteral("zoomSpeed"), sanitizeNavigationSpeed(settings.zoomSpeed));
   store.setValue(prefix + QStringLiteral("trackpadSpeed"), sanitizeNavigationSpeed(settings.trackpadSpeed));
   store.setValue(prefix + QStringLiteral("turnStep"), sanitizeTurnStep(settings.turnStep));
+  store.setValue(prefix + QStringLiteral("orbitCenter"), QLatin1String(orbitCenterId(settings.orbitCenter)));
   saveSpaceMouseSettings(store, settings.spaceMouse);
   if (settings.customBindings.isEmpty()) {
     store.remove(prefix + QStringLiteral("navigationBindings"));

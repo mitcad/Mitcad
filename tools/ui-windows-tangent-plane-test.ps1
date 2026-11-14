@@ -9,8 +9,12 @@
 #      with an origin plane along the axis (xz or yz, not xy), the angle
 #      with 0 deg (or 180 deg when that plane's normal points away from
 #      the click); the preview is drawn stronger than the picked plane.
-#   3. OK: the plane touches the cylinder (its normal at right angles to
-#      the axis, 10 from it).
+#   3. Offset 5 mm (mitcad#1779): previewed, with an arrow along the
+#      normal.
+#   4. OK: the plane lies 5 mm off the cylinder (its normal at right angles
+#      to the axis and away from it, 15 from the axis).
+#   5. Edited from the timeline: the offset comes from the feature; -3 mm
+#      (into the face) is previewed and the edit made.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-tangent-plane-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -56,7 +60,18 @@ if ($filled -notmatch ' (0|180) deg$') { Ui-Fail "the angle is not 0 or 180 deg:
 Write-Host "ok   reference and angle: $filled"
 Ui-ExpectNew 'Preview datum drawn: transparency 0.2, picked planes 0.8' 'the preview stronger than the picked plane'
 
-Write-Host '--- The plane touches the cylinder'
+Write-Host '--- An offset of 5 mm away from the face'
+Ui-Mark
+Ui-Step 'offset 5'                       { Ui-TypeIn 'Panel Tangent Plane input offset' '5' }
+Ui-ExpectNew 'Tangent Plane Offset: 5 = 5 mm' 'the offset typed'
+Ui-ExpectNew 'Preview Tangent Plane: ok' 'the moved plane previewed' 30
+Ui-ExpectLog 'Manipulator Tangent Plane offset at' 'the offset has an arrow' 30
+Ui-ExpectLog 'Arrow direction Tangent Plane offset: ' 'the arrow''s direction logged' 30
+$way = Ui-LastMatch 'Arrow direction Tangent Plane offset: (\S+)$'
+if ($way -notmatch ',0\.000$') { Ui-Fail "the offset's arrow is not at right angles to the axis: $way" }
+Write-Host "ok   the offset's arrow along the normal: $way"
+
+Write-Host '--- The plane 5 mm off the cylinder'
 Ui-Mark
 Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
 Ui-ExpectNew 'Added plane ' 'the plane added' 30
@@ -67,7 +82,21 @@ if ($numbers.Count -ne 6) { Ui-Fail "the plane was not logged as origin and norm
 $o = $numbers[0..2]; $n = $numbers[3..5]
 if ([Math]::Abs($n[2]) -gt 1e-6) { Ui-Fail "the normal is not at right angles to the axis: $added" }
 $offset = $n[0] * $o[0] + $n[1] * $o[1]
-if ([Math]::Abs([Math]::Abs($offset) - 10) -gt 1e-6) { Ui-Fail "the plane is not 10 from the axis: $added" }
-Write-Host "ok   the plane touches the cylinder: $added"
+# The normal points away from the axis: the radius 10 and the offset 5.
+if ([Math]::Abs($offset - 15) -gt 1e-6) { Ui-Fail "the plane is not 15 from the axis: $added" }
+Write-Host "ok   the plane 5 mm off the cylinder: $added"
+
+Write-Host '--- Edited: the offset from the feature, then into the face'
+Ui-Mark
+Ui-Step 'edit Plane1 (double-click)'     { Ui-DoubleClickLogged 'Timeline Plane1' }
+Ui-ExpectNew ' with Tangent Plane' 'Plane1 opens for editing' 30
+Ui-ExpectNew 'Tangent Plane Offset: 5 mm' 'the offset came from the feature' 30
+Ui-Mark
+Ui-Step 'offset -3'                      { Ui-TypeIn 'Panel Tangent Plane input offset' '-3' }
+Ui-ExpectNew 'Tangent Plane Offset: -3 = -3 mm' 'into the face'
+Ui-ExpectNew 'Preview Tangent Plane: ok' 'the edit previewed' 30
+Ui-Mark
+Ui-Step 'OK (Enter)'                     { Ui-Key 'Return' }
+Ui-ExpectNew 'Edited F' 'Plane1 edited' 30
 
 Ui-Finish 'UI Windows tangent plane test'

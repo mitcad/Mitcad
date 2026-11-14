@@ -144,6 +144,43 @@ fn picks_of_a_sheet_resolve_to_domains_boundaries_and_seams() {
 }
 
 #[test]
+fn stored_corners_give_the_edges_they_lie_on() {
+    // The `sheet_corner_edges` query (mitcad#1766): the edge an edit of
+    // Corner Round or Corner Chamfer highlights for each stored corner, in
+    // the body at the marker. The mock kernel lists no edges between the
+    // sheet's walls, so a corner between two walls is the edge of their
+    // names; curves that do not meet have none. (A corner beside a bend:
+    // the CLI fixture sheet_corner_beside_bend_fillet.)
+    let (doc, body) = face_with_rules();
+    let wall = |segment: &str| format!("F3:sheet_side0(F1:sheet_curve({segment}))");
+    let edge = format!("E{{{}|{}}}", wall("c2[c1,c3]"), wall("c3[c2,c4]"));
+    let picked = query(
+        &doc,
+        json!({"query":"sheet_reference","body":body,"edge":edge}),
+    )
+    .unwrap();
+    let apart = json!({"panel":{"feature":"F3","slot":0},
+        "incoming":{"type":"sketch","sketch":"F1","segment":"c1[c4,c2]"},
+        "outgoing":{"type":"sketch","sketch":"F1","segment":"c3[c2,c4]"}});
+    let corners = json!([picked["corner"], apart]);
+    let answer = query(
+        &doc,
+        json!({"query":"sheet_corner_edges","body":body,"corners":corners}),
+    )
+    .unwrap();
+    assert_eq!(answer["body"], "F3.b0", "{answer}");
+    assert_eq!(answer["edges"], json!([edge, null]), "{answer}");
+    // A body that is no sheet is refused.
+    assert!(
+        query(
+            &doc,
+            json!({"query":"sheet_corner_edges","body":"F1.b0","corners":[]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn sheet_bodies_list_rules_and_flat_patterns_with_the_display_choice() {
     let (mut doc, body) = face_with_rules();
     let bodies = query(&doc, json!({"query":"sheet_bodies"})).unwrap();

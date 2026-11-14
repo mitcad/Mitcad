@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 29];
+    fn command_families() -> [CommandFamily<K>; 30];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 29] {
+    fn command_families() -> [CommandFamily<K>; 30] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -360,6 +360,14 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                         doc,
                         parse(value, "command")?,
                     )
+                },
+            },
+            // CAM setups, operations and machines (mitcad#1013, `cam.rs`).
+            CommandFamily {
+                names: super::cam::CamCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::cam::run_cam_command(doc, parse(value, "command")?)
                 },
             },
         ]

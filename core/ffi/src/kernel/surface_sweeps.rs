@@ -58,6 +58,18 @@ pub mod ffi {
             ruled: bool,
             closed: bool,
         ) -> Result<SharedPtr<Shape>>;
+        /// The chains moved by the screw motion about the axis (x, y, z,
+        /// dx, dy, dz) that rises `pitch` per turn for `revolutions` turns
+        /// (mitcad#1777).
+        fn helix_sheet(
+            feature: &str,
+            curves: &[SweepCurve],
+            chains: &[usize],
+            axis: &[f64],
+            pitch: f64,
+            revolutions: f64,
+            left_handed: bool,
+        ) -> Result<SharedPtr<Shape>>;
     }
 }
 

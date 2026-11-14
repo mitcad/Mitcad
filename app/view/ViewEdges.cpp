@@ -25,6 +25,9 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 
+#include "mitcad/geometry/shape.hpp"
+#include "mitcad/geometry/smooth_seams.hpp"
+
 namespace mitcad {
 
 occ::handle<Poly_Polygon3D> viewEdgePolygon(const TopoDS_Edge& edge) {
@@ -113,12 +116,15 @@ TopoDS_Edge detachedCopy(const TopoDS_Edge& edge) {
 }
 
 // The compound drawn for `shape`: each edge's copy where and as the shape
-// has the edge (`copyOf` null: the edge itself), and the free vertices.
-template <class CopyOf>
-TopoDS_Shape drawnCompound(const TopoDS_Shape& shape, const CopyOf& copyOf) {
+// has the edge (`copyOf` null: the edge itself), but the edges `leftOut`
+// takes, and the free vertices; `count` the edges in it.
+template <class CopyOf, class LeftOut>
+TopoDS_Shape drawnCompound(const TopoDS_Shape& shape, const CopyOf& copyOf, const LeftOut& leftOut,
+                           std::size_t& count) {
   TopoDS_Compound compound;
   BRep_Builder builder;
   builder.MakeCompound(compound);
+  count = 0;
   if (shape.IsNull()) {
     return compound;
   }
@@ -126,6 +132,10 @@ TopoDS_Shape drawnCompound(const TopoDS_Shape& shape, const CopyOf& copyOf) {
   TopExp::MapShapes(shape, TopAbs_EDGE, edges);
   for (int i = 1; i <= edges.Extent(); ++i) {
     const TopoDS_Shape& edge = edges(i);
+    if (leftOut(edge)) {
+      continue;
+    }
+    ++count;
     const TopoDS_Edge copy = copyOf(edge);
     builder.Add(compound, copy.IsNull() ? edge : copy.Located(edge.Location()).Oriented(edge.Orientation()));
   }
@@ -137,9 +147,30 @@ TopoDS_Shape drawnCompound(const TopoDS_Shape& shape, const CopyOf& copyOf) {
 
 } // namespace
 
-ViewEdges::ViewEdges(const TopoDS_Shape& shape, const std::vector<const ViewEdges*>& caches) : m_source(shape) {
+ViewEdges::ViewEdges(const TopoDS_Shape& shape, const std::vector<const ViewEdges*>& caches,
+                     const geometry::Shape* named)
+    : m_source(shape) {
   if (shape.IsNull()) {
     return;
+  }
+  // The smooth seams (mitcad#1773): a cache of the same shape's (the body
+  // a highlight of the whole of it is drawn over) knows them already.
+  const ViewEdges* same = nullptr;
+  if (named == nullptr) {
+    for (const ViewEdges* cache : caches) {
+      if (cache != nullptr && cache->source().IsPartner(shape)) {
+        same = cache;
+        break;
+      }
+    }
+  }
+  if (same != nullptr) {
+    m_seams = same->m_seams;
+  } else {
+    const geometry::ShapeMap seams = geometry::smooth_seams(shape, named);
+    for (int i = 1; i <= seams.Extent(); ++i) {
+      m_seams.insert(seams(i).TShape().get());
+    }
   }
   // Each edge once (its TShape), wherever the shape has it.
   std::vector<TopoDS_Edge> fresh;
@@ -177,7 +208,13 @@ ViewEdges::ViewEdges(const TopoDS_Shape& shape, const std::vector<const ViewEdge
       m_copies.emplace(fresh[i].TShape().get(), made[i]);
     }
   }
-  m_drawn = drawnCompound(shape, [this](const TopoDS_Shape& edge) { return copyOf(edge); });
+  m_drawn = drawnCompound(
+      shape, [this](const TopoDS_Shape& edge) { return copyOf(edge); },
+      [this](const TopoDS_Shape& edge) { return smoothSeam(edge); }, m_drawnCount);
+}
+
+bool ViewEdges::smoothSeam(const TopoDS_Shape& edge) const {
+  return !edge.IsNull() && !m_seams.empty() && m_seams.count(edge.TShape().get()) > 0;
 }
 
 TopoDS_Edge ViewEdges::copyOf(const TopoDS_Shape& edge) const {
@@ -257,6 +294,36 @@ private:
 };
 
 } // namespace
+
+void dropSmoothSeams(const occ::handle<SelectMgr_Selection>& selection, const ViewEdges& edges) {
+  if (selection.IsNull() || edges.seamCount() == 0) {
+    return;
+  }
+  // The entities kept, in their order; the rest are let go as they are
+  // (SelectMgr_Selection::Clear would also clear the kept ones' owners).
+  NCollection_DynamicArray<occ::handle<SelectMgr_SensitiveEntity>>& entities = selection->ChangeEntities();
+  std::vector<occ::handle<SelectMgr_SensitiveEntity>> kept;
+  kept.reserve(static_cast<std::size_t>(entities.Length()));
+  for (int i = 0; i < entities.Length(); ++i) {
+    const occ::handle<SelectMgr_SensitiveEntity>& entity = entities.Value(i);
+    if (!entity.IsNull() && !entity->BaseSensitive().IsNull()) {
+      const occ::handle<StdSelect_BRepOwner> owner =
+          occ::handle<StdSelect_BRepOwner>::DownCast(entity->BaseSensitive()->OwnerId());
+      if (!owner.IsNull() && owner->ComesFromDecomposition() && owner->HasShape() &&
+          owner->Shape().ShapeType() == TopAbs_EDGE && edges.smoothSeam(owner->Shape())) {
+        continue;
+      }
+    }
+    kept.push_back(entity);
+  }
+  if (kept.size() == static_cast<std::size_t>(entities.Length())) {
+    return;
+  }
+  entities.Clear();
+  for (const occ::handle<SelectMgr_SensitiveEntity>& entity : kept) {
+    entities.Append(entity);
+  }
+}
 
 void drawOwnersFrom(const occ::handle<SelectMgr_Selection>& selection, const std::shared_ptr<const ViewEdges>& edges) {
   if (selection.IsNull() || !edges) {

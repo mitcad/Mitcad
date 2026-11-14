@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{Document, ModelError, invalid};
 use crate::analysis;
-use crate::datum::{ANGULAR, DatumAxis, DatumPlane, Vec3};
+use crate::datum::{ANGULAR, DatumAxis, DatumPlane, OriginDatum, Vec3};
 use crate::features::geom_ref::GeomRef;
 use crate::features::{OccurrencePath, is_false};
 use crate::ids::{BodyUid, ComponentUid};
@@ -334,18 +334,52 @@ fn is_zero(value: &f64) -> bool {
     *value == 0.0
 }
 
+const NEEDS_AN_AXIS: &str = "an angle needs an axis to turn the plane about";
+
 impl SectionAnalysis {
     /// Why the angle cannot be kept, if it cannot (not its geometry): not
-    /// finite, or not zero without an axis to turn about.
+    /// finite, or not zero without an axis to turn about. A face or an
+    /// edge as the plane may have its own axis (mitcad#1769): whether it
+    /// has is known only from its geometry ([`Document::section_plane`]).
     fn check_angle(&self) -> Result<(), String> {
         if !self.angle.is_finite() {
             return Err("the angle must be a finite angle".to_owned());
         }
-        if self.angle != 0.0 && self.axis.is_none() {
-            return Err("an angle needs an axis to turn the plane about".to_owned());
+        let may_have_axis = matches!(self.plane, GeomRef::Face { .. } | GeomRef::Edge { .. });
+        if self.angle != 0.0 && self.axis.is_none() && !may_have_axis {
+            return Err(NEEDS_AN_AXIS.to_owned());
         }
         Ok(())
     }
+}
+
+/// Where the turn of a section's plane about an axis (a face round about
+/// it, a circular edge) starts (mitcad#1769), never from the view: the
+/// normal of the first of the origin planes XY, XZ and YZ whose normal is
+/// at least 45 degrees from the axis, made square to it. For an axis along
+/// a model axis that is the first origin plane that contains it (XZ for
+/// Z, XY for X and Y). At most one model axis is within 45 degrees of a
+/// direction, so one of the three always is.
+fn section_start_normal(axis: Vec3) -> Vec3 {
+    let axis = mitcad_vec3::unit(axis).unwrap_or([0.0, 0.0, 1.0]);
+    let candidates = [OriginDatum::Xy, OriginDatum::Xz, OriginDatum::Yz].map(|origin| {
+        let crate::datum::Datum::Plane(plane) = origin.datum() else {
+            unreachable!("an origin plane is a plane")
+        };
+        plane.normal()
+    });
+    let square = |n: Vec3| {
+        mitcad_vec3::unit(mitcad_vec3::sub(
+            n,
+            mitcad_vec3::scale(axis, mitcad_vec3::dot(n, axis)),
+        ))
+    };
+    candidates
+        .iter()
+        .find(|n| mitcad_vec3::dot(**n, axis).abs() <= std::f64::consts::FRAC_1_SQRT_2 + 1e-9)
+        .and_then(|n| square(*n))
+        // Not reached for a direction (see above); a zero axis as Z.
+        .unwrap_or([0.0, 1.0, 0.0])
 }
 
 /// A section's plane in the design's coordinates: a point on it and the
@@ -472,26 +506,101 @@ impl<K: Kernel> Document<K> {
         &self.state.analyses
     }
 
+    /// The plane a section's plane reference places, before its Angle,
+    /// Distance and Flip, in design coordinates, and the axis it turns
+    /// about without an Axis of its own (mitcad#1769): a plane as it is; a
+    /// face round about an axis or a circular edge, the plane that contains
+    /// that axis, its turn about it starting at `section_start_normal`,
+    /// with that axis; a straight edge, the plane through its middle normal
+    /// to it. Through the reference's occurrence as [`Self::analysis_plane`].
+    pub fn section_pick(
+        &self,
+        reference: &GeomRef,
+        occurrence: Option<&OccurrencePath>,
+    ) -> Result<(DatumPlane, Option<DatumAxis>), String> {
+        use crate::features::geom_ref::{SectionPick, resolve_section_pick};
+        let (plane, own_axis) = match resolve_section_pick(&mut self.resolver(), reference)? {
+            SectionPick::Plane(plane) => (plane, None),
+            SectionPick::Axis(axis) => {
+                let normal = section_start_normal(axis.direction);
+                let plane = DatumPlane {
+                    origin: axis.origin,
+                    x_axis: axis.direction,
+                    y_axis: mitcad_vec3::cross(normal, axis.direction),
+                };
+                (plane, Some(axis))
+            }
+            SectionPick::Across { point, normal } => {
+                (DatumPlane::from_normal(point, normal, None), None)
+            }
+        };
+        let path = self.analysis_plane_occurrence(reference, occurrence)?;
+        let transform = self.path_transform(&path.0);
+        let plane = DatumPlane {
+            origin: transform.apply_point(plane.origin),
+            x_axis: transform.apply_vector(plane.x_axis),
+            y_axis: transform.apply_vector(plane.y_axis),
+        };
+        let own_axis = own_axis
+            .map(|axis| {
+                mitcad_vec3::unit(transform.apply_vector(axis.direction))
+                    .map(|direction| DatumAxis {
+                        origin: transform.apply_point(axis.origin),
+                        direction,
+                    })
+                    .ok_or_else(|| "the axis has no direction".to_owned())
+            })
+            .transpose()?;
+        Ok((plane, own_axis))
+    }
+
+    /// The axis a section's plane turns about by its Angle (mitcad#823,
+    /// #1769), in design coordinates: its Axis, else the axis of a face
+    /// round about one or of a circular edge picked as its plane; None
+    /// without either; or why it cannot be found.
+    pub fn section_turn_axis(
+        &self,
+        section: &SectionAnalysis,
+    ) -> Result<Option<DatumAxis>, String> {
+        match self.section_axis(section)? {
+            Some(axis) => Ok(Some(axis)),
+            None => Ok(self
+                .section_pick(&section.plane, section.occurrence.as_ref())?
+                .1),
+        }
+    }
+
     /// A section's plane at the timeline marker, or why it cannot be found.
     pub fn section_plane(&self, section: &SectionAnalysis) -> Result<SectionPlane, String> {
         if !section.offset.is_finite() {
             return Err("the section offset must be finite".to_owned());
         }
         section.check_angle()?;
-        let plane = self.analysis_plane(&section.plane, section.occurrence.as_ref())?;
-        let (base, n) = match self.section_axis(section)? {
-            // Turned rigidly about the axis, then moved along the turned
-            // normal (mitcad#823).
+        let (plane, own_axis) = self.section_pick(&section.plane, section.occurrence.as_ref())?;
+        let normal = plane.normal();
+        let axis = match self.section_axis(section)? {
             Some(axis) => {
-                let normal = plane.normal();
                 if mitcad_vec3::norm(mitcad_vec3::cross(axis.direction, normal)) < ANGULAR {
                     return Err("the axis is along the plane's normal".to_owned());
                 }
+                Some(axis)
+            }
+            // A face round about an axis or a circular edge turns about its
+            // own axis (mitcad#1769).
+            None => own_axis,
+        };
+        let (base, n) = match axis {
+            // Turned rigidly about the axis, then moved along the turned
+            // normal (mitcad#823).
+            Some(axis) => {
                 let turn = Transform::rotation(axis.origin, axis.direction, section.angle)
                     .ok_or_else(|| "the axis has no direction".to_owned())?;
                 (turn.apply_point(plane.origin), turn.apply_vector(normal))
             }
-            None => (plane.origin, plane.normal()),
+            None if section.angle != 0.0 => {
+                return Err(NEEDS_AN_AXIS.to_owned());
+            }
+            None => (plane.origin, normal),
         };
         let origin = [0, 1, 2].map(|i| base[i] + n[i] * section.offset);
         // No -0 in the normal.

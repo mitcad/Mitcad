@@ -13,7 +13,9 @@
 #         -DWORK=<folder> [-DADD_LANGUAGE=<code>] -P tools/translations-update.cmake
 #
 # ADD_LANGUAGE starts a new language: its line in languages.txt and its .ts
-# file with every text unfinished.
+# file with every text unfinished. English's line (en, mitcad#1756) keeps
+# only the plural messages (lupdate -pluralonly): new ones come in
+# unfinished, and their two English forms are written by hand.
 cmake_minimum_required(VERSION 3.24)
 foreach(variable LUPDATE TOOL WORK)
   if(NOT ${variable})
@@ -63,12 +65,21 @@ foreach(line IN LISTS lines)
   endif()
   string(REGEX MATCH "^[^ \t]+" code "${line}")
   message(STATUS "lupdate: mitcad_${code}.ts")
+  # English (mitcad#1756): its plural forms only; the model's messages
+  # are English already.
+  set(plural_only "")
+  if(code STREQUAL "en")
+    set(plural_only -pluralonly)
+  endif()
   execute_process(
     COMMAND "${LUPDATE}" "@${WORK}/lupdate-sources.lst" -I "${root}/app" -no-obsolete -locations none
-            -source-language en -target-language ${code} -silent -ts "${folder}/mitcad_${code}.ts"
+            ${plural_only} -source-language en -target-language ${code} -silent -ts "${folder}/mitcad_${code}.ts"
     RESULT_VARIABLE status)
   if(NOT status EQUAL 0)
     message(FATAL_ERROR "lupdate failed for ${code} (${status})")
+  endif()
+  if(code STREQUAL "en")
+    continue()
   endif()
   message(STATUS "lupdate: model_${code}.ts")
   execute_process(

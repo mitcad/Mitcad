@@ -30,9 +30,11 @@ constexpr int kMostFacesBesideStrips = 16;
 // (how far from its edges the dressup touches its faces at most) that were
 // wider in the input, beside a face the dressup made (one whose name the
 // input has not), in connected groups with at most kMostFacesBesideStrips
-// faces beside them.
+// faces beside them. `left`: the strips in groups with more faces beside
+// them, which stay.
 struct Strips {
   std::vector<int> faces;              // the strips to remove, by face index
+  std::vector<int> left;               // the strips that stay
   std::vector<std::vector<int>> beside; // by face: the faces across its edges
   std::vector<char> made;              // by face: one the dressup made
 };

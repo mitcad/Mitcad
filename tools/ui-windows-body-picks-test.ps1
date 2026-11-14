@@ -17,6 +17,12 @@
 #      edge and holds the point at its middle.
 #   4. The block 80 wide: both points follow (the saved design checked by
 #      mitcad-cli); a click at the corner again adds nothing.
+#   5. Sketch5 on the end face of a 24 cylinder beside the block, with a
+#      hexagon, a line and a circle (mitcad#1782): Coincident between a
+#      hexagon corner and the face's outer edge projects the edge (linked)
+#      in the constraint's one undo step, which one undo takes back, and Esc
+#      after the pick changes nothing; Tangent with the line projects it
+#      again; Concentric with the circle reuses the projection.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-body-picks-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -26,8 +32,11 @@ param(
 
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
-# The Point tool has no shortcut of its own: the test gives it one.
-Ui-Init $App $Out $QtBin @{ 'sketch.point' = 'F8' } -StepPause 0
+# The Point tool has no shortcut of its own: the test gives it one, and the
+# constraints function keys, as the other Windows sketch tests do.
+Ui-Init $App $Out $QtBin @{
+  'sketch.point' = 'F8'; 'sketch.constraint.coincident' = 'Shift+F5'; 'sketch.constraint.tangent' = 'Shift+F6'
+  'sketch.constraint.concentric' = 'Shift+F7' } -StepPause 0
 
 # Ui-NotSince "text" description: no line since the mark has the text.
 function Ui-NotSince([string]$Text, [string]$Description) {
@@ -74,7 +83,15 @@ Set-Content -Encoding ascii $script (@'
   {"cmd": "sketch.create", "plane": {"face": "F2:end(RECT)", "body": "F2.b0"}},
   {"cmd": "sketch.add_point", "sketch": "F3", "at": [20, 10]},
   {"cmd": "sketch.add_point", "sketch": "F3", "at": [45, 25]},
-  {"cmd": "sketch.create", "plane": {"face": "F2:end(RECT)", "body": "F2.b0"}}
+  {"cmd": "sketch.create", "plane": {"face": "F2:end(RECT)", "body": "F2.b0"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F5", "center": [-25, 20], "diameter": 24},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": {"face": "F6:end(r{c1})", "body": "F6.b0"}},
+  {"cmd": "sketch.polygon", "sketch": "F7", "center": [-25, 20], "vertex": [-19, 20], "sides": 6},
+  {"cmd": "sketch.add_line", "sketch": "F7", "start": [-37, 36], "end": [-15, 37]},
+  {"cmd": "sketch.circle", "sketch": "F7", "mode": "center", "center": [-50, 20], "radius": 3}
 ]
 '@ -creplace 'RECT', 'r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}')
 $made = & $cli run $script --save $design
@@ -210,5 +227,64 @@ Set-Content -Encoding ascii $check @'
 $checked = & $cli run $check --open $design
 if ($LASTEXITCODE -ne 0) { Ui-Fail "the saved design: $($checked -join ' / ')" }
 Write-Host 'ok   both points follow the block: the corner (80, 40), the edge''s middle (40, 0)'
+
+Write-Host '--- Sketch5 on the cylinder''s end face: constraints to its edge (mitcad#1782)'
+# The face's outer edge, a circle of 12 about (-25, 20), is picked at its
+# lower left (-33.49, 11.51), away from the hexagon (its corners 6 from the
+# centre).
+Ui-EditSketch 'Sketch5' 'F7'
+Ui-ExpectLog 'Sketch Sketch5: 11 DOF' 'a hexagon, a line and a circle, free'
+Ui-ExpectLog 'Sketch Sketch5: 0 linked projection(s)' 'nothing projected yet'
+Ui-Mark
+Ui-Step 'coincident (Shift+F5)'          { Ui-Key 'shift+F5' }
+Ui-ExpectNew 'Sketch tool Coincident' 'Coincident active'
+Ui-Step 'pick the face''s edge'          { Ui-SketchClick -33.49 11.51 }
+Ui-ExpectNew 'Coincident picked the body edge E{' 'the edge in the sketch plane picked'
+Ui-Step 'Esc'                            { Ui-Key 'Escape' }
+Ui-NotSince 'Projected the body' 'Esc after the pick: nothing projected'
+Ui-NotSince 'Added constraint' 'no constraint added'
+
+Write-Host '--- Coincident: a hexagon''s corner on the edge, in one undo step'
+Ui-Mark
+Ui-Step 'pick the corner (-19, 20)'      { Ui-SketchClick -19 20 }
+Ui-Step 'pick the face''s edge'          { Ui-SketchClick -33.49 11.51 }
+Ui-ExpectNew 'Projected the body edge E{' 'the edge projected when the constraint is added'
+Ui-ExpectNew 'Added constraint coincident k' 'the corner on the projected edge'
+Ui-ExpectNew 'Sketch Sketch5: 10 DOF' 'the corner held on the circle'
+Ui-ExpectNew 'Sketch Sketch5: 1 linked projection(s)' 'one linked projection'
+Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'undo (Ctrl+Z)'                  { Ui-Key 'ctrl+z' }
+Ui-ExpectNew 'Undo: Add Constraint to Sketch5' 'one undo step, named after the constraint'
+Ui-ExpectNew 'Sketch Sketch5: 11 DOF' 'the constraint gone'
+Ui-ExpectNew 'Sketch Sketch5: 0 linked projection(s)' 'the projection gone with it'
+
+Write-Host '--- Tangent: the line to the edge'
+Ui-Mark
+Ui-Step 'tangent (Shift+F6)'             { Ui-Key 'shift+F6' }
+Ui-ExpectNew 'Sketch tool Tangent' 'Tangent active'
+Ui-Step 'pick the line'                  { Ui-SketchClick -26 36.5 }
+Ui-Step 'pick the face''s edge'          { Ui-SketchClick -33.49 11.51 }
+Ui-ExpectNew 'Projected the body edge E{' 'the edge projected'
+Ui-ExpectNew 'Added constraint tangent k' 'the line tangent to the projected edge'
+Ui-ExpectNew 'Sketch Sketch5: 10 DOF' 'the line held'
+Ui-ExpectNew 'Sketch Sketch5: 1 linked projection(s)' 'one linked projection'
+Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
+
+Write-Host '--- Concentric: the circle with the edge, its projection reused'
+Ui-Mark
+Ui-Step 'concentric (Shift+F7)'          { Ui-Key 'shift+F7' }
+Ui-ExpectNew 'Sketch tool Concentric' 'Concentric active'
+Ui-Step 'pick the circle'                { Ui-SketchClick -47 20 }
+Ui-Step 'pick the face''s edge'          { Ui-SketchClick -33.49 11.51 }
+Ui-ExpectNew 'Added constraint concentric k' 'the circle concentric with the projected edge'
+Ui-ExpectNew 'Sketch Sketch5: 8 DOF' 'the circle''s centre held at the face''s'
+Ui-NotSince 'Projected the body' 'the edge not projected a second time'
+Ui-NotSince 'Sketch Sketch5: 2 linked projection(s)' 'still one linked projection'
+Ui-Step 'end the tool (Esc)'             { Ui-Key 'Escape' }
+Ui-Mark
+Ui-Step 'finish sketch (Ctrl+Enter)'     { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew 'Sketch finished' 'Sketch5 finished'
+if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 
 Ui-Finish 'UI Windows body picks test'

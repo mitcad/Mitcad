@@ -21,22 +21,35 @@
 //! pattern, a construction plane or point along a path): along its exact
 //! pieces, their speed integrated (mitcad#1417), not along chords. A rib or
 //! a web grows from it in the plane it lies in ([`curve_plane`]).
+//!
+//! Since mitcad#1777 either input may instead be faces, surface bodies or
+//! solid bodies ([`CurveSide::Geometry`]): both sides then meet as they are,
+//! the kernel's section of the shapes ([`Kernel::shape_section`]), and the
+//! curve runs from its end nearer to the component's origin.
 
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::geom_ref::{GeomRef, Resolver, Want};
 use super::mapping::map_params;
 use super::path::{SketchCurves, chain};
 use super::{CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References};
 use crate::datum::{PathParameter, PathPoint, Vec3};
-use crate::kernel::{Curve3, Kernel};
+use crate::ids::{BodyUid, FeatureUid};
+use crate::kernel::{Curve3, Kernel, SectionPart};
 use crate::parameters::ParamId;
 use crate::sweeps::PathCurve;
+use crate::topo::FaceName;
 use mitcad_model_base::curves::{
     bspline_point, conic_point, curve_ends, helix_point, reversed_path, tolerance,
 };
 use mitcad_vec3::{add, cross, distance, norm, scale, sub, unit};
+
+/// A body as the kernel's section takes it: its shape and the faces picked
+/// on it (none: the whole body).
+type PickedBody<K> = (<K as Kernel>::Shape, Vec<FaceName>);
 
 /// Normals whose cross product is shorter than this are parallel.
 const PARALLEL: f64 = 1e-9;
@@ -49,13 +62,146 @@ const SAMPLES: usize = 2048;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntersectionCurveDef<P = ParamId> {
-    /// A chain of curves of one sketch, swept along its normal.
-    pub first: SketchCurves,
+    /// A chain of curves of one sketch, swept along its normal; or faces
+    /// and bodies (mitcad#1777).
+    pub first: CurveSide,
     /// A chain of curves of another sketch, on a plane at an angle to the
-    /// first's, swept along its normal.
-    pub second: SketchCurves,
+    /// first's, swept along its normal; or faces and bodies.
+    pub second: CurveSide,
     #[serde(skip)]
     pub values: PhantomData<P>,
+}
+
+/// One input of an Intersection Curve.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum CurveSide {
+    /// A chain of one sketch's curves (`{"sketch", "curves", "chain"}`),
+    /// swept along the sketch's normal.
+    Sketch(SketchCurves),
+    /// Faces of bodies, surface bodies and solid bodies, as they are
+    /// (mitcad#1777): `{"geometry": [{"body": "F2.b0", "face": "F2:side0"},
+    /// {"body": "F3.b0"}]}`.
+    Geometry { geometry: Vec<GeomRef> },
+}
+
+impl<'de> Deserialize<'de> for CurveSide {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::Object(mut map) if map.contains_key("geometry") => {
+                let geometry = map.remove("geometry").unwrap_or(Value::Null);
+                if let Some(other) = map.keys().next() {
+                    return Err(D::Error::custom(format!(
+                        "faces and bodies of an intersection curve take only \"geometry\", \
+                         not \"{other}\""
+                    )));
+                }
+                let Value::Array(items) = geometry else {
+                    return Err(D::Error::custom(
+                        "\"geometry\" lists faces and bodies: [{\"body\": …, \"face\": …}, …]",
+                    ));
+                };
+                let geometry = items
+                    .into_iter()
+                    .map(GeomRef::from_value)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(D::Error::custom)?;
+                Ok(Self::Geometry { geometry })
+            }
+            other => serde_json::from_value(other)
+                .map(Self::Sketch)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+impl CurveSide {
+    /// The sketch of a chain of sketch curves.
+    pub fn sketch(&self) -> Option<FeatureUid> {
+        match self {
+            Self::Sketch(curves) => Some(curves.sketch),
+            Self::Geometry { .. } => None,
+        }
+    }
+
+    fn add_references(&self, references: &mut References) {
+        match self {
+            Self::Sketch(curves) => curves.add_references(references),
+            Self::Geometry { geometry } => {
+                for item in geometry {
+                    item.add_to(references);
+                }
+            }
+        }
+    }
+
+    fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        match self {
+            // Curves of a planar or a 3D sketch (mitcad#1550).
+            Self::Sketch(curves) => curves.check_any(ctx),
+            Self::Geometry { geometry } => {
+                if geometry.is_empty() {
+                    return Err("no faces or bodies are picked".to_owned());
+                }
+                for (i, item) in geometry.iter().enumerate() {
+                    if geometry[..i].contains(item) {
+                        return Err("a face or a body is picked more than once".to_owned());
+                    }
+                    match item {
+                        GeomRef::Face { .. } => item.check(ctx, Want::Face)?,
+                        GeomRef::Body(body) => ctx.body(*body)?,
+                        _ => {
+                            return Err(
+                                item.error(|what| format!("{what} is neither a face nor a body"))
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The bodies and faces as the kernel's section takes them: per body
+    /// its shape and the faces picked on it (none: the whole body).
+    fn parts<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Vec<PickedBody<K>>, String> {
+        let Self::Geometry { geometry } = self else {
+            return Ok(Vec::new());
+        };
+        let mut picked: Vec<(BodyUid, Vec<FaceName>, bool)> = Vec::new();
+        for item in geometry {
+            let (body, face) = match item {
+                GeomRef::Face { body, face } => (*body, Some(face.clone())),
+                GeomRef::Body(body) => (*body, None),
+                _ => return Err("only faces and bodies meet in an intersection curve".to_owned()),
+            };
+            let at = match picked.iter().position(|(b, _, _)| *b == body) {
+                Some(at) => at,
+                None => {
+                    picked.push((body, Vec::new(), false));
+                    picked.len() - 1
+                }
+            };
+            match face {
+                Some(face) => picked[at].1.push(face),
+                None => picked[at].2 = true,
+            }
+        }
+        let mut parts = Vec::with_capacity(picked.len());
+        for (body, faces, whole) in picked {
+            let shape = Resolver::shape(&mut *ctx, body)?;
+            // A whole body picked takes all of it, its faces picked too.
+            let faces = if whole {
+                Vec::new()
+            } else {
+                ctx.faces_on(body, &shape, &faces)?
+            };
+            parts.push((shape, faces));
+        }
+        Ok(parts)
+    }
 }
 
 impl<P> IntersectionCurveDef<P> {
@@ -64,10 +210,18 @@ impl<P> IntersectionCurveDef<P> {
 
     pub fn new(first: SketchCurves, second: SketchCurves) -> Self {
         Self {
-            first,
-            second,
+            first: CurveSide::Sketch(first),
+            second: CurveSide::Sketch(second),
             values: PhantomData,
         }
+    }
+
+    /// The sketches of its inputs that are chains of sketch curves.
+    pub fn sketches(&self) -> Vec<FeatureUid> {
+        [&self.first, &self.second]
+            .into_iter()
+            .filter_map(CurveSide::sketch)
+            .collect()
     }
 
     map_params! {
@@ -88,29 +242,97 @@ impl FeatureInfo for IntersectionCurveDef {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
-        // Curves of a planar or a 3D sketch (mitcad#1550).
         self.first
-            .check_any(ctx)
-            .map_err(|e| format!("the first curves: {e}"))?;
+            .check(ctx)
+            .map_err(|e| format!("the first input: {e}"))?;
         self.second
-            .check_any(ctx)
-            .map_err(|e| format!("the second curves: {e}"))?;
-        if self.first.sketch == self.second.sketch {
-            let entry = ctx.feature(self.first.sketch)?;
-            return Err(format!(
-                "both chains are curves of {}: take the second from another sketch, \
-                 on a plane at an angle to the first",
-                entry.name
-            ));
+            .check(ctx)
+            .map_err(|e| format!("the second input: {e}"))?;
+        match (&self.first, &self.second) {
+            (CurveSide::Sketch(first), CurveSide::Sketch(second))
+                if first.sketch == second.sketch =>
+            {
+                let entry = ctx.feature(first.sketch)?;
+                Err(format!(
+                    "both chains are curves of {}: take the second from another sketch, \
+                     on a plane at an angle to the first",
+                    entry.name
+                ))
+            }
+            (CurveSide::Sketch(_), CurveSide::Geometry { .. })
+            | (CurveSide::Geometry { .. }, CurveSide::Sketch(_)) => Err(
+                "one input is sketch curves and the other faces or bodies: take both from \
+                 sketches, or both faces or bodies"
+                    .to_owned(),
+            ),
+            _ => Ok(()),
         }
-        Ok(())
+    }
+}
+
+impl IntersectionCurveDef {
+    /// Where faces and bodies meet (mitcad#1777): the kernel's section of
+    /// the two sides, joined into one curve from its end nearer to the
+    /// origin.
+    fn of_geometry<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+    ) -> Result<FeatureOutput<K::Shape>, String> {
+        let first = self.first.parts(ctx)?;
+        let second = self.second.parts(ctx)?;
+        let first_parts: Vec<SectionPart<'_, K::Shape>> = first
+            .iter()
+            .map(|(shape, faces)| SectionPart { shape, faces })
+            .collect();
+        let second_parts: Vec<SectionPart<'_, K::Shape>> = second
+            .iter()
+            .map(|(shape, faces)| SectionPart { shape, faces })
+            .collect();
+        let crossing = ctx
+            .kernel
+            .shape_section(&first_parts, &second_parts)
+            .map_err(|e| format!("intersection curve: {e}"))?;
+        let pieces: Vec<PathCurve> = crossing
+            .into_iter()
+            .filter(|curve| !matches!(curve, Curve3::Point(_)))
+            .map(|curve| PathCurve {
+                name: String::new(),
+                curve,
+            })
+            .collect();
+        if pieces.is_empty() {
+            return Err("the faces or bodies do not meet: they have no curve in common".to_owned());
+        }
+        Ok(named_curve(ctx.uid, joined_curve(pieces, [0.0; 3])?))
+    }
+}
+
+/// The feature's output: the curve's pieces named `F5:curve1`, ... in
+/// order along it.
+fn named_curve<S>(uid: FeatureUid, curve: Vec<PathCurve>) -> FeatureOutput<S> {
+    let curve = curve
+        .into_iter()
+        .enumerate()
+        .map(|(i, piece)| PathCurve {
+            name: format!("{uid}:curve{}", i + 1),
+            curve: piece.curve,
+        })
+        .collect();
+    FeatureOutput {
+        curve: Some(curve),
+        ..FeatureOutput::default()
     }
 }
 
 impl<K: Kernel> Evaluate<K> for IntersectionCurveDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        let (first_frame, first) = self.first.curves(ctx)?;
-        let (second_frame, second) = self.second.curves(ctx)?;
+        let (CurveSide::Sketch(first_curves), CurveSide::Sketch(second_curves)) =
+            (&self.first, &self.second)
+        else {
+            return self.of_geometry(ctx);
+        };
+        let (first_frame, first) = first_curves.curves(ctx)?;
+        let (second_frame, second) = second_curves.curves(ctx)?;
         let first = chain(first).map_err(|e| format!("the first curves: {e}"))?;
         let second = chain(second).map_err(|e| format!("the second curves: {e}"))?;
         let (n1, n2) = (first_frame.normal(), second_frame.normal());
@@ -118,8 +340,8 @@ impl<K: Kernel> Evaluate<K> for IntersectionCurveDef {
             return Err(format!(
                 "{} and {} lie in parallel planes: curves swept along the same normal \
                  cross in no curve; take sketches on planes at an angle",
-                ctx.feature_name(self.first.sketch),
-                ctx.feature_name(self.second.sketch)
+                ctx.feature_name(first_curves.sketch),
+                ctx.feature_name(second_curves.sketch)
             ));
         }
         let crossing = ctx
@@ -137,19 +359,7 @@ impl<K: Kernel> Evaluate<K> for IntersectionCurveDef {
             .first()
             .and_then(|p| start_of(&p.curve))
             .unwrap_or_default();
-        let uid = ctx.uid;
-        let curve = joined_curve(pieces, start)?
-            .into_iter()
-            .enumerate()
-            .map(|(i, piece)| PathCurve {
-                name: format!("{uid}:curve{}", i + 1),
-                curve: piece.curve,
-            })
-            .collect();
-        Ok(FeatureOutput {
-            curve: Some(curve),
-            ..FeatureOutput::default()
-        })
+        Ok(named_curve(ctx.uid, joined_curve(pieces, start)?))
     }
 }
 

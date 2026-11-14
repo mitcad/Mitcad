@@ -3,7 +3,9 @@
 // carries, as pixels at the size a file manager asks for. Implemented in
 // Rust (core/thumbnailer/src/capi.rs) and linked as the static library
 // mitcad_thumbnailer_capi; Windows Explorer's thumbnail handler
-// (app/thumbnails) calls it, so that it has no reader of its own.
+// (app/thumbnails) and the Finder's Quick Look extension (mitcad#1696,
+// app/platform/macos/QuickLookThumbnail.cpp) call it, so that they have no
+// reader of their own.
 #ifndef MITCAD_THUMBNAILER_H
 #define MITCAD_THUMBNAILER_H
 

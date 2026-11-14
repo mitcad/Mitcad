@@ -10,15 +10,19 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
 
 #include "../platform/NativeDialogs.hpp"
+#include "ModelMessages.hpp"
 #include "PanelTree.hpp"
 
 namespace mitcad {
@@ -26,6 +30,51 @@ namespace {
 constexpr int kTargetRole = Qt::UserRole;
 constexpr int kBodyRole = Qt::UserRole + 1;
 constexpr int kBodiesRole = Qt::UserRole + 2;
+// A row left out only because it moves through joints (mitcad#1789):
+// checking it, or one of its bodies, turns the scope explicit with it.
+constexpr int kMovesRole = Qt::UserRole + 3;
+// A row whose reason or note is under its name, wrapped to the list's width.
+constexpr int kWrapRole = Qt::UserRole + 4;
+
+// Wraps the rows marked kWrapRole, and gives them the height of their
+// wrapped lines (mitcad#1789): a reason cut off at the list's width hid the
+// way out.
+class WrappingDelegate final : public QStyledItemDelegate {
+public:
+  explicit WrappingDelegate(QTreeWidget* tree) : QStyledItemDelegate(tree), m_tree(tree) {}
+
+  QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    QSize size = QStyledItemDelegate::sizeHint(option, index);
+    if (!index.data(kWrapRole).toBool()) {
+      return size;
+    }
+    int depth = 1; // the root's decoration
+    for (QModelIndex parent = index.parent(); parent.isValid(); parent = parent.parent()) { ++depth; }
+    QStyle* style = m_tree->style();
+    const int margin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, nullptr, m_tree) + 1;
+    const int width = m_tree->viewport()->width() - depth * m_tree->indentation() -
+                      style->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, m_tree) - 4 * margin;
+    if (width <= 0) {
+      return size;
+    }
+    const QRect lines = option.fontMetrics.boundingRect(QRect(0, 0, width, 1 << 20), Qt::TextWordWrap,
+                                                        index.data(Qt::DisplayRole).toString());
+    size.setHeight(std::max(size.height(), lines.height() + 2 * margin));
+    return size;
+  }
+
+protected:
+  void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    if (index.data(kWrapRole).toBool()) {
+      option->features |= QStyleOptionViewItem::WrapText;
+      option->textElideMode = Qt::ElideNone;
+    }
+  }
+
+private:
+  QTreeWidget* m_tree;
+};
 
 QJsonObject identity(const QJsonObject& row) {
   return {{QStringLiteral("component"), row.value(QStringLiteral("component"))},
@@ -74,6 +123,46 @@ QJsonObject selectCutTargets(const QJsonObject& scope, bool all) {
                 QJsonObject{{QStringLiteral("type"), all ? QStringLiteral("automatic") : QStringLiteral("explicit")},
                             {all ? QStringLiteral("excluded") : QStringLiteral("included"), QJsonArray()},
                             {QStringLiteral("excluded_bodies"), QJsonArray()}});
+  return result;
+}
+
+QJsonObject includeMovingCutTarget(const QJsonObject& scope, const QJsonObject& report,
+                                   const QJsonObject& target, const QString& body) {
+  const QJsonObject component = identity(target);
+  const QJsonArray before = scope.value(QStringLiteral("targets")).toObject().value(QStringLiteral("excluded_bodies")).toArray();
+  const QJsonArray rows = report.value(QStringLiteral("rows")).toArray();
+  QJsonArray included;
+  QJsonArray excludedBodies;
+  for (const QJsonValue& value : rows) {
+    const QJsonObject row = value.toObject();
+    const QJsonObject id = identity(row);
+    const bool checked = row.value(QStringLiteral("checked")).toBool() || row.value(QStringLiteral("partial")).toBool();
+    if (id == component || !row.value(QStringLiteral("eligible")).toBool() || !checked || included.contains(id)) {
+      continue;
+    }
+    included.append(id);
+    for (const QJsonValue& exception : before) {
+      if (identity(exception.toObject()) == id) { excludedBodies.append(exception); }
+    }
+  }
+  included.append(component);
+  if (!body.isEmpty()) {
+    for (const QJsonValue& value : rows) {
+      const QJsonObject row = value.toObject();
+      if (identity(row) != component) { continue; }
+      for (const QJsonValue& other : row.value(QStringLiteral("bodies")).toArray()) {
+        const QString uid = other.toObject().value(QStringLiteral("body")).toString();
+        if (uid == body) { continue; }
+        QJsonObject item = component;
+        item.insert(QStringLiteral("body"), uid);
+        if (!excludedBodies.contains(item)) { excludedBodies.append(item); }
+      }
+    }
+  }
+  QJsonObject result = scope;
+  result.insert(QStringLiteral("targets"), QJsonObject{{QStringLiteral("type"), QStringLiteral("explicit")},
+                                                       {QStringLiteral("included"), included},
+                                                       {QStringLiteral("excluded_bodies"), excludedBodies}});
   return result;
 }
 
@@ -233,6 +322,7 @@ CutTargetsPanel::CutTargetsPanel(QWidget* parent) : QWidget(parent) {
   m_tree->setSelectionMode(QAbstractItemView::SingleSelection);
   m_tree->setEditTriggers(QAbstractItemView::NoEditTriggers);
   m_tree->header()->setStretchLastSection(true);
+  m_tree->setItemDelegate(new WrappingDelegate(m_tree));
   layout->addWidget(m_tree);
   auto* buttons = new QHBoxLayout;
   m_all = new QPushButton(tr("Select All"));
@@ -246,8 +336,19 @@ CutTargetsPanel::CutTargetsPanel(QWidget* parent) : QWidget(parent) {
   connect(m_none, &QPushButton::clicked, this, [this] { emit scopeChanged(selectCutTargets(m_scope, false)); });
   connect(m_tree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int) {
     if (m_refreshing || !m_current) { return; }
-    emit scopeChanged(setCutTargetChecked(m_scope, item->data(0, kTargetRole).toJsonObject(),
-                                          item->data(0, kBodyRole).toString(), item->checkState(0) != Qt::Unchecked));
+    const QJsonObject target = item->data(0, kTargetRole).toJsonObject();
+    const QString body = item->data(0, kBodyRole).toString();
+    const bool checked = item->checkState(0) != Qt::Unchecked;
+    if (checked && item->data(0, kMovesRole).toBool()) {
+      // Left out of the automatic scope for its joints (mitcad#1789): the
+      // scope turns explicit with what is checked now and this one.
+      qDebug().noquote() << QStringLiteral("Cut target %1@%2 checked: explicit scope with it")
+                                .arg(target.value(QStringLiteral("component")).toString(),
+                                     target.value(QStringLiteral("occurrence")).toString());
+      emit scopeChanged(includeMovingCutTarget(m_scope, m_report, target, body));
+      return;
+    }
+    emit scopeChanged(setCutTargetChecked(m_scope, target, body, checked));
   });
   connect(m_tree, &QAbstractItemView::entered, this, &CutTargetsPanel::highlight);
   connect(m_tree->selectionModel(), &QItemSelectionModel::currentChanged, this,
@@ -283,6 +384,7 @@ void CutTargetsPanel::rebuild() {
     if (item->isExpanded()) { expanded.insert(item->data(0, NativeControlIdentifierRole).toString()); }
   }
   m_tree->clear();
+  m_wraps = false;
   const QJsonArray rows = m_report.value(QStringLiteral("rows")).toArray();
   for (const QJsonValue& value : rows) {
     const QJsonObject row = value.toObject();
@@ -296,43 +398,58 @@ void CutTargetsPanel::rebuild() {
     const bool eligible = row.value(QStringLiteral("eligible")).toBool();
     const bool intersects = row.value(QStringLiteral("intersects")).toBool();
     const bool hidden = row.value(QStringLiteral("hidden")).toBool(); // mitcad#475
+    const QJsonObject scope = m_scope.value(QStringLiteral("targets")).toObject();
+    const bool automatic = scope.value(QStringLiteral("type")) == QStringLiteral("automatic");
+    // Left out only because it moves through joints (mitcad#1789): enabled,
+    // and checking it turns the scope explicit with it. Rows unavailable
+    // for other reasons (linked, placed more than once) stay disabled.
+    const bool moves = !eligible && automatic && row.value(QStringLiteral("joint_motion")).toBool();
     QString text = name;
     if (hidden) { text += tr(" (hidden)"); }
     if (!intersects) { text += tr(" — outside current cut"); }
-    if (!reason.isEmpty()) { text += QStringLiteral(" — ") + reason; }
-    if (!note.isEmpty()) { text += QStringLiteral(" — ") + note; }
+    // The reason and the note in full under the name, wrapped (mitcad#1789).
+    if (!reason.isEmpty()) { text += QLatin1Char('\n') + modelMessage(reason); }
+    if (!note.isEmpty()) { text += QLatin1Char('\n') + modelMessage(note); }
+    m_wraps = m_wraps || !reason.isEmpty() || !note.isEmpty();
     auto* item = new QTreeWidgetItem(m_tree, {text});
     // In words (mitcad#1741): the component's and the occurrences' ids are
     // the row's data.
     item->setToolTip(0, text);
     item->setData(0, kTargetRole, identity(row));
     item->setData(0, kBodiesRole, row.value(QStringLiteral("bodies")).toArray());
+    item->setData(0, kMovesRole, moves);
+    item->setData(0, kWrapRole, !reason.isEmpty() || !note.isEmpty());
     item->setData(0, NativeControlIdentifierRole, QStringLiteral("cut_target_") + component + QLatin1Char('@') + path);
-    item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | (m_current && eligible ? Qt::ItemIsEnabled : Qt::NoItemFlags));
+    item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsUserCheckable |
+                   (m_current && (eligible || moves) ? Qt::ItemIsEnabled : Qt::NoItemFlags));
     item->setCheckState(0, row.value(QStringLiteral("partial")).toBool() ? Qt::PartiallyChecked
                          : row.value(QStringLiteral("checked")).toBool() ? Qt::Checked : Qt::Unchecked);
     for (const QJsonValue& bodyValue : row.value(QStringLiteral("bodies")).toArray()) {
       const QJsonObject body = bodyValue.toObject();
       const QString uid = body.value(QStringLiteral("body")).toString();
+      const QString bodyName = body.value(QStringLiteral("name")).toString();
+      const QString shown = bodyName.isEmpty() ? tr("Body") : bodyName;
       auto* child = new QTreeWidgetItem(
-          item, {body.value(QStringLiteral("name")).toString(uid) +
-                 (body.value(QStringLiteral("hidden")).toBool() ? tr(" (hidden)") : QString())});
+          item, {shown + (body.value(QStringLiteral("hidden")).toBool() ? tr(" (hidden)") : QString())});
       child->setData(0, kTargetRole, identity(row));
       child->setData(0, kBodyRole, uid);
       child->setData(0, kBodiesRole, QJsonArray{body});
+      child->setData(0, kMovesRole, moves);
       child->setData(0, NativeControlIdentifierRole, QStringLiteral("cut_body_") + uid + QLatin1Char('@') + path);
-      const QJsonObject scope = m_scope.value(QStringLiteral("targets")).toObject();
-      const bool automatic = scope.value(QStringLiteral("type")) == QStringLiteral("automatic");
       const QJsonArray membership = scope.value(automatic ? QStringLiteral("excluded") : QStringLiteral("included")).toArray();
       const bool included = automatic ? !membership.contains(identity(row)) : membership.contains(identity(row));
       child->setFlags(Qt::ItemIsSelectable | Qt::ItemIsUserCheckable |
-                      (m_current && eligible && included ? Qt::ItemIsEnabled : Qt::NoItemFlags));
+                      (m_current && ((eligible && included) || moves) ? Qt::ItemIsEnabled : Qt::NoItemFlags));
       child->setCheckState(0, body.value(QStringLiteral("checked")).toBool() ? Qt::Checked : Qt::Unchecked);
-      child->setToolTip(0, item->toolTip(0) + QStringLiteral("\n") + uid);
+      // The body and its component in words (mitcad#1789, no ids in what a
+      // person reads): the uid is the item's data and in the log.
+      child->setToolTip(0, tr("%1 in %2").arg(shown, name));
+      qDebug().noquote() << QStringLiteral("Cut body %1@%2 tooltip: %3").arg(uid, path, child->toolTip(0));
     }
     item->setExpanded(expanded.contains(item->data(0, NativeControlIdentifierRole).toString()));
     qDebug().noquote() << QStringLiteral("Cut target %1@%2: %3, %4, %5%6%7")
-        .arg(component, path, eligible ? QStringLiteral("eligible") : QStringLiteral("unavailable"),
+        .arg(component, path, eligible ? QStringLiteral("eligible") : moves ? QStringLiteral("moves through joints")
+                                                                            : QStringLiteral("unavailable"),
              item->checkState(0) == Qt::Checked ? QStringLiteral("checked") : item->checkState(0) == Qt::PartiallyChecked
                  ? QStringLiteral("partial") : QStringLiteral("unchecked"), intersects ? QStringLiteral("intersects") : QStringLiteral("outside"),
              hidden ? QStringLiteral(", hidden") : QString(), note.isEmpty() ? QString() : QStringLiteral(", own definition"));
@@ -398,6 +515,12 @@ void CutTargetsPanel::highlight(const QModelIndex& index) {
 
 bool CutTargetsPanel::eventFilter(QObject* watched, QEvent* event) {
   if (event->type() == QEvent::Leave || event->type() == QEvent::FocusOut) { emit highlightChanged({}); }
+  // Wrapped reasons take the height of the new width (mitcad#1789).
+  if (m_wraps && watched == m_tree->viewport() && event->type() == QEvent::Resize &&
+      static_cast<QResizeEvent*>(event)->size().width() != static_cast<QResizeEvent*>(event)->oldSize().width()) {
+    QAbstractItemView* view = m_tree;
+    QMetaObject::invokeMethod(view, [view] { view->doItemsLayout(); }, Qt::QueuedConnection);
+  }
   return QWidget::eventFilter(watched, event);
 }
 

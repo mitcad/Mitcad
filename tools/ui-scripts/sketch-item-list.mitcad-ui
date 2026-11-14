@@ -1,23 +1,27 @@
 # SPDX-License-Identifier: MIT
 # Sketch mode's list of the sketch's work steps in the timeline's place
 # (mitcad#1750, after mitcad#1492's list of items), on sketch-item-list.json
-# (a 60 x 40 x 20 box; Sketch2 on its top face, empty; Sketch3 a line and
-# its points saved without steps):
+# (a 60 x 40 x 20 box; Sketch2 on its top face, empty; Sketch3 a line, its
+# points and an inactive Horizontal saved without steps):
 #   1. Editing Sketch2 puts the step list in the timeline's place.
 #   2. Project of the top face: one Project cell for its whole outline.
 #   3. A 20 x 10 rectangle with its width and height typed: one Rectangle
 #      cell for its lines, corners, constraints and the two dimensions.
 #   4. Sketch Dimension between the rectangle's left side and the face's
 #      left edge: one Sketch Dimension cell. Three cells in all.
-#   5. The pointer over the Project cell opens its hover list; over an
-#      edge's row it highlights that edge in the view; a click on the row
-#      selects it.
+#   5. The pointer over the Project cell opens its hover list; its last
+#      point's row, low in it, is reached (in the Floating layout too,
+#      where the list is over the message band's card, mitcad#1763); over
+#      an edge's row it highlights that edge in the view; a click on the
+#      row selects it, and the Project cell is drawn selected with its
+#      icon in its own colors.
 #   6. A double-click on the dimension's cell opens its value editor.
 #   7. Parallel between two sides of the rectangle is refused: the error
 #      badge of its conflicting constraints is on the Rectangle cell.
 #   8. A click on the Rectangle cell selects its items, Delete deletes them
 #      and the cell goes (the dimension on its side with it).
-#   9. Sketch3, saved without steps, shows one cell per item.
+#   9. Sketch3, saved without steps, shows one cell per item; the inactive
+#      Horizontal's cell is drawn dimmed, its icon in its disabled colors.
 #  10. Finish Sketch brings the timeline back.
 # The clicks in the view stay inside the top face, away from its edges
 # (60 x 40 around the origin), but for the edge the dimension picks.
@@ -25,7 +29,8 @@
 # layout grid, whose step (1 or 5 mm here) follows the window's size, so a
 # corner off the coarser grid moved its sides away from the later clicks
 # (the 0.61.0 release test on Windows: -8 snapped to -10).
-# Run by tools/ui-sketch-item-list-test.sh (Linux) and
+# Run in the Docked and in the Floating layout by
+# tools/ui-sketch-item-list-test.sh (Linux) and
 # tools/ui-windows-sketch-item-list-test.ps1 (Windows).
 expect-ever 'View area'
 wait-idle
@@ -91,7 +96,14 @@ mark
 hover-logged "^Sketch step ${project} at "
 wait-log "^Sketch step ${project} hover list: Project: "
 capture edge "^Sketch step ${project} hover list: Project: (?:.*, )?(c[0-9]+) line"
+capture low "^Sketch step ${project} hover list: Project: (?:.*, )?(p[0-9]+) point"
 wait-log "^Sketch step item ${edge} at "
+wait-log "^Sketch step item ${low} at "
+# The last point's row, low in the list, under the pointer: nothing lies
+# over the list.
+mark
+hover-logged "^Sketch step item ${low} at "
+wait-log "^Sketch step item ${low} hovered$"
 mark
 hover-logged "^Sketch step item ${edge} at "
 wait-log "^Sketch step item ${edge} hovered$"
@@ -101,6 +113,8 @@ click-logged "^Sketch step item ${edge} at "
 wait-log "^Sketch step item ${edge} clicked$"
 wait-log "^Selected: .*${edge} of F3"
 wait-log "^Sketch steps selected: ${project}$"
+# The selected cell: the accent's tint and ring, the icon in its colors.
+wait-log "^Sketch step ${project} drawn: selected, icon normal$"
 mark
 leave-widget sketchStepItems
 wait-log '^Sketch step hover list closed$'
@@ -150,7 +164,9 @@ wait-idle
 mark
 dblclick-logged '^Timeline Sketch3 at '
 wait-log '^Editing sketch F4 \(Sketch3\)' 30
-wait-log '^Sketch steps: p1 point, p2 point, c3 line$'
+wait-log '^Sketch steps: p1 point, p2 point, c3 line, k4 horizontal inactive$'
+# The inactive Horizontal's cell dimmed: its icon in its disabled colors.
+wait-log '^Sketch step k4 drawn: dimmed, icon disabled$'
 wait-idle
 
 # 10. The timeline back when the sketch is finished.

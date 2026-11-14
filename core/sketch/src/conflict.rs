@@ -314,6 +314,30 @@ pub fn sentence(ctx: &Context<'_>, items: &[SolverItem]) -> String {
     }
 }
 
+/// A redundant constraint or dimension in words (mitcad#1774): what follows
+/// from what, "the Coincident between a point and a projected point follows
+/// from the Tangent between a line and an arc, the 15.95 mm distance and 2
+/// more". `set` is the dependent set it is in (itself included); the same
+/// phrase twice is named once. None for an id the sketch does not have.
+pub fn follows(ctx: &Context<'_>, item: ConstraintUid, set: &[SolverItem]) -> Option<String> {
+    let (_, what) = ctx.phrase(item)?;
+    let others: Vec<ConstraintUid> = user_items(set).into_iter().filter(|k| *k != item).collect();
+    let mut phrases: Vec<String> = Vec::new();
+    for phrase in ctx.phrases(&others) {
+        if !phrases.contains(&phrase) {
+            phrases.push(phrase);
+        }
+    }
+    if let Some(fixed) = fixed_words(ctx, set) {
+        phrases.push(format!("the {fixed}"));
+    }
+    Some(if phrases.is_empty() {
+        format!("{what} follows from the others")
+    } else {
+        format!("{what} follows from {}", listed(&phrases))
+    })
+}
+
 /// An edit refused for a conflict, in words: the constraints and
 /// dimensions that block `change` (the first few named, the rest counted);
 /// without any, the fixed geometry `change` cannot hold with.

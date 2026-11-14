@@ -259,7 +259,9 @@ pub(crate) fn writes(
         | D::BoundLength(_)
         | D::Placeholder(_)
         | D::IntersectionCurve(_)
-        | D::SpatialSketch(_) => Writes::Nothing,
+        | D::HelixCurve(_)
+        | D::SpatialSketch(_)
+        | D::CoordinateSystem(_) => Writes::Nothing,
         D::Extrude(e) if e.active_cut_scope().is_some() => Writes::All,
         D::Extrude(e) => by_operation(e.operation, &e.participants),
         D::Revolve(r) => by_operation(r.operation, &r.participants),

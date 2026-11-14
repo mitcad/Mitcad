@@ -3,8 +3,9 @@
 // clicks on a planar face, each click a row of the position table, or at
 // sketch points; it may be counterdrilled and tapered (mitcad#27, as the
 // FreeCAD import makes them). A thread's size is suggested from the
-// cylinder picked; its free ends may be chamfered (mitcad#304). Sizes, designations and classes are chosen from the
-// model's table (`thread_sizes`, P9), ISO metric first (P11); Thread Type
+// cylinder picked while none is chosen (mitcad#1781); its free ends may be
+// chamfered (mitcad#304). Sizes, designations and classes are chosen from
+// the model's table (`thread_sizes`, P9), ISO metric first (P11); Thread Type
 // Custom takes a major diameter and a pitch of its own instead, and a
 // modelled one a number of starts (mitcad#893).
 #include <algorithm>
@@ -115,36 +116,6 @@ QString foreignObject(const CommandState& state, const CommandContext& context) 
 
 std::function<bool(const CommandState&)> choiceIs(const QString& id, const QString& value) {
   return [id, value](const CommandState& state) { return state.choice(id) == value; };
-}
-
-// ISO metric coarse sizes (ISO 261): nominal diameter and pitch.
-struct MetricSize {
-  double d;
-  double pitch;
-};
-const MetricSize kCoarse[] = {{1, 0.25},   {1.2, 0.25}, {1.6, 0.35}, {2, 0.4},   {2.5, 0.45},
-                              {3, 0.5},    {4, 0.7},    {5, 0.8},    {6, 1.0},   {8, 1.25},
-                              {10, 1.5},   {12, 1.75},  {14, 2.0},   {16, 2.0},  {20, 2.5},
-                              {24, 3.0},   {30, 3.5},   {36, 4.0},   {42, 4.5},  {48, 5.0},
-                              {56, 5.5},   {64, 6.0}};
-
-QString designation(const MetricSize& size) {
-  return QStringLiteral("M%1x%2").arg(number(size.d), number(size.pitch));
-}
-
-// The coarse size that fits a cylinder: its nominal diameter outside, its
-// minor diameter (D - 1.0825 P) inside.
-MetricSize sizeFor(double diameter, bool internal) {
-  MetricSize best = kCoarse[0];
-  double nearest = 1e300;
-  for (const MetricSize& size : kCoarse) {
-    const double fits = internal ? size.d - 1.082532 * size.pitch : size.d;
-    if (std::abs(fits - diameter) < nearest) {
-      nearest = std::abs(fits - diameter);
-      best = size;
-    }
-  }
-  return best;
 }
 
 // A cylindrical face's diameter and whether it is a bore (its normal points
@@ -432,29 +403,14 @@ void keepClassOnSide(CommandState& state, const CommandContext& context, bool in
   }
 }
 
-// The ISO metric coarse size a cylindrical face suggests (its nominal
-// diameter outside, its tap drill inside), with 6H for a hole and 6g for a
-// shaft; a custom thread's major diameter a shaft's own (mitcad#893);
-// nothing for another standard or another surface. A face picked in the
-// open command and one selected before it alike (mitcad#691).
-void suggestSize(const SelectionItem& item, CommandState& state, const CommandContext& model) {
-  const auto cylinder = cylinderOf(item, model);
-  if (!cylinder) {
-    return;
-  }
-  if (customThread(state) && !cylinder->second) {
-    state.setText(kThreadMajor, lengthText(std::round(cylinder->first * 1000.0) / 1000.0, model));
-    state.setValue(kThreadMajor, std::numeric_limits<double>::quiet_NaN());
-    return;
-  }
-  if (state.choice(QStringLiteral("standard")) != QStringLiteral("iso_metric")) {
-    return;
-  }
-  const MetricSize size = sizeFor(cylinder->first, cylinder->second);
-  state.setChoice(QStringLiteral("size"), number(size.d));
-  state.setChoice(QStringLiteral("designation"), designation(size));
-  state.setChoice(QStringLiteral("class"), cylinder->second ? QStringLiteral("6H") : QStringLiteral("6g"));
-}
+// Whether the thread's size is chosen (mitcad#1781), kept in the state
+// beside the inputs: set when Size, Designation, Class or a custom
+// thread's Major Diameter changes in the panel (their onChange, also a
+// Repeat's restored settings) and when a thread is edited. A picked face
+// then suggests no size (Thread's suggestSize).
+const QString kSizeChosen = QStringLiteral("size_chosen");
+
+void markSizeChosen(CommandState& state) { state.setChecked(kSizeChosen, true); }
 
 // The size table's inputs: Thread Type, Size, Designation and Class,
 // starting at an ISO metric size (M6x1 6H for holes,
@@ -551,6 +507,7 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
             return options;
           })
           .withOnChange([designationsIn, keepClass](CommandState& state, const CommandContext& model) {
+            markSizeChosen(state);
             state.setChoice(QStringLiteral("designation"), designationsIn(state).value(0));
             keepClass(state, model);
           })
@@ -558,7 +515,10 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
       choiceInput(QStringLiteral("designation"), QObject::tr("Designation"), {}, start.designation)
           .withTooltip(QObject::tr("The size and pitch: M10x1.5 (coarse), M10x1.25 (fine), 1/4-20 UNC"))
           .withChoices([designationsIn](const CommandState& state) { return labelled(designationsIn(state)); })
-          .withOnChange(keepClass)
+          .withOnChange([keepClass](CommandState& state, const CommandContext& model) {
+            markSizeChosen(state);
+            keepClass(state, model);
+          })
           .withVisible(tabled),
       // Once the faces are known, only the classes of their side (mitcad#691).
       choiceInput(QStringLiteral("class"), QObject::tr("Class"), {}, start.threadClass)
@@ -574,11 +534,13 @@ QVector<InputDef> threadInputs(const CommandContext& context, const ThreadStart&
                             : side == kExternal ? standard->external
                                                 : standard->external + standard->internal);
           })
+          .withOnChange([](CommandState& state, const CommandContext&) { markSizeChosen(state); })
           .withVisible(tabled),
       valueInput(kThreadMajor, QObject::tr("Major Diameter"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
           .withExactDefault()
           .withTooltip(QObject::tr("The custom thread's major diameter, on the 60-degree profile"))
           .withOnChange([sized](CommandState& state, const CommandContext& model) {
+            markSizeChosen(state);
             // (A tapped hole's countersink follows it, mitcad#903.)
             if (sized) {
               sized(state, model);
@@ -642,6 +604,95 @@ void loadClearance(const QJsonObject& thread, const QJsonObject& feature, Comman
   for (const QString& key : {kRadialClearance, kFlankClearance}) {
     loadValue(state, key, thread.value(key), feature, context);
   }
+}
+
+// The fit check's allowance (mitcad#1262), as the model's `fit_allowance`
+// (core/model/src/features/thread.rs), which the app cannot call: a face's
+// diameter may lie a quarter of a pitch (`CLASS_TOLERANCE`), half a
+// millimetre (`FIT_MARGIN`) and twice the radial clearance from the
+// thread's crest diameter without a warning.
+double fitAllowance(double pitch, double radialClearance) { return 0.25 * pitch + 0.5 + 2.0 * radialClearance; }
+
+// An ISO metric designation's pitch (`M60x3`: 3), NaN without one.
+double isoPitch(const QString& designation) {
+  const int x = designation.lastIndexOf(QLatin1Char('x'));
+  bool ok = false;
+  const double pitch = x < 0 ? 0.0 : designation.mid(x + 1).toDouble(&ok);
+  return ok && pitch > 0.0 ? pitch : std::numeric_limits<double>::quiet_NaN();
+}
+
+// The ISO metric thread's crest diameter a face meets: the major diameter
+// on a shaft, the minor one in a hole (ISO 68-1: D1 = D - 1.082532 P).
+double isoCrest(double major, double pitch, bool internal) { return internal ? major - 1.082532 * pitch : major; }
+
+// The size a cylindrical face suggests (mitcad#691, mitcad#1781), a face
+// picked in the open command and one selected before it alike, only while
+// the size is not chosen (kSizeChosen: never in an edit). ISO metric: the
+// size there is kept when it fits the face (within the fit check's
+// allowance); else, from the model's whole table (`thread_sizes`), the size
+// whose crest diameter is the nearest to the face's, at its coarse pitch
+// (the table's first designation), the class kept when it is one of the
+// face's side, else the side's default (6H in a hole, 6g on a shaft). A
+// custom thread's Major Diameter is a shaft's own (mitcad#893); nothing for
+// another standard or another surface.
+void suggestSize(const SelectionItem& item, CommandState& state, const CommandContext& model) {
+  if (state.checked(kSizeChosen)) {
+    qDebug().noquote() << QStringLiteral("Thread size kept: %1 (chosen)").arg(sizeText(state));
+    return;
+  }
+  const auto cylinder = cylinderOf(item, model);
+  if (!cylinder) {
+    return;
+  }
+  const double diameter = cylinder->first;
+  const bool internal = cylinder->second;
+  if (customThread(state) && !internal) {
+    state.setText(kThreadMajor, lengthText(std::round(diameter * 1000.0) / 1000.0, model));
+    state.setValue(kThreadMajor, std::numeric_limits<double>::quiet_NaN());
+    return;
+  }
+  const QString id = state.choice(QStringLiteral("standard"));
+  const ThreadStandard* standard = id == QStringLiteral("iso_metric") ? standardOf(model, id) : nullptr;
+  if (standard == nullptr) {
+    return;
+  }
+  const QString face = QStringLiteral("%1%2 mm %3")
+                           .arg(QChar(0x00D8))
+                           .arg(number(std::round(diameter * 1000.0) / 1000.0), internal ? kInternal : kExternal);
+  // The size there now, when it fits (a modelled thread's radial clearance
+  // moves its crest away from the material).
+  const QString size = state.choice(QStringLiteral("size"));
+  const double pitch = isoPitch(state.choice(QStringLiteral("designation")));
+  const double radial = state.value(kRadialClearance);
+  const double clearance = state.checked(QStringLiteral("modeled")) && std::isfinite(radial) ? radial : 0.0;
+  if (standard->majors.contains(size) && std::isfinite(pitch) &&
+      std::abs(isoCrest(standard->majors.value(size), pitch, internal) - diameter) <= fitAllowance(pitch, clearance)) {
+    qDebug().noquote() << QStringLiteral("Thread size kept: %1 fits the face (%2)").arg(sizeText(state), face);
+    return;
+  }
+  const QPair<QString, QStringList>* best = nullptr;
+  double nearest = std::numeric_limits<double>::infinity();
+  for (const auto& entry : standard->sizes) {
+    const double coarse = entry.second.isEmpty() ? std::numeric_limits<double>::quiet_NaN()
+                                                 : isoPitch(entry.second.first());
+    if (!std::isfinite(coarse) || !standard->majors.contains(entry.first)) {
+      continue;
+    }
+    const double off = std::abs(isoCrest(standard->majors.value(entry.first), coarse, internal) - diameter);
+    if (off < nearest) {
+      nearest = off;
+      best = &entry;
+    }
+  }
+  if (best == nullptr) {
+    return;
+  }
+  state.setChoice(QStringLiteral("size"), best->first);
+  state.setChoice(QStringLiteral("designation"), best->second.first());
+  if (!(internal ? standard->internal : standard->external).contains(state.choice(QStringLiteral("class")))) {
+    state.setChoice(QStringLiteral("class"), internal ? standard->defaultInternal : standard->defaultExternal);
+  }
+  qDebug().noquote() << QStringLiteral("Thread size suggested: %1 for the face (%2)").arg(sizeText(state), face);
 }
 
 // A thread's end chamfers (mitcad#304): the check, the ends, and the size
@@ -1606,7 +1657,9 @@ CommandDef threadCommand(const CommandContext& context) {
           .withAccepts([](const SelectionItem& item) { return item.geometry == QStringLiteral("cylinder"); })
           .withOnPick(
               [](const SelectionItem& item, CommandState& state, const CommandContext& model) {
-                // The first face suggests the size.
+                // The first face suggests the size, while it is not chosen
+                // (mitcad#1781: not in an edit, nor after a size chosen by
+                // hand).
                 if (state.items(QStringLiteral("faces")).size() == 1) {
                   suggestSize(item, state, model);
                 }
@@ -1777,6 +1830,8 @@ CommandDef threadCommand(const CommandContext& context) {
     loadChamfer(feature, state, context);
     // An edited thread is fitted by Auto Fix, not by the panel (mitcad#1632).
     state.setChecked(kFitEditing, true);
+    // Its size stays when its faces are picked again (mitcad#1781).
+    markSizeChosen(state);
   };
 
   // Starts are offered for a custom thread only (mitcad#893): a thread of a

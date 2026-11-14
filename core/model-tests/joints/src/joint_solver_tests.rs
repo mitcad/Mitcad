@@ -511,6 +511,78 @@ fn joints_that_cannot_hold_fail_and_move_nothing() {
 }
 
 #[test]
+fn a_loop_of_joints_that_cannot_all_hold_says_what_fights_and_what_to_do() {
+    // mitcad#1753: a loop of three revolute joints that cannot close (a
+    // crank of 30 and a coupler of 100 between ground pivots 300 apart).
+    // The closing joint's error says in words which joints work against
+    // each other, by the names the timeline shows, and what to do, without
+    // the solver's terms; its places are the joints, painted on hover; the
+    // agents' detail keeps the solver's analysis.
+    let mut doc = Document::new(MockKernel::default());
+    link(&mut doc, "Crank", Transform::IDENTITY);
+    link(&mut doc, "Coupler", shift(0.0, 50.0, 0.0));
+    let first = joint(
+        &mut doc,
+        "revolute",
+        pin("Crank:1", [0.0; 3]),
+        ground([0.0; 3]),
+    );
+    assert_eq!(first["error"], Value::Null, "{first}");
+    let second = joint(
+        &mut doc,
+        "revolute",
+        pin("Coupler:1", [0.0; 3]),
+        pin("Crank:1", [30.0, 0.0, 0.0]),
+    );
+    assert_eq!(second["error"], Value::Null, "{second}");
+    let closing = joint(
+        &mut doc,
+        "revolute",
+        pin("Coupler:1", [100.0, 0.0, 0.0]),
+        ground([300.0, 0.0, 0.0]),
+    );
+    assert!(matches!(
+        doc.status(uid(&closing)),
+        Some(FeatureStatus::Failed(_))
+    ));
+
+    let feature = query(&doc, json!({"query": "feature", "uid": uid(&closing)}));
+    let notice = &feature["notices"][0];
+    assert_eq!(notice["level"], "error", "{feature}");
+    let message = notice["message"].as_str().unwrap_or_default();
+    // The words: which joints fight, by their names, and what to do.
+    for name in ["Joint1", "Joint2", "Joint3"] {
+        assert!(message.contains(name), "{message}");
+    }
+    assert!(message.contains("cannot all hold"), "{message}");
+    assert!(
+        message.contains("free a motion of one of them") && message.contains("remove one of them"),
+        "{message}"
+    );
+    // No solver terms: not "over-constrained", no motion ids.
+    assert!(!message.contains("over-constrained"), "{message}");
+    assert!(!message.contains("rz"), "{message}");
+    // The places: the three joints.
+    let places = notice["places"].as_array().cloned().unwrap_or_default();
+    assert!(places.iter().all(|p| p["kind"] == "joint"), "{places:?}");
+    let painted: std::collections::BTreeSet<String> = places
+        .iter()
+        .filter_map(|p| p["feature"].as_str().map(str::to_owned))
+        .collect();
+    let joints: std::collections::BTreeSet<String> = [&first, &second, &closing]
+        .iter()
+        .map(|r| uid(r).to_string())
+        .collect();
+    assert_eq!(painted, joints, "{places:?}");
+    // The agents' detail keeps the solver's analysis.
+    let error = feature["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("cannot all hold") && error.contains("Joint3"),
+        "{error}"
+    );
+}
+
+#[test]
 fn moves_and_joints_take_rigid_groups_along() {
     let mut doc = Document::new(MockKernel::default());
     let base = link(&mut doc, "Base", Transform::IDENTITY);

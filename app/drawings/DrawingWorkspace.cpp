@@ -3811,7 +3811,7 @@ bool DrawingWorkspace::exportTo(const QString& path, const QString& units) {
     const QString inUnit = written.isEmpty() ? QString() : QStringLiteral(", in %1").arg(written);
     qInfo().noquote()
         << QStringLiteral("Exported %1: cut sheet %2, %3 parts%4").arg(path, m_name).arg(parts).arg(inUnit);
-    setStatus(tr("Exported %1 (%2 component(s)%3).").arg(QDir::toNativeSeparators(path)).arg(parts).arg(inUnit),
+    setStatus(tr("Exported %1 (%n component(s)%2).", nullptr, parts).arg(QDir::toNativeSeparators(path), inUnit),
               false);
     return true;
   }
@@ -3837,7 +3837,7 @@ bool DrawingWorkspace::exportTo(const QString& path, const QString& units) {
   const QString inUnit = written.isEmpty() ? QString() : QStringLiteral(", in %1").arg(written);
   qInfo().noquote()
       << QStringLiteral("Exported %1: drawing %2, %3 sheets%4").arg(path, m_name).arg(sheets).arg(inUnit);
-  setStatus(tr("Exported %1 (%2 sheet(s)%3).").arg(QDir::toNativeSeparators(path)).arg(sheets).arg(inUnit),
+  setStatus(tr("Exported %1 (%n sheet(s)%2).", nullptr, sheets).arg(QDir::toNativeSeparators(path), inUnit),
             false);
   return true;
 }

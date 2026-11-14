@@ -777,3 +777,79 @@ fn an_evaluation_unpacks_only_the_bodies_it_reads() {
     assert_eq!(histories(&opened), histories(&b.doc));
     assert_eq!(opened.versions(), b.doc.versions());
 }
+
+#[test]
+fn results_taken_for_an_autosave_are_written_on_another_thread() {
+    // An autosave takes what was computed since the last save with the
+    // design (mitcad#1796) and writes it on its own thread while the
+    // document goes on; a design recovered from it then finds the results.
+    let folder = Folder::new();
+    let mut p = part();
+    p.b.doc.set_result_store(Some(folder.store()));
+    assert_eq!(p.b.doc.persist_results(Duration::ZERO).results, 3);
+    // Changed after the save: the boss and the fillet after it evaluated.
+    p.b.doc.set_parameter("d6", 35.0).unwrap();
+    assert_eq!(p.b.doc.stats().evaluated, vec![p.boss, p.fillet]);
+    let taken = p.b.doc.take_results_to_write(Duration::ZERO);
+    assert_eq!(taken.len(), 2);
+    // Taken, they are marked written: nothing to take or persist again.
+    assert!(p.b.doc.take_results_to_write(Duration::ZERO).is_empty());
+    assert_eq!(p.b.doc.persist_results(Duration::ZERO).results, 0);
+    // The document goes on meanwhile.
+    let json = p.b.doc.to_json();
+    p.b.doc.set_parameter("d7", 3.0).unwrap();
+    let report = std::thread::spawn(move || taken.write()).join().unwrap();
+    assert_eq!((report.results, report.failed), (2, 0));
+    assert!(report.shapes >= 2, "{report:?}");
+    // The design as autosaved, recovered: every solid feature restored.
+    let recovered = open(&json, Some(folder.store()));
+    assert_eq!(
+        recovered.stats().restored,
+        vec![p.b.extrude, p.boss, p.fillet]
+    );
+    assert_eq!(recovered.kernel().count("extrude"), 0);
+    assert_eq!(recovered.kernel().count("fillet"), 0);
+}
+
+#[test]
+fn taking_results_without_a_store_takes_none() {
+    let mut p = part();
+    let taken = p.b.doc.take_results_to_write(Duration::ZERO);
+    assert!(taken.is_empty());
+    assert_eq!(taken.write().results, 0);
+    // Not marked written: a store set later still gets them.
+    let folder = Folder::new();
+    p.b.doc.set_result_store(Some(folder.store()));
+    assert_eq!(p.b.doc.persist_results(Duration::ZERO).results, 3);
+}
+
+#[test]
+fn written_in_two_steps_a_result_is_found_as_one_written_at_once() {
+    // ResultStore::write is prepare and finish at once: the same files,
+    // and a new document restores from either.
+    let at_once = Folder::new();
+    let in_steps = Folder::new();
+    let mut p = part();
+    p.b.doc.set_result_store(Some(at_once.store()));
+    let written = p.b.doc.persist_results(Duration::ZERO);
+    let mut q = part();
+    q.b.doc.set_result_store(Some(in_steps.store()));
+    let taken = q.b.doc.take_results_to_write(Duration::ZERO).write();
+    assert_eq!(
+        (taken.results, taken.shapes),
+        (written.results, written.shapes)
+    );
+    let names = |folder: &Folder| -> Vec<String> {
+        let mut names: Vec<_> = folder
+            .files()
+            .into_iter()
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&at_once), names(&in_steps));
+    let opened = open(&q.b.doc.to_json(), Some(in_steps.store()));
+    assert_eq!(opened.stats().restored, vec![q.b.extrude, q.boss, q.fillet]);
+    assert_eq!(histories(&opened), histories(&q.b.doc));
+}

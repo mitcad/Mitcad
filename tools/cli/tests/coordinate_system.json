@@ -1,0 +1,40 @@
+[
+  {"comment": "Coordinate System (mitcad#1775): a frame at the corner (60, 0, 20) of a 60 x 40 x 20 block, Z along the top front edge away from it (-X), X down the front right edge (-Z), so Y = Z x X is -Y. The block written in that frame to STEP, IGES and STL and read back lies at x 0..20, y -40..0, z 0..60: the corner at the origin, its edges along X and Z. Files go to the working directory."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"body": "Body1", "volume": 48000}},
+
+  {"cmd": "add_feature", "def": {"type": "coordinate_system",
+    "origin": {"body": "F2.b0", "vertex": "V{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"},
+    "z_axis": {"body": "F2.b0", "edge": "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F2:side(c1[c4,c2])}"},
+    "x_axis": {"body": "F2.b0", "edge": "E{F2:side(c1[c4,c2])|F2:side(c2[c1,c3])}"}}},
+  {"expect": {"feature": "CoordinateSystem1", "status": "ok"}},
+  {"expect": {"query": {"query": "datum", "uid": "F3"}, "result": {"name": "CoordinateSystem1", "type": "plane",
+    "origin": [60, 0, 20], "x_axis": [0, 0, -1], "y_axis": [0, -1, 0], "normal": [-1, 0, 0]}}},
+
+  {"cmd": "export", "path": "frame.step", "coordinates": {"frame": "CoordinateSystem1"}},
+  {"cmd": "export", "path": "frame.igs", "coordinates": {"frame": "F3"}},
+  {"cmd": "export", "path": "frame.stl", "coordinates": {"frame": "CoordinateSystem1"}},
+
+  {"comment": "Read back: the corner at the origin within 1e-6 mm, the 20 mm edge along +X, the 60 mm one along +Z."},
+  {"cmd": "import_file", "path": "frame.step", "structure": "base", "wrap": false},
+  {"expect": {"body": "F4.b0", "volume": 48000,
+    "bbox": {"min": [0, -40, 0], "max": [20, 0, 60]}, "tolerance": 1e-6}},
+  {"cmd": "import_file", "path": "frame.igs", "wrap": false},
+  {"expect": {"body": "F5.b0", "volume": 48000,
+    "bbox": {"min": [0, -40, 0], "max": [20, 0, 60]}, "tolerance": 1e-6}},
+  {"cmd": "import_file", "path": "frame.stl"},
+  {"expect": {"body": "F6.b0",
+    "bbox": {"min": [0, -40, 0], "max": [20, 0, 60]}, "tolerance": 1e-6}},
+
+  {"comment": "The frame follows the block: 30 mm high, the corner at (60, 0, 30), the block written in it 30 along X."},
+  {"cmd": "set_parameter", "name": "d3", "value": 30},
+  {"expect": {"query": {"query": "datum", "uid": "F3"}, "result": {"origin": [60, 0, 30], "normal": [-1, 0, 0]}}},
+  {"cmd": "export", "path": "taller.step", "bodies": ["Body1"], "coordinates": {"frame": "CoordinateSystem1"}},
+  {"cmd": "import_file", "path": "taller.step", "structure": "base", "wrap": false},
+  {"expect": {"body": "F7.b0", "volume": 72000,
+    "bbox": {"min": [0, -40, 0], "max": [30, 0, 60]}, "tolerance": 1e-6}}
+]

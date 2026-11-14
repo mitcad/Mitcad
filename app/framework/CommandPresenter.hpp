@@ -57,6 +57,11 @@ public:
     // (InputNote::places and hover painted meanwhile, mitcad#1643). The Qt
     // panel's NoteRow calls it.
     std::function<void(const QString&, bool)> noteHovered;
+    // The pointer came over a row of a choice shown as rows of columns:
+    // the input's key and the row's option (empty: it left the list), its
+    // InputDef::choicePlaces painted meanwhile (mitcad#1794). The Qt
+    // panel's list calls it.
+    std::function<void(const QString&, const QString&)> choiceHovered;
     // The button beside the message was clicked (setMessageAction,
     // mitcad#1634).
     std::function<void()> messageAction;

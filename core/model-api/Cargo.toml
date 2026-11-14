@@ -20,6 +20,8 @@ mitcad-dxf = { path = "../dxf" }
 mitcad-model-drawing = { path = "../model-drawing" }
 # 3MF export for slicers.
 mitcad-3mf = { path = "../3mf" }
+# CAM: toolpaths, posts and the spindle's collision check (mitcad#1013).
+mitcad-cam = { path = "../cam" }
 serde.workspace = true
 serde_json.workspace = true
 

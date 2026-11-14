@@ -292,6 +292,77 @@ CommandDef surfaceRevolveCommand(const CommandContext& context) {
   return def;
 }
 
+// --- Surface Helix (mitcad#1777)
+
+CommandDef surfaceHelixCommand(const CommandContext& context) {
+  CommandDef def = surfaceCommand("surface.helix", QObject::tr("Surface Helix"), "helix",
+                                  QObject::tr("Turns sketch curves about an axis as they rise along it, into surfaces"));
+  def.featureType = QStringLiteral("helix");
+  def.inputs = sheetInputs(context);
+  def.inputs += {
+      selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
+                     SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge, 1, 1)
+          .withTooltip(QObject::tr("A sketch line, an origin or construction axis, or a straight edge"))
+          .withAccepts([](const SelectionItem& item) { return item.kind == SelectKind::Axis || isLine(item); }),
+      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("4"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The turns; need not be whole")),
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("5 mm"))
+          .withStepMinimum(0.0, true)
+          .withTooltip(QObject::tr("The rise per turn")),
+      choiceInput(QStringLiteral("hand"), QObject::tr("Handedness"),
+                  {{QStringLiteral("right"), QStringLiteral("Right Hand")},
+                   {QStringLiteral("left"), QStringLiteral("Left Hand")}},
+                  QStringLiteral("right"))
+          .withTooltip(QObject::tr("The way the curves turn about the way they rise")),
+      flipInput(QStringLiteral("flip"), QObject::tr("Flip")).withTooltip(QObject::tr("Rise against the axis direction")),
+  };
+  def.enabled = [&context] { return hasSketches(context, true); };
+  def.build = [](const CommandState& state, const CommandContext&) {
+    Built result;
+    QJsonObject definition{{QStringLiteral("type"), QStringLiteral("helix")}};
+    if (!addSheetInputs(definition, state, result)) {
+      return result;
+    }
+    const Selection& axis = state.items(QStringLiteral("axis"));
+    if (axis.isEmpty()) {
+      return Built::failure(QObject::tr("Select the axis."), QStringLiteral("axis"));
+    }
+    definition.insert(QStringLiteral("axis"), axis.first().reference());
+    definition.insert(QStringLiteral("pitch"), state.expression(QStringLiteral("pitch")));
+    definition.insert(QStringLiteral("revolutions"), state.expression(QStringLiteral("revolutions")));
+    if (state.choice(QStringLiteral("hand")) == QStringLiteral("left")) {
+      definition.insert(QStringLiteral("left_handed"), true);
+    }
+    if (state.checked(QStringLiteral("flip"))) {
+      definition.insert(QStringLiteral("flip"), true);
+    }
+    return Built::of(definition);
+  };
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+    loadSheetInputs(feature, state, context);
+    const SelectionItem axis = itemOf(feature.value(QStringLiteral("axis")), context);
+    if (axis.isValid()) {
+      state.setItems(QStringLiteral("axis"), {axis});
+    }
+    loadValue(state, QStringLiteral("pitch"), feature.value(QStringLiteral("pitch")), feature, context);
+    loadValue(state, QStringLiteral("revolutions"), feature.value(QStringLiteral("revolutions")), feature, context);
+    state.setChoice(QStringLiteral("hand"), feature.value(QStringLiteral("left_handed")).toBool()
+                                                ? QStringLiteral("left")
+                                                : QStringLiteral("right"));
+    state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
+  };
+  def.canEdit = [&context](const QJsonObject& feature) {
+    return sheetEditable(feature, context) && isShowable(feature.value(QStringLiteral("axis")), context);
+  };
+  def.describe = [](const CommandState& state, const CommandContext&) {
+    return QStringLiteral("Added surface helix of %1, %2 turns of %3")
+        .arg(sheetCount(state), number(state.value(QStringLiteral("revolutions"))),
+             number(state.value(QStringLiteral("pitch"))));
+  };
+  return def;
+}
+
 // --- Surface Sweep
 
 CommandDef surfaceSweepCommand(const CommandContext& context) {
@@ -951,6 +1022,7 @@ const QString kKept = QStringLiteral("kept_points");
 CommandDef trimSurfaceCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.trim", QObject::tr("Trim"), "surface-trim",
                                   QObject::tr("Cuts a surface body and keeps the pieces clicked"));
+  def.pinned = true; // mitcad#1778
   def.featureType = QStringLiteral("trim_surface");
   def.surfaceBodiesOnly = true; // the view's context menu (mitcad#494)
   def.extendedToolPreview = true; // the trimming tool as it is extended (mitcad#712)
@@ -1592,24 +1664,38 @@ namespace mitcad {
 
 void registerSurfaceCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  registry.add(surfaceExtrudeCommand(context));
-  registry.add(surfaceRevolveCommand(context));
-  registry.add(surfaceSweepCommand(context));
-  registry.add(surfaceLoftCommand(context));
-  registry.add(patchCommand(context));
-  registry.add(stitchCommand(context));
-  registry.add(thickenCommand(context));
-  registry.add(offsetSurfaceCommand(context));
-  registry.add(ruledSurfaceCommand(context));
-  registry.add(extendSurfaceCommand(context));
-  registry.add(trimSurfaceCommand(context));
-  registry.add(untrimSurfaceCommand(context));
-  registry.add(unstitchCommand(context));
-  registry.add(reverseNormalCommand(context));
-  registry.add(blendSurfaceCommand(context));
-  registry.add(boundarySurfaceCommand(context));
-  registry.add(matchSurfaceCommand(context));
-  registry.add(fairSurfaceCommand(context));
+  // Registration order is the menu's order: each section's commands
+  // together, the sections in their order (CommandDef::section,
+  // mitcad#1778).
+  const auto add = [&registry](CommandDef def, const char* section) {
+    def.section = QString::fromLatin1(section);
+    registry.add(def);
+  };
+  // Surfaces from sketch profiles and curves.
+  add(surfaceExtrudeCommand(context), "profiles");
+  add(surfaceRevolveCommand(context), "profiles");
+  add(surfaceSweepCommand(context), "profiles");
+  add(surfaceLoftCommand(context), "profiles");
+  // A surface helix of profiles and sketch curves (mitcad#1777).
+  add(surfaceHelixCommand(context), "profiles");
+  // Surfaces from edges.
+  add(patchCommand(context), "edges");
+  add(ruledSurfaceCommand(context), "edges");
+  add(boundarySurfaceCommand(context), "edges");
+  add(blendSurfaceCommand(context), "edges");
+  // Changing a surface.
+  add(extendSurfaceCommand(context), "edit");
+  add(trimSurfaceCommand(context), "edit");
+  add(untrimSurfaceCommand(context), "edit");
+  add(offsetSurfaceCommand(context), "edit");
+  // Its quality and orientation.
+  add(matchSurfaceCommand(context), "quality");
+  add(fairSurfaceCommand(context), "quality");
+  add(reverseNormalCommand(context), "quality");
+  // Surface bodies and solids.
+  add(stitchCommand(context), "bodies");
+  add(unstitchCommand(context), "bodies");
+  add(thickenCommand(context), "bodies");
 }
 
 } // namespace mitcad

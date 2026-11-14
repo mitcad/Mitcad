@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1780: two rods of 20 (Sketch1 F1 with the circles c2 at the origin and c4 at 0,40, Extrude1 F2 of c2; Sketch2 F3 with c2 at 40,0, Extrude2 F4) and an M20x2.5 thread on both sides (Thread1 F5); then Extrude1 takes c4 instead, so that the thread's first face is gone and Thread1 fails. All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0], "fixed": true},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 10},
+    {"id": "p3", "type": "point", "at": [0, 40], "fixed": true},
+    {"id": "c4", "type": "circle", "center": "p3", "radius": 10}]}},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c2}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [40, 0], "fixed": true},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 10}]}},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c2}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "thread",
+    "faces": [{"body": "F2.b0", "face": "F2:side(c2)"}, {"body": "F4.b0", "face": "F4:side(c2)"}],
+    "thread": {"designation": "M20x2.5", "class": "6g"}}},
+  {"expect": {"feature": "Thread1", "status": "ok"}},
+  {"cmd": "edit_feature", "uid": "F2", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c4}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}}
+]

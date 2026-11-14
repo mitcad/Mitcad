@@ -9,6 +9,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -201,8 +202,8 @@ void ScreenshotView::mouseReleaseEvent(QMouseEvent* event) {
 // ---------------------------------------------------------------------------
 // Help > Send Feedback
 
-FeedbackDialog::FeedbackDialog(const QImage& screenshot, std::function<bool(const Feedback&)> preview,
-                               QWidget* parent)
+FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
+                               std::function<bool(const Feedback&)> preview, QWidget* parent)
     : QDialog(parent), m_preview(std::move(preview)) {
   setObjectName(QStringLiteral("feedbackDialog"));
   setWindowTitle(tr("Send Feedback"));
@@ -251,6 +252,17 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, std::function<bool(cons
   connect(reset, &QPushButton::clicked, m_view, &ScreenshotView::reset);
   m_viewRow->setVisible(false);
   layout->addWidget(m_viewRow, 1);
+  // Include the design (mitcad#1795): off, offered while a design is open.
+  m_design = new QCheckBox(tr("Include the desi&gn (a zip to attach to the issue)"), this);
+  m_design->setObjectName(QStringLiteral("feedbackDesign"));
+  m_design->setEnabled(designOpen);
+  m_design->setToolTip(designOpen ? tr("A zip of the design, the files it refers to, the report and the "
+                                       "screenshot, to attach or e-mail")
+                                  : tr("Open a design to include it"));
+  layout->addWidget(m_design);
+  connect(m_design, &QCheckBox::toggled, this, [](bool on) {
+    qInfo().noquote() << QStringLiteral("Feedback design %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  });
   connect(m_screenshot, &QCheckBox::toggled, this, [this](bool on) {
     m_viewRow->setVisible(on);
     adjustSize();
@@ -287,13 +299,14 @@ Feedback FeedbackDialog::feedback() const {
   if (m_screenshot->isChecked()) {
     feedback.screenshot = m_view->image();
   }
+  feedback.includeDesign = m_design->isEnabled() && m_design->isChecked();
   return feedback;
 }
 
 void FeedbackDialog::preview() {
   const Feedback form = feedback();
   qInfo().noquote() << QStringLiteral("Feedback form: kind %1, summary '%2', description %3 characters, contact %4, "
-                                      "diagnostics %5, screenshot %6")
+                                      "diagnostics %5, screenshot %6, design %7")
                            .arg(form.kind, form.summary)
                            .arg(form.description.size())
                            .arg(form.contact.isEmpty() ? QStringLiteral("none") : QStringLiteral("given"),
@@ -301,7 +314,8 @@ void FeedbackDialog::preview() {
                                 form.screenshot.isNull() ? QStringLiteral("none")
                                                          : QStringLiteral("%1x%2")
                                                                .arg(form.screenshot.width())
-                                                               .arg(form.screenshot.height()));
+                                                               .arg(form.screenshot.height()),
+                                form.includeDesign ? QStringLiteral("on") : QStringLiteral("off"));
   if (m_preview(form)) {
     accept();
   }
@@ -311,8 +325,8 @@ void FeedbackDialog::preview() {
 // The preview
 
 ReportPreviewDialog::ReportPreviewDialog(const Report& report, const QImage& screenshot, const QString& destination,
-                                         QWidget* parent, const QString& logFile)
-    : QDialog(parent), m_report(report), m_screenshot(screenshot), m_logFile(logFile) {
+                                         QWidget* parent, const QString& logFile, const DesignZip& design)
+    : QDialog(parent), m_report(report), m_screenshot(screenshot), m_logFile(logFile), m_design(design) {
   setObjectName(QStringLiteral("reportPreview"));
   setWindowTitle(tr("Review Report"));
   auto* layout = new QVBoxLayout(this);
@@ -396,6 +410,40 @@ ReportPreviewDialog::ReportPreviewDialog(const Report& report, const QImage& scr
     });
     sections->addWidget(m_logFileBox);
   }
+  if (!m_design.path.isEmpty()) {
+    // Include the design (mitcad#1795): the zip, made for the preview to
+    // show its size; Send makes it again with the report as sent.
+    m_designBox = new QGroupBox(tr("Design (a zip you attach to the issue or e-mail)"), content);
+    m_designBox->setObjectName(QStringLiteral("reportSection_design"));
+    m_designBox->setCheckable(true);
+    m_designBox->setChecked(m_design.error.isEmpty());
+    m_designBox->setEnabled(m_design.error.isEmpty());
+    mac::styleSection(m_designBox);
+    auto* boxLayout = new QVBoxLayout(m_designBox);
+    QString text;
+    if (!m_design.error.isEmpty()) {
+      text = tr("Could not make the design's zip: %1").arg(m_design.error.toHtmlEscaped());
+    } else {
+      text = tr("%1, %2. It holds the open design as it is now, the designs and files it refers to, this report, "
+                "the screenshot and the log of this run. Names in it are not masked.")
+                 .arg(QFileInfo(m_design.path).fileName().toHtmlEscaped(), designZipSizeText(m_design.size));
+      if (m_design.size > attachmentLimit()) {
+        text += QLatin1Char(' ') + tr("It is larger than the 25 MB an issue takes: e-mail it to %1 and write "
+                                      "its name in the issue.")
+                                       .arg(QLatin1String(kTestFileAddress));
+      }
+    }
+    auto* note = new QLabel(text, m_designBox);
+    note->setObjectName(QStringLiteral("reportDesignNote"));
+    note->setWordWrap(true);
+    note->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    boxLayout->addWidget(note);
+    connect(m_designBox, &QGroupBox::toggled, this, [](bool on) {
+      qInfo().noquote() << QStringLiteral("Report section design %1")
+                               .arg(on ? QStringLiteral("included") : QStringLiteral("left out"));
+    });
+    sections->addWidget(m_designBox);
+  }
   sections->addStretch(1);
   scroll->setWidget(content);
   layout->addWidget(scroll, 1);
@@ -409,10 +457,15 @@ ReportPreviewDialog::ReportPreviewDialog(const Report& report, const QImage& scr
     key->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(key);
   }
-  auto* where = new QLabel(tr("Send opens the issue form of %1 in your web browser with this report filled in. "
-                              "Nothing is sent until you submit the form there. Issues are public. Your design "
-                              "and its files are never attached.")
-                               .arg(destination.toHtmlEscaped()),
+  auto* where = new QLabel(m_design.path.isEmpty()
+                               ? tr("Send opens the issue form of %1 in your web browser with this report filled "
+                                    "in. Nothing is sent until you submit the form there. Issues are public. Your "
+                                    "design and its files are never attached.")
+                                     .arg(destination.toHtmlEscaped())
+                               : tr("Send opens the issue form of %1 in your web browser with this report filled "
+                                    "in. Nothing is sent until you submit the form there. Issues are public. Your "
+                                    "design goes only into the zip, which you attach or e-mail yourself.")
+                                     .arg(destination.toHtmlEscaped()),
                            this);
   where->setWordWrap(true);
   layout->addWidget(where);
@@ -446,6 +499,10 @@ QString ReportPreviewDialog::logFile() const {
   return m_logFileBox != nullptr && m_logFileBox->isChecked() ? m_logFile : QString();
 }
 
+bool ReportPreviewDialog::designIncluded() const {
+  return m_designBox != nullptr && m_design.error.isEmpty() && m_designBox->isChecked();
+}
+
 void ReportPreviewDialog::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
   TestSync::singleShot(100, this, [this] { logContent(); });
@@ -473,6 +530,18 @@ void ReportPreviewDialog::logContent() const {
   if (m_logFileBox != nullptr) {
     qInfo().noquote() << QStringLiteral("Report section logfile: %1").arg(m_logFile);
     logPlace(QStringLiteral("Report section logfile"), m_logFileBox, checkBoxRect(m_logFileBox));
+  }
+  if (m_designBox != nullptr) {
+    if (m_design.error.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Report section design: %1, %2 bytes%3")
+                               .arg(QFileInfo(m_design.path).fileName())
+                               .arg(m_design.size)
+                               .arg(m_design.size > attachmentLimit() ? QStringLiteral(", over the attachment limit")
+                                                                     : QString());
+    } else {
+      qInfo().noquote() << QStringLiteral("Report section design: not made: %1").arg(m_design.error);
+    }
+    logPlace(QStringLiteral("Report section design"), m_designBox, checkBoxRect(m_designBox));
   }
   if (!m_report.key.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Report key: mitcad-%1").arg(m_report.key);

@@ -567,6 +567,8 @@ pub fn one_turn_slot(feature: &str, slot: &str) -> bool {
         // An emboss's wrap turned about the axis and on the face (mitcad#1259)
         // and its taper (mitcad#1547).
         "emboss" => matches!(slot, "around_angle" | "rotation_angle" | "taper_angle"),
+        // A coordinate system's turn about its Z axis (mitcad#1775).
+        "coordinate_system" => slot == "angle",
         _ => false,
     }
 }

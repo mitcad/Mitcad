@@ -457,7 +457,13 @@ fn turn_fields(
             }
         }
         FeatureDef::ConstructionPlane(plane) => {
+            // (A flange-wall plane's stored frame too, mitcad#1776.)
             if let PlaneDefinition::Fixed {
+                origin,
+                x_axis,
+                y_axis,
+            }
+            | PlaneDefinition::FlangeWall {
                 origin,
                 x_axis,
                 y_axis,

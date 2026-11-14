@@ -17,6 +17,7 @@
 #include <QUuid>
 
 #include <cstdio>
+#include <functional>
 
 int autosaveTests() {
   using namespace mitcad;
@@ -179,6 +180,79 @@ int autosaveTests() {
           "right snapshot retains its own document bytes");
   }
   check(dir.entryList(QDir::Files | QDir::Hidden).isEmpty(), "normal document close removes both owned sessions");
+
+  // The results computed since the last save are taken with the snapshot
+  // on the UI thread and written on the manager's thread after the design
+  // file; what was written comes back on the UI thread (mitcad#1796).
+  {
+    AutosaveManager manager;
+    manager.state = [] { return AutosaveManager::State{true, 7}; };
+    manager.snapshot = [&] { return AutosaveManager::Snapshot{first, QStringLiteral("Results"), QString()}; };
+    QThread* const ui = QThread::currentThread();
+    int taken = 0;
+    bool takenOnUi = false;
+    bool writtenOffUi = false;
+    bool designFirst = false;
+    QByteArray stored;
+    bool storedOnUi = false;
+    const QString record = dir.filePath(manager.session() + QStringLiteral(".json"));
+    manager.results = [&]() -> std::function<QByteArray()> {
+      ++taken;
+      takenOnUi = QThread::currentThread() == ui;
+      return [&] {
+        writtenOffUi = QThread::currentThread() != ui;
+        designFirst = QFile::exists(record);
+        return QByteArrayLiteral("{\"results\":2}");
+      };
+    };
+    manager.resultsStored = [&](const QByteArray& json) {
+      stored = json;
+      storedOnUi = QThread::currentThread() == ui;
+    };
+    GeneralSettings settings;
+    settings.autosave = true;
+    manager.apply(settings);
+    manager.saveSoon();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (stored.isEmpty() && elapsed.elapsed() < 10000) {
+      QCoreApplication::processEvents();
+      QThread::msleep(1);
+    }
+    check(taken == 1 && takenOnUi, "the results are taken once, on the UI thread, with the snapshot");
+    check(writtenOffUi, "the results are written on the autosave's thread");
+    check(designFirst, "the design file is written before the results");
+    check(stored == QByteArrayLiteral("{\"results\":2}") && storedOnUi,
+          "what was written is reported on the UI thread");
+    // The same revision again: nothing is taken (nothing new to recover).
+    manager.saveSoon();
+    elapsed.restart();
+    while (elapsed.elapsed() < 200) {
+      QCoreApplication::processEvents();
+      QThread::msleep(1);
+    }
+    check(taken == 1, "an unchanged revision takes no results again");
+    // A hook with nothing to write gives no report.
+    manager.state = [] { return AutosaveManager::State{true, 8}; };
+    manager.results = [&]() -> std::function<QByteArray()> {
+      ++taken;
+      return {};
+    };
+    stored.clear();
+    manager.saveSoon();
+    elapsed.restart();
+    while (taken < 2 && elapsed.elapsed() < 10000) {
+      QCoreApplication::processEvents();
+      QThread::msleep(1);
+    }
+    elapsed.restart();
+    while (elapsed.elapsed() < 200) {
+      QCoreApplication::processEvents();
+      QThread::msleep(1);
+    }
+    check(taken == 2 && stored.isEmpty(), "no results to write: nothing is reported");
+  }
+  check(dir.entryList(QDir::Files | QDir::Hidden).isEmpty(), "the results' session is removed at its end");
   if (hadDirectory) qputenv("MITCAD_AUTOSAVE_DIR", oldDirectory);
   else qunsetenv("MITCAD_AUTOSAVE_DIR");
   return failures;

@@ -24,3 +24,5 @@ mod usdz_animation_tests;
 mod occurrence_placement_tests;
 // The preview a design file carries for file managers (mitcad#1539).
 mod design_preview_tests;
+// The design packed into a zip for a report (mitcad#1795).
+mod design_package_tests;

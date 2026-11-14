@@ -21,7 +21,9 @@
 //! - Anything else (an imported body, a face a fillet or a boolean made, a
 //!   face whose diameter comes from several dimensions or from none) has
 //!   no source: the thread's warning says the face has to be changed by
-//!   hand, and why.
+//!   hand, and why. A face of a projected curve (a reference curve that
+//!   follows the model geometry it was projected from) says so
+//!   (mitcad#1780): no dimension of its sketch moves it.
 
 use std::sync::Arc;
 
@@ -273,6 +275,15 @@ fn sketch_source(
     }
     let (id, value, slope) = match movers.as_slice() {
         [one] => *one,
+        // A projected curve (mitcad#1780): it follows the model geometry
+        // it was projected from, which no dimension of the sketch moves.
+        [] if is_projected(def, curve) => {
+            return Err(format!(
+                "the face follows an edge projected into {}: draw and dimension the curve \
+                 instead, or change the geometry it was projected from",
+                sketch.name
+            ));
+        }
         [] => {
             return Err(format!(
                 "no dimension of {} sets the face's diameter",
@@ -326,6 +337,17 @@ fn sketch_source(
         "{}'s dimension cannot give the face the diameter the thread needs",
         sketch.name
     ))
+}
+
+/// A curve of the sketch that is projected model geometry (mitcad#1780): a
+/// reference entity (a projection, linked or not, or included geometry) or
+/// one a linked projection made.
+fn is_projected(def: &SketchDef, curve: EntityUid) -> bool {
+    def.entities.iter().any(|e| e.id == curve && e.reference)
+        || def
+            .projections
+            .iter()
+            .any(|p| p.entities.iter().any(|r| r.uid() == curve))
 }
 
 /// A cylinder's axis in a sketch's plane: a point and a unit direction in

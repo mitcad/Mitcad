@@ -338,14 +338,22 @@ void AnnotationsWindow::fill() {
     const QString own = a.value(QStringLiteral("kind")).toString();
     const QString ownGroup = a.value(QStringLiteral("group")).toString();
     const QJsonObject label = a.value(QStringLiteral("label")).toObject();
-    const QString error = a.value(QStringLiteral("error")).toString();
+    // Rolled back with the features its picks are on (mitcad#1756: a
+    // sketch edited rolls the timeline back to it): dimmed as rolled-back
+    // features are, not a warning; broken only otherwise.
+    const bool rolledBack = a.value(QStringLiteral("rolled_back")).toBool();
+    const QString error = rolledBack ? QString() : a.value(QStringLiteral("error")).toString();
     const bool shown = a.value(QStringLiteral("visible")).toBool(true);
-    const QString valueText = error.isEmpty() ? label.value(QStringLiteral("text")).toString() : tr("Broken");
+    const QString valueText = rolledBack       ? tr("Rolled back")
+                              : error.isEmpty() ? label.value(QStringLiteral("text")).toString()
+                                                : tr("Broken");
     const QString tolerance = label.value(QStringLiteral("tolerance")).toString();
     const QString text = ownText(a);
-    const QString state = !error.isEmpty() ? QStringLiteral("broken: ") + error
-                          : shown          ? QStringLiteral("shown")
-                                           : QStringLiteral("hidden");
+    const QString why = a.value(QStringLiteral("error")).toString();
+    const QString state = rolledBack        ? QStringLiteral("rolled back: ") + why
+                          : !error.isEmpty() ? QStringLiteral("broken: ") + error
+                          : shown            ? QStringLiteral("shown")
+                                             : QStringLiteral("hidden");
     logged << QStringLiteral("Annotations row %1: %2, %3, %4, %5, %6, %7")
                   .arg(name, own, valueText, tolerance.isEmpty() ? QStringLiteral("-") : tolerance,
                        ownGroup.isEmpty() ? QStringLiteral("-") : ownGroup,
@@ -379,6 +387,9 @@ void AnnotationsWindow::fill() {
     } else {
       nameItem->setIcon(measurementSwatch(colour));
     }
+    if (rolledBack) {
+      nameItem->setToolTip(tr("%1: rolled back").arg(name));
+    }
     m_table->setItem(row, kName, nameItem);
     m_table->setItem(row, kKind, cell(kindName(own)));
     QTableWidgetItem* valueItem = cell(valueText);
@@ -386,6 +397,9 @@ void AnnotationsWindow::fill() {
       valueItem->setToolTip(shownError(a));
       // A warning's colour, as its name's badge (mitcad#1051).
       valueItem->setForeground(noticeColor(NoticeLevel::Warning, m_table->palette()));
+    } else if (rolledBack) {
+      valueItem->setToolTip(tr("Its picks are on features after the timeline marker; they come back when the "
+                               "marker moves past them."));
     } else if (label.contains(QStringLiteral("warning"))) {
       valueItem->setToolTip(label.value(QStringLiteral("warning")).toString());
     }
@@ -401,7 +415,7 @@ void AnnotationsWindow::fill() {
     shownItem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
     shownItem->setCheckState(shown ? Qt::Checked : Qt::Unchecked);
     m_table->setItem(row, kShown, shownItem);
-    if (!shown) {
+    if (!shown || rolledBack) {
       for (int column = 0; column < kShown; ++column) {
         if (QTableWidgetItem* item = m_table->item(row, column); item != nullptr && error.isEmpty()) {
           item->setForeground(palette().color(QPalette::Disabled, QPalette::Text));

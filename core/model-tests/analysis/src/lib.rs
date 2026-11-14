@@ -19,3 +19,6 @@ mod body_note_tests;
 mod physical_properties_tests;
 // Comments pinned to the model for an AI agent (mitcad#1119).
 mod comment_tests;
+// Section Analysis through a pick: a round face, a circular or straight
+// edge (mitcad#1769).
+mod section_pick_tests;

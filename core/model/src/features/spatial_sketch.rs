@@ -85,7 +85,7 @@ use crate::recompute::Read;
 use crate::sketch::regions::{RegionCurve, face_bounded_regions, regions_and_layout};
 use crate::sketch::spatial_planar::planar_view;
 use crate::sketch::{ConstraintUid, SketchEntityRef, project};
-use crate::topo::{FaceName, TopoName};
+use crate::topo::{EdgeName, FaceName, TopoName};
 use crate::transform::Transform;
 
 impl FeatureInfo for SpatialSketchDef {
@@ -241,7 +241,7 @@ impl FeatureInfo for SpatialSketchDef {
                 }
                 crate::sketch::ProjectionSource::Curve(feature) => {
                     let entry = ctx.feature(*feature).map_err(what)?;
-                    if !matches!(entry.def, FeatureDef::IntersectionCurve(_)) {
+                    if !entry.def.makes_curve() {
                         return Err(what(format!("{} makes no curve", entry.name)));
                     }
                 }
@@ -432,7 +432,7 @@ fn check_source(ctx: &CheckContext<'_>, source: &SpatialSource) -> Result<(), St
         }
         SpatialSource::Curve { feature, .. } => {
             let entry = source_feature(ctx, *feature)?;
-            if !matches!(entry.def, FeatureDef::IntersectionCurve(_)) {
+            if !entry.def.makes_curve() {
                 return Err(said(
                     format!("{} makes no curve", entry.name),
                     format!("{} ({}) makes no curve", entry.name, entry.uid),
@@ -605,7 +605,12 @@ fn planar_shell(def: &SpatialSketchDef) -> SketchDef {
 /// The kept linked projections (mitcad#1550) followed to their sources
 /// where they are now, as a planar sketch follows its own: the definition
 /// with their entities moved there, when they moved; their in-plane fixes
-/// hold them there in the solve.
+/// hold them there in the solve. A source edge that was merged with, or
+/// split from, edges on the same curve is followed on that curve as a
+/// planar sketch follows it (mitcad#1794, `mitcad_sketch::successor`),
+/// with the same information notice; its points move there, its curves
+/// keep their kinds (an arc of what is now a whole circle keeps its span:
+/// a 3D sketch's curves take only their points' and radii's places).
 fn follow_kept<K: Kernel>(
     def: &SpatialSketchDef,
     frame: &SketchFrame,
@@ -618,16 +623,24 @@ fn follow_kept<K: Kernel>(
     let project::Followed {
         def: followed,
         reports,
-    } = project::follow_links(&shell, frame, &mut |projection| {
-        super::sketch::source_curves(projection, frame, ctx)
+    } = project::follow_links_with(&shell, frame, &mut |projection| {
+        let curves = super::sketch::source_curves(projection, frame, ctx)?;
+        let successors = if curves.is_empty() {
+            super::sketch::successor_curves(projection, ctx)
+        } else {
+            Vec::new()
+        };
+        Ok(project::Found { curves, successors })
     })?;
     for report in &reports {
-        if let Some(warning) = shell
-            .projections
-            .get(report.projection)
-            .and_then(|p| report.warning(p))
-        {
+        let Some(projection) = shell.projections.get(report.projection) else {
+            continue;
+        };
+        if let Some(warning) = report.warning(projection) {
             ctx.warn(warning);
+        }
+        if let Some(info) = report.info(projection) {
+            ctx.inform(info);
         }
     }
     Ok(followed.map(|followed| {
@@ -792,6 +805,45 @@ fn one_curve(curves: Vec<Curve3>, shown: &str, what: &str) -> Result<Curve3, Str
     }
 }
 
+/// Whether a curve is closed (a whole circle or ellipse).
+fn is_closed(curve: &Curve3) -> bool {
+    matches!(curve, Curve3::Conic { closed: true, .. })
+}
+
+/// The edge that took the place of an edge a record names that is gone
+/// (mitcad#1794), as a planar sketch's projection finds it
+/// ([`super::projection_successors`]): of the edges between the faces it
+/// lay between (each as the shape names it now), those whose curve is a
+/// line, a circle or an arc (what edges merged or split on one curve are),
+/// each its curve (its pieces joined); exactly one must be there. A 3D
+/// sketch keeps no last geometry of a record to choose among several by.
+/// Otherwise the names of those that are there, for the agents' text.
+fn successor_edge<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    shape: &K::Shape,
+    edge: &EdgeName,
+) -> Result<(EdgeName, Curve3), Vec<String>> {
+    let mut found: Vec<(EdgeName, Curve3)> = Vec::new();
+    for name in super::projection_successors::successor_edges(ctx.kernel, shape, edge) {
+        let curves = match ctx.kernel.curves_of(shape, &TopoName::Edge(name.clone())) {
+            Ok(curves) if !curves.is_empty() => curves,
+            _ => continue,
+        };
+        let round = |major: f64, minor: f64| (major - minor).abs() <= 1e-9 * major.abs().max(1.0);
+        match project::join_curves(&curves) {
+            Some(curve @ Curve3::Line { .. }) => found.push((name, curve)),
+            Some(curve @ Curve3::Conic { major, minor, .. }) if round(major, minor) => {
+                found.push((name, curve));
+            }
+            _ => {}
+        }
+    }
+    if found.len() == 1 {
+        return Ok(found.pop().expect("one"));
+    }
+    Err(found.iter().map(|(name, _)| name.to_string()).collect())
+}
+
 /// A source's geometry in the sketch's component's coordinates
 /// (mitcad#1543), found where it is now: a point (the origin of the
 /// component, a vertex, another sketch's point) or a curve (an edge,
@@ -829,9 +881,43 @@ fn source_geometry<K: Kernel>(
             let found = super::renamed::edge_for(ctx, &shape, edge)?;
             let count = ctx.kernel.count_edges(&shape, &found);
             if count == 0 {
+                // The edge that took its place when edges were merged or
+                // split (mitcad#1794).
+                let listed = match successor_edge(ctx, &shape, edge) {
+                    Ok((name, curve)) if source.at().is_none() || !is_closed(&curve) => {
+                        let mut places = source.places();
+                        if link.is_none() {
+                            places.push(
+                                crate::notice::NoticePlace::edge(name.to_string())
+                                    .in_body(&body.to_string()),
+                            );
+                        }
+                        ctx.inform(said_at(
+                            "a reference of the 3D sketch follows an edge between the same faces, \
+                             which took the place of its edge when edges were merged or split",
+                            format!(
+                                "edge {edge} of {body} is gone: the 3D sketch follows {name}, \
+                                 which took its place when edges were merged or split"
+                            ),
+                            places,
+                        ));
+                        return Ok(moved(transform, curve));
+                    }
+                    // A whole circle has no ends for an attachment to take.
+                    Ok((name, _)) => vec![name.to_string()],
+                    Err(names) => names,
+                };
+                let candidates = if listed.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; the edges between the same faces that could have taken its place: {}",
+                        listed.join(", ")
+                    )
+                };
                 return Err(said_at(
                     "the edge does not exist at this point of the timeline",
-                    format!("edge {edge} does not exist at this point of the timeline"),
+                    format!("edge {edge} does not exist at this point of the timeline{candidates}"),
                     source.places(),
                 ));
             }

@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: MIT
+# Trim on an offset's curve (mitcad#1755, GitHub mitcad/Mitcad#314). The
+# wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation on the fixture's Sketch1: two framing points at (-40, -30) and
+# (40, 30), a line from (-20, 0) to (10, 0) and an arc about (10, 10) from
+# its end round to (20, 10), offset 4 mm outward (an arc copy of radius 14
+# from (10, -4) to (24, 10)), and a line from (15, 5) to (30, 5) across the
+# arc copy. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+
+# Trim clicked on the arc copy beyond the line across it, 10 degrees below
+# its end: the piece from the crossing to the end goes, and the status line
+# says in words that the offset is no longer linked to its source.
+mark
+command sketch.trim
+wait-log '^Sketch tool Trim$'
+mark
+sketch-click 23.787 7.569
+wait-log '^Trimmed c[0-9]+ at '
+wait-log '^Sketch notice: Trim: the offset is no longer linked to its source\.$'
+expect-no-log 'Trim: .*(refused|cannot)'
+screenshot '${MITCAD_TEST_WORK}/sketch-offset-trim.png'
+key Escape
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

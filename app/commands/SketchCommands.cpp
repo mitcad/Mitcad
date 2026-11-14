@@ -25,6 +25,7 @@
 #include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/Dialogs.hpp"
+#include "../framework/LengthUnits.hpp"
 #include "../sketch/FontFiles.hpp"
 #include "../sketch/SketchChains.hpp"
 #include "../sketch/SketchController.hpp"
@@ -104,6 +105,16 @@ QJsonObject base(SketchController& c, const char* command) {
   return {{QStringLiteral("cmd"), QString::fromLatin1(command)}, {QStringLiteral("sketch"), c.uid()}};
 }
 
+// An offset's Corners (mitcad#1774): where its curves cross (Sharp), or an
+// arc about the source's corner at each outer corner of lines and arcs
+// (Round, mitcad#1786).
+InputDef offsetCornersInput() {
+  const QVector<QPair<QString, QString>> corners = {{QStringLiteral("sharp"), QObject::tr("Sharp")},
+                                                    {QStringLiteral("round"), QObject::tr("Round")}};
+  return choiceInput(QStringLiteral("corners"), QObject::tr("Corners"), corners, QStringLiteral("sharp"))
+      .withTooltip(QObject::tr("Round: an arc about each outer corner, as far from it as the offset"));
+}
+
 void addOffset(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.offset", QObject::tr("Offset"), "offset", "MODIFY",
                                  CommandDef::Kind::Feature);
@@ -119,6 +130,7 @@ void addOffset(CommandRegistry& registry, SketchController& c) {
       valueInput(QStringLiteral("distance"), QObject::tr("Offset Position"), ValueKind::Length,
                  QStringLiteral("5")),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
+      offsetCornersInput(),
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
     QStringList curves;
@@ -135,6 +147,7 @@ void addOffset(CommandRegistry& registry, SketchController& c) {
     QJsonObject cmd = base(c, "sketch.offset");
     cmd.insert(QStringLiteral("curves"), QJsonArray::fromStringList(curves));
     cmd.insert(QStringLiteral("distance"), distance);
+    cmd.insert(QStringLiteral("corners"), s.choice(QStringLiteral("corners")));
     return Built::of(cmd);
   };
   def.describe = [](const CommandState& s, const CommandContext&) {
@@ -629,6 +642,32 @@ void addCleanUpStaleProjections(CommandRegistry& registry, SketchController& c) 
   registry.add(def);
 }
 
+// The edges that could take the place of the sketch's lost projections'
+// sources (mitcad#1794), as Project Again lists them: kept in its state when
+// it starts, since its preview applies the command and the sketch then has
+// none.
+const QString kSuccessors = QStringLiteral("successors");
+
+QJsonArray successorRows(const CommandState& state) {
+  return state.object(kSuccessors).value(QStringLiteral("rows")).toArray();
+}
+
+// One of them as a row in words (mitcad#1794): its number, its kind, its
+// length and an arc's or circle's radius, in the design's unit; never its
+// name, which is the model's.
+QString successorRow(int index, const QJsonObject& row, const QString& unit) {
+  const QString type = row.value(QStringLiteral("type")).toString();
+  const QString kind = type == QStringLiteral("line")     ? QObject::tr("Line")
+                       : type == QStringLiteral("arc")    ? QObject::tr("Arc")
+                       : type == QStringLiteral("circle") ? QObject::tr("Circle")
+                                                          : QObject::tr("Edge");
+  const bool round = type == QStringLiteral("arc") || type == QStringLiteral("circle");
+  return QStringList{QString::number(index + 1), kind,
+                     lengthInUnit(row.value(QStringLiteral("length")).toDouble(), unit),
+                     round ? lengthInUnit(row.value(QStringLiteral("radius")).toDouble(), unit) : QString()}
+      .join(QLatin1Char('\t'));
+}
+
 // Project Again (mitcad#1303): the linked projections that no longer follow
 // their sources (their curves kept their last geometry, or some found
 // nothing like them) projected anew from their sources, the constraints and
@@ -637,6 +676,10 @@ void addCleanUpStaleProjections(CommandRegistry& registry, SketchController& c) 
 // references, and the preview lists it (the command's warnings). OK keeps it
 // as one undo step. The Sketch Palette offers it under the warning, beside
 // Clean Up Stale Projections, and so do the sketch's context menus.
+// A projection whose source edge is gone, with edges on its curve that could
+// have taken its place (mitcad#1794): the panel lists them as rows in words,
+// the edge painted while the pointer is over its row, the first chosen; the
+// chosen one becomes the projection's source (`successor`).
 void addProjectAgain(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.project_again", QObject::tr("Project Again"), "project",
                                  "CREATE/References", CommandDef::Kind::Feature);
@@ -644,8 +687,66 @@ void addProjectAgain(CommandRegistry& registry, SketchController& c) {
   def.tooltip = QObject::tr("Projects again what no longer follows, keeping its constraints");
   def.keywords = {QStringLiteral("reproject"), QStringLiteral("repair"), QStringLiteral("stale"),
                   QStringLiteral("follow")};
-  def.build = [&c](const CommandState&, const CommandContext&) -> Built {
-    return Built::of(base(c, "sketch.project_again"));
+  const auto hasRows = [](const CommandState& state) { return !successorRows(state).isEmpty(); };
+  def.inputs = {
+      choiceInput(QStringLiteral("successor"), QObject::tr("Edge to Follow"), {}, QString())
+          .withChoiceColumns({QObject::tr("Edge"), QObject::tr("Kind"), QObject::tr("Length"), QObject::tr("Radius")})
+          .withChoices([&c](const CommandState& state) {
+            QVector<QPair<QString, QString>> rows;
+            const QJsonArray listed = successorRows(state);
+            for (int i = 0; i < listed.size(); ++i) {
+              rows.append({QString::number(i), successorRow(i, listed.at(i).toObject(), c.lengthUnit())});
+            }
+            return rows;
+          })
+          .withChoicePlaces([](const CommandState& state, const QString& value) {
+            // The edge where the body has it (another component's where its
+            // occurrence puts it).
+            bool ok = false;
+            const int index = value.toInt(&ok);
+            const QJsonArray listed = successorRows(state);
+            if (!ok || index < 0 || index >= listed.size()) {
+              return QJsonArray();
+            }
+            const QJsonObject row = listed.at(index).toObject();
+            QJsonObject place{{QStringLiteral("kind"), QStringLiteral("edge")},
+                              {QStringLiteral("name"), row.value(QStringLiteral("edge"))}};
+            for (const char* field : {"body", "occurrence"}) {
+              const QString text = row.value(QLatin1String(field)).toString();
+              if (!text.isEmpty()) {
+                place.insert(QLatin1String(field), text);
+              }
+            }
+            return QJsonArray{place};
+          })
+          .withVisible(hasRows)
+          .withTooltip(
+              QObject::tr("The edge on the curve that takes the place of the gone source; the pointer over "
+                          "a row shows it")),
+  };
+  def.init = [&c](CommandState& s, const CommandContext&) {
+    QJsonArray rows;
+    for (const sketch::SuccessorData& found : c.model().successors()) {
+      rows.append(QJsonObject{{QStringLiteral("edge"), found.edge},
+                              {QStringLiteral("type"), found.type},
+                              {QStringLiteral("length"), found.length},
+                              {QStringLiteral("radius"), found.radius},
+                              {QStringLiteral("body"), found.body},
+                              {QStringLiteral("occurrence"), found.occurrence}});
+    }
+    s.setObject(kSuccessors, QJsonObject{{QStringLiteral("rows"), rows}});
+    s.setChoice(QStringLiteral("successor"), rows.isEmpty() ? QString() : QStringLiteral("0"));
+  };
+  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+    QJsonObject cmd = base(c, "sketch.project_again");
+    // The edge chosen to take a lost source's place (mitcad#1794).
+    bool ok = false;
+    const int chosen = s.choice(QStringLiteral("successor")).toInt(&ok);
+    const QJsonArray rows = successorRows(s);
+    if (ok && chosen >= 0 && chosen < rows.size()) {
+      cmd.insert(QStringLiteral("successor"), rows.at(chosen).toObject().value(QStringLiteral("edge")));
+    }
+    return Built::of(cmd);
   };
   def.describe = [](const CommandState&, const CommandContext&) { return QStringLiteral("Projected again"); };
   registry.add(def);
@@ -1137,19 +1238,21 @@ void addEditOffset(CommandRegistry& registry, SketchController& c) {
   CommandDef def = sketchCommand("sketch.edit_offset", QObject::tr("Edit Offset"), "offset", "MODIFY",
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
-  def.tooltip = QObject::tr("The distance or side of an offset, picked by one of the curves it made");
+  def.tooltip = QObject::tr("The distance, side or corners of an offset, picked by one of the curves it made");
   const auto lookup = [](const sketch::SketchModel& m, const QString& id) { return m.offsetOf(id); };
   def.inputs = {
       selectionInput(QStringLiteral("curve"), QObject::tr("Offset"), SelectKind::SketchCurve, 1, 1)
           .withAccepts(editable(c, lookup)),
       valueInput(QStringLiteral("distance"), QObject::tr("Offset Position"), ValueKind::Length, QStringLiteral("5")),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
+      offsetCornersInput(),
   };
   def.init = [&c](CommandState& s, const CommandContext&) {
     const Selection& picked = s.items(QStringLiteral("curve"));
     const sketch::OffsetData* o = picked.isEmpty() ? nullptr : c.model().offsetOf(picked.first().name);
     if (o != nullptr) {
       s.setText(QStringLiteral("distance"), o->expression);
+      s.setChoice(QStringLiteral("corners"), o->round ? QStringLiteral("round") : QStringLiteral("sharp"));
     }
   };
   def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
@@ -1162,14 +1265,17 @@ void addEditOffset(CommandRegistry& registry, SketchController& c) {
     cmd.insert(QStringLiteral("offset"), o->id);
     cmd.insert(QStringLiteral("distance"), s.expression(QStringLiteral("distance")));
     cmd.insert(QStringLiteral("flip"), s.checked(QStringLiteral("flip")));
+    cmd.insert(QStringLiteral("corners"), s.choice(QStringLiteral("corners")));
     return Built::of(cmd);
   };
   def.describe = [&c](const CommandState& s, const CommandContext&) {
     const Selection& picked = s.items(QStringLiteral("curve"));
     const sketch::OffsetData* o = picked.isEmpty() ? nullptr : c.model().offsetOf(picked.first().name);
-    return QStringLiteral("Edited offset %1: %2%3")
+    return QStringLiteral("Edited offset %1: %2%3%4")
         .arg(o != nullptr ? o->id : QString(), s.expression(QStringLiteral("distance")),
-             s.checked(QStringLiteral("flip")) ? QStringLiteral(", flipped") : QString());
+             s.checked(QStringLiteral("flip")) ? QStringLiteral(", flipped") : QString(),
+             s.choice(QStringLiteral("corners")) == QStringLiteral("round") ? QStringLiteral(", round corners")
+                                                                              : QString());
   };
   registry.add(def);
 }

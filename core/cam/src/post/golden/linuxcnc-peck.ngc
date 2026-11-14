@@ -1,0 +1,26 @@
+%
+(WARNING: MitCad CAM is highly experimental.)
+(Treat this machine code with caution. Check every toolpath)
+(in a simulator, then run it first without stock, at a low)
+(feed, with a hand on the emergency stop, before cutting.)
+(Holes)
+(T3 5 mm drill, D5 mm)
+G17 G90 G94 G40 G49 G80
+G21
+G64 P0.01
+G54
+G0 Z15
+(Drill)
+T3 M6
+G43 H3
+G0 Z15
+S3000 M3
+G0 X10 Y10
+G0 Z10
+G98 G83 X10 Y10 Z-9 R2 Q3 F150
+X30 Y10
+G80
+M5
+G0 Z15
+M2
+%

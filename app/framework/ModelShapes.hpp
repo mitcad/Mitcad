@@ -38,6 +38,11 @@ bool isIdentity(const QJsonArray& rows);
 // A datum of the `datums` query: a plane as a square of `size`, an axis as a
 // line of `size` through its origin, a point as a vertex.
 TopoDS_Shape datumShape(const QJsonObject& datum, double size);
+// A coordinate system's triad (mitcad#1775): of a plane datum with its
+// frame, the line of `length` from its origin along X (`axis` 0), Y (1) or
+// Z (2, the normal); all three as one compound for -1. Null for a datum
+// that is not a plane.
+TopoDS_Shape frameTriadShape(const QJsonObject& datum, double length, int axis = -1);
 // A fixed plane of a definition (`{"origin", "normal"[, "x_axis"]}`) as the
 // `datum` query gives a plane (`type`, `origin`, `normal`, `x_axis`,
 // `y_axis`), its frame as the model makes it (mitcad#1137): the origin as

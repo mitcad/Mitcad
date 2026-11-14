@@ -617,8 +617,6 @@ impl<K: Kernel> Evaluate<K> for FilletDef {
                 *vertex = ctx.vertex_on(&shape, vertex)?;
             }
         }
-        let uid = ctx.uid;
-        let rounded = found.apply(ctx, uid, &shape, &sizes, &weights)?;
         // The picked edges where they were, for the timeline (mitcad#957).
         let inputs = super::inputs::picked_edges(
             ctx.kernel,
@@ -628,6 +626,17 @@ impl<K: Kernel> Evaluate<K> for FilletDef {
                 .iter()
                 .map(|set| (set.edges.as_slice(), set.faces.as_slice())),
         );
+        // Corners of a sheet beside a bend (mitcad#1765) are rounded as
+        // Corner Round rounds them, so that the body stays a sheet.
+        if let Some(edges) = found.sheet_corners(&sizes)
+            && let Some(mut output) =
+                crate::sheet::folded::dressup_corners(ctx, self.body, &shape, &edges)?
+        {
+            output.inputs = inputs;
+            return Ok(output);
+        }
+        let uid = ctx.uid;
+        let rounded = found.apply(ctx, uid, &shape, &sizes, &weights)?;
         Ok(FeatureOutput {
             changes: vec![BodyChange::Set(self.body, rounded)],
             inputs,
@@ -648,6 +657,29 @@ impl FilletDef {
     ) -> Result<K::Shape, String> {
         let (sizes, weights) = self.values(ctx)?;
         self.apply(ctx, feature, shape, &sizes, &weights)
+    }
+
+    /// The edges of a fillet of constant radii, each with its radius, as
+    /// sheet corners take them (mitcad#1765); None for other fillets.
+    fn sheet_corners(
+        &self,
+        sizes: &[Size],
+    ) -> Option<Vec<(EdgeName, crate::sheet::folded::CornerSize)>> {
+        let mut edges = Vec::new();
+        for (set, size) in self.sets.iter().zip(sizes) {
+            let Size::Constant(radius) = size else {
+                return None;
+            };
+            if !set.faces.is_empty() || set.all_edges {
+                return None;
+            }
+            edges.extend(
+                set.edges
+                    .iter()
+                    .map(|e| (e.clone(), crate::sheet::folded::CornerSize::Round(*radius))),
+            );
+        }
+        Some(edges)
     }
 
     /// The sets' sizes and tangency weights.

@@ -288,7 +288,7 @@ mod parameters_csv_tests;
 // plate (mitcad#731).
 pub use document::PrintBedFace;
 // Types of the document's methods that other crates name (mitcad#811).
-pub use document::{Isolated, PlaneShape, PurgeChange, SketchPlaneChange};
+pub use document::{Folder, Isolated, PlaneShape, PurgeChange, SketchPlaneChange};
 // Image references: images placed on planes and faces (mitcad#782), and
 // the sizes of image files from their headers.
 pub use document::{
@@ -396,6 +396,15 @@ mod spatial_plane_curves_tests;
 pub mod print_changes;
 // A thread's face fitted to the thread (mitcad#1632).
 pub use document::{AutoFixFit, NoFit, SharedChoice};
+// CAM setups, operations and machines kept with the design, not on the
+// timeline; toolpaths by the crate mitcad-cam (mitcad#1013).
+pub mod cam;
 // Linked designs from outside the project: whether a link would be
 // followed, and the file copied into the project to link (mitcad#1719).
 pub use document::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+// The design and the files it refers to packed into a zip for a report
+// (mitcad#1795).
+pub use document::{DesignPackage, PackageExtra, UNSAVED_DESIGN_NAME};
+// Results taken from a document for its result store and written on
+// another thread (an autosave's, mitcad#1796).
+pub use document::ResultWrites;

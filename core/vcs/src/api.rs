@@ -329,7 +329,7 @@ fn describe(name: &str, answer: &Value) -> String {
             if let Some(commit) = answer.get("commit").and_then(Value::as_str) {
                 let _ = writeln!(
                     out,
-                    "Recorded version {} of {}: {} file(s) written, {} removed",
+                    "Recorded version {} of {} (files written: {}, removed: {})",
                     &commit[..7.min(commit.len())],
                     field("files"),
                     list("written"),

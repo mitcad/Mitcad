@@ -18,11 +18,14 @@
 //! - Constraints and dimensions stay; region keys (made of curve ids) do not
 //!   change. A stale curve converted is no longer stale: staleness is about
 //!   a projection's entities.
+//! - A selected curve an offset made (mitcad#1755) frees that offset: all
+//!   of its curves become plain sketch geometry, no longer tied to the
+//!   source nor made again from it ([`SketchEdit::free_offset`]).
 
 use std::collections::BTreeSet;
 
-use super::Ref;
 use super::edit::SketchEdit;
+use super::{ConstraintUid, Ref};
 use crate::ids::EntityUid;
 
 /// What [`SketchEdit::convert_projected`] did.
@@ -36,6 +39,9 @@ pub struct Converted {
     pub kept: Vec<EntityUid>,
     /// Selected entities that are not projected, left as they are.
     pub ignored: Vec<Ref>,
+    /// The offsets freed because a curve they made was selected
+    /// (mitcad#1755); their curves are in `converted`.
+    pub offsets: Vec<ConstraintUid>,
     /// The sources of projections that follow only a source like the one
     /// they were made from and lost entities: they keep their geometry from
     /// now on.
@@ -55,13 +61,15 @@ impl SketchEdit<'_> {
     }
 
     /// Turns the projected entities among `entities` into ordinary sketch
-    /// geometry (see the module documentation). Refused when none of them
-    /// is projected, or when nothing would change (every selected point is
-    /// used by projected curves that stay).
+    /// geometry, and frees the offsets that made the curves among them
+    /// (see the module documentation). Refused when none of them is
+    /// projected or an offset's, or when nothing would change (every
+    /// selected point is used by projected curves that stay).
     pub fn convert_projected(&mut self, entities: &[Ref]) -> Result<Converted, String> {
         let mut out = Converted::default();
         let mut curves: BTreeSet<EntityUid> = BTreeSet::new();
         let mut points: BTreeSet<EntityUid> = BTreeSet::new();
+        let mut offset_curves: Vec<EntityUid> = Vec::new();
         for r in entities {
             let e = self
                 .def
@@ -71,7 +79,9 @@ impl SketchEdit<'_> {
                 return Err(format!("{r} is a {}", e.kind.type_name()));
             }
             if !self.projected(e.id) {
-                if !out.ignored.contains(r) {
+                if !e.is_point() && !self.offsets_making(&[e.id]).is_empty() {
+                    offset_curves.push(e.id);
+                } else if !out.ignored.contains(r) {
                     out.ignored.push(*r);
                 }
             } else if e.is_point() {
@@ -80,11 +90,29 @@ impl SketchEdit<'_> {
                 curves.insert(e.id);
             }
         }
-        if curves.is_empty() && points.is_empty() {
+        if curves.is_empty() && points.is_empty() && offset_curves.is_empty() {
             return Err(
-                "nothing to convert: none of the selected entities is projected geometry"
+                "nothing to convert: none of the selected entities is projected geometry or \
+                 an offset's curve"
                     .to_owned(),
             );
+        }
+        // Every curve of each offset that made a selected one (mitcad#1755).
+        let freed: BTreeSet<EntityUid> = self
+            .def
+            .offsets
+            .iter()
+            .filter(|o| o.made().iter().any(|c| offset_curves.contains(c)))
+            .flat_map(|o| o.made())
+            .collect();
+        out.offsets = self.free_offsets_of(&offset_curves)?;
+        if curves.is_empty() && points.is_empty() {
+            for e in &self.def.entities {
+                if freed.contains(&e.id) {
+                    out.converted.push(e.as_ref());
+                }
+            }
+            return Ok(out);
         }
         // A projected curve that stays holds its points.
         let held = |p: EntityUid| {
@@ -121,7 +149,7 @@ impl SketchEdit<'_> {
                 converting.insert(p);
             }
         }
-        if converting.is_empty() {
+        if converting.is_empty() && out.offsets.is_empty() {
             let names: Vec<String> = out.kept.iter().map(|p| format!("p{}", p.0)).collect();
             return Err(format!(
                 "nothing to convert: projected curves that stay use {}; convert them too",
@@ -130,7 +158,7 @@ impl SketchEdit<'_> {
         }
         // Curves first, then points, as the definition lists them.
         for e in &self.def.entities {
-            if converting.contains(&e.id) && !e.is_point() {
+            if (converting.contains(&e.id) || freed.contains(&e.id)) && !e.is_point() {
                 out.converted.push(e.as_ref());
             }
         }

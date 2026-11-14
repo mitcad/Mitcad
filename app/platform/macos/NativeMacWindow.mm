@@ -1059,7 +1059,7 @@ struct NativeMacWindowState {
       while (index + count < historyItems.size() && historyItems[index + count].filtered && index + count != historyMarker) ++count;
       mark.hidden = NO;
       mark.frame = NSMakeRect(x + 1, 10, historyRunSlot - 2, 14);
-      mark.toolTip = ns(QObject::tr("%1 feature(s) hidden by the timeline filter").arg(count));
+      mark.toolTip = ns(QObject::tr("%n feature(s) hidden by the timeline filter", nullptr, count));
       mark.accessibilityLabel = mark.toolTip;
       mark.accessibilityIdentifier = ns(QStringLiteral("native.history.filteredRun.%1").arg(index));
       ++run;
@@ -1133,7 +1133,7 @@ struct NativeMacWindowState {
                                             [](const auto& item) { return item.filtered; }));
     historyMarkerButton.toolTip = ns(QObject::tr("Timeline marker: %1 of %2\nDrag to roll back or forward%3")
                                       .arg(historyMarker).arg(historyItems.size())
-                                      .arg(hiddenAfter > 0 ? QObject::tr("\n%1 hidden feature(s) after the marker").arg(hiddenAfter) : QString()));
+                                      .arg(hiddenAfter > 0 ? QObject::tr("\n%n hidden feature(s) after the marker", nullptr, hiddenAfter) : QString()));
     historyFilterButton.enabled = !blocked && !historyMarkerDragging;
     for (NSButton* button in historySteps) {
       const bool beginning = button.tag < 2;

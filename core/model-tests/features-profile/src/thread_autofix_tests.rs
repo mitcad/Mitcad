@@ -369,6 +369,47 @@ fn a_face_no_dimension_sets_is_left_to_be_changed_by_hand() {
 }
 
 #[test]
+fn a_face_of_a_projected_curve_says_it_follows_the_projection() {
+    // mitcad#1780: a reference circle projected into the sketch (fixed,
+    // Ø61.511) inside the drawn Ø65 circle with its diameter dimension;
+    // the extrusion takes the inner region, so the face is the projected
+    // circle's, which no dimension moves.
+    let mut doc = Document::new(MockKernel::default());
+    add(
+        &mut doc,
+        json!({"type": "sketch", "plane": "xy",
+               "entities": [
+                   {"id": "p2", "type": "point", "at": [0, 0], "fixed": true},
+                   {"id": "c1", "type": "circle", "center": "p2", "radius": 30.7555,
+                    "reference": true, "fixed": true},
+                   {"id": "c4", "type": "circle", "center": "p2", "radius": 32.5}],
+               "dimensions": [{"id": "k3", "type": "diameter", "curve": "c4", "value": "65 mm"}]}),
+    );
+    add(
+        &mut doc,
+        json!({"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1}"}],
+               "extent": {"type": "distance", "distance": 9}, "operation": "new_body"}),
+    );
+    let uid = thread(&mut doc, "F2.b0", "F2:side(c1)", "M60x3", "6g");
+    let warned = warnings(&doc, uid);
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    let reason = "the face follows an edge projected into Sketch1: draw and dimension the \
+                  curve instead, or change the geometry it was projected from";
+    assert!(
+        warned[0].ends_with(&format!("; the shaft has to be changed by hand ({reason})")),
+        "{warned:?}"
+    );
+    assert_eq!(doc.auto_fixable(FeatureUid(uid)), 0);
+    let left = auto_fix(&mut doc, uid, None);
+    assert_eq!(left["fixed"], 0, "{left}");
+    assert_eq!(
+        left["left"][0]["advice"],
+        format!("change the shaft by hand ({reason})"),
+        "{left}"
+    );
+}
+
+#[test]
 fn a_thread_added_with_fit_faces_fits_its_hole_in_one_undo_step() {
     // The Thread panel's Fit the hole to the thread.
     let mut doc = Document::new(MockKernel::default());

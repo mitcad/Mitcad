@@ -968,7 +968,8 @@ fn profile_wall<K: Kernel>(
 /// that line against the boundary's canonical axial direction and `y`
 /// along the wall away from the bend. The normal is the wall's chart
 /// normal, so the sketch's coordinates map to the wall's chart by a
-/// quarter turn ([`ProfileWall::chart`]).
+/// quarter turn ([`ProfileWall::chart`]). A flange-wall plane is this
+/// frame at every recompute (mitcad#1776, `profile_plane.rs`).
 pub(crate) fn flange_profile_frame(
     state: &SheetState,
     rules: &SheetRulesDef<f64>,
@@ -1029,9 +1030,11 @@ pub(crate) fn flange_profile_layout(
 }
 
 /// Warns when a flange's profile sketch no longer lies on the wall
-/// (mitcad#1648): its plane was placed for an earlier angle, radius or
-/// position, or moved. The wall still follows the profile's outline; the
-/// Flange panel's Edit Profile puts the sketch back on the wall.
+/// (mitcad#1648): its plane is not the flange-wall plane that follows the
+/// wall (mitcad#1776) but one the user put elsewhere, or the sheet changed
+/// between the plane and the flange. The wall still follows the profile's
+/// outline; the Flange panel's Edit Profile puts a sketch on a fixed plane
+/// of its own back on the wall.
 pub(crate) fn warn_moved_profile<K: Kernel>(
     d: &SheetFlangeDef<f64>,
     ctx: &mut EvalContext<'_, K>,

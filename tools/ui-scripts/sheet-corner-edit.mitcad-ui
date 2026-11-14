@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: MIT
+# A saved Corner Round beside a bend edited from the timeline (mitcad#1766;
+# app/COMMANDS.md "Corner Round"), on sheet-corner-edit.json (the sheet
+# F3.b0 with a flange F6 whose wall c2 slants from the bend line, and
+# SheetCornerRound1 F7 at the corner between c2 and the bend):
+#   1. SheetCornerRound1 edited: once the timeline is rolled back to it,
+#      its corner is found again on the edge between the wall c2 and the
+#      bend's side, which the panel lists and the view highlights.
+#   2. Esc cancels the command.
+# Run by tools/ui-sheet-corner-edit-test.sh (Linux) and
+# tools/ui-windows-sheet-corner-edit-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-ever '^Timeline SheetCornerRound1 at '
+
+# 1. Edited: the corner listed and highlighted on its edge.
+mark
+dblclick-logged '^Timeline SheetCornerRound1 at '
+wait-log '^Editing F7 with Corner Round$'
+wait-log '^Corner Round corners where the feature finds them: edge E[{]F6:sheet_bend_side0[(]F6:sheet_curve[(]40[)][)][|]F6:sheet_side0[(]F5:sheet_curve[(]c2[[]c1,c3[]][)][)][}] of F3[.]b0$' 30
+wait-log '^Corner Round Corners: .*[[]edge E[{]F6:sheet_bend_side0[(]F6:sheet_curve[(]40[)][)][|]F6:sheet_side0[(]F5:sheet_curve[(]c2[[]c1,c3[]][)][)][}] of F3[.]b0[]]$' 30
+wait-log '^View highlight places: .*edge F3[.]b0/E[{]F6:sheet_bend_side0[(]F6:sheet_curve[(]40[)][)][|]F6:sheet_side0[(]F5:sheet_curve[(]c2[[]c1,c3[]][)][)][}] at ' 30
+wait-idle
+expect-no-log '^Corner edges not found: '
+
+# 2. Esc cancels.
+mark
+key Escape
+wait-log '^Command Corner Round cancelled$'
+wait-idle

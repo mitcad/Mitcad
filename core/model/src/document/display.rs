@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: MIT
 //! What the browser shows that the document keeps (P9): the root's Origin
 //! folder shown or not, the bodies and components the view is isolated to,
-//! and the favourite parameters. Each change is an undo step that
-//! recomputes nothing, as the light bulbs are (`browser.rs`).
+//! View › Show, the eyes of each component's Bodies, Sketches and
+//! Construction folders (mitcad#1771), the sketches whose dimensions are
+//! drawn outside sketch mode (mitcad#1772), and the favourite parameters.
+//! Each change is an undo step that recomputes nothing, as the light bulbs
+//! are (`browser.rs`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::{Document, ModelError, invalid};
-use crate::features::is_false;
-use crate::ids::{BodyUid, OccurrenceUid};
+use crate::features::{FeatureDef, is_false};
+use crate::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use crate::kernel::Kernel;
 
 /// A body or a component occurrence the view is isolated to, as the
@@ -42,6 +45,66 @@ pub struct DisplayState {
     /// What View › Show hides in the whole design (mitcad#1287).
     #[serde(default, skip_serializing_if = "HiddenKinds::is_default")]
     pub hidden: HiddenKinds,
+    /// The Browser folders each component's own eyes hide (mitcad#1771),
+    /// by component; a component with none hidden has no entry.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub folders: BTreeMap<ComponentUid, HiddenFolders>,
+    /// The sketches whose dimensions the view draws while they are shown
+    /// and not edited (mitcad#1772: the sketch row's Show Dimensions).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub sketch_dimensions: BTreeSet<FeatureUid>,
+}
+
+/// A component's Browser folder with an eye of its own (mitcad#1771): its
+/// Bodies, its Sketches and its Construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Folder {
+    Bodies,
+    Sketches,
+    Construction,
+}
+
+/// The folders of one component hidden by their eyes (mitcad#1771): the
+/// view leaves out everything in a hidden folder whatever the items' own
+/// light bulbs say, which stay as they are and decide again when the
+/// folder is shown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HiddenFolders {
+    /// The component's bodies.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bodies: bool,
+    /// The component's sketches.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sketches: bool,
+    /// The component's construction planes, axes, points and Intersection
+    /// Curves.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub construction: bool,
+}
+
+impl HiddenFolders {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Whether the folder is hidden.
+    pub fn hides(&self, folder: Folder) -> bool {
+        match folder {
+            Folder::Bodies => self.bodies,
+            Folder::Sketches => self.sketches,
+            Folder::Construction => self.construction,
+        }
+    }
+
+    fn set(&mut self, folder: Folder, hidden: bool) {
+        match folder {
+            Folder::Bodies => self.bodies = hidden,
+            Folder::Sketches => self.sketches = hidden,
+            Folder::Construction => self.construction = hidden,
+        }
+    }
 }
 
 /// The kinds of items View › Show hides in the whole design, every
@@ -79,6 +142,14 @@ pub struct CenterOfMassMarker {
 impl DisplayState {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// Whether a component's folder is shown by its eye (mitcad#1771):
+    /// every folder is until the user hides it.
+    pub fn folder_shown(&self, component: ComponentUid, folder: Folder) -> bool {
+        self.folders
+            .get(&component)
+            .is_none_or(|hidden| !hidden.hides(folder))
     }
 }
 
@@ -192,10 +263,11 @@ impl<K: Kernel> Document<K> {
         if self.state.display.isolated == items {
             return Ok(());
         }
-        let label = if items.is_empty() {
-            "Unisolate".to_owned()
-        } else {
-            format!("Isolate {} item(s)", items.len())
+        // One whole label for one and for several: no "(s)" (mitcad#1759).
+        let label = match items.len() {
+            0 => "Unisolate".to_owned(),
+            1 => "Isolate an item".to_owned(),
+            n => format!("Isolate {n} items"),
         };
         self.apply_with(|state| {
             state.display.isolated = items;
@@ -323,5 +395,111 @@ impl<K: Kernel> Document<K> {
             state.display.hidden = after;
             Ok((label, (), false))
         })
+    }
+
+    // The eyes of each component's Bodies, Sketches and Construction
+    // folders (mitcad#1771): display state as View › Show's, each change an
+    // undo step that recomputes nothing.
+
+    /// Shows or hides a component's folder by its eye (`Hide Sketches`,
+    /// `Show Bodies`) unless nothing changes. No item's own light bulb
+    /// changes: a hidden folder leaves its items out of the view, a shown
+    /// one lets each follow its own light bulb (and a body its Show When).
+    pub fn set_folder_visible(
+        &mut self,
+        component: ComponentUid,
+        folder: Folder,
+        visible: bool,
+    ) -> Result<(), ModelError> {
+        if !self.assembly().exists(component) {
+            return Err(invalid(format!("{component} does not exist")));
+        }
+        if self.state.display.folder_shown(component, folder) == visible {
+            return Ok(());
+        }
+        let label = match (folder, visible) {
+            (Folder::Bodies, true) => "Show Bodies",
+            (Folder::Bodies, false) => "Hide Bodies",
+            (Folder::Sketches, true) => "Show Sketches",
+            (Folder::Sketches, false) => "Hide Sketches",
+            (Folder::Construction, true) => "Show Construction",
+            (Folder::Construction, false) => "Hide Construction",
+        };
+        self.apply_with(|state| {
+            let mut hidden = state
+                .display
+                .folders
+                .get(&component)
+                .copied()
+                .unwrap_or_default();
+            hidden.set(folder, !visible);
+            if hidden.is_default() {
+                state.display.folders.remove(&component);
+            } else {
+                state.display.folders.insert(component, hidden);
+            }
+            Ok((label.to_owned(), (), false))
+        })
+    }
+
+    /// Whether a component's folder is shown by its eye (mitcad#1771).
+    pub fn folder_shown(&self, component: ComponentUid, folder: Folder) -> bool {
+        self.state.display.folder_shown(component, folder)
+    }
+
+    // Show Dimensions of a sketch's row (mitcad#1772): display state as View
+    // › Show's, each change an undo step that recomputes nothing.
+
+    /// Draws a planar sketch's dimensions outside sketch mode or stops
+    /// drawing them (`Show Dimensions of Sketch1`, `Hide Dimensions of
+    /// Sketch1`) unless nothing changes. Its definition and light bulb stay
+    /// as they are; a sketch that is not there, or a 3D sketch, is refused.
+    pub fn set_sketch_dimensions_shown(
+        &mut self,
+        sketch: FeatureUid,
+        shown: bool,
+    ) -> Result<(), ModelError> {
+        let Some(entry) = self.state.entry(sketch) else {
+            return Err(invalid(format!("{sketch} does not exist")));
+        };
+        if !matches!(entry.def, FeatureDef::Sketch(_)) {
+            return Err(invalid(format!(
+                "{} is not a sketch whose dimensions can be shown",
+                entry.name
+            )));
+        }
+        if self.state.display.sketch_dimensions.contains(&sketch) == shown {
+            return Ok(());
+        }
+        // Whole labels, each a message of its own (mitcad#1284).
+        let label = if shown {
+            format!("Show Dimensions of {}", entry.name)
+        } else {
+            format!("Hide Dimensions of {}", entry.name)
+        };
+        self.apply_with(|state| {
+            if shown {
+                state.display.sketch_dimensions.insert(sketch);
+            } else {
+                state.display.sketch_dimensions.remove(&sketch);
+            }
+            Ok((label, (), false))
+        })
+    }
+
+    /// The sketches whose dimensions are drawn outside sketch mode
+    /// (mitcad#1772) that are in the design, in uid order.
+    pub fn sketches_with_dimensions_shown(&self) -> Vec<FeatureUid> {
+        self.state
+            .display
+            .sketch_dimensions
+            .iter()
+            .copied()
+            .filter(|uid| {
+                self.state
+                    .entry(*uid)
+                    .is_some_and(|entry| matches!(entry.def, FeatureDef::Sketch(_)))
+            })
+            .collect()
     }
 }

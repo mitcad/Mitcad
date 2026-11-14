@@ -25,6 +25,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QStyle>
@@ -111,6 +112,9 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Rolling Ball"), QT_TRANSLATE_NOOP("Choice", "Setback"),
     QT_TRANSLATE_NOOP("Choice", "Chamfer"), QT_TRANSLATE_NOOP("Choice", "Miter"),
     QT_TRANSLATE_NOOP("Choice", "Blend"),
+    // Rib's Direction (mitcad#1746).
+    QT_TRANSLATE_NOOP("Choice", "Perpendicular to Chord"), QT_TRANSLATE_NOOP("Choice", "Sketch X"),
+    QT_TRANSLATE_NOOP("Choice", "Sketch Y"), QT_TRANSLATE_NOOP("Choice", "Along Line"),
     // New Component.
     QT_TRANSLATE_NOOP("Choice", "Empty Component"), QT_TRANSLATE_NOOP("Choice", "From Bodies"),
     // The other commands' fixed choices (mitcad#1473), by the file that defines
@@ -311,6 +315,10 @@ QString countText(const InputDef& input, int count) {
 }
 
 bool isShown(const InputDef& input, const CommandState& state) {
+  // A field in a window beside the panel has no row (mitcad#1800).
+  if (input.windowPick) {
+    return false;
+  }
   return !input.visible || input.visible(state);
 }
 
@@ -385,16 +393,19 @@ void styleToggle(QToolButton* button, const QColor& accent) {
 }
 
 // The selection button: a capsule that is filled with the accent colour
-// while its input is the one that takes the picks.
-void styleSelect(QPushButton* button, const QColor& accent, const QColor& accentText) {
+// while its input is the one that takes the picks, its text and border in
+// the error colour while picks of it are gone (mitcad#1780).
+void styleSelect(QPushButton* button, const QColor& accent, const QColor& accentText, const QColor& error) {
   button->setFixedHeight(uiRoomSize(26));
   button->setStyleSheet(QStringLiteral(
       "QPushButton { border: 1px solid rgba(128, 128, 128, 70); background: rgba(128, 128, 128, 25);"
       " border-radius: %3px; padding: 0 12px; }"
       "QPushButton:hover { background: rgba(128, 128, 128, 55); }"
-      "QPushButton:checked { border: 1px solid %1; background: %1; color: %2; }")
+      "QPushButton:checked { border: 1px solid %1; background: %1; color: %2; }"
+      "QPushButton[missing=\"true\"]:!checked { border: 1px solid %4; color: %4; }")
                             .arg(accent.name(), accentText.name())
-                            .arg(uiRoomSize(26) / 2));
+                            .arg(uiRoomSize(26) / 2)
+                            .arg(error.name()));
 }
 
 // The text fields: rounded with a subtle fill like the combo boxes next to
@@ -520,6 +531,47 @@ private:
   QLabel* m_detail = nullptr;
   qint64 m_imageKey = 0;
   bool m_shown = false;
+};
+
+// The row of a choice's list under the pointer (mitcad#1794: what its option
+// is about is painted meanwhile), watched on the list's viewport: each move
+// over another row calls `hovered` with its option, leaving the list (or
+// the rows) with an empty one. Read from the moves themselves, not from the
+// view's entered signal, so that posted moves (the UI tests' driver, a
+// session without a desktop) count as the pointer's do.
+class RowHoverWatch : public QObject {
+public:
+  RowHoverWatch(QTreeWidget* table, std::function<void(const QString&)> hovered)
+      : QObject(table), m_table(table), m_hovered(std::move(hovered)) {}
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    switch (event->type()) {
+    case QEvent::MouseMove: {
+      const QTreeWidgetItem* item = m_table->itemAt(static_cast<QMouseEvent*>(event)->position().toPoint());
+      update(item != nullptr ? item->data(0, Qt::UserRole).toString() : QString());
+      break;
+    }
+    case QEvent::Leave:
+      update(QString());
+      break;
+    default:
+      break;
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  void update(const QString& option) {
+    if (option != m_option) {
+      m_option = option;
+      m_hovered(option);
+    }
+  }
+
+  QTreeWidget* m_table;
+  std::function<void(const QString&)> m_hovered;
+  QString m_option;
 };
 
 } // namespace
@@ -820,7 +872,7 @@ void CommandPanel::applyControlStyles() {
       "QLabel { background: rgba(128, 128, 128, 18); border: none; border-radius: 10px; }"));
   for (const auto& row : m_rows) {
     if (row->select != nullptr) {
-      styleSelect(row->select, accent, accentText);
+      styleSelect(row->select, accent, accentText, errorColor(palette()));
     }
     if (row->edit != nullptr) {
       styleLineEdit(row->edit, accent, errorColor(palette()));
@@ -891,9 +943,13 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
     box->addWidget(row.select, 1);
     box->addWidget(row.clear);
     field = line;
-    if (input.ordered) {
-      // The picks in order, with buttons that move them.
+    // An ordered input's picks in order, with buttons that move and remove
+    // them. Another input of several picks has the list under its line only
+    // while one of them is gone (mitcad#1780), its ✕ removing the pick
+    // chosen there.
+    if (input.ordered || input.max != 1) {
       auto* ordered = new QWidget;
+      row.picks = ordered;
 #ifdef MITCAD_MAC_UI
       auto* orderedBox = new QVBoxLayout(ordered);
 #else
@@ -911,36 +967,43 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
 #endif
       moves->setSpacing(0);
       QListWidget* items = row.order;
-      auto* up = smallButton(QStringLiteral("▲"), tr("Move up"));
-      auto* down = smallButton(QStringLiteral("▼"), tr("Move down"));
+      if (input.ordered) {
+        auto* up = smallButton(QStringLiteral("▲"), tr("Move up"));
+        auto* down = smallButton(QStringLiteral("▼"), tr("Move down"));
+        up->setObjectName(QStringLiteral("up_") + key);
+        down->setObjectName(QStringLiteral("down_") + key);
+        connect(up, &QToolButton::clicked, this, [this, key, items] {
+          const int at = items->currentRow();
+          if (at > 0) {
+            emit itemMoved(key, at, at - 1);
+          }
+        });
+        connect(down, &QToolButton::clicked, this, [this, key, items] {
+          const int at = items->currentRow();
+          if (at >= 0 && at + 1 < items->count()) {
+            emit itemMoved(key, at, at + 1);
+          }
+        });
+        moves->addWidget(up);
+        moves->addWidget(down);
+      }
       auto* remove = smallButton(QStringLiteral("✕"), tr("Remove"));
-      up->setObjectName(QStringLiteral("up_") + key);
-      down->setObjectName(QStringLiteral("down_") + key);
-      connect(up, &QToolButton::clicked, this, [this, key, items] {
-        const int at = items->currentRow();
-        if (at > 0) {
-          emit itemMoved(key, at, at - 1);
-        }
-      });
-      connect(down, &QToolButton::clicked, this, [this, key, items] {
-        const int at = items->currentRow();
-        if (at >= 0 && at + 1 < items->count()) {
-          emit itemMoved(key, at, at + 1);
-        }
-      });
+      remove->setObjectName(QStringLiteral("remove_pick_") + key);
       connect(remove, &QToolButton::clicked, this, [this, key, items] {
         if (items->currentRow() >= 0) {
           emit itemRemoved(key, items->currentRow());
         }
       });
-      moves->addWidget(up);
-      moves->addWidget(down);
       moves->addWidget(remove);
       moves->addStretch();
       orderedBox->addWidget(row.order, 1);
       orderedBox->addLayout(moves);
-      column->addWidget(line);
-      field = ordered;
+      if (input.ordered) {
+        column->addWidget(line);
+        field = ordered;
+      } else {
+        ordered->hide(); // under the line (below), while a pick is gone
+      }
     }
     break;
   }
@@ -1045,6 +1108,18 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
           emit choiceChanged(key, item->data(0, Qt::UserRole).toString());
         }
       });
+      // The pointer over a row paints what its option is about
+      // (InputDef::choicePlaces, mitcad#1794); leaving the list ends it.
+      if (input.choicePlaces) {
+        // Moves without a button reach the viewport only with tracking on.
+        table->setMouseTracking(true);
+        table->viewport()->setMouseTracking(true);
+        table->viewport()->installEventFilter(new RowHoverWatch(table, [this, key](const QString& option) {
+          if (CommandPresenter::actions().choiceHovered) {
+            CommandPresenter::actions().choiceHovered(key, option);
+          }
+        }));
+      }
       row.table = table;
       table->installEventFilter(this); // Tab to the next field (mitcad#1181)
       field = table;
@@ -1247,6 +1322,9 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
   field->setObjectName(QStringLiteral("input_") + key);
   if (field != container) {
     column->addWidget(field);
+  }
+  if (row.picks != nullptr && row.picks != field) {
+    column->addWidget(row.picks); // the gone picks' list (mitcad#1780)
   }
   row.note = new QLabel;
   row.note->setWordWrap(true);
@@ -1509,7 +1587,17 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       row.select->setProperty("swatch", swatch.name());
       row.select->setIcon(swatchIcon(swatch));
     }
-    if (!empty.first.isEmpty()) {
+    // Picks that are gone from the model (mitcad#1780): counted on the chip
+    // in the error colour, marked in the list of picks.
+    const QList<int> missing = scope.missingItems(id);
+    if (!missing.isEmpty()) {
+      const QString counted = tr("%1 selected, %2 missing").arg(items.size()).arg(missing.size());
+      if (row.select->text() != counted) {
+        qDebug().noquote() << QStringLiteral("Panel %1 %2: %3").arg(m_def.name, row.key, counted);
+      }
+      row.select->setText(counted);
+      row.select->setToolTip(tip);
+    } else if (!empty.first.isEmpty()) {
       row.select->setText(empty.first);
       row.select->setToolTip(tip);
     } else if (listed.isEmpty()) {
@@ -1519,9 +1607,21 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       row.select->setText(row.select->fontMetrics().elidedText(listed, Qt::ElideRight, 220));
       row.select->setToolTip(QStringLiteral("%1\n%2").arg(listed, tip));
     }
+    if (row.missingShown != !missing.isEmpty()) {
+      row.missingShown = !missing.isEmpty();
+      if (chromeStyle() == ChromeStyle::Floating) {
+        // The chip's style sheet is the card's (styleSelect), with the error
+        // colour for the property.
+        row.select->setProperty("missing", row.missingShown);
+        row.select->style()->unpolish(row.select);
+        row.select->style()->polish(row.select);
+      } else {
+        setErrorStyleSheet(row.select, row.missingShown ? QStringLiteral("QPushButton { color: %1; }") : QString());
+      }
+    }
     if (row.order != nullptr) {
       // Each pick in words (mitcad#1741), its kind until the session has
-      // named it.
+      // named it; a gone one marked.
       const QStringList pickWords = scope.itemWords(id);
       QStringList texts;
       for (int i = 0; i < items.size(); ++i) {
@@ -1529,7 +1629,8 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         if (!word.isEmpty()) {
           word[0] = word[0].toUpper();
         }
-        texts << QStringLiteral("%1. %2").arg(i + 1).arg(word);
+        const QString text = QStringLiteral("%1. %2").arg(i + 1).arg(word);
+        texts << (missing.contains(i) ? tr("%1 (missing)").arg(text) : text);
       }
       QStringList shownTexts;
       for (int i = 0; i < row.order->count(); ++i) {
@@ -1539,7 +1640,23 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         const int current = row.order->currentRow();
         row.order->clear();
         row.order->addItems(texts);
-        row.order->setCurrentRow(std::min(current, static_cast<int>(texts.size()) - 1));
+        for (const int index : missing) {
+          if (QListWidgetItem* item = row.order->item(index)) {
+            item->setForeground(errorColor(palette()));
+          }
+        }
+        // The first gone pick chosen, for its ✕.
+        row.order->setCurrentRow(missing.isEmpty() ? std::min(current, static_cast<int>(texts.size()) - 1)
+                                                   : missing.first());
+        if (!missing.isEmpty()) {
+          qDebug().noquote() << QStringLiteral("Panel %1 picks %2: %3")
+                                    .arg(m_def.name, row.key, texts.join(QStringLiteral("; ")));
+        }
+      }
+      // An input that is not ordered lists its picks only while one is gone.
+      if (!input.ordered && row.picks != nullptr && row.picks->isHidden() != missing.isEmpty()) {
+        row.picks->setVisible(!missing.isEmpty());
+        scheduleLogLayout();
       }
     }
     break;

@@ -214,6 +214,7 @@ CommandDef newComponentCommand(const CommandContext& context) {
   def.tooltip = QObject::tr("An empty component in the active one, or components made of bodies");
   // Registered with CREATE, so that it leads the ASSEMBLE group.
   def.group = QStringLiteral("ASSEMBLE");
+  def.section = QStringLiteral("components"); // a section of its own (mitcad#1778)
   def.pinned = true;
   def.keywords = {QStringLiteral("part"), QStringLiteral("assembly"), QStringLiteral("occurrence")};
   def.modelCommand = true;

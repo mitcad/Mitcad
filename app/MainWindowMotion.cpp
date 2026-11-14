@@ -54,6 +54,8 @@ void MainWindow::openMotionStudy(const QString& name) {
     showStatus(tr("Close the command to open a motion study."), NoticeLevel::Error);
     return;
   }
+  // Its playback shows previews too (mitcad#1790).
+  stopAnimation(QStringLiteral("a motion study opened"));
   if (m_motionStudy) {
     auto* open = static_cast<MotionStudyDialog*>(m_motionStudy.data());
     if (!name.isEmpty() && name != open->study()) {

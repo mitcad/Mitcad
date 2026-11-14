@@ -968,6 +968,7 @@ fn a_seeded_offset_corner_of_a_line_and_an_arc_lies_on_both() {
         corners: Vec::new(),
         helpers: Vec::new(),
         derived: false,
+        round: false,
     }];
     let at = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -1044,6 +1045,7 @@ fn a_seeded_tangent_offset_corner_lies_where_the_line_touches_the_arc() {
         corners: Vec::new(),
         helpers: Vec::new(),
         derived: false,
+        round: false,
     }];
     let point = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -1135,6 +1137,7 @@ fn a_seeded_corner_of_two_arcs_of_one_circle_stays_on_the_circle() {
         corners: Vec::new(),
         helpers,
         derived: false,
+        round: false,
     }];
     let point = |entities: &[Entity], id: EntityUid| match entities
         .iter()
@@ -1210,6 +1213,7 @@ fn tangent_corners_of_offsets_are_those_whose_sources_touch_by_definition() {
         corners: Vec::new(),
         helpers: Vec::new(),
         derived: false,
+        round: false,
     };
     let held = |b: &[Binding]| -> Vec<(u32, u32, u32, u32)> {
         b.iter()
@@ -1510,4 +1514,80 @@ fn clashing_entity_ids_name_both_entities() {
     let mut b = Builder::new();
     b.def.entities.push(Entity::point(EntityUid(0), [5.0, 5.0]));
     assert_eq!(refused(&b.def), "entity p0: id 0 is not allowed");
+}
+
+/// A constraint the others imply only in part takes a degree of freedom
+/// away and is kept; one they imply in full takes none (mitcad#1774).
+#[test]
+fn freedom_tells_a_constraint_implied_only_in_part() {
+    use crate::edit::Freedom;
+    let before = Freedom {
+        redundant: 0,
+        dof: 3,
+    };
+    let partly = Freedom {
+        redundant: 1,
+        dof: 2,
+    };
+    let fully = Freedom {
+        redundant: 1,
+        dof: 3,
+    };
+    let needed = Freedom {
+        redundant: 0,
+        dof: 2,
+    };
+    assert!(!partly.implied_in_full(before));
+    assert!(fully.implied_in_full(before));
+    assert!(!needed.implied_in_full(before));
+}
+
+/// A line distance between two lines that are not parallel is listed in
+/// the solved status; between parallel ones it is not (mitcad#1774).
+#[test]
+fn a_line_distance_between_turned_lines_is_listed() {
+    let entities = vec![
+        Entity::point(EntityUid(1), [0.0, 0.0]),
+        Entity::point(EntityUid(2), [100.0, 0.0]),
+        Entity::point(EntityUid(3), [0.0, 10.0]),
+        Entity::point(EntityUid(4), [100.0, 30.0]),
+        Entity::new(
+            EntityUid(5),
+            EntityKind::Line {
+                start: EntityUid(1),
+                end: EntityUid(2),
+                centerline: false,
+            },
+        ),
+        Entity::new(
+            EntityUid(6),
+            EntityKind::Line {
+                start: EntityUid(3),
+                end: EntityUid(4),
+                centerline: false,
+            },
+        ),
+    ];
+    let kind = DimensionKind::LineDistance {
+        a: EntityUid(5),
+        b: EntityUid(6),
+    };
+    let dimensions = [DimensionInput {
+        id: ConstraintUid(7),
+        kind: &kind,
+        value: None,
+    }];
+    let solved = solve(&entities, &[], &dimensions).unwrap();
+    assert_eq!(solved.status.not_parallel, vec![ConstraintUid(7)]);
+    assert!(solved.status.not_parallel_warning().is_some());
+    let parallel = [Constraint::new(
+        ConstraintUid(8),
+        ConstraintKind::Parallel {
+            a: EntityUid(5),
+            b: EntityUid(6),
+        },
+    )];
+    let solved = solve(&entities, &parallel, &dimensions).unwrap();
+    assert!(solved.status.not_parallel.is_empty());
+    assert!(solved.status.not_parallel_warning().is_none());
 }

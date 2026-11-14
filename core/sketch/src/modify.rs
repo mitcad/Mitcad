@@ -200,6 +200,19 @@ impl SketchEdit<'_> {
                 }
             }
         }
+        // A deleted offset leaves its curves as plain sketch geometry, no
+        // longer tied to the source nor made again from it (mitcad#1755).
+        let offsets: Vec<ConstraintUid> = self
+            .def
+            .offsets
+            .iter()
+            .map(|o| o.id)
+            .filter(|k| constraints.contains(k))
+            .collect();
+        for k in &offsets {
+            self.free_offset(*k)?;
+        }
+        self.note_freed(&offsets);
         self.drop_entities(&entities);
         self.def.texts.retain(|t| !texts.contains(&t.id));
         // Their text parameters' links go with them (mitcad#664).
@@ -1122,7 +1135,7 @@ impl SketchEdit<'_> {
                 )
             };
             let before = match self.solved() {
-                Ok(solved) => solved.status.redundant.len(),
+                Ok(solved) => super::edit::Freedom::of(&solved.status),
                 Err(e) => {
                     self.report.warnings.push(leave_out(&e));
                     continue;
@@ -1630,6 +1643,8 @@ impl SketchEdit<'_> {
     /// that held the cut-off end to a curve no longer touching it goes
     /// (mitcad#1220, see `tangent_at_join` and `drop_replaced_tangents`).
     pub fn trim(&mut self, id: EntityUid, at: P2) -> Result<(), String> {
+        // An offset's curve is first freed from its source (mitcad#1755).
+        self.free_offsets_of(&[id])?;
         self.shape_editable(id)?;
         let solved = self.solved()?;
         let (curve, cuts) = self.crossings(id, &solved)?;
@@ -1848,6 +1863,8 @@ impl SketchEdit<'_> {
     /// (see `points.rs`); returns that point. Elsewhere the end is a new
     /// point on the curve reached.
     pub fn extend(&mut self, id: EntityUid, at: P2) -> Result<Option<EntityUid>, String> {
+        // An offset's curve is first freed from its source (mitcad#1755).
+        self.free_offsets_of(&[id])?;
         self.shape_editable(id)?;
         let solved = self.solved()?;
         let curve = solved
@@ -2131,6 +2148,8 @@ impl SketchEdit<'_> {
         b: EntityUid,
         radius: &ValueInput,
     ) -> Result<EntityUid, String> {
+        // Offsets' curves are first freed from their sources (mitcad#1755).
+        self.free_offsets_of(&[a, b])?;
         self.shape_editable(a)?;
         self.shape_editable(b)?;
         let r = self.fillet_radius(radius)?;
@@ -2183,6 +2202,9 @@ impl SketchEdit<'_> {
     ) -> Result<Vec<EntityUid>, String> {
         let r = self.fillet_radius(radius)?;
         let corners = self.corners_of(curves, points)?;
+        // Offsets' curves are first freed from their sources (mitcad#1755).
+        let rounded: Vec<EntityUid> = corners.iter().flat_map(|&(a, b, _)| [a, b]).collect();
+        self.free_offsets_of(&rounded)?;
         for &(a, b, _) in &corners {
             self.shape_editable(a)?;
             self.shape_editable(b)?;
@@ -2582,12 +2604,22 @@ impl SketchEdit<'_> {
                     at.extend([p, q]);
                     corners.push((x.id, y, Some(p)));
                 }
+                // One whole message per count: no "(s)" (mitcad#1759).
                 _ => {
-                    return Err(format!(
-                        "p{} is not the corner of two lines or arcs ({} curve(s) end there)",
-                        p.0,
-                        ends_here.len()
-                    ));
+                    return Err(match ends_here.len() {
+                        0 => format!(
+                            "p{} is not the corner of two lines or arcs (no curve ends there)",
+                            p.0
+                        ),
+                        1 => format!(
+                            "p{} is not the corner of two lines or arcs (one curve ends there)",
+                            p.0
+                        ),
+                        n => format!(
+                            "p{} is not the corner of two lines or arcs ({n} curves end there)",
+                            p.0
+                        ),
+                    });
                 }
             }
         }
@@ -2904,6 +2936,8 @@ impl SketchEdit<'_> {
         second: Option<&ValueInput>,
         angle: Option<&ValueInput>,
     ) -> Result<EntityUid, String> {
+        // Offsets' curves are first freed from their sources (mitcad#1755).
+        self.free_offsets_of(&[a, b])?;
         self.shape_editable(a)?;
         self.shape_editable(b)?;
         let value = |v: &ValueInput, unit| self.value_of(v, unit);
@@ -3007,6 +3041,21 @@ impl SketchEdit<'_> {
         curves: &[EntityUid],
         distance: &ValueInput,
     ) -> Result<(ConstraintUid, Vec<EntityUid>), String> {
+        self.offset_cornered(curves, distance, false)
+    }
+
+    /// [`SketchEdit::offset`] with its outer corners `round` (mitcad#1774,
+    /// Corners: Round): where two curves of an offset made by constraints
+    /// (lines, a line and an arc or two arcs, mitcad#1786) meet at an angle
+    /// at a corner the chain turns away from the offset at, an arc about the
+    /// source's corner joins them, its radius the distance, tangent to both
+    /// (see [`super::offset::SketchOffset::round`]).
+    pub fn offset_cornered(
+        &mut self,
+        curves: &[EntityUid],
+        distance: &ValueInput,
+        round: bool,
+    ) -> Result<(ConstraintUid, Vec<EntityUid>), String> {
         let d = self.value_of(distance, crate::expr::Unit::MM)?;
         if !(d.is_finite() && d != 0.0) {
             return Err("the offset distance must not be zero".to_owned());
@@ -3015,16 +3064,17 @@ impl SketchEdit<'_> {
             ValueInput::Name(text) if d < 0.0 => ValueInput::Name(format!("-({text})")),
             other => other.clone(),
         };
-        self.offset_with(curves, &magnitude, d)
+        self.offset_with(curves, &magnitude, d, round)
     }
 
     /// An offset by `d` (signed, now) whose parameter `distance` gives (its
-    /// magnitude).
+    /// magnitude), its outer corners `round` (mitcad#1774, mitcad#1786).
     pub(crate) fn offset_with(
         &mut self,
         curves: &[EntityUid],
         distance: &ValueInput,
         d: f64,
+        round: bool,
     ) -> Result<(ConstraintUid, Vec<EntityUid>), String> {
         for c in curves {
             self.editable(*c)?;
@@ -3059,10 +3109,11 @@ impl SketchEdit<'_> {
         // What vanishes at the distance is left out, and the curves on
         // either side meet where their offsets cross (mitcad#1234); lines on
         // one line across it are one, and the outline may fall into several
-        // (mitcad#1244).
+        // (mitcad#1244). With round corners nothing runs on past an outer
+        // corner to where the offsets cross (mitcad#1786).
         let vanishing = if sources.len() > 1 {
             let name = |i: usize| format!("c{}", chain.curves[i].0.0);
-            super::offset::exact_vanishing(&sources, d, chain.closed, &name)?
+            super::offset::exact_vanishing(&sources, d, chain.closed, !round, &name)?
         } else {
             super::offset::Vanishing::none(1, false)
         };
@@ -3171,12 +3222,27 @@ impl SketchEdit<'_> {
         let mut ends: Vec<Option<EntityUid>> = vec![None; n];
         // A circle has no corners (a circle offset alone, or an arc's offset
         // round its whole circle, mitcad#1246).
-        let round = |i: usize| matches!(pieces[i], Offset::Circle(..));
+        let circle = |i: usize| matches!(pieces[i], Offset::Circle(..));
+        // The round corners (mitcad#1774): the curve before, the source's
+        // corner point, and the two ends the arc joins.
+        let mut rounded: Vec<(usize, EntityUid, EntityUid, EntityUid)> = Vec::new();
+        let size = pieces.iter().map(Offset::extent).fold(1.0, f64::max);
         for i in 0..n {
             let Some(j) = next.get(i).copied().flatten() else {
                 continue;
             };
-            if round(i) || round(j) {
+            if circle(i) || circle(j) {
+                continue;
+            }
+            // An outer corner is rounded before the offsets are met: those
+            // of a line and an arc, or of two arcs, need not cross there
+            // (mitcad#1786).
+            if round && let Some(at) = self.outer_corner(&curves, &pieces, i, j, d, size) {
+                let a = self.add_point(pieces[i].end());
+                let b = self.add_point(pieces[j].start());
+                ends[i] = Some(a);
+                starts[j] = Some(b);
+                rounded.push((i, at, a, b));
                 continue;
             }
             // Across a curve that vanished, where the offsets cross.
@@ -3195,12 +3261,12 @@ impl SketchEdit<'_> {
             starts[j] = Some(corner);
         }
         for i in 0..n {
-            if starts[i].is_none() && !round(i) {
+            if starts[i].is_none() && !circle(i) {
                 starts[i] = Some(self.add_point(pieces[i].start()));
             }
         }
         for i in 0..n {
-            if ends[i].is_none() && !round(i) {
+            if ends[i].is_none() && !circle(i) {
                 let end = reach
                     .get(&curves[i].0)
                     .copied()
@@ -3292,6 +3358,29 @@ impl SketchEdit<'_> {
                 }
             }
         }
+        // The round corners' arcs (mitcad#1774): about the source's corner,
+        // counter-clockwise from one curve's end to the other's. Their
+        // tangencies are the offset's own (`offset::tangent_corners`), and
+        // the curve after each is placed by its arc (`offset::independent`).
+        let mut corners = Vec::new();
+        for (i, at, a, b) in rounded {
+            let c = self.at(at)?;
+            let (pa, pb) = (self.at(a)?, self.at(b)?);
+            let (start, end) = if cross(sub(pa, c), sub(pb, c)) >= 0.0 {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            let arc = self.add_curve(EntityKind::Arc {
+                center: at,
+                start,
+                end,
+            });
+            corners.push(super::offset::OffsetCorner {
+                join: i as u32,
+                arc,
+            });
+        }
         let (outlines, open) = super::offset::outlines_of(&next, &ids, chain.closed);
         self.note_trimmed(&dropped, &merged, &small, outlines.len());
         self.def.offsets.push(super::offset::SketchOffset {
@@ -3304,13 +3393,54 @@ impl SketchEdit<'_> {
             merged,
             outlines,
             ends: open,
-            corners: Vec::new(),
+            corners,
             helpers,
             derived: false,
+            round,
         });
         // The offset's id first in the result, before its own constraints.
         self.report.constraints.insert(first, id);
         Ok((id, ids))
+    }
+
+    /// The source's corner point between the curves `i` and `j` of an
+    /// offset's chain (in chain order, with their directions; lines or arcs)
+    /// where the chain turns away from the offset there (mitcad#1774,
+    /// mitcad#1786): the offsets of the two do not reach each other, the
+    /// end of the first lies apart from the start of the second (by more
+    /// than 1e-7 of `size`, as a derived offset's joins are judged,
+    /// `offset::join_kind`) and the chain turns left there for an offset to
+    /// its right (a positive `d`), or right for one to its left. None at a
+    /// corner the chain turns toward the offset at (trimmed there, as
+    /// always), at a tangent join (the offsets meet at their ends), or where
+    /// the sources share no point.
+    fn outer_corner(
+        &self,
+        curves: &[(EntityUid, bool)],
+        pieces: &[Offset],
+        i: usize,
+        j: usize,
+        d: f64,
+        size: f64,
+    ) -> Option<EntityUid> {
+        if matches!(pieces[i], Offset::Circle(..)) || matches!(pieces[j], Offset::Circle(..)) {
+            return None;
+        }
+        // The end of curve `k` along the chain (`last`), or its start.
+        let end_of = |k: usize, last: bool| -> Option<EntityUid> {
+            let (id, forward) = curves[k];
+            let (s, e) = self.def.entity(id)?.kind.ends()?;
+            Some(if forward == last { e } else { s })
+        };
+        let at = end_of(i, true)?;
+        if end_of(j, false)? != at {
+            return None;
+        }
+        if dist(pieces[i].end(), pieces[j].start()) <= 1e-7 * size {
+            return None;
+        }
+        let turn = cross(pieces[i].end_direction(), pieces[j].start_direction());
+        (turn * d > 0.0).then_some(at)
     }
 
     /// The curves in the order of the chain they make, each with whether it
@@ -3836,6 +3966,38 @@ impl Offset {
                 ..
             } => Self::at(*center, *radius, *end),
             Self::Circle(c, r) => Self::at(*c, *r, 0.0),
+        }
+    }
+
+    /// The direction of travel along the chain at an arc's angle `a`.
+    fn along_arc(a: f64, ccw: bool) -> P2 {
+        let t = [-a.sin(), a.cos()];
+        if ccw { t } else { scale(t, -1.0) }
+    }
+
+    /// The direction of travel along the chain at the start.
+    fn start_direction(&self) -> P2 {
+        match self {
+            Self::Line(a, b) => unit(sub(*b, *a)),
+            Self::Arc { start, ccw, .. } => Self::along_arc(*start, *ccw),
+            Self::Circle(..) => [0.0, 0.0],
+        }
+    }
+
+    /// The direction of travel along the chain at the end.
+    fn end_direction(&self) -> P2 {
+        match self {
+            Self::Line(a, b) => unit(sub(*b, *a)),
+            Self::Arc { end, ccw, .. } => Self::along_arc(*end, *ccw),
+            Self::Circle(..) => [0.0, 0.0],
+        }
+    }
+
+    /// The size of the curve: a line's length, a circle's diameter.
+    fn extent(&self) -> f64 {
+        match self {
+            Self::Line(a, b) => dist(*a, *b),
+            Self::Arc { radius, .. } | Self::Circle(_, radius) => 2.0 * radius,
         }
     }
 

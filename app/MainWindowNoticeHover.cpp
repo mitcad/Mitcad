@@ -7,7 +7,8 @@
 // Docked status line (the notices of the feature the message is about).
 // Faces, edges and vertices are drawn as the selection preview draws them,
 // in the hover's colour and seen through what hides them; a point as a
-// ball; a sketch region as its profile. Nothing is selected, picked or
+// ball; a sketch region as its profile; a joint as the pointer over its
+// Browser row draws it (mitcad#1753). Nothing is selected, picked or
 // framed; moving away clears them. While a job computes the model they are
 // kept and drawn once it has ended (mitcad#1600). A message shown in place
 // of the hovered one in the message band or the status line gives its own
@@ -21,6 +22,7 @@
 #include "MainWindow.hpp"
 
 #include <array>
+#include <cstddef>
 #include <exception>
 #include <functional>
 #include <string>
@@ -42,6 +44,7 @@
 #include <QLabel>
 #include <QtLogging>
 
+#include "framework/JointHighlight.hpp"
 #include "framework/NoticePlaces.hpp"
 #include "framework/Theme.hpp"
 
@@ -270,6 +273,24 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       if (!path.isEmpty()) {
         const SelectionItem item{SelectKind::Component, QString(), QString(), QString(), path};
         add(item, itemShape(item));
+      }
+      continue;
+    }
+    if (kind == QStringLiteral("joint")) {
+      // A joint or constraint set (mitcad#1753: the joints of a loop that
+      // cannot all hold), drawn as the pointer over its Browser row draws
+      // it: its sides and frames, where its component's first occurrence
+      // puts them, seen through what hides them and never picked.
+      const QString feature = place.value(QStringLiteral("feature")).toString();
+      const QJsonObject entry = feature.isEmpty() ? QJsonObject() : jointEntry(feature);
+      if (!entry.isEmpty()) {
+        const std::size_t first = drawn.size();
+        QStringList lines; // the notice hover logs its places itself
+        appendJointHighlight(jointHighlightOf(entry, placingOccurrence(feature)), true, drawn, lines);
+        for (std::size_t i = first; i < drawn.size(); ++i) {
+          drawn[i].pickable = false;
+          drawn[i].throughSolid = true;
+        }
       }
       continue;
     }

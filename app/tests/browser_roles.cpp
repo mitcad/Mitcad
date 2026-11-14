@@ -342,11 +342,68 @@ void isolationEyeTests() {
   }
 }
 
+// The folders' own eyes (mitcad#1771): the root's Sketches and Bodies
+// folders hidden. Their eyes are closed; the rows in them are greyed with
+// their own eyes as they are: Sketch1 and Sketch3 open, Sketch2 closed,
+// the bodies open. Shown again, the rows that are on are not greyed.
+void folderEyeTests() {
+  DocumentSnapshot snapshot = usedSketchesDesign();
+  snapshot.featureShown.insert(QStringLiteral("F1"), true);
+  snapshot.featureShown.insert(QStringLiteral("F4"), false);
+  snapshot.featureShown.insert(QStringLiteral("F5"), true);
+  snapshot.hiddenFolders.insert(QStringLiteral("C0"),
+                                {DocumentSnapshot::Folder::Bodies, DocumentSnapshot::Folder::Sketches});
+  CHECK(!snapshot.folderShown(QStringLiteral("C0"), DocumentSnapshot::Folder::Sketches));
+  CHECK(snapshot.folderShown(QStringLiteral("C0"), DocumentSnapshot::Folder::Construction));
+  CHECK(snapshot.folderShown(QStringLiteral("C1"), DocumentSnapshot::Folder::Sketches));
+  CHECK(snapshot.kindHidden(QStringLiteral("F1")));
+  CHECK(!snapshot.isDrawn(QStringLiteral("F1")));
+  CHECK(!snapshot.kindHidden(QStringLiteral("F2"))); // an extrude has no folder eye
+  CHECK(DocumentSnapshot::folderKey(DocumentSnapshot::Folder::Construction) == QStringLiteral("construction"));
+  {
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree == nullptr) {
+      return;
+    }
+    const QColor plain = tree->palette().color(QPalette::Text);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketches"))).bulb == QStringLiteral("eye-off"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Bodies"))).bulb == QStringLiteral("eye-off"));
+    const Look sketch1 = look(tree, rowNamed(tree, QStringLiteral("Sketch1")));
+    CHECK(sketch1.bulb == QStringLiteral("eye"));
+    CHECK(sketch1.text != plain);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketch2"))).bulb == QStringLiteral("eye-off"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketch3"))).bulb == QStringLiteral("eye"));
+    const Look body = look(tree, rowNamed(tree, QStringLiteral("Body F2.b0")));
+    CHECK(body.bulb == QStringLiteral("eye"));
+    CHECK(body.text != plain);
+  }
+  {
+    snapshot.hiddenFolders.clear();
+    CHECK(snapshot.isDrawn(QStringLiteral("F1")));
+    BrowserPanel panel;
+    panel.rebuild(snapshot, false);
+    auto* tree = panel.findChild<QTreeWidget*>();
+    CHECK(tree != nullptr);
+    if (tree == nullptr) {
+      return;
+    }
+    const QColor plain = tree->palette().color(QPalette::Text);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketches"))).bulb == QStringLiteral("eye"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketch1"))).text == plain);
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Sketch2"))).bulb == QStringLiteral("eye-off"));
+    CHECK(look(tree, rowNamed(tree, QStringLiteral("Body F2.b0"))).text == plain);
+  }
+}
+
 } // namespace
 
 int browserRolesTests() {
   rowLookTests();
   usedSketchesTests();
   isolationEyeTests();
+  folderEyeTests();
   return failures;
 }

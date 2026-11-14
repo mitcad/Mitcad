@@ -21,14 +21,6 @@ param(
 
 Ui-Init $App $Out $QtBin -StepPause 0
 
-# Place-Valid "Browser <path>": the row's place was logged and has not gone
-# out of sight since (BrowserPanel::logLayout).
-function Place-Valid([string]$Text) {
-  $last = "$(Ui-LogLines | Where-Object { $_.Contains("$Text at ") -or $_.EndsWith("$Text out of sight") } |
-    Select-Object -Last 1)"
-  return ($last.Length -gt 0) -and -not $last.EndsWith(' out of sight')
-}
-
 # Since-Mark "text": the lines logged since the mark that contain the text.
 function Since-Mark([string]$Text) {
   return @(Ui-LogLines | Select-Object -Skip $script:UiMark | Where-Object { $_.Contains($Text) })
@@ -97,11 +89,11 @@ Ui-ExpectLog 'Browser opened folded: ' 'the long tree opens folded'
 Ui-Sync
 Ui-ExpectLog 'Browser Root/Part1:1 at' "the root's children are in sight"
 foreach ($row in @('Root/Part1:1', 'Root/Part2:1', 'Root/Named Views', 'Root/Origin')) {
-  if (-not (Place-Valid "Browser $row")) { Ui-Fail "$row is not in sight" }
-  if (-not (Place-Valid "Browser arrow $row")) { Ui-Fail "$row has no arrow in sight" }
+  if (-not (Ui-PlaceValid "Browser $row")) { Ui-Fail "$row is not in sight" }
+  if (-not (Ui-PlaceValid "Browser arrow $row")) { Ui-Fail "$row has no arrow in sight" }
 }
 Write-Host 'ok   the first parts and the folders are in sight with their arrows'
-if (Place-Valid 'Browser Root/Part1:1/Bodies') { Ui-Fail 'Part1 is open' }
+if (Ui-PlaceValid 'Browser Root/Part1:1/Bodies') { Ui-Fail 'Part1 is open' }
 Write-Host 'ok   Part1 is folded'
 Ui-Mark
 Ui-Step 'open Part1'                     { Ui-ClickLogged 'Browser arrow Root/Part1:1' }
@@ -117,8 +109,8 @@ Ui-ExpectNew 'Collapse All' 'the menu has Collapse All'
 Ui-Step 'choose Collapse All'            { Ui-Key 'Up'; Ui-Key 'Return' }
 Ui-ExpectNew 'Browser collapsed all' 'Collapse All ran'
 Ui-ExpectNew 'Browser Root/Part1:1/Bodies out of sight' 'Part1 folded again'
-if (-not (Place-Valid 'Browser Root/Part1:1')) { Ui-Fail "the root's children left sight" }
-if (-not (Place-Valid 'Browser Root')) { Ui-Fail 'the top row is gone' }
+if (-not (Ui-PlaceValid 'Browser Root/Part1:1')) { Ui-Fail "the root's children left sight" }
+if (-not (Ui-PlaceValid 'Browser Root')) { Ui-Fail 'the top row is gone' }
 Write-Host 'ok   the root stays open, its children in sight'
 if (Ui-LogLines | Where-Object { $_.Contains('Recompute failed') }) { Ui-Fail 'a recompute failed' }
 

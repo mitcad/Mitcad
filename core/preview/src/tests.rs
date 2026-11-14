@@ -403,3 +403,89 @@ fn seams_and_slivers_are_no_edges() {
     // Every side along the cylinder (the seam's too) is a fold.
     assert_eq!(edges.folds.len(), 2 * n);
 }
+
+/// A prism's side as one face whose seam has two copies (mitcad#1773):
+/// where their normals agree (a round profile) the seam is no edge; where
+/// they part (a teardrop's sharp tip) it is drawn, as the 3D view draws it.
+#[test]
+fn a_seam_is_an_edge_only_at_a_crease() {
+    let n = 24usize;
+    let side = |crease: bool| -> Mesh {
+        let mut mesh = Mesh {
+            edge_color: raster::EDGE_COLOR,
+            ..Mesh::default()
+        };
+        for k in 0..=n {
+            let angle = std::f64::consts::TAU * k as f64 / n as f64;
+            let (s, c) = angle.sin_cos();
+            // At a crease the two copies' normals are turned apart.
+            let turn = match (crease, k) {
+                (true, 0) => 0.3,
+                (true, k) if k == n => -0.3,
+                _ => 0.0,
+            };
+            let (ns, nc) = (angle + turn).sin_cos();
+            for z in [0.0, 10.0] {
+                mesh.vertices.push([5.0 * c, 5.0 * s, z]);
+                mesh.normals.push([nc, ns, 0.0]);
+            }
+        }
+        for k in 0..n as u32 {
+            let (a, b, c, d) = (2 * k, 2 * k + 2, 2 * k + 3, 2 * k + 1);
+            mesh.triangles.push([a, b, c]);
+            mesh.triangles.push([a, c, d]);
+        }
+        mesh.face_triangles.push(mesh.triangles.len() as u32);
+        mesh.face_colors.push(raster::BODY_COLOR);
+        mesh
+    };
+    let smooth = raster::mesh_edges(&side(false));
+    assert_eq!(smooth.segments.len(), 2 * n);
+    let creased = raster::mesh_edges(&side(true));
+    assert_eq!(creased.segments.len(), 2 * n + 1);
+    assert_eq!(
+        creased
+            .segments
+            .iter()
+            .filter(|[a, b]| a[2] != b[2])
+            .count(),
+        1,
+        "the crease along the side"
+    );
+}
+
+/// Two pieces of one face on one plane, each meshed with its own corners
+/// (mitcad#1773): with one surface number the side between them is no
+/// edge; with two, or none given, it is.
+#[test]
+fn pieces_of_one_surface_have_no_edge_between_them() {
+    let pieces = |surfaces: Vec<u32>| -> Mesh {
+        let mut mesh = Mesh {
+            edge_color: raster::EDGE_COLOR,
+            ..Mesh::default()
+        };
+        for x0 in [0.0, 1.0] {
+            let first = mesh.vertices.len() as u32;
+            for (x, y) in [(x0, 0.0), (x0 + 1.0, 0.0), (x0 + 1.0, 1.0), (x0, 1.0)] {
+                mesh.vertices.push([x, y, 0.0]);
+                mesh.normals.push([0.0, 0.0, 1.0]);
+            }
+            mesh.triangles.push([first, first + 1, first + 2]);
+            mesh.triangles.push([first, first + 2, first + 3]);
+            mesh.face_triangles.push(2);
+            mesh.face_colors.push(raster::BODY_COLOR);
+        }
+        mesh.face_surfaces = surfaces;
+        mesh
+    };
+    assert_eq!(raster::mesh_edges(&pieces(vec![0, 1])).segments.len(), 7);
+    assert_eq!(raster::mesh_edges(&pieces(Vec::new())).segments.len(), 7);
+    let one = raster::mesh_edges(&pieces(vec![0, 0]));
+    assert_eq!(one.segments.len(), 6);
+    assert!(
+        one.segments
+            .iter()
+            .all(|[a, b]| !(a[0] == 1.0 && b[0] == 1.0)),
+        "no edge along x = 1"
+    );
+}

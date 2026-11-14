@@ -5,20 +5,24 @@
 // (a height in the design's unit, or a plane's or face's name with the
 // height it gives), what happens there (Change to a filament, Pause), the
 // warning in words of an event left out, and Edit and Remove; Add change
-// and Add pause; Change At, a pick of a plane or flat face in the view.
-// Edit and the Add buttons open Filament Change beside the panel
-// (print/FilamentChangeDialog). Every edit sets the whole schedule, one
-// undo step (`set_filament_changes`, "Set Filament Changes"). While the
-// panel is open the view draws the bodies in their print colours by height
-// and each change's ring (`filament_change_preview`); its end restores the
-// normal look. Filament Change Here… of the view's context menu
-// (MainWindowContextMenu.cpp) opens the panel with a change at the plane
-// or face.
+// and Add pause. Edit and the Add buttons open Filament Change beside the
+// panel (print/FilamentChangeDialog), where the event is placed as Extrude
+// places its extent (mitcad#1800): a height above the bed, or To Object, a
+// plane or flat face picked in the view, which the dialog's field takes
+// through the panel's `change_at` input that the panel does not draw
+// (InputDef::windowPick). Every edit sets the whole schedule, one undo step
+// (`set_filament_changes`, "Set Filament Changes"). While the panel is
+// open the view draws the bodies in their print colours by height and each
+// change's ring (`filament_change_preview`); its end restores the normal
+// look. Filament Change Here… of the view's context menu
+// (MainWindowContextMenu.cpp) opens the panel, then Filament Change with
+// the plane or face picked.
 #include "../MainWindow.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -57,6 +61,19 @@ QJsonValue changeReference(const SelectionItem& item) {
   }
   return QJsonObject{{QStringLiteral("body"), item.owner}, {QStringLiteral("face"), item.name}};
 }
+
+// The plane or face a reference names, as the view picks it.
+SelectionItem referenceItem(const QJsonValue& at) {
+  if (at.isObject()) {
+    const QJsonObject face = at.toObject();
+    return SelectionItem{SelectKind::Face, face.value(QStringLiteral("body")).toString(),
+                         face.value(QStringLiteral("face")).toString(), QStringLiteral("plane")};
+  }
+  return SelectionItem{SelectKind::Plane, at.toString(), QString(), QStringLiteral("plane")};
+}
+
+// The input that takes the view's picks for Filament Change's To Object.
+const QString kChangeAt = QStringLiteral("change_at");
 
 // The events as the schedule keeps them.
 QJsonArray storedEvents(const QJsonObject& listed) {
@@ -256,13 +273,18 @@ std::vector<InputDef> MainWindow::filamentChangeInputs(const std::function<bool(
                      index < filamentChangesNow().value(QStringLiteral("changes")).toArray().size();
             }));
   }
-  // Change At: a plane (a construction plane or an origin plane) or a flat
-  // face of a body picked in the view. With Filament Change open the event
-  // there is at it; otherwise a change at it is added at once.
-  InputDef at =
-      selectionInput(QStringLiteral("change_at"), tr("Change At"), SelectKind::Plane | SelectKind::Face, 0, 1)
-          .withTooltip(tr("A plane or flat face where the filament changes"))
-          .withVisible(threeMf)
+  // Filament Change's To Object (mitcad#1800): a plane (a construction
+  // plane or an origin plane) or a flat face of a body picked in the view
+  // goes to the dialog's field. The panel draws no row for it; it is shown
+  // (and takes the picks once the dialog gives it them) only while the
+  // dialog wants them.
+  inputs.push_back(
+      selectionInput(kChangeAt, tr("Plane or Face"), SelectKind::Plane | SelectKind::Face, 0, 1)
+          .withWindowPick()
+          .withColor(commandInputColor(1))
+          .withVisible([this, threeMf](const CommandState& state) {
+            return threeMf(state) && m_filamentChangePicking;
+          })
           .withAccepts([](const SelectionItem& item) {
             return item.kind == SelectKind::Plane ||
                    (item.kind == SelectKind::Face && item.geometry == QStringLiteral("plane"));
@@ -270,12 +292,10 @@ std::vector<InputDef> MainWindow::filamentChangeInputs(const std::function<bool(
           .withRefusedHint(
               [](const SelectionItem&, const CommandState&) { return tr("Pick a plane or a flat face."); })
           .withOnPick([this](const SelectionItem& item, CommandState& state, const CommandContext&) {
-            state.setItems(QStringLiteral("change_at"), {});
+            state.setItems(kChangeAt, {});
             const SelectionItem picked = item;
             TestSync::singleShot(0, this, [this, picked] { filamentChangeAt(picked); });
-          });
-  at.emptyShows = [](const CommandState&) { return std::make_pair(tr("Pick a plane or face"), QColor()); };
-  inputs.push_back(at);
+          }));
   return inputs;
 }
 
@@ -293,44 +313,104 @@ QString MainWindow::filamentReferenceName(const SelectionItem& item) const {
   return tr("A face of %1").arg(bodyName(item.owner));
 }
 
+std::pair<QString, QString> MainWindow::filamentTrialPlace(const QJsonValue& reference, const QJsonValue& body,
+                                                           bool pause) const {
+  const QString name = filamentReferenceName(referenceItem(reference));
+  QJsonObject trial{{QStringLiteral("at"), reference}};
+  if (body.isString()) {
+    trial.insert(QStringLiteral("body"), body);
+  }
+  if (pause) {
+    trial.insert(QStringLiteral("kind"), QStringLiteral("pause"));
+  }
+  QJsonObject query{{QStringLiteral("query"), QStringLiteral("filament_changes")}, {QStringLiteral("trial"), trial}};
+  if (!m_filamentPlate.isEmpty()) {
+    query.insert(QStringLiteral("plate"), m_filamentPlate);
+  }
+  QJsonObject answer;
+  if (!modelBusy()) {
+    try {
+      answer = queryObject(query).value(QStringLiteral("trial")).toObject();
+    } catch (const std::exception&) {
+      answer = QJsonObject();
+    }
+  }
+  const QJsonValue height = answer.value(QStringLiteral("height"));
+  if (height.isDouble()) {
+    return {tr("%1: %2 above the bed").arg(name, heightText(height.toDouble(), lengthUnit(), unitMillimetres())),
+            QString()};
+  }
+  const QString warning = answer.value(QStringLiteral("warning")).toString();
+  return {name, warning.isEmpty() ? QString() : modelMessage(warning)};
+}
+
 void MainWindow::filamentChangeAt(const SelectionItem& item) {
-  const QJsonValue reference = changeReference(item);
-  const QString place = filamentReferenceName(item);
-  // Filament Change open: its event is at the pick.
-  if (m_filamentChangeDialog && m_filamentChangeDialog->isVisible()) {
-    m_filamentChangeDialog->setAt(reference, place);
+  // Only Filament Change's To Object takes picks: its event is at the pick.
+  if (!m_filamentChangeDialog || !m_filamentChangeDialog->isVisible()) {
     return;
   }
-  // Otherwise a change at it, to the first filament other than the plate's.
-  const QJsonObject listed = filamentChangesNow();
-  QJsonArray events = storedEvents(listed);
-  QJsonObject event{{QStringLiteral("at"), reference}};
-  const QJsonArray choices = listed.value(QStringLiteral("choices")).toArray();
-  const QJsonObject choice = choices.at(preferredChoice(listed)).toObject();
-  if (choice.value(QStringLiteral("material")).isString()) {
-    event.insert(QStringLiteral("material"), choice.value(QStringLiteral("material")));
-    if (choice.value(QStringLiteral("appearance")).isString()) {
-      event.insert(QStringLiteral("appearance"), choice.value(QStringLiteral("appearance")));
-    }
-  } else {
-    // A design without materials of its own: a pause there.
-    event.insert(QStringLiteral("kind"), QStringLiteral("pause"));
+  if (modelBusy()) {
+    whenIdle(this, [this, item] { filamentChangeAt(item); });
+    return;
   }
-  events.append(event);
-  if (setFilamentChanges(events, nullptr)) {
-    qInfo().noquote() << QStringLiteral("Filament changes: added a change at %1").arg(place);
+  const QJsonValue reference = changeReference(item);
+  const auto [place, warning] = filamentTrialPlace(reference, QJsonValue(), m_filamentChangeDialog->isPause());
+  m_filamentChangeDialog->setAt(reference, place, warning);
+}
+
+void MainWindow::filamentChangePicks(bool wanted) {
+  // The panel's input that takes them is shown while the dialog wants
+  // them (its `visible`), and then made the active one; given back, the
+  // panel's first selection still needed takes them again.
+  m_filamentChangePicking = wanted && m_session != nullptr;
+  if (m_session == nullptr) {
+    if (m_filamentChangeDialog) {
+      m_filamentChangeDialog->setPicking(false);
+    }
+    return;
+  }
+  if (m_filamentChangePicking) {
+    if (!m_session->pickInWindow(kChangeAt)) {
+      m_filamentChangePicking = false;
+    }
+  } else if (m_session->activeSelection() == kChangeAt) {
+    m_session->pickInWindow(QString());
+  }
+  followFilamentChangePicks();
+}
+
+void MainWindow::followFilamentChangePicks() {
+  if (m_filamentChangeDialog) {
+    m_filamentChangeDialog->setPicking(m_filamentChangePicking && m_session != nullptr &&
+                                       m_session->activeSelection() == kChangeAt);
   }
 }
 
-void MainWindow::editFilamentChange(int row) {
+void MainWindow::editFilamentChange(int row, const SelectionItem& here) {
   const QJsonObject listed = filamentChangesNow();
   const QJsonArray changes = listed.value(QStringLiteral("changes")).toArray();
   QJsonObject event;
   QString place;
-  if (row >= 0 && row < changes.size()) {
+  QString warning;
+  if (here.isValid()) {
+    // Filament Change Here…: a new change at the plane or face, to the
+    // first filament other than the plate's.
+    event.insert(QStringLiteral("at"), changeReference(here));
+    const QJsonObject choice =
+        listed.value(QStringLiteral("choices")).toArray().at(preferredChoice(listed)).toObject();
+    if (choice.value(QStringLiteral("material")).isString()) {
+      event.insert(QStringLiteral("material"), choice.value(QStringLiteral("material")));
+      if (choice.value(QStringLiteral("appearance")).isString()) {
+        event.insert(QStringLiteral("appearance"), choice.value(QStringLiteral("appearance")));
+      }
+    } else {
+      // A design without materials of its own: a pause there.
+      event.insert(QStringLiteral("kind"), QStringLiteral("pause"));
+    }
+    row = -1;
+  } else if (row >= 0 && row < changes.size()) {
     const QJsonObject change = changes.at(row).toObject();
     event = change.value(QStringLiteral("event")).toObject();
-    place = filamentChangePlace(row);
   } else {
     // A new change or pause: above the last event at a height (10 mm up
     // to begin with), in the design's unit.
@@ -347,6 +427,13 @@ void MainWindow::editFilamentChange(int row) {
     }
     row = -1;
   }
+  // An event at a plane or face: its name and the height it gives.
+  const QJsonValue at = event.value(QStringLiteral("at"));
+  if (!at.isUndefined() && !at.isNull()) {
+    std::tie(place, warning) =
+        filamentTrialPlace(at, event.value(QStringLiteral("body")),
+                           event.value(QStringLiteral("kind")).toString() == QStringLiteral("pause"));
+  }
   if (!m_filamentChangeDialog) {
     m_filamentChangeDialog = new FilamentChangeDialog(this);
     connect(m_filamentChangeDialog, &FilamentChangeDialog::applied, this,
@@ -361,12 +448,17 @@ void MainWindow::editFilamentChange(int row) {
                 m_filamentChangeDialog->hide();
               }
             });
+    connect(m_filamentChangeDialog, &FilamentChangeDialog::picksWanted, this,
+            [this](bool wanted) { filamentChangePicks(wanted); });
   }
-  m_filamentChangeDialog->edit(row, event, place, listed.value(QStringLiteral("choices")).toArray(),
+  m_filamentChangeDialog->edit(row, event, place, warning, listed.value(QStringLiteral("choices")).toArray(),
                                preferredChoice(listed), lengthUnit(), unitMillimetres());
   m_filamentChangeDialog->show();
   m_filamentChangeDialog->raise();
   m_filamentChangeDialog->activateWindow();
+  // To Object takes the view's picks at once (a plane or face picked again
+  // moves the event there).
+  filamentChangePicks(m_filamentChangeDialog->wantsPicks());
 }
 
 bool MainWindow::setFilamentChanges(const QJsonArray& events, FilamentChangeDialog* dialog) {
@@ -453,6 +545,7 @@ void MainWindow::endFilamentChanges() {
   m_filamentChangesStale = true;
   m_filamentChangesLogged.clear();
   m_filamentPlate.clear();
+  m_filamentChangePicking = false;
   if (m_filamentChangeDialog) {
     m_filamentChangeDialog->hide();
   }
@@ -478,8 +571,8 @@ std::vector<std::pair<SelectionItem, QColor>> MainWindow::filamentChangeMarks() 
 }
 
 void MainWindow::filamentChangeHere(const SelectionItem& item) {
-  // Send to Slicer opens, then the change is added at the plane or face
-  // (its init, print3dCommand).
+  // Send to Slicer opens, then Filament Change on a change at the plane or
+  // face (its init, print3dCommand).
   m_filamentChangeHere = item;
   // A face of a body on a print plate: the plate's panel, Plates…, on that
   // plate, whose schedule the change goes into; otherwise Send to Slicer
@@ -535,7 +628,7 @@ void MainWindow::addPendingFilamentChange() {
     });
     return;
   }
-  filamentChangeAt(item);
+  editFilamentChange(-1, item);
 }
 
 } // namespace mitcad

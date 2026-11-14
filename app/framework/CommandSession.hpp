@@ -386,10 +386,12 @@ public:
   // roll-back and its way back move past them, and Cancel takes them back
   // with the command.
   void featuresInserted(int count, int depth);
-  // The panel set aside while a sketch it uses is edited (mitcad#1648):
-  // its preview goes and nothing previews meanwhile; resume() shows the
-  // inputs again and computes the preview anew.
-  void suspend();
+  // The panel set aside while a sketch it uses is edited (mitcad#1648),
+  // or while its motion is animated (mitcad#1790; `why` for the log):
+  // its preview and handles go and nothing previews meanwhile; resume()
+  // shows the inputs again and the preview (from the cache when nothing
+  // changed, else computed anew).
+  void suspend(const QString& why = QStringLiteral("while a sketch is edited"));
   void resume();
   bool suspended() const { return m_suspended; }
   // A light bulb of the browser while the panel is open (mitcad#295;
@@ -420,7 +422,11 @@ public:
   // The notice of the activation the command made, shown in the panel's
   // message as information, before the preview's own (okMessage), until
   // the panel closes; logged "Panel <command> notice: <text>".
+  // An empty text takes the notice away (mitcad#1752: a part's linked
+  // shaft's notice once another pick places it), logged "Panel <command>
+  // notice cleared".
   void setActivationNotice(const QString& text);
+  const QString& activationNotice() const { return m_activationNotice; }
   // The component the panel offers to activate (CommandHost::activationOffer),
   // empty when none: also the `activate` of the script state (MCP ui_state).
   const QJsonObject& activationOffer() const { return m_activationOffer; }
@@ -445,6 +451,17 @@ public:
   // empty) and the highlights (CommandDef::marks) are drawn again. False
   // when the command has ended or no such input is shown.
   bool ask(const QString& key, const QString& message);
+  // A window beside the panel takes the view's picks (mitcad#1800:
+  // Filament Change's To Object): the selection input `key`, which the
+  // panel does not draw (InputDef::windowPick) and which must be shown now
+  // (its `visible`), becomes the active one, as a click on a row's field
+  // makes it; an empty key gives the picks back to the panel's first
+  // selection still needed, else its first. False when the command has
+  // ended or no such input is shown.
+  bool pickInWindow(const QString& key);
+  // The key of the selection input that takes the view's picks now; empty
+  // when none does.
+  const QString& activeSelection() const { return m_active; }
   // Esc while the panel is open: the command's own (CommandDef::escape),
   // true when it took it; else the window's Esc cancels.
   bool escape();
@@ -832,6 +849,11 @@ private:
   QString m_hoveredNote;
   Selection m_noteHighlights;
   void hoverNote(const QString& key, bool on);
+  // The row of a choice shown as rows the pointer is over, "<key>=<value>",
+  // that paints what its option is about (InputDef::choicePlaces,
+  // mitcad#1794); empty: none.
+  QString m_hoveredChoice;
+  void hoverChoice(const QString& key, const QString& value);
   // The panel's message without a preview report (a hint, an error, a
   // progress): the shown preview's places and bodies go with it
   // (mitcad#1609).
@@ -848,6 +870,16 @@ private:
   // left out of the selection, and those sketches' names (mitcad#1264).
   int m_missingProfiles = 0;
   QString m_missingSketches;
+  // The picks of the selection inputs that a failed preview's error names
+  // and the model no longer has (mitcad#1780, CommandSessionPicks.cpp):
+  // marked in the state (CommandState::missingItems) for the panel's chip
+  // and list, and what the message says of them, each input by its label
+  // ("A face of Faces is gone: pick it again"); empty when none is. It
+  // reads the model: only while no job computes it.
+  QString markMissingPicks(const QJsonObject& report);
+  // The marks taken away, of one input or (empty key) of all: a good
+  // preview, a change of the input's picks. True when there were some.
+  bool clearMissingPicks(const QString& key = QString());
   QHash<QString, QString> m_rowNotes; // the row notes shown, by input key
   QHash<QString, QString> m_marks;    // the marks' tooltips logged, by input key
   QHash<QString, QString> m_valueHints; // the value hints logged, by input key (mitcad#994)

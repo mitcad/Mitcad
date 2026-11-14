@@ -26,6 +26,7 @@
 
 #include <gp_Trsf.hxx>
 
+#include "../browser/DocumentHost.hpp"
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "CommandFactories.hpp"
@@ -714,6 +715,146 @@ Built originsOf(const CommandState& state, const CommandContext& context, const 
   return Built::of(def);
 }
 
+// --- Animate (mitcad#1790): the motion a panel makes played back and forth
+// from its preview, nothing changed (DocumentHost::animatePanelMotion).
+
+const QString kAnimate = QStringLiteral("animate");
+// A motion without limits: a slide this far either way (mm), a turn once
+// round, as Animate Joint plays it.
+constexpr double kFreeSlide = 25.0;
+constexpr double kFullTurn = 6.283185307179586;
+
+using PanelMotionOf =
+    std::function<std::optional<DocumentHost::PanelMotion>(const CommandState&, const CommandContext&)>;
+
+// The choice of the motion to play and its Play button; the button's call
+// is set by withAnimate once the command has its build.
+InputDef animateInput(std::function<Choices(const CommandState&)> motions) {
+  return choiceInput(kAnimate, QObject::tr("Animate"), {}, QString())
+      .withTooltip(QObject::tr("The motion Play shows"))
+      .withChoices(motions)
+      .withVisible([motions](const CommandState& state) { return !motions(state).isEmpty(); })
+      .withButton(QObject::tr("Play"), QObject::tr("Plays the motion back and forth in the preview; nothing changes"),
+                  nullptr);
+}
+
+// The chosen option of `choices`, else the first.
+QString chosen(const CommandState& state, const Choices& choices) {
+  const QString choice = state.choice(kAnimate);
+  for (const auto& option : choices) {
+    if (option.first == choice) {
+      return choice;
+    }
+  }
+  return choices.isEmpty() ? QString() : choices.first().first;
+}
+
+// Play: the panel's motion (`motionOf`) to the main window, which stops it
+// when it plays already; a change of the definition or of the chosen
+// motion stops it too.
+void withAnimate(CommandDef& def, PanelMotionOf motionOf) {
+  for (InputDef& input : def.inputs) {
+    if (input.id != kAnimate) {
+      continue;
+    }
+    input.onButton = [build = def.build, motionOf](const CommandState& state, const CommandContext& model) {
+      auto* host = const_cast<DocumentHost*>(dynamic_cast<const DocumentHost*>(&model));
+      if (host == nullptr) {
+        return;
+      }
+      std::optional<DocumentHost::PanelMotion> motion = motionOf(state, model);
+      if (!motion) {
+        host->showStatus(QObject::tr("There is no motion to animate."), NoticeLevel::Hint);
+        return;
+      }
+      motion->inputs = [build](const CommandState& now, const CommandContext& context) -> QByteArray {
+        return compactJson(build(now, context).def) + QByteArrayLiteral("|") + now.choice(kAnimate).toUtf8();
+      };
+      host->animatePanelMotion(*motion);
+    };
+  }
+}
+
+// A range to play: through the limits, else a full turn from `start` or a
+// slide of kFreeSlide either way.
+void playRange(DocumentHost::PanelMotion& motion, double min, double max) {
+  if (std::isfinite(min) && std::isfinite(max) && max > min) {
+    motion.low = min;
+    motion.high = max;
+  } else if (motion.turn) {
+    motion.low = motion.start;
+    motion.high = motion.start + kFullTurn;
+  } else {
+    motion.low = motion.start - kFreeSlide;
+    motion.high = motion.start + kFreeSlide;
+  }
+}
+
+// A number from a value's text as a joint's `position` keeps it ("45 deg",
+// "12 mm", a bare number in mm or radians); NaN for an expression.
+double plainValue(const QString& text, bool turn) {
+  static const QRegularExpression plain(
+      QStringLiteral(R"(^\s*(-?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*(deg|mm)?\s*$)"));
+  const QRegularExpressionMatch match = plain.match(text);
+  if (!match.hasMatch()) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  const double number = match.captured(1).toDouble();
+  return turn && match.captured(2) == QStringLiteral("deg") ? number * kFullTurn / 360.0 : number;
+}
+
+// The Joint panel's motions: the kind's free motions.
+Choices jointMotionChoices(const CommandState& state) {
+  Choices motions;
+  for (const QString& motion : motionsIn(state)) {
+    motions.append({motion, motionLabel(motion)});
+  }
+  return motions;
+}
+
+// The Joint panel's motion: the chosen one of the kind's free motions,
+// played from where the panel's preview has it (its rest value, the
+// position an edit keeps, its start), as its `position` in each frame.
+std::optional<DocumentHost::PanelMotion> jointPanelMotion(const CommandState& state, const CommandContext&) {
+  const QString motion = chosen(state, jointMotionChoices(state));
+  if (motion.isEmpty()) {
+    return std::nullopt;
+  }
+  DocumentHost::PanelMotion panel;
+  panel.label = QStringLiteral("Joint");
+  panel.motion = motion;
+  panel.turn = isTurn(motion);
+  const QJsonValue kept = state.object(kStart).value(motion);
+  const QJsonObject position = QJsonDocument::fromJson(state.text(QStringLiteral("position")).toUtf8()).object();
+  double start = state.checked(QStringLiteral("rest_on_") + motion) ? state.value(QStringLiteral("rest_") + motion)
+                                                                    : std::numeric_limits<double>::quiet_NaN();
+  if (!std::isfinite(start) && position.contains(motion)) {
+    start = plainValue(position.value(motion).toString(), panel.turn);
+  }
+  if (!std::isfinite(start)) {
+    start = kept.isDouble() ? kept.toDouble() : 0.0;
+  }
+  panel.start = start;
+  const bool limited = state.checked(QStringLiteral("limit_") + motion);
+  playRange(panel, limited ? state.value(QStringLiteral("min_") + motion) : std::numeric_limits<double>::quiet_NaN(),
+            limited ? state.value(QStringLiteral("max_") + motion) : std::numeric_limits<double>::quiet_NaN());
+  panel.at = [motion](QJsonObject def, double value) {
+    // Driven there: its position, not where it starts.
+    QJsonObject driven = def.value(QStringLiteral("position")).toObject();
+    driven.insert(motion, value);
+    def.insert(QStringLiteral("position"), driven);
+    QJsonObject start = def.value(kStart).toObject();
+    start.remove(motion);
+    if (start.isEmpty()) {
+      def.remove(kStart);
+    } else {
+      def.insert(kStart, start);
+    }
+    return def;
+  };
+  return panel;
+}
+
 } // namespace
 
 CommandDef jointCommand(const CommandContext& context) {
@@ -747,6 +888,8 @@ CommandDef jointCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("Turns origin A over: a face onto a face")),
   };
   def.inputs += limitInputs();
+  // The motion it makes played back and forth from the preview (mitcad#1790).
+  def.inputs += {animateInput(jointMotionChoices)};
   def.inputs += {hidden(QStringLiteral("component")), hidden(QStringLiteral("position"))};
   def.enabled = [&context] { return occurrenceCount(context) > 0; };
   // The handles stand on the joint's origin where the preview puts it.
@@ -795,6 +938,8 @@ CommandDef jointCommand(const CommandContext& context) {
            originItem(feature.value(QStringLiteral("b")), QString(), context).isValid() &&
            limitsEditable(feature);
   };
+
+  withAnimate(def, jointPanelMotion);
 
   def.describe = [](const CommandState&, const CommandContext& context) {
     return addedJoint(context, QStringLiteral("joint"), QStringLiteral("joint"));
@@ -1524,6 +1669,78 @@ std::function<bool(const CommandState&)> typeIn(const CommandContext& context, c
 
 bool limited(const CommandState& row) { return row.checked(QStringLiteral("limits")); }
 
+// The Assembly Constraint panel's motions (mitcad#1790): each row's value
+// that can move, an align's or an insert's offset or an angle row's
+// angle, by the row's index.
+Choices constraintMotionChoices(const CommandState& state, const CommandContext& context) {
+  Choices motions;
+  for (int i = 0; i < state.rows(kRows); ++i) {
+    const QString type = rowType(state.row(kRows, i), context);
+    if (type == QStringLiteral("angle")) {
+      motions.append({QString::number(i), QObject::tr("Constraint %1: Angle").arg(i + 1)});
+    } else if (type == QStringLiteral("align") || type == QStringLiteral("insert")) {
+      motions.append({QString::number(i), QObject::tr("Constraint %1: Offset").arg(i + 1)});
+    }
+  }
+  return motions;
+}
+
+// The chosen row's value played: between its limits (as its rest value in
+// each frame), else an angle from 0 to 180 degrees or an offset 25 mm
+// either way from the panel's.
+std::optional<DocumentHost::PanelMotion> constraintPanelMotion(const CommandState& state,
+                                                               const CommandContext& context) {
+  const QString choice = chosen(state, constraintMotionChoices(state, context));
+  if (choice.isEmpty()) {
+    return std::nullopt;
+  }
+  const int index = choice.toInt();
+  const CommandState row = state.row(kRows, index);
+  const bool angle = rowType(row, context) == QStringLiteral("angle");
+  const bool withLimits = limited(row) && (angle || rowType(row, context) == QStringLiteral("align"));
+  constexpr double kNone = std::numeric_limits<double>::quiet_NaN();
+  DocumentHost::PanelMotion panel;
+  panel.label = QStringLiteral("Constraint %1").arg(index + 1);
+  panel.motion = angle ? QStringLiteral("angle") : QStringLiteral("offset");
+  panel.turn = angle;
+  if (withLimits) {
+    const double min = row.value(angle ? QStringLiteral("min_angle") : QStringLiteral("min"));
+    const double rest = row.checked(QStringLiteral("rest_on"))
+                            ? row.value(angle ? QStringLiteral("rest_angle") : QStringLiteral("rest"))
+                            : kNone;
+    panel.start = std::isfinite(rest) ? rest : min;
+    playRange(panel, min, row.value(angle ? QStringLiteral("max_angle") : QStringLiteral("max")));
+  } else if (angle) {
+    const double now = row.value(QStringLiteral("angle"));
+    panel.start = std::isfinite(now) ? now : kFullTurn / 4.0;
+    playRange(panel, 0.0, kFullTurn / 2.0);
+  } else {
+    const double now = row.value(QStringLiteral("offset"));
+    panel.start = std::isfinite(now) ? now : 0.0;
+    playRange(panel, kNone, kNone);
+  }
+  panel.at = [index, withLimits](QJsonObject def, double value) {
+    QJsonArray rows = def.value(kRows).toArray();
+    if (index >= rows.size()) {
+      return def;
+    }
+    QJsonObject out = rows.at(index).toObject();
+    if (withLimits) {
+      QJsonObject limits = out.value(QStringLiteral("limits")).toObject();
+      limits.insert(QStringLiteral("rest"), value);
+      out.insert(QStringLiteral("limits"), limits);
+    } else if (str(out, "type") == QStringLiteral("angle")) {
+      out.insert(QStringLiteral("angle"), value);
+    } else {
+      out.insert(QStringLiteral("offset"), value);
+    }
+    rows.replace(index, out);
+    def.insert(kRows, rows);
+    return def;
+  };
+  return panel;
+}
+
 // "Constraint1: insert placed, moved O2; DOF 1", as the `joints` query has
 // the set (a failure: its error).
 QString constraintLine(const QJsonObject& set, const QJsonObject& joints) {
@@ -1648,6 +1865,8 @@ CommandDef constraintCommand(const CommandContext& context) {
            // A locked insert's turn as loaded: an edit keeps it.
            hidden(QStringLiteral("lock_angle"))},
           QObject::tr("Add Constraint"), QObject::tr("Constraint %1")),
+      // A row's value played back and forth from the preview (mitcad#1790).
+      animateInput([&context](const CommandState& state) { return constraintMotionChoices(state, context); }),
       hidden(QStringLiteral("component")),
   };
   def.enabled = [&context] { return occurrenceCount(context) > 1; };
@@ -1781,6 +2000,7 @@ CommandDef constraintCommand(const CommandContext& context) {
     }
     return QStringLiteral("Added constraint %1").arg(constraintLine(set, joints));
   };
+  withAnimate(def, constraintPanelMotion);
   return def;
 }
 
@@ -2228,20 +2448,26 @@ CommandDef motionLinkCommand(const CommandContext& context) {
 
 } // namespace cmd
 
-// The ASSEMBLE group (mitcad#55), in menu order.
+// The ASSEMBLE group (mitcad#55), in menu order and in the menu's sections
+// (CommandDef::section, mitcad#1778): New Component's "components" before
+// them (registerCreateCommands), the main window's Animate Joint and
+// Motion Study at the end of "motion", then its "insert" section.
 void registerAssembleCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  registry.add(jointCommand(context));
-  registry.add(asBuiltJointCommand(context));
-  registry.add(jointOriginCommand(context));
-  registry.add(rigidGroupCommand(context));
-  registry.add(driveJointCommand(context));
-  // Assembly constraints (mitcad#148).
-  registry.add(constraintCommand(context));
-  // Contact sets (mitcad#454).
-  registry.add(contactSetCommand(context));
-  // Motion links (mitcad#466).
-  registry.add(motionLinkCommand(context));
+  const auto add = [&registry](CommandDef def, const char* section) {
+    def.section = QString::fromLatin1(section);
+    registry.add(def);
+  };
+  // What holds the components together.
+  add(jointCommand(context), "joints");
+  add(asBuiltJointCommand(context), "joints");
+  add(jointOriginCommand(context), "joints");
+  add(rigidGroupCommand(context), "joints");
+  add(constraintCommand(context), "joints"); // assembly constraints (mitcad#148)
+  // How they move.
+  add(driveJointCommand(context), "motion");
+  add(motionLinkCommand(context), "motion"); // mitcad#466
+  add(contactSetCommand(context), "motion"); // mitcad#454
 }
 
 } // namespace mitcad

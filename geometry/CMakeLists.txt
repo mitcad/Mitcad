@@ -333,6 +333,18 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/pipe_folds.cpp
   src/pipe_folds.hpp)
+
+# Edges inside one smooth surface (seams, edges between pieces of one
+# face) that the views leave out (mitcad#1773).
+target_sources(mitcad_geometry PRIVATE
+  src/smooth_seams.cpp
+  include/mitcad/geometry/smooth_seams.hpp)
+
+# Nearness of shapes and points on surfaces, told without measuring more
+# than the answer needs (mitcad#1785).
+target_sources(mitcad_geometry PRIVATE
+  src/proximity.cpp
+  src/proximity.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1215,4 +1227,32 @@ if(BUILD_TESTING)
   add_executable(test_pipe_folds tests/test_pipe_folds.cpp)
   target_link_libraries(test_pipe_folds PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.pipe_folds COMMAND test_pipe_folds)
+endif()
+
+if(BUILD_TESTING)
+  # Edges inside one smooth surface (mitcad#1773): a cylinder's, a sphere's,
+  # a hole's and a smooth extruded profile's seam, the edge between two faces
+  # on one plane and between two named pieces of one face; never a box's
+  # edges, a rounded plate's, a teardrop's crease or two faces' on their own
+  # surfaces.
+  add_executable(test_smooth_seams tests/test_smooth_seams.cpp)
+  target_link_libraries(test_smooth_seams PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.smooth_seams COMMAND test_smooth_seams)
+  # The curve tools (mitcad#1777): a growing helix on its cone, a line's
+  # helix the helicoid of its area, the helicoid and a cylinder meeting in
+  # one helix on the cylinder, a face name that finds nothing refused.
+  add_executable(test_curve_tools tests/test_curve_tools.cpp)
+  target_link_libraries(test_curve_tools PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.curve_tools COMMAND test_curve_tools)
+endif()
+
+if(BUILD_TESTING)
+  # Nearness told without measuring the whole distance (mitcad#1785):
+  # within_distance agrees with BRepExtrema's distance at limits around it
+  # for solids, faces (a B-spline one too), edges and vertices apart,
+  # touching and inside, and a surface probe with a projection of each
+  # point on B-spline, cylindrical and plane surfaces.
+  add_executable(test_proximity tests/test_proximity.cpp)
+  target_link_libraries(test_proximity PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.proximity COMMAND test_proximity)
 endif()

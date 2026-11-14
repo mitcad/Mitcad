@@ -129,6 +129,23 @@ fn clamp(eqs: &dyn Equations, params: &mut [f64], vars: &[usize]) {
     }
 }
 
+/// The most times a continuation step is halved because an arc came out
+/// on the other side of its chord (mitcad#1774).
+const MAX_SPLITS: usize = 8;
+
+/// How far from a half circle (the sine of its sweep) an arc's side counts:
+/// an arc nearer a half circle may pass it as the geometry changes.
+const SIDE_MARGIN: f64 = 0.1;
+
+/// Whether an arc of `before` lies clearly on the other side of its chord
+/// in `now` ([`System::arc_sides`]).
+fn flipped(before: &[(usize, f64)], now: &[(usize, f64)]) -> bool {
+    // The same arcs in the same order: those of one system.
+    before.iter().zip(now).any(|(&(i, b), &(j, n))| {
+        i == j && b.abs() > SIDE_MARGIN && n.abs() > SIDE_MARGIN && b.signum() != n.signum()
+    })
+}
+
 pub(crate) struct Run {
     pub converged: bool,
     pub iterations: usize,
@@ -344,6 +361,12 @@ pub(crate) fn lm(ctx: &Ctx, comp: &Component, params: &mut [f64], work: &mut Wor
 /// possible), then [`lm`] restores the constraints. A step that does not
 /// bring the goals closer is halved (the constraint curvature can make full
 /// steps overshoot).
+///
+/// A drag that gets nowhere from a singular point of the solution set (an
+/// arc whose ends lie on two lines and whose centre is held, touching both
+/// lines: its radius is free, but the linearized constraints hold it) is
+/// taken again from a regular point beside it ([`nudge`], mitcad#1774); it
+/// is kept only when it gets the goals nearer than the first try.
 pub(crate) fn drag(
     ctx: &Ctx,
     comp: &Component,
@@ -351,12 +374,75 @@ pub(crate) fn drag(
     work: &mut Work,
     goals: &[(usize, f64)],
 ) -> Run {
-    let sym = &comp.plan.sym;
     let first = lm(ctx, comp, params, work);
     if !first.converged {
         return first;
     }
-    let mut iterations = first.iterations;
+    let distance = |params: &[f64]| -> f64 {
+        goals
+            .iter()
+            .map(|&(c, t)| (t - params[comp.vars[c]]).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    };
+    let from = distance(params);
+    let (mut iterations, reached) = pull(ctx, comp, params, work, goals);
+    iterations += first.iterations;
+    if from > ctx.tol && from - reached <= 1e-6 * from {
+        let kept: Vec<f64> = comp.vars.iter().map(|&v| params[v]).collect();
+        nudge(comp, params, NUDGE * ctx.scale);
+        let settled = lm(ctx, comp, params, work);
+        iterations += settled.iterations;
+        let mut better = false;
+        if settled.converged {
+            let (more, again) = pull(ctx, comp, params, work, goals);
+            iterations += more;
+            better = again < reached - 0.01 * from;
+        }
+        if !better {
+            for (i, &v) in comp.vars.iter().enumerate() {
+                params[v] = kept[i];
+            }
+        }
+    }
+    ctx.eqs.evaluate(comp, params, ctx.scale, &mut work.f, None);
+    let res = max_abs(&work.f);
+    Run {
+        converged: res <= ctx.tol,
+        iterations,
+        residual: res,
+    }
+}
+
+/// How far [`nudge`] moves the unknowns, relative to the sketch size.
+pub(crate) const NUDGE: f64 = 1e-3;
+
+/// Moves every unknown of a component by up to `delta`, by the same
+/// pseudo-random amounts every time (mitcad#1774): off a singular point of
+/// the solution set, which a solve from there leaves for a regular one
+/// beside it.
+pub(crate) fn nudge(comp: &Component, params: &mut [f64], delta: f64) {
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    for &g in &comp.vars {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let unit = (seed >> 11) as f64 / (1u64 << 53) as f64;
+        params[g] += delta * (2.0 * unit - 1.0);
+    }
+}
+
+/// The steps of [`drag`] from where the geometry is: the iterations they
+/// took and how far the goals are from their targets after them.
+fn pull(
+    ctx: &Ctx,
+    comp: &Component,
+    params: &mut [f64],
+    work: &mut Work,
+    goals: &[(usize, f64)],
+) -> (usize, f64) {
+    let sym = &comp.plan.sym;
+    let mut iterations = 0;
     let n = comp.vars.len();
     let mut dcol = comp.dcol.clone();
     for &(c, _) in goals {
@@ -434,13 +520,7 @@ pub(crate) fn drag(
             }
         }
     }
-    ctx.eqs.evaluate(comp, params, ctx.scale, &mut work.f, None);
-    let res = max_abs(&work.f);
-    Run {
-        converged: res <= ctx.tol,
-        iterations,
-        residual: res,
-    }
+    (iterations, good_dist)
 }
 
 impl System {
@@ -599,15 +679,38 @@ impl System {
             degenerate: Vec::new(),
         };
         let start = self.params.clone();
-        for k in 1..=steps {
-            let t = k as f64 / steps as f64;
+        // Each arc stays on its branch (mitcad#1774): a step after which an
+        // arc lies on the other side of its chord is taken again in halves,
+        // up to `MAX_SPLITS` times in all.
+        let mut sides = self.arc_sides();
+        let mut done = 0.0;
+        let base = 1.0 / steps as f64;
+        let mut step = base;
+        let mut splits = 0;
+        while done < 1.0 {
+            let t = if done + step >= 1.0 - 1e-12 {
+                1.0
+            } else {
+                done + step
+            };
             for &(c, from, to) in changed {
                 prep.update_values(c, from + (to - from) * t);
             }
+            let before = self.params.clone();
             result = self.solve_components(prep, opts, scale, tol, goal_params, &start);
             if result.status != SolveStatus::Converged {
                 break;
             }
+            let now = self.arc_sides();
+            if !changed.is_empty() && splits < MAX_SPLITS && flipped(&sides, &now) {
+                self.params = before;
+                step /= 2.0;
+                splits += 1;
+                continue;
+            }
+            sides = now;
+            step = (2.0 * step).min(base);
+            done = t;
         }
         // Leave the prepared values at the targets.
         for &(c, _, to) in changed {
@@ -682,6 +785,25 @@ impl System {
             conflicts,
             degenerate: Vec::new(),
         }
+    }
+
+    /// The side of its chord each arc lies on (mitcad#1774): the sine of its
+    /// sweep, `cross(s - c, e - c) / r^2`, by entity index; positive for an
+    /// arc shorter than a half circle, negative for a longer one.
+    fn arc_sides(&self) -> Vec<(usize, f64)> {
+        self.entities
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| match r.as_ref()?.data {
+                EntityData::Arc { c, s, e } => {
+                    let (c, s, e) = (self.xy(c), self.xy(s), self.xy(e));
+                    let (a, b) = (s.sub(c), e.sub(c));
+                    let r2 = a.dot(a);
+                    (r2 > 0.0).then(|| (i, a.cross(b) / r2))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Lines of (nearly) zero length and circles or arcs of zero radius.

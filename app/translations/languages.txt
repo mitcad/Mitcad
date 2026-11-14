@@ -5,4 +5,8 @@
 # repo.translations, which only goes down as the language is completed
 # (tools/translations-update.cmake writes it after new texts come in). A
 # comment after the count ("de 120  # note") stays when the count is written.
+# en is English's own plural forms (mitcad#1756): mitcad_en.ts has only the
+# texts with a count (%n), "1 degree of freedom" and "2 degrees of freedom"
+# where the source says "degree(s)"; it is no language to choose.
 fi 0
+en 0

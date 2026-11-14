@@ -383,6 +383,36 @@ impl<K: Kernel> Document<K> {
         }))
     }
 
+    /// Where an event not in the schedule would be (mitcad#1800: a plane or
+    /// face picked in Filament Change, shown before its OK): its `height`
+    /// above the print bed, measured as the schedule's own events are on
+    /// the plate (`plate`; none: the design's schedule), null when it would
+    /// be left out, then with its `warning` in words; its `place` in words
+    /// and, at a plane or face, the `body` it is measured from.
+    pub fn filament_change_trial_json(
+        &self,
+        plate: Option<&str>,
+        trial: &FilamentChange,
+    ) -> Result<Value, ModelError> {
+        let id = self.schedule_plate(plate)?;
+        let on = id
+            .as_deref()
+            .and_then(|id| self.state.print_plates.iter().find(|p| p.id == id));
+        let first = self.plate_first_body(on);
+        let (resolved, missing) = self.resolve_in_design(std::slice::from_ref(trial), first);
+        let mut answer = json!({
+            "height": resolved.first().map(|r| r.height),
+            "place": self.change_place(trial).text(),
+        });
+        if trial.at.is_some() {
+            answer["body"] = json!(Self::measured_body(trial, first));
+        }
+        if let Some(note) = missing.get(&0) {
+            answer["warning"] = json!(note);
+        }
+        Ok(answer)
+    }
+
     /// The layer events of a 3MF model's plates (mitcad#1596; see
     /// [`crate::print_changes`]): `settings` are the parts' (in the
     /// model's order), `plates` the export's plates (none: one plate of

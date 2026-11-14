@@ -34,6 +34,7 @@ use mitcad_vec3::distance;
 use super::geometry::dot as dot2;
 use super::geometry::{Curve2, P2, add, angle_after, dist, norm, scale, sub};
 use super::solve::{SolveError, Solved};
+use super::successor::{self, Successor};
 use super::{Entity, EntityKind, Projection, Ref};
 use crate::datum::DatumPlane;
 use crate::def::SketchDef;
@@ -1188,6 +1189,17 @@ pub struct ProjectionFollow {
     /// plane without repeats ([`distinct`]): what Project Again projects
     /// in their place (mitcad#1303). Empty for a lost source.
     pub current: Vec<Projected>,
+    /// The edge it follows in its source's place, an edge on the same curve
+    /// its source was merged with or split from (mitcad#1784,
+    /// [`crate::successor`]); its own source's name where that finds the
+    /// pieces. Everything followed; the evaluation tells it as information
+    /// ([`ProjectionFollow::info`]).
+    pub successor: Option<String>,
+    /// For a lost source of an edge: the edges on a curve of its kind that
+    /// could have taken its place, none of them alone (mitcad#1784), each
+    /// with its curves projected onto the sketch's plane. Project Again
+    /// takes one that is named ([`crate::edit::SketchEdit::project_again_from`]).
+    pub candidates: Vec<(String, Vec<Projected>)>,
 }
 
 impl ProjectionFollow {
@@ -1291,6 +1303,19 @@ impl ProjectionFollow {
             }
         })
     }
+
+    /// The evaluation's information about it when it follows an edge in
+    /// its source's place (mitcad#1784): no warning, as it followed. A
+    /// person reads the kinds ("the projection of an edge follows an
+    /// edge"), the names are its places and the agents'.
+    pub fn info(&self, projection: &Projection) -> Option<String> {
+        let edge = self.successor.as_ref()?;
+        let topo = &projection.source;
+        Some(format!(
+            "the projection of {topo} follows {edge} on the same curve, which took its place \
+             when edges were merged or split"
+        ))
+    }
 }
 
 /// The entity `id` of the projection as it lists it (`p7`, `c9`); a curve
@@ -1323,6 +1348,34 @@ pub fn follow_links(
     frame: &SketchFrame,
     source_curves: &mut dyn FnMut(&Projection) -> Result<Vec<Curve3>, String>,
 ) -> Result<Followed, String> {
+    follow_links_with(def, frame, &mut |projection| {
+        Ok(Found {
+            curves: source_curves(projection)?,
+            successors: Vec::new(),
+        })
+    })
+}
+
+/// What a linked projection's source gives at an evaluation
+/// ([`follow_links_with`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Found {
+    /// Its curves; none when it is gone.
+    pub curves: Vec<Curve3>,
+    /// For a source of an edge that is gone: the edges that may have taken
+    /// its place (mitcad#1784), those between the faces it lay between.
+    pub successors: Vec<Successor>,
+}
+
+/// [`follow_links`] where a projection whose source edge is gone follows an
+/// edge on the same curve that took its place, and one whose source's name
+/// finds its pieces follows the piece that holds its used points
+/// ([`crate::successor`], mitcad#1784).
+pub fn follow_links_with(
+    def: &SketchDef,
+    frame: &SketchFrame,
+    source: &mut dyn FnMut(&Projection) -> Result<Found, String>,
+) -> Result<Followed, String> {
     let mut out = Followed::default();
     if def.projections.is_empty() {
         return Ok(out);
@@ -1341,8 +1394,30 @@ pub fn follow_links(
     // time, so no old id may also be a fresh one still to replace.
     let top = def.entities.iter().map(|e| e.id.0).max().unwrap_or(0);
     for (k, projection) in def.projections.iter().enumerate() {
-        let curves = source_curves(projection)?;
+        let Found { curves, successors } = source(projection)?;
         if curves.is_empty() {
+            // An edge that took its place on the same curve (mitcad#1784).
+            let mut candidates = Vec::new();
+            if !successors.is_empty() {
+                let old = linked_entities_at(def, &at, projection);
+                match successor::follow(def, &old, &old_at, &successors, frame, false) {
+                    successor::Outcome::Followed {
+                        kinds,
+                        name,
+                        current,
+                    } => {
+                        changed |= apply_kinds(&mut updated, &at, kinds);
+                        out.reports.push(ProjectionFollow {
+                            projection: k,
+                            successor: Some(name),
+                            current,
+                            ..ProjectionFollow::default()
+                        });
+                        continue;
+                    }
+                    successor::Outcome::Open(open) => candidates = open,
+                }
+            }
             // A lost projection keeps its last geometry.
             out.reports.push(ProjectionFollow {
                 projection: k,
@@ -1352,6 +1427,7 @@ pub fn follow_links(
                     .filter(|e| !e.is_point())
                     .map(|e| e.id)
                     .collect(),
+                candidates,
                 ..ProjectionFollow::default()
             });
             continue;
@@ -1428,6 +1504,37 @@ pub fn follow_links(
         let current = distinct(project(&curves, frame));
         let fresh = entities(&current, &mut fresh_id);
         let pairing = pair(&old, &old_at, &fresh);
+        // An edge its name now finds in pieces on one curve, or whose curve
+        // came back of the other round kind (an arc that became a whole
+        // circle): the piece that holds its used points (mitcad#1784).
+        let whole = !pairing.kept && pairing.unfollowed.is_empty() && pairing.unmatched == 0;
+        if !whole && one_edge(projection) {
+            let pieces = Successor {
+                name: projection.source.to_string(),
+                curves: curves.clone(),
+            };
+            if let successor::Outcome::Followed {
+                kinds,
+                name,
+                current,
+            } = successor::follow(
+                def,
+                &old,
+                &old_at,
+                std::slice::from_ref(&pieces),
+                frame,
+                true,
+            ) {
+                changed |= apply_kinds(&mut updated, &at, kinds);
+                out.reports.push(ProjectionFollow {
+                    projection: k,
+                    successor: Some(name),
+                    current,
+                    ..ProjectionFollow::default()
+                });
+                continue;
+            }
+        }
         if pairing.kept {
             // A pairing that tears the projection's joints moves nothing
             // (mitcad#249).
@@ -1467,6 +1574,34 @@ pub fn follow_links(
     }
     out.def = changed.then_some(updated);
     Ok(out)
+}
+
+/// Sets the entities `kinds` names in `updated` (where `at` has them) to
+/// their kinds; true when any changed.
+fn apply_kinds(
+    updated: &mut SketchDef,
+    at: &HashMap<EntityUid, usize>,
+    kinds: Vec<(EntityUid, EntityKind)>,
+) -> bool {
+    let mut changed = false;
+    for (id, kind) in kinds {
+        if let Some(target) = at.get(&id).map(|&i| &mut updated.entities[i])
+            && target.kind != kind
+        {
+            target.kind = kind;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Whether a projection is of one edge's curve, the curve projected
+/// (mitcad#1784): no section, no chain, no outline.
+fn one_edge(projection: &Projection) -> bool {
+    matches!(projection.source.topo(), Some(TopoName::Edge(_)))
+        && !projection.section
+        && !projection.outline
+        && projection.chain.is_empty()
 }
 
 /// How far apart, relative to the size of the geometry, two curves or
@@ -2244,7 +2379,72 @@ pub fn solve_followed(
     {
         return Ok(solved);
     }
-    followed.solve_oriented(value, name, &def.entities)
+    let solved = followed.solve_oriented(value, name, &def.entities)?;
+    // One solve that put an arc on the other side of its chord (after the
+    // steps, if a step did not solve): in finer steps (mitcad#1774), which
+    // keep it where they can.
+    if flipped(&arc_sides(&def.entities), &solved_sides(&solved))
+        && let Some(stepped) = solve_in_steps(def, followed, (2 * steps).clamp(4, 16), value, name)
+    {
+        return Ok(stepped);
+    }
+    Ok(solved)
+}
+
+/// The most times a step of [`solve_in_steps`] is halved because an arc
+/// came out on the other side of its chord (mitcad#1774).
+const MAX_SPLITS: usize = 6;
+
+/// How far from a half circle (the sine of its sweep) an arc's side counts.
+const SIDE_MARGIN: f64 = 0.1;
+
+/// The side of its chord each arc of `entities` lies on (mitcad#1774): the
+/// sine of its sweep counter-clockwise from its start to its end, positive
+/// for an arc shorter than a half circle. Fixed and projected arcs, which
+/// follow what they are fixed to, are left out.
+fn arc_sides(entities: &[Entity]) -> BTreeMap<EntityUid, f64> {
+    let at: HashMap<EntityUid, P2> = entities
+        .iter()
+        .filter_map(|e| match e.kind {
+            EntityKind::Point { at } => Some((e.id, at)),
+            _ => None,
+        })
+        .collect();
+    entities
+        .iter()
+        .filter(|e| !e.fixed && !e.reference)
+        .filter_map(|e| match e.kind {
+            EntityKind::Arc { center, start, end } => {
+                let c = *at.get(&center)?;
+                let (a, b) = (sub(*at.get(&start)?, c), sub(*at.get(&end)?, c));
+                let r2 = dot2(a, a);
+                (r2 > 0.0).then(|| (e.id, (a[0] * b[1] - a[1] * b[0]) / r2))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`arc_sides`] of a solved sketch.
+fn solved_sides(solved: &Solved) -> BTreeMap<EntityUid, f64> {
+    solved
+        .curves
+        .iter()
+        .filter_map(|(id, c)| match c {
+            Curve2::Arc { start, end, .. } => Some((*id, (end - start).sin())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether an arc lies clearly on the other side of its chord in `now`
+/// than in `before`.
+fn flipped(before: &BTreeMap<EntityUid, f64>, now: &BTreeMap<EntityUid, f64>) -> bool {
+    before.iter().any(|(id, b)| {
+        now.get(id).is_some_and(|n| {
+            b.abs() > SIDE_MARGIN && n.abs() > SIDE_MARGIN && b.signum() != n.signum()
+        })
+    })
 }
 
 /// The steps of [`solve_followed`]: one for each tenth of the sketch's
@@ -2287,9 +2487,21 @@ fn solve_in_steps(
         .solve_with(value, name)
         .ok()?
         .store(&mut current.entities);
-    for k in 1..=steps {
-        let t = k as f64 / steps as f64;
-        for ((entity, old), new) in current
+    // Each arc stays on its side of its chord (mitcad#1774): a step after
+    // which one lies on the other side is taken again in halves.
+    let mut sides = arc_sides(&current.entities);
+    let mut done = 0.0;
+    let base = 1.0 / steps as f64;
+    let mut step = base;
+    let mut splits = 0;
+    loop {
+        let t = if done + step >= 1.0 - 1e-12 {
+            1.0
+        } else {
+            done + step
+        };
+        let mut next = current.clone();
+        for ((entity, old), new) in next
             .entities
             .iter_mut()
             .zip(&def.entities)
@@ -2300,13 +2512,22 @@ fn solve_in_steps(
             }
         }
         // The sides stay those of the stored sketch (mitcad#1047).
-        let solved = current.solve_oriented(value, name, &def.entities).ok()?;
-        if k == steps {
+        let solved = next.solve_oriented(value, name, &def.entities).ok()?;
+        let now = solved_sides(&solved);
+        if splits < MAX_SPLITS && flipped(&sides, &now) {
+            step /= 2.0;
+            splits += 1;
+            continue;
+        }
+        if t >= 1.0 {
             return Some(solved);
         }
-        solved.store(&mut current.entities);
+        solved.store(&mut next.entities);
+        current = next;
+        sides = now;
+        step = (2.0 * step).min(base);
+        done = t;
     }
-    None
 }
 
 /// An entity's kind the part `t` of the way from `old` to `new`: points
@@ -2358,9 +2579,14 @@ pub fn moved_entities(def: &SketchDef, solution: &SketchDef) -> Vec<Entity> {
 /// where the last edit left them; this is the sketch as it evaluated,
 /// which queries show and edits start from. Moved entities the definition
 /// no longer has as the same kind of entity on the same points, and fixed
-/// ones outside linked projections, are left out.
+/// ones outside linked projections, are left out. One kind change is
+/// taken (mitcad#1794, [`crate::successor`]): a linked arc that followed
+/// its source onto one whole circle is that circle about the same centre,
+/// and its ends, which nothing else has, go with it (from the sketch's
+/// entities and from the projections that list them).
 pub fn with_moved(def: &SketchDef, moved: &[Entity]) -> Option<SketchDef> {
     let mut out: Option<SketchDef> = None;
+    let mut loose: BTreeSet<EntityUid> = BTreeSet::new();
     for entity in moved {
         let Some(old) = def.entity(entity.id) else {
             continue;
@@ -2370,6 +2596,22 @@ pub fn with_moved(def: &SketchDef, moved: &[Entity]) -> Option<SketchDef> {
                 .iter()
                 .any(|p| p.entities.iter().any(|r| r.uid() == entity.id))
         };
+        if let (
+            EntityKind::Arc { center, start, end },
+            EntityKind::Circle {
+                center: circle_center,
+                ..
+            },
+        ) = (&old.kind, &entity.kind)
+            && center == circle_center
+            && linked()
+        {
+            loose.extend([*start, *end]);
+            if let Some(target) = out.get_or_insert_with(|| def.clone()).entity_mut(entity.id) {
+                target.kind = entity.kind.clone();
+            }
+            continue;
+        }
         if old.kind == entity.kind
             || old.kind.type_name() != entity.kind.type_name()
             || old.kind.points() != entity.kind.points()
@@ -2381,7 +2623,60 @@ pub fn with_moved(def: &SketchDef, moved: &[Entity]) -> Option<SketchDef> {
             target.kind = entity.kind.clone();
         }
     }
+    if let Some(sketch) = out.as_mut()
+        && !loose.is_empty()
+    {
+        drop_loose_points(sketch, &loose);
+    }
     out
+}
+
+/// Leaves out of `def` the points of `loose` that nothing in it has: no
+/// curve ends on them, no constraint, dimension, pattern or text refers to
+/// them, and at most one projection lists them (the ends of a linked arc
+/// that became a circle, mitcad#1794). The projections stop listing those
+/// that go.
+fn drop_loose_points(def: &mut SketchDef, loose: &BTreeSet<EntityUid>) {
+    let mut used: BTreeSet<EntityUid> = BTreeSet::new();
+    for e in &def.entities {
+        used.extend(e.kind.points());
+    }
+    for c in &def.constraints {
+        used.extend(c.kind.refs().iter().map(|r| r.uid()));
+    }
+    for d in &def.dimensions {
+        used.extend(d.kind.refs().iter().map(|r| r.uid()));
+    }
+    for p in &def.patterns {
+        used.extend(p.entities.iter().map(|r| r.uid()));
+        for copy in &p.copies {
+            used.extend(copy.entities.iter().flat_map(|(a, b)| [a.uid(), b.uid()]));
+        }
+        if let super::pattern::PatternKind::Circular { center, .. } = &p.kind {
+            used.insert(*center);
+        }
+    }
+    for t in &def.texts {
+        used.extend(t.frame.iter().copied());
+    }
+    for id in loose {
+        let listed = def
+            .projections
+            .iter()
+            .filter(|p| p.entities.iter().any(|r| r.uid() == *id))
+            .count();
+        if listed > 1 {
+            used.insert(*id);
+        }
+    }
+    let gone: BTreeSet<EntityUid> = loose.difference(&used).copied().collect();
+    if gone.is_empty() {
+        return;
+    }
+    def.entities.retain(|e| !gone.contains(&e.id));
+    for p in &mut def.projections {
+        p.entities.retain(|r| !gone.contains(&r.uid()));
+    }
 }
 
 /// The entities of a projection with the points they use, in order:

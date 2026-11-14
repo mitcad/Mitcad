@@ -36,4 +36,7 @@ Where code goes: a new stored field or its check into the model's
 `drawing/`; layout and writing here; a command into the api crate. Tests
 of the layout without a document live beside the code here
 (`core.model_drawing`); tests through the JSON api in
-`core/model-tests/drawing` and `drawing-views`.
+`core/model-tests/drawing` and `drawing-views`. One-off pictures of a
+layout come from an example of this crate run by a `tools/look-*.sh`
+script (`examples/radius_leader_look.rs`, a radius's arrow on its leader
+round a small fillet, mitcad#1770: `tools/look-drawing-radius-leader.sh`).

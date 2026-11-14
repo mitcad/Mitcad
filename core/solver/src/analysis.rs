@@ -18,14 +18,17 @@
 //! An unknown is determined when its unit vector lies in the row space of the
 //! Jacobian, i.e. when the Schur complement `1 - b^T G^-1 b` of its column
 //! vanishes. This is a first-order (linearized) analysis at the current
-//! geometry.
+//! geometry. Where the geometry sits at a singular point of its solution
+//! set (an arc touching a line it ends on, mitcad#1774) and the rank drops
+//! there, the analysis is that of a regular point beside it
+//! ([`regular_nearby`]).
 
 use std::collections::BTreeMap;
 
 use crate::analysis_plan::{AnalysisPlan, Variant};
 use crate::direction;
 use crate::prepare::{Component, Prepared};
-use crate::solve::{Equations, SketchEquations, Work};
+use crate::solve::{Ctx, Equations, NUDGE, SketchEquations, Work, lm, nudge};
 use crate::sparse::{Factor, Rows, Symbolic};
 use crate::system::System;
 use crate::types::*;
@@ -65,6 +68,20 @@ pub(crate) fn component_dependencies(
     work: &mut Work,
     want_determined: bool,
 ) -> CompAnalysis {
+    component_dependencies_within(eqs, comp, params, scale, work, want_determined, DEP_TOL)
+}
+
+/// [`component_dependencies`] with a row dependent when its pivot is below
+/// `dep_tol`.
+fn component_dependencies_within(
+    eqs: &dyn Equations,
+    comp: &Component,
+    params: &[f64],
+    scale: f64,
+    work: &mut Work,
+    want_determined: bool,
+    dep_tol: f64,
+) -> CompAnalysis {
     let mut f = std::mem::take(&mut work.f);
     eqs.evaluate(comp, params, scale, &mut f, Some(&mut work.jac));
     work.f = f;
@@ -87,17 +104,18 @@ pub(crate) fn component_dependencies(
         }
     }
     let plan = plan.unwrap_or_else(|| plan_of(Variant::Plain));
-    let ranked = analyse_in(&plan, comp, jac, &nrm, want_determined).unwrap_or_else(|| {
-        // A row factored later depended on others: creation order.
-        let reduced = plan_of(Variant::Reduced);
-        let creation = if reduced.pins_hold(jac) {
-            reduced
-        } else {
-            plan_of(Variant::Plain)
-        };
-        analyse_in(&creation, comp, jac, &nrm, want_determined)
-            .expect("creation order moves no row")
-    });
+    let ranked =
+        analyse_in(&plan, comp, jac, &nrm, want_determined, dep_tol).unwrap_or_else(|| {
+            // A row factored later depended on others: creation order.
+            let reduced = plan_of(Variant::Reduced);
+            let creation = if reduced.pins_hold(jac) {
+                reduced
+            } else {
+                plan_of(Variant::Plain)
+            };
+            analyse_in(&creation, comp, jac, &nrm, want_determined, dep_tol)
+                .expect("creation order moves no row")
+        });
     let f = &work.f;
     let dependent: Vec<DepRow> = ranked
         .dependent
@@ -155,10 +173,11 @@ fn analyse_in(
     jac: &Rows,
     nrm: &[f64],
     want_determined: bool,
+    dep_tol: f64,
 ) -> Option<Ranked> {
     let m = comp.eqs.len();
     let n = comp.vars.len();
-    let (factor, dependent) = rank_rows(plan, comp, jac, nrm, n)?;
+    let (factor, dependent) = rank_rows(plan, comp, jac, nrm, n, dep_tol)?;
     let rank = m - factor.skipped.iter().filter(|&&s| s).count();
     let determined = if !want_determined {
         None
@@ -209,6 +228,7 @@ fn rank_rows(
     jac: &Rows,
     nrm: &[f64],
     n: usize,
+    dep_tol: f64,
 ) -> Option<(Factor, Dependent)> {
     let m = plan.order.len();
     let sym = &plan.gram.sym;
@@ -245,7 +265,7 @@ fn rank_rows(
     // the square of the Jacobian's) that the pivot of a row that lies in the
     // span of earlier rows can come out above `DEP_TOL`; once n rows are
     // accepted, every later row is dependent.
-    factor.factor_against(sym, 0.0, Some(&reference), DEP_TOL, n);
+    factor.factor_against(sym, 0.0, Some(&reference), dep_tol, n);
     if (0..m).any(|k| plan.moved[k] && factor.skipped[k]) {
         return None;
     }
@@ -575,6 +595,68 @@ pub(crate) fn to_dependencies(
         .collect()
 }
 
+/// The pivot below which a row depends on earlier rows at the point beside
+/// a singular one: stricter than [`DEP_TOL`], so that a point the solve
+/// left within its tolerance of the singular one (a double point is met
+/// only to the square root of the tolerance) is not taken for a regular
+/// one, while a point [`NUDGE`] away is.
+const NUDGED_DEP_TOL: f64 = 1e-8;
+/// The most unknowns of a component [`regular_nearby`] solves again.
+const MAX_NUDGED: usize = 4000;
+
+/// The analysis of a component at a regular point of its solution set
+/// beside `params` (mitcad#1774), when its rank there is higher than
+/// `rank`. At a singular point the linearized equations lose rank although
+/// the constraints take away as much freedom as anywhere beside it: an arc
+/// whose ends lie on two lines and whose centre is held has its radius free,
+/// and where it touches both lines (the circle meets each in a double
+/// point) the rows of its end equations along the lines vanish, so that its
+/// ends seemed free to slide (two degrees of freedom for one) and the lines'
+/// dimensions followed from the rest. Every unknown is moved by up to
+/// [`NUDGE`] of the sketch size (the same pseudo-random amounts every time),
+/// the equations are solved again from there, and the rank found there with
+/// a stricter tolerance is the rank of the solution set through `params`
+/// where it is higher: a rank only drops at special points. None when the
+/// solve does not converge, settles back where it was (an isolated
+/// solution) or far away, or finds no more rank.
+fn regular_nearby(
+    eqs: &dyn Equations,
+    comp: &Component,
+    params: &[f64],
+    scale: f64,
+    rank: usize,
+) -> Option<CompAnalysis> {
+    if comp.vars.len() > MAX_NUDGED {
+        return None;
+    }
+    let delta = NUDGE * scale;
+    let mut moved = params.to_vec();
+    nudge(comp, &mut moved, delta);
+    let options = SolveOptions::default();
+    let ctx = Ctx {
+        eqs,
+        scale,
+        tol: options.tolerance * scale,
+        max_iterations: options.max_iterations,
+    };
+    let mut work = Work::new(comp);
+    if !lm(&ctx, comp, &mut moved, &mut work).converged {
+        return None;
+    }
+    let away = comp
+        .vars
+        .iter()
+        .map(|&g| (moved[g] - params[g]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    if !(away > 0.01 * delta && away < 100.0 * delta) {
+        return None;
+    }
+    let there =
+        component_dependencies_within(eqs, comp, &moved, scale, &mut work, true, NUDGED_DEP_TOL);
+    (there.rank > rank).then_some(there)
+}
+
 /// Merges dependencies of the same constraint.
 fn merge(mut deps: Vec<Dependency>) -> Vec<Dependency> {
     deps.sort_by_key(|d| d.constraint);
@@ -612,7 +694,20 @@ impl System {
         };
         for comp in &prep.comps {
             let mut work = Work::new(comp);
-            let a = component_dependencies(&eqs, comp, &self.params, scale, &mut work, true);
+            let mut a = component_dependencies(&eqs, comp, &self.params, scale, &mut work, true);
+            // A singular point of the solution set (an arc that touches a
+            // line it ends on): told as at a regular point beside it
+            // (mitcad#1774).
+            let consistent = a
+                .dependent
+                .iter()
+                .any(|d| d.inconsistency.abs() <= CONFLICT_TOL * scale);
+            if consistent
+                && a.rank < comp.vars.len()
+                && let Some(regular) = regular_nearby(&eqs, comp, &self.params, scale, a.rank)
+            {
+                a = regular;
+            }
             dof += comp.vars.len() - a.rank;
             if let Some(det) = &a.determined {
                 for (k, &g) in comp.vars.iter().enumerate() {
@@ -723,13 +818,13 @@ mod tests {
             let n = comp.vars.len();
             let plan = |v| comp.analysis_plans.get(jac, n, &comp.implicit, v);
             let plain_plan = plan(Variant::Plain);
-            let plain = analyse_in(&plain_plan, comp, jac, &nrm, true).expect("plain");
-            let reduced = analyse_in(&plan(Variant::Reduced), comp, jac, &nrm, true)
+            let plain = analyse_in(&plain_plan, comp, jac, &nrm, true, DEP_TOL).expect("plain");
+            let reduced = analyse_in(&plan(Variant::Reduced), comp, jac, &nrm, true, DEP_TOL)
                 .expect("creation order holds");
             assert_eq!(differences(&plain, &reduced), "", "known columns left out");
             let ordered_plan = plan(Variant::Ordered);
             assert!(ordered_plan.pins_hold(jac));
-            let ordered = analyse_in(&ordered_plan, comp, jac, &nrm, true);
+            let ordered = analyse_in(&ordered_plan, comp, jac, &nrm, true, DEP_TOL);
             if let Some(ordered) = &ordered {
                 assert_eq!(differences(&plain, ordered), "", "implicit rows later");
             }
@@ -903,5 +998,79 @@ mod tests {
         let compared = compare(&mut s);
         let held = compared.components.iter().filter(|c| c.0).count();
         assert!(held > 0 && held < compared.components.len());
+    }
+
+    /// A quarter arc about a fixed centre from a horizontal line's end to a
+    /// vertical line's (their other ends fixed), touching both lines: its
+    /// radius is free (mitcad#1774).
+    fn touching_arc(s: &mut System) -> (PointId, PointId, EntityId) {
+        let d = 10.0;
+        let c = s.add_point(0.0, 0.0);
+        let a = s.add_point(0.0, -d);
+        let b = s.add_point(d, 0.0);
+        let q1 = s.add_point(-40.0, -d);
+        let q2 = s.add_point(d, 40.0);
+        let arc = s.add_arc(c, a, b).unwrap();
+        let h = s.add_line(q1, a).unwrap();
+        let v = s.add_line(b, q2).unwrap();
+        s.add_constraint(FixPoint(c)).unwrap();
+        s.add_constraint(FixPoint(q1)).unwrap();
+        s.add_constraint(FixPoint(q2)).unwrap();
+        s.add_constraint(Horizontal(h)).unwrap();
+        s.add_constraint(Vertical(v)).unwrap();
+        (a, b, arc)
+    }
+
+    #[test]
+    fn an_arc_touching_the_lines_it_ends_on_has_its_radius_free() {
+        // Where the arc touches both lines its ends' equations lose their
+        // rows along the lines: the ends seemed free to slide (2 degrees of
+        // freedom) and the Vertical followed from the rest. Beside it, one
+        // degree of freedom (the radius) and nothing redundant.
+        let mut s = System::new();
+        touching_arc(&mut s);
+        assert!(s.solve(&SolveOptions::default()).is_ok());
+        let a = s.analyze();
+        assert_eq!(a.dof, 1);
+        assert!(a.redundant.is_empty(), "{:?}", a.redundant);
+        assert!(a.conflicts.is_empty());
+    }
+
+    #[test]
+    fn an_arc_touching_the_lines_it_ends_on_can_be_dragged() {
+        let mut s = System::new();
+        let (a, b, arc) = touching_arc(&mut s);
+        let r = s.drag(
+            &[DragGoal::Point {
+                point: a,
+                target: [-5.0, -15.0],
+            }],
+            &SolveOptions::default(),
+        );
+        assert!(r.is_ok());
+        // Its start slid along the horizontal line, its end along the
+        // vertical one as far, and the radius grew.
+        let (pa, pb) = (s.point(a).unwrap(), s.point(b).unwrap());
+        assert!(pa[0] < -1.0, "{pa:?}");
+        assert!((pa[1] + 10.0).abs() < 1e-9, "{pa:?}");
+        assert!((pb[0] - 10.0).abs() < 1e-9, "{pb:?}");
+        assert!((pa[0].abs() - pb[1].abs()).abs() < 1e-6, "{pa:?} {pb:?}");
+        let radius = pa[0].hypot(pa[1]);
+        assert!(radius > 10.05, "{radius}");
+        assert!(s.entity_kind(arc).is_some());
+    }
+
+    #[test]
+    fn a_held_point_on_a_touching_arc_stays_isolated() {
+        // With its start held where it touches (a fixed point there), the
+        // arc's end is held only to the second order: no point beside it
+        // solves, so the analysis stays where it is.
+        let mut s = System::new();
+        let (a, _, _) = touching_arc(&mut s);
+        s.add_constraint(FixPoint(a)).unwrap();
+        assert!(s.solve(&SolveOptions::default()).is_ok());
+        let a = s.analyze();
+        assert!(a.conflicts.is_empty());
+        assert!(a.dof <= 1, "{}", a.dof);
     }
 }

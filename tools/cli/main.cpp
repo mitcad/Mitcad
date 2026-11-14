@@ -318,7 +318,7 @@ const char* const kUsage = R"(usage:
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]
-                    [--coordinates design|component] [--occurrence <path>]
+                    [--coordinates design|component|<coordinate system>] [--occurrence <path>]
       Writes bodies at the timeline marker (all, or the listed uids or
       names) to a .step/.stp, .iges/.igs, .stl, .obj, .brep, .3mf or .usdz
       file. STEP and IGES keep body names and imported colours;
@@ -335,8 +335,10 @@ const char* const kUsage = R"(usage:
       folder).
       Every format has the bodies where the design shows them (a STEP
       file of moved components is an assembly); --coordinates component
-      writes each body once in its component's coordinates, --occurrence
-      (Arm:1/Pin:2) only what that occurrence places.
+      writes each body once in its component's coordinates, --coordinates
+      with a coordinate system's name or uid writes them in its frame
+      (STEP, IGES, BRep, OBJ, STL, 3MF), --occurrence (Arm:1/Pin:2) only
+      what that occurrence places.
   mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--unit mm|cm|m|in|ft] [--r12]
                            [--construction]
       Writes the geometry of a sketch (uid or name) to a DXF file (R2000,
@@ -849,7 +851,12 @@ int export_bodies(const std::vector<std::string>& args) {
     command += R"(, "ascii": true)";
   }
   if (const std::string* coordinates = a.option("--coordinates")) {
-    command += R"(, "coordinates": )" + json_string(*coordinates);
+    // design, component, or a coordinate system's frame (mitcad#1775).
+    if (*coordinates == "design" || *coordinates == "component") {
+      command += R"(, "coordinates": )" + json_string(*coordinates);
+    } else {
+      command += R"(, "coordinates": {"frame": )" + json_string(*coordinates) + "}";
+    }
   }
   if (const std::string* occurrence = a.option("--occurrence")) {
     command += R"(, "occurrence": )" + json_string(*occurrence);

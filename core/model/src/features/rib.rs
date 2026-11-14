@@ -13,13 +13,27 @@
 //! its curves in its sketch plane, as its profiles are; one out of the
 //! plane fails the rib or web, naming the sketch
 //! ([`SketchCurves::in_plane`]).
+//!
+//! A rib's Extend Ends (`extend_ends`, mitcad#1746) continues the chain's
+//! open ends along their end tangents to the faces of the bodies, so that
+//! it fills up to a curved or slanted face; End Offset (`end_offset`) moves
+//! where they stop along the tangent. The kernel does it
+//! ([`RibSpec`]); an end it could not continue comes back as a note, shown
+//! as the rib's warning. The panel turns it on for new ribs; a rib saved
+//! without it keeps its ends as drawn. Its Direction ([`RibDirection`])
+//! grows it along the sketch's x or y or a picked line instead of at right
+//! angles to the chord.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use mitcad_vec3::{dot, scale, sub, unit};
+
 use super::extrude::{Operation, apply_operation, check_participants, participant_bodies};
+use super::geom_ref::{GeomRef, Want};
 use super::intersection_curve;
 use super::path::{self, SketchCurves};
+use super::pattern::none;
 use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse, is_false,
 };
@@ -39,6 +53,57 @@ pub enum RibExtent<P = ParamId> {
     Depth {
         depth: P,
     },
+}
+
+/// The way a rib grows in its sketch plane (mitcad#1746): at right angles
+/// to its chain's chord (`"perpendicular"`, the default, written as
+/// nothing), along the sketch's x or y axis (`"sketch_x"`, `"sketch_y"`),
+/// or along a straight line, edge or axis in or parallel to the sketch
+/// plane (`{"along": <reference>}`). `flip` turns it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RibDirection {
+    #[default]
+    Perpendicular,
+    SketchX,
+    SketchY,
+    Along(GeomRef),
+}
+
+impl RibDirection {
+    fn is_perpendicular(&self) -> bool {
+        *self == Self::Perpendicular
+    }
+
+    /// The unit vector it grows along in model space before `flip`, in
+    /// the plane of `frame`; none for Perpendicular to Chord, which the
+    /// kernel takes from the chain.
+    fn resolve<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        frame: &SketchFrame,
+    ) -> Result<Option<[f64; 3]>, String> {
+        let along = match self {
+            Self::Perpendicular => return Ok(None),
+            Self::SketchX => frame.x_axis,
+            Self::SketchY => frame.y_axis,
+            Self::Along(reference) => {
+                ctx.axis(reference)
+                    .map_err(|e| format!("the rib's direction: {e}"))?
+                    .direction
+            }
+        };
+        let along = unit(along).ok_or_else(|| "the rib's direction has no length".to_owned())?;
+        let normal = frame.normal();
+        // In or parallel to the sketch plane: within 1e-6 rad.
+        if dot(along, normal).abs() > 1e-6 {
+            return Err(
+                "the rib's direction must lie in or parallel to its sketch plane".to_owned(),
+            );
+        }
+        let flat = sub(along, scale(normal, dot(along, normal)));
+        Ok(Some(unit(flat).unwrap_or(along)))
+    }
 }
 
 /// What a rib or a web grows from: curves of a sketch
@@ -98,7 +163,9 @@ impl RibCurves {
             Self::Sketch(curves) => curves.check_in_plane(ctx),
             Self::Feature { feature } => {
                 let entry = ctx.feature(*feature)?;
-                if matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                // A Helix Curve's too (mitcad#1777), refused at evaluation
+                // as a curve off any one plane.
+                if entry.def.makes_curve() {
                     Ok(())
                 } else {
                     Err(format!(
@@ -126,9 +193,8 @@ impl RibCurves {
         let curve = ctx.feature_curve(feature)?;
         // Its sketches' normals, which orient its plane.
         let sketches: Vec<FeatureUid> = match ctx.env.feature(feature).map(|e| &e.def) {
-            Some(super::FeatureDef::IntersectionCurve(def)) => {
-                vec![def.first.sketch, def.second.sketch]
-            }
+            // (Faces and bodies crossed have none, mitcad#1777.)
+            Some(super::FeatureDef::IntersectionCurve(def)) => def.sketches(),
             _ => Vec::new(),
         };
         let mut normals = Vec::with_capacity(sketches.len());
@@ -166,6 +232,19 @@ macro_rules! thin_feature {
             /// The bodies it reaches and joins; empty for all.
             #[serde(default, skip_serializing_if = "Vec::is_empty")]
             pub participants: Vec<BodyUid>,
+            /// A rib's open ends continued along their end tangents to the
+            /// faces of the bodies (mitcad#1746); absent: as drawn, as
+            /// ribs made before it.
+            #[serde(default, skip_serializing_if = "is_false")]
+            pub extend_ends: bool,
+            /// How much further each continued end goes along its tangent,
+            /// into the face it meets (negative: short of it); absent: 0.
+            #[serde(default = "none", skip_serializing_if = "Option::is_none")]
+            pub end_offset: Option<P>,
+            /// The way a rib grows in its sketch plane (mitcad#1746);
+            /// absent: at right angles to its chain's chord.
+            #[serde(default, skip_serializing_if = "RibDirection::is_perpendicular")]
+            pub direction: RibDirection,
         }
 
         impl<P> $name<P> {
@@ -189,6 +268,13 @@ macro_rules! thin_feature {
                     },
                     flip: self.flip,
                     participants: self.participants.clone(),
+                    extend_ends: self.extend_ends,
+                    end_offset: self
+                        .end_offset
+                        .as_ref()
+                        .map(|v| f("end_offset", v))
+                        .transpose()?,
+                    direction: self.direction.clone(),
                 })
             }
 
@@ -201,6 +287,9 @@ macro_rules! thin_feature {
                     extent: &self.extent,
                     flip: self.flip,
                     participants: &self.participants,
+                    extend_ends: self.extend_ends,
+                    end_offset: self.end_offset.as_ref(),
+                    direction: &self.direction,
                 }
             }
         }
@@ -270,6 +359,9 @@ struct Thin<'a, P> {
     extent: &'a RibExtent<P>,
     flip: bool,
     participants: &'a [BodyUid],
+    extend_ends: bool,
+    end_offset: Option<&'a P>,
+    direction: &'a RibDirection,
 }
 
 impl Thin<'_, ParamId> {
@@ -283,10 +375,27 @@ impl Thin<'_, ParamId> {
         for body in self.participants {
             references.body(*body);
         }
+        if let RibDirection::Along(reference) = self.direction {
+            reference.add_to(&mut references);
+        }
         references
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
+        if self.web && (self.extend_ends || self.end_offset.is_some()) {
+            return Err(
+                "a web's curves end where they are drawn: Extend Ends and End Offset are a rib's"
+                    .to_owned(),
+            );
+        }
+        if self.web && !self.direction.is_perpendicular() {
+            return Err("a web grows along the sketch normal: Direction is a rib's".to_owned());
+        }
+        if let RibDirection::Along(reference) = self.direction {
+            reference
+                .check(ctx, Want::Line)
+                .map_err(|e| format!("the rib's direction: {e}"))?;
+        }
         check_participants(ctx, Operation::Join, self.participants)?;
         self.curves.check(ctx)
     }
@@ -307,6 +416,15 @@ impl Thin<'_, ParamId> {
         if let RibExtent::Depth { depth } = self.extent {
             positive(*depth, "depth")?;
         }
+        if let Some(offset) = self.end_offset {
+            let v = value(*offset);
+            if !v.is_finite() {
+                return Err(format!(
+                    "the {}'s end offset must be a number, got {v}",
+                    self.what()
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -319,15 +437,22 @@ impl Thin<'_, ParamId> {
             RibExtent::ToNext => None,
             RibExtent::Depth { depth } => Some(ctx.param(*depth)?),
         };
+        let end_offset = match self.end_offset {
+            Some(id) => ctx.param(*id)?,
+            None => 0.0,
+        };
         self.check_values(&|id| {
             if id == *self.thickness {
                 thickness
+            } else if self.end_offset == Some(&id) {
+                end_offset
             } else {
                 depth.unwrap_or(f64::NAN)
             }
         })?;
         let participants = participant_bodies(ctx, Operation::Join, self.participants)?;
         let (frame, curves) = self.curves.resolve(ctx)?;
+        let direction = self.direction.resolve(ctx, &frame)?;
         let chains = if self.web {
             for curve in &curves {
                 if path::curve_ends(&curve.curve).is_none() {
@@ -352,8 +477,13 @@ impl Thin<'_, ParamId> {
             depth,
             flip: self.flip,
             bodies: participants.iter().map(|(_, s)| s.clone()).collect(),
+            extend_ends: self.extend_ends,
+            end_offset,
+            direction,
         };
         let tool = ctx.kernel.rib(&spec).map_err(|e| e.to_string())?;
+        // An end that could not be continued to the bodies (mitcad#1746).
+        ctx.warn_notes(&tool);
         apply_operation(ctx, Operation::Join, participants, tool, self.what())
     }
 }

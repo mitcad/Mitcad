@@ -10,6 +10,15 @@
 // only its picks. Create Sketch and the Construct commands ask instead
 // (browser/ActivateQuestion): there, keeping the active component is a real
 // choice.
+//
+// A part placed by a pick (Gear, Pulley, Bearing, Coil, Box, Cylinder,
+// Sphere, Torus; mitcad#1752) is in the table too, by its Place On: its
+// placement refers to its own component's geometry, so a face or vertex of
+// another component's body activates that component, as a Hole's does. A
+// shaft of another component (a body's cylindrical face or circular edge)
+// is the exception: the part goes in linked to it (a seat with its
+// occurrence link, mitcad#578), stays in the active component, and the
+// panel says so.
 
 #include <QString>
 #include <QStringList>
@@ -21,7 +30,7 @@
 namespace mitcad {
 
 // One row of the table: a command whose feature changes the bodies it
-// picks, and the inputs (InputDef ids, also of a list's rows) that hold
+// picks or places a part by them (Place On), and the inputs (InputDef ids, also of a list's rows) that hold
 // those picks. Its other inputs (a Replace Face's new surface, a Draft's
 // plane, a Combine's tools, a Hole's sketch points) may take another
 // component's geometry linked, and do not activate.
@@ -76,5 +85,35 @@ PickActivation activationForPicks(const DocumentSnapshot& snapshot, const Select
 // picks, "1 pick of another component dropped." on a line of its own.
 // Components by their names only (mitcad#1327).
 QString activatedNotice(const QString& command, const QString& component, int dropped);
+
+// --- Parts placed by a pick (mitcad#1752)
+
+// Whether `command` places a part by a pick whose Place On links a shaft
+// of another component rather than activating it: Gear, Pulley, Bearing,
+// Coil and the primitives; not Hole, which cuts the shaft's body and so
+// goes into its component.
+bool linksShafts(const QString& command);
+// A body's cylindrical face or circular edge: a shaft or a hole that Place
+// On takes as an axis.
+bool isShaftPick(const SelectionItem& item);
+// Whether a pick into one of the command's activating inputs activates
+// its component (activationForPick then decides which): false for a shaft
+// picked into a command that links shafts.
+bool pickActivates(const QString& command, const SelectionItem& item);
+// The picks of `picks` that activate (pickActivates), for the panel's
+// Activate button.
+Selection activatingPicks(const QString& command, const Selection& picks);
+// The panel's notice for a shaft of a component other than the active one
+// picked into such a command's Place On: "Gear goes into Base (active),
+// linked to the shaft of Lid: a part on a shaft stays out of the shaft's
+// component." `name` is the command's as the panel shows it. Empty for
+// any other pick (the active component's shaft, a face, another command).
+QString linkedShaftNotice(const DocumentSnapshot& snapshot, const QString& command, const QString& name,
+                          const SelectionItem& item);
+// The notice `shown` kept after a pick into such a command's Place On that
+// activates nothing and is no linked shaft: an activation's notice while it
+// still holds (that component still active), else nothing (an earlier
+// shaft's notice no longer applies).
+QString keptNotice(const DocumentSnapshot& snapshot, const QString& name, const QString& shown);
 
 } // namespace mitcad

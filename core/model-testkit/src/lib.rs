@@ -387,6 +387,10 @@ pub struct MockKernel {
     /// whose bounds overlap the tool's by volume, as a tool that only meets
     /// a target's face leaves it as it was; the others as without this.
     pub cuts_by_bounds: Cell<bool>,
+    /// Edges `edges` lists after the shape's face pairs, by name, on any
+    /// shape that has faces (mitcad#1784: the pieces of an edge a model
+    /// change split, which a projection's lost source may have become).
+    pub extra_edges: RefCell<Vec<String>>,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -1635,7 +1639,7 @@ impl Kernel for MockKernel {
     }
 
     /// The face pairs as named edges (mitcad#256), numbered where the same
-    /// faces meet more than once.
+    /// faces meet more than once; then `extra_edges` on a shape with faces.
     fn edges(
         &self,
         shape: &MockShape,
@@ -1645,6 +1649,11 @@ impl Kernel for MockKernel {
             .iter()
             .map(|(a, b)| EdgeName::new(a.clone(), b.clone()))
             .collect();
+        let extra: Vec<String> = if shape.faces.is_empty() {
+            Vec::new()
+        } else {
+            self.extra_edges.borrow().clone()
+        };
         Ok(names
             .iter()
             .enumerate()
@@ -1656,11 +1665,13 @@ impl Kernel for MockKernel {
                 } else {
                     name.clone()
                 };
-                mitcad_model_base::kernel::EdgeInfo {
-                    name: Some(named.to_string()),
-                    curve: "line".to_owned(),
-                    length: 0.0,
-                }
+                named.to_string()
+            })
+            .chain(extra)
+            .map(|name| mitcad_model_base::kernel::EdgeInfo {
+                name: Some(name),
+                curve: "line".to_owned(),
+                length: 0.0,
             })
             .collect())
     }
@@ -3220,8 +3231,23 @@ impl Kernel for MockKernel {
                     .join(",")
             })
             .collect();
+        // Extend Ends (mitcad#1746) only when on, so older specs read as before.
+        let mut extend = if spec.extend_ends {
+            format!(" extend_ends offset {}", number(spec.end_offset))
+        } else {
+            String::new()
+        };
+        // A Direction (mitcad#1746) only when given.
+        if let Some(d) = spec.direction {
+            extend.push_str(&format!(
+                " direction [{}, {}, {}]",
+                number(d[0]),
+                number(d[1]),
+                number(d[2])
+            ));
+        }
         self.specs.borrow_mut().push(format!(
-            "{} {} chains {} thickness {} {:?} depth {:?} flip {} bodies {}",
+            "{} {} chains {} thickness {} {:?} depth {:?} flip {} bodies {}{extend}",
             if spec.web { "web" } else { "rib" },
             spec.feature,
             chains.join("; "),
@@ -6054,6 +6080,102 @@ impl Kernel for MockKernel {
                 .collect()),
             None => Err(KernelError::Unsupported("face separations")),
         }
+    }
+
+    // Curve tools (mitcad#1777).
+
+    /// Records the helix in `specs`; the curve as lines between its points
+    /// at 32 a turn, each moved out by its share of the growth.
+    fn helix_curve(
+        &self,
+        spec: &mitcad_model_base::kernel::HelixCurveSpec,
+    ) -> Result<Vec<mitcad_model_base::kernel::Curve3>, KernelError> {
+        use mitcad_model_base::kernel::Curve3;
+        self.call("helix_curve")?;
+        self.specs.borrow_mut().push(format!(
+            "helix_curve at {:?} along {:?} radius {} pitch {} revolutions {} left {} growth {}",
+            spec.origin.map(|v| number(round(v))),
+            spec.direction.map(|v| number(round(v))),
+            number(round(spec.radius)),
+            number(round(spec.pitch)),
+            number(round(spec.revolutions)),
+            spec.left_handed,
+            number(round(spec.growth))
+        ));
+        let d = spec.direction;
+        let y = mitcad_vec3::cross(d, spec.x_axis);
+        let hand = if spec.left_handed { -1.0 } else { 1.0 };
+        let steps = ((spec.revolutions * 32.0).ceil() as usize).max(1);
+        let point = |i: usize| {
+            let turns = spec.revolutions * i as f64 / steps as f64;
+            let angle = hand * std::f64::consts::TAU * turns;
+            let r = spec.radius + spec.growth * turns;
+            std::array::from_fn(|k| {
+                spec.origin[k]
+                    + r * (angle.cos() * spec.x_axis[k] + angle.sin() * y[k])
+                    + spec.pitch * turns * d[k]
+            })
+        };
+        Ok((0..steps)
+            .map(|i| Curve3::Line {
+                start: point(i),
+                end: point(i + 1),
+            })
+            .collect())
+    }
+
+    /// Records the two sides in `specs` (each part's history and faces);
+    /// the pieces of `crossing` when set, else none.
+    fn shape_section(
+        &self,
+        first: &[mitcad_model_base::kernel::SectionPart<'_, MockShape>],
+        second: &[mitcad_model_base::kernel::SectionPart<'_, MockShape>],
+    ) -> Result<Vec<mitcad_model_base::kernel::Curve3>, KernelError> {
+        self.call("shape_section")?;
+        let side = |parts: &[mitcad_model_base::kernel::SectionPart<'_, MockShape>]| {
+            parts
+                .iter()
+                .map(|part| {
+                    if part.faces.is_empty() {
+                        part.shape.history.clone()
+                    } else {
+                        let faces: Vec<String> =
+                            part.faces.iter().map(ToString::to_string).collect();
+                        format!("{}[{}]", part.shape.history, faces.join(","))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" + ")
+        };
+        self.specs.borrow_mut().push(format!(
+            "shape_section {} with {}",
+            side(first),
+            side(second)
+        ));
+        Ok(self.crossing.borrow().clone().unwrap_or_default())
+    }
+
+    fn helix_sheet(
+        &self,
+        spec: &mitcad_model_base::sweeps::HelixSpec<'_, MockShape>,
+        chains: &[Vec<PathCurve>],
+    ) -> Result<MockShape, KernelError> {
+        self.call("helix_sheet")?;
+        self.specs.borrow_mut().push(format!(
+            "helix_sheet({}: {} axis {:?} {:?} pitch {} revolutions {} left {})",
+            spec.feature,
+            describe_chains(chains),
+            spec.origin,
+            spec.direction,
+            number(spec.pitch),
+            number(spec.revolutions),
+            spec.left_handed
+        ));
+        Ok(sheet_of_chains(
+            format!("helix_sheet({},sheet)", spec.feature),
+            spec.feature,
+            chains,
+        ))
     }
 }
 

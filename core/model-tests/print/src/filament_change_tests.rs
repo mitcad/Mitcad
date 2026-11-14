@@ -1277,3 +1277,66 @@ fn auto_fix_writes_a_renamed_face_into_the_schedule() {
     let report = command(&mut doc, json!({"cmd": "auto_fix"}));
     assert_eq!(report["filament_faces"], 0, "{report}");
 }
+
+#[test]
+fn a_trial_event_gives_its_height_without_changing_the_schedule() {
+    // mitcad#1800: Filament Change shows the height a plane or face picked
+    // gives before its OK, by the query's `trial`.
+    let (mut doc, plane) = box_and_plane();
+    let trial = |doc: &Document<MockKernel>, event: Value| {
+        query(doc, json!({"query": "filament_changes", "trial": event}))["trial"].clone()
+    };
+    let at_plane = json!({"at": plane, "material": "pla_two", "appearance": "blue_pla"});
+    let answer = trial(&doc, at_plane.clone());
+    assert_eq!(answer["height"], json!(10.0), "{answer}");
+    assert_eq!(answer["place"], "Plane1");
+    assert_eq!(answer["body"], "F2.b0");
+    assert!(answer.get("warning").is_none(), "{answer}");
+    // A pause at the box's top: 40 mm, the face named by its body.
+    let face = format!("F2:end({R})");
+    let answer = trial(
+        &doc,
+        json!({"at": {"body": "F2.b0", "face": face}, "kind": "pause"}),
+    );
+    assert_eq!(answer["height"], json!(40.0), "{answer}");
+    assert_eq!(answer["place"], "a face of Body1");
+    // Nothing was set: no schedule, no undo step.
+    assert!(doc.filament_changes(None).is_empty());
+    assert_ne!(doc.undo_label(), Some("Set Filament Changes"));
+    // It follows the plane as the schedule's events do.
+    set_h(&mut doc, "15 mm");
+    assert_eq!(trial(&doc, at_plane.clone())["height"], json!(15.0));
+    // On its side on the print bed: the plane stands upright, so the event
+    // would be left out, and the answer says why.
+    doc.kernel().surfaces.borrow_mut().insert(
+        "F2:side(c1[c4,c2])".to_owned(),
+        SurfaceGeometry::Plane {
+            origin: [10.0, 0.0, 20.0],
+            normal: [0.0, -1.0, 0.0],
+        },
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_print_bed_face", "uid": "F2.b0", "face": "F2:side(c1[c4,c2])"}),
+    );
+    let answer = trial(&doc, at_plane);
+    assert_eq!(answer["height"], Value::Null, "{answer}");
+    assert_eq!(
+        answer["warning"],
+        "the filament change at Plane1 is not level in the print orientation, so it is left out"
+    );
+    // A plate's schedule measures from the plate's first body.
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "Plate 1", "items": [{"body": "F2.b0"}]}),
+    );
+    let answer = query(
+        &doc,
+        json!({"query": "filament_changes", "plate": "Plate 1",
+               "trial": {"at": {"body": "F2.b0", "face": face}, "kind": "pause"}}),
+    )["trial"]
+        .clone();
+    assert_eq!(answer["body"], "F2.b0", "{answer}");
+    assert_eq!(answer["place"], "a face of Body1");
+}

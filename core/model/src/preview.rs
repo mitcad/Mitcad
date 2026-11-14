@@ -321,6 +321,7 @@ impl<K: Kernel> Document<K> {
             kind: BodyKind,
             colors: Vec<[f64; 3]>,
             see_through: bool,
+            surfaces: Vec<u32>,
         }
         let mut meshed: BTreeMap<BodyUid, Option<Meshed>> = BTreeMap::new();
         let mut scene = Scene::default();
@@ -333,6 +334,7 @@ impl<K: Kernel> Document<K> {
                         kind,
                         colors,
                         see_through,
+                        surfaces: self.face_surfaces(instance.body),
                     })
             });
             let Some(body) = entry else {
@@ -351,6 +353,7 @@ impl<K: Kernel> Document<K> {
                 &instance.transform,
                 Mesh {
                     face_colors: look.face_colors(&body.colors),
+                    face_surfaces: body.surfaces.clone(),
                     cap_color: Some(look.color.unwrap_or(base)),
                     edge_color: if transparent {
                         base.map(|c| (c * 0.6 * 255.0).round() as u8)
@@ -421,6 +424,14 @@ impl<K: Kernel> Document<K> {
             face_of.extend(std::iter::repeat_n(face, count as usize));
         }
         let last = mesh.face_triangles.len();
+        // Each face's surface (mitcad#1773); a band's piece of it is a
+        // surface of its own, so a band's boundary stays an edge.
+        let surface_of = |face: usize| -> (bool, u32) {
+            match mesh.face_surfaces.get(face) {
+                Some(&surface) => (true, surface),
+                None => (false, face as u32),
+            }
+        };
         let mut groups: BTreeMap<(usize, usize), Vec<[u32; 3]>> = BTreeMap::new();
         for ((triangle, &source), &band) in banded
             .triangles
@@ -431,17 +442,40 @@ impl<K: Kernel> Document<K> {
             let face = face_of.get(source as usize).copied().unwrap_or(last);
             groups.entry((face, band)).or_default().push(*triangle);
         }
+        let mut surfaces: BTreeMap<((bool, u32), usize), u32> = BTreeMap::new();
+        let mut face_surfaces = Vec::with_capacity(groups.len());
+        for &(face, band) in groups.keys() {
+            let next = surfaces.len() as u32;
+            face_surfaces.push(*surfaces.entry((surface_of(face), band)).or_insert(next));
+        }
         mesh.vertices = banded.vertices;
         mesh.normals = banded.normals;
         mesh.triangles = Vec::with_capacity(banded.triangles.len());
         mesh.face_triangles = Vec::with_capacity(groups.len());
         mesh.face_colors = Vec::with_capacity(groups.len());
+        mesh.face_surfaces = face_surfaces;
         for ((_, band), triangles) in groups {
             mesh.face_triangles.push(triangles.len() as u32);
             mesh.face_colors.push(bands.colors[band]);
             mesh.triangles.extend(triangles);
         }
         mesh.cap_color = Some(bands.colors[0]);
+    }
+
+    /// Each face's surface for the picture's edges (mitcad#1773), in the
+    /// order [`Kernel::faces`] lists the faces: pieces of one face that a
+    /// split left share a number ([`surfaces_by_name`]), so that the
+    /// raster draws the side between them only where the surface creases,
+    /// as the 3D view does. Empty when the faces cannot be listed (each
+    /// face its own).
+    fn face_surfaces(&self, uid: BodyUid) -> Vec<u32> {
+        let Some(shape) = self.body_shape(uid) else {
+            return Vec::new();
+        };
+        let Ok(faces) = self.kernel().faces(shape) else {
+            return Vec::new();
+        };
+        surfaces_by_name(faces.iter().map(|face| face.names.as_slice()))
     }
 
     /// A body's display mesh and each face's colour; None (with a
@@ -634,6 +668,43 @@ fn elapsed(start: Instant) -> f64 {
 /// A body's faces placed by `transform`, into `mesh` (its colours and
 /// flags set): normals turned with the placement, the triangles' turn
 /// kept counter-clockwise from outside where the placement mirrors.
+/// A face name without its trailing "#k" piece numbers (`F5:fillet(..)#0#1`
+/// -> `F5:fillet(..)`): what the pieces of one split face share (the
+/// geometry's `unsplit_face_name`, smooth_seams.hpp).
+fn unsplit_face_name(name: &str) -> &str {
+    let mut whole = name;
+    loop {
+        let digits = whole.trim_end_matches(|c: char| c.is_ascii_digit());
+        match digits.strip_suffix('#') {
+            Some(rest) if digits.len() < whole.len() => whole = rest,
+            _ => return whole,
+        }
+    }
+}
+
+/// A surface number for each face by its names (mitcad#1773): faces whose
+/// names are equal but for their piece numbers share one; an unnamed face
+/// has one of its own.
+fn surfaces_by_name<'a>(faces: impl Iterator<Item = &'a [String]>) -> Vec<u32> {
+    let mut by_name: BTreeMap<&'a str, u32> = BTreeMap::new();
+    let mut surfaces = Vec::new();
+    let mut next = 0u32;
+    for names in faces {
+        let known = names
+            .iter()
+            .find_map(|name| by_name.get(unsplit_face_name(name)).copied());
+        let surface = known.unwrap_or_else(|| {
+            next += 1;
+            next - 1
+        });
+        for name in names {
+            by_name.entry(unsplit_face_name(name)).or_insert(surface);
+        }
+        surfaces.push(surface);
+    }
+    surfaces
+}
+
 fn placed_mesh(faces: &FaceMeshes, transform: &Transform, mut mesh: Mesh) -> Mesh {
     let m = transform.linear;
     let determinant = transform.determinant();
@@ -669,4 +740,44 @@ fn placed_mesh(faces: &FaceMeshes, transform: &Transform, mut mesh: Mesh) -> Mes
     };
     mesh.face_triangles = faces.face_triangles.clone();
     mesh
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::{surfaces_by_name, unsplit_face_name};
+
+    #[test]
+    fn piece_numbers_are_dropped_from_the_end_only() {
+        assert_eq!(
+            unsplit_face_name("F5:fillet(E{F2:a|F2:b})#0"),
+            "F5:fillet(E{F2:a|F2:b})"
+        );
+        assert_eq!(unsplit_face_name("F3:side0#0#1"), "F3:side0");
+        assert_eq!(unsplit_face_name("F3:side0"), "F3:side0");
+        assert_eq!(
+            unsplit_face_name("F3:side(c1[c4,c2])"),
+            "F3:side(c1[c4,c2])"
+        );
+        assert_eq!(
+            unsplit_face_name("F4:inst1(F2:top#1)"),
+            "F4:inst1(F2:top#1)"
+        );
+    }
+
+    #[test]
+    fn pieces_of_one_face_share_a_surface() {
+        let names: Vec<Vec<String>> = [
+            vec!["F5:fillet(x)#0"],
+            vec!["F2:top"],
+            vec![],
+            vec!["F5:fillet(x)#1"],
+            vec![],
+            vec!["F2:bottom#0"],
+        ]
+        .iter()
+        .map(|n| n.iter().map(|s| s.to_string()).collect())
+        .collect();
+        let surfaces = surfaces_by_name(names.iter().map(Vec::as_slice));
+        assert_eq!(surfaces, vec![0, 1, 2, 0, 3, 4]);
+    }
 }

@@ -72,7 +72,9 @@ use mitcad_model_api::{AnalysisApi, DocumentApi, ReportApi, ScriptApi};
 
 use jobs::{JobControl, new_job_control};
 use kernel::{OcctKernel, Shape};
-use result_store::{DisplayFeed, DisplayMeshWrite, result_store_clear, result_store_gc};
+use result_store::{
+    DisplayFeed, DisplayMeshWrite, ResultWrites, result_store_clear, result_store_gc,
+};
 use vcs::{
     Project, create_project_repository, git_repository_root, init_project_history, load_version,
     open_project,
@@ -470,6 +472,18 @@ mod ffi {
         /// import process hands its evaluation over to the application
         /// (mitcad#413). The same JSON as persist_results.
         fn hand_off_results(self: &Document, dir: &str, build_id: &str, label: &str) -> String;
+        /// Takes the results persist_results would write (not stored yet,
+        /// whose evaluation took at least `min_ms` or were quick and
+        /// small) with their shapes' bytes, and marks them written, for
+        /// write_taken on another thread (an autosave's, mitcad#1796); the
+        /// document may change or go meanwhile. Without a store, none.
+        fn take_results_to_write(self: &Document, min_ms: f64) -> Box<ResultWrites>;
+        type ResultWrites;
+        /// The results taken.
+        fn count(self: &ResultWrites) -> usize;
+        /// Writes the results taken to the store (once; again, nothing),
+        /// on any thread; the same JSON as persist_results.
+        fn write_taken(self: &mut ResultWrites) -> String;
         /// When the store holds more than `budget_mb` megabytes, removes
         /// the files used longest ago down to 80 % of it; returns JSON
         /// {"files", "bytes", "removed", "removed_bytes"} (what is left and

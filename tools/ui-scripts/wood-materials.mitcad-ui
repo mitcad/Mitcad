@@ -90,7 +90,7 @@ expect-log '^Material created from the dataset: Plywood - pine \(panel/plywood_p
 expect-undo-depth ${start} 1
 focus-dialog '^Materials$'
 wait-idle
-expect-log '^Materials message: 3 material\(s\) made from the dataset\.$'
+expect-log '^Materials message: 3 materials made from the dataset\.$'
 expect-log '^Materials row: wood/.+ Plywood - eucalyptus \(design\)$'
 expect-log '^Materials row: wood/.+ Plywood - pine \(design\)$'
 expect-log '^Materials row: wood/.+ Plywood - spruce \(design\)$'
@@ -121,7 +121,7 @@ expect-log '^Materials from the dataset into design: 0 made, 4 skipped \(Plywood
 expect-undo-depth ${start} 1
 focus-dialog '^Materials$'
 wait-idle
-expect-log '^Materials message: 0 material\(s\) made from the dataset\. 4 skipped: a material of the same name is there already\.$'
+expect-log '^Materials message: 0 materials made from the dataset\. 4 skipped: a material of the same name is there already\.$'
 button '^Close$'
 focus-main
 wait-idle

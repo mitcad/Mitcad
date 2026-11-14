@@ -232,7 +232,7 @@ ui_expect_new "Progress dialog shown: boss.mitcad" "the progress dialog again"
 ui_expect_new "Computing boss.mitcad: 6 of 6, Fillet1" "up to the last feature" 10
 ui_expect_new "Computing boss.mitcad done in" "the job ran to its end" 10
 ui_expect_new "(6 evaluated)" "all six features evaluated"
-ui_expect_new "Recomputed 6 feature(s)" "the recompute reported"
+ui_expect_new "Recomputed 6 features " "the recompute reported"
 ui_expect_new "Opened $FILE" "opened"
 ui_expect_new "Bodies shown: F2.b0" "the design is shown"
 tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "Recompute failed" && ui_fail "a feature failed"

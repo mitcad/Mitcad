@@ -856,12 +856,28 @@ impl SketchDef {
             &bindings[patterns..],
         );
         bindings.extend(anchors);
-        let restating: BTreeSet<ConstraintUid> = self
+        let mut restating: BTreeSet<ConstraintUid> = self
             .offsets
             .iter()
             .filter(|o| !o.derived)
             .map(|o| o.id)
             .collect();
+        // An offset with round corners (mitcad#1774): a closed chain rounded
+        // at every corner closes a loop of tangencies on its first result's
+        // own dimensions (a line's parallel and distance, an arc's helper,
+        // mitcad#1786); that is the offset's own as well.
+        for o in self
+            .offsets
+            .iter()
+            .filter(|o| !o.derived && !o.corners.is_empty())
+        {
+            restating.extend(offset::constraints_of(
+                o,
+                &self.entities,
+                &self.constraints,
+                &self.dimensions,
+            ));
+        }
         let index = EntityIndex::new(&self.entities);
         let skip = derived_entities(&self.offsets, &index);
         self.check_derived(&skip).map_err(SolveError::new)?;

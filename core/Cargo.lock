@@ -9,6 +9,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -155,6 +167,18 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "cavalier_contours"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "85e06038a969c5e4d93565f12b044814d3b1a48d50c4ef868d588e79956fea51"
+dependencies = [
+ "ahash",
+ "num-traits",
+ "smallvec",
+ "static_aabb2d_index",
+]
 
 [[package]]
 name = "cc"
@@ -2120,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-3dm"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-asm",
@@ -2130,7 +2154,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-3mf"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-zip",
  "roxmltree 0.20.0",
@@ -2138,18 +2162,28 @@ dependencies = [
 
 [[package]]
 name = "mitcad-asm"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
 ]
 
 [[package]]
+name = "mitcad-cam"
+version = "0.62.0"
+dependencies = [
+ "cavalier_contours",
+ "mitcad-vec3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mitcad-cfb"
-version = "0.61.0"
+version = "0.62.0"
 
 [[package]]
 name = "mitcad-dump"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
  "serde",
@@ -2158,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-dwg"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-asm",
  "mitcad-dxf",
@@ -2169,18 +2203,18 @@ dependencies = [
 
 [[package]]
 name = "mitcad-dxf"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
 ]
 
 [[package]]
 name = "mitcad-expr"
-version = "0.61.0"
+version = "0.62.0"
 
 [[package]]
 name = "mitcad-f3d"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-asm",
  "mitcad-expr",
@@ -2193,7 +2227,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-f3d-decode"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-asm",
  "mitcad-dump",
@@ -2204,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-f3d-design"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-asm",
  "mitcad-dump",
@@ -2219,7 +2253,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-f3d-file"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
  "mitcad-zip",
@@ -2227,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-f3d-names"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-asm",
  "mitcad-dump",
@@ -2235,14 +2269,14 @@ dependencies = [
 
 [[package]]
 name = "mitcad-ffi"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-ffi-bridges",
 ]
 
 [[package]]
 name = "mitcad-ffi-bridges"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "cxx",
  "mitcad-3dm",
@@ -2272,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-freecad"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
  "mitcad-zip",
@@ -2283,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-ifc"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
  "mitcad-zip",
@@ -2293,7 +2327,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-f3d-design",
@@ -2312,7 +2346,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-appearances"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-f3d-file",
@@ -2324,7 +2358,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-base"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-vec3",
@@ -2333,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-fcstd"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-freecad",
  "mitcad-import-base",
@@ -2345,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-ifc"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-ifc",
  "mitcad-import-base",
@@ -2356,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-joints"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-import-base",
@@ -2369,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-primitives"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-import-replay",
@@ -2379,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-replay"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-f3d",
@@ -2394,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-rvt"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-ifc",
  "mitcad-import-base",
@@ -2408,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-sheet"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dump",
  "mitcad-import-replay",
@@ -2419,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-import-solidcraft"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-import-base",
  "mitcad-model",
@@ -2431,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-ipt"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-asm",
@@ -2447,7 +2481,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-mcp"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2458,10 +2492,11 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-3mf",
+ "mitcad-cam",
  "mitcad-dxf",
  "mitcad-expr",
  "mitcad-model-base",
@@ -2472,6 +2507,7 @@ dependencies = [
  "mitcad-solver",
  "mitcad-usdz",
  "mitcad-vec3",
+ "mitcad-zip",
  "roxmltree 0.20.0",
  "serde",
  "serde_json",
@@ -2479,9 +2515,10 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-api"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-3mf",
+ "mitcad-cam",
  "mitcad-dxf",
  "mitcad-model",
  "mitcad-model-build",
@@ -2493,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-base"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-expr",
  "mitcad-print-keys",
@@ -2504,7 +2541,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-build"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "serde",
@@ -2513,7 +2550,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-diff"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "serde",
@@ -2522,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-drawing"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-dwg",
@@ -2535,7 +2572,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-testkit"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model-base",
  "mitcad-vec3",
@@ -2545,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-analysis"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2556,8 +2593,9 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-api"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
+ "mitcad-cam",
  "mitcad-mcp",
  "mitcad-model",
  "mitcad-model-api",
@@ -2566,7 +2604,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-appearance"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-3mf",
  "mitcad-model",
@@ -2577,7 +2615,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-assembly"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2586,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-build-frames"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2598,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-build-timber"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2608,8 +2646,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mitcad-model-tests-cam"
+version = "0.62.0"
+dependencies = [
+ "mitcad-model",
+ "mitcad-model-api",
+ "serde_json",
+]
+
+[[package]]
 name = "mitcad-model-tests-drawing"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dwg",
  "mitcad-dxf",
@@ -2622,7 +2669,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-drawing-views"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2632,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-features-profile"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2641,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-features-solid"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2650,7 +2697,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-files"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-3mf",
  "mitcad-dxf",
@@ -2658,12 +2705,13 @@ dependencies = [
  "mitcad-model-api",
  "mitcad-model-diff",
  "mitcad-usdz",
+ "mitcad-zip",
  "serde_json",
 ]
 
 [[package]]
 name = "mitcad-model-tests-imports"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-ifc",
  "mitcad-import",
@@ -2678,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-joints"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2688,7 +2736,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-links"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2698,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-parts"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2707,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-print"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-3mf",
  "mitcad-model",
@@ -2720,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-sheet"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-dxf",
  "mitcad-model",
@@ -2730,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-sketch"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2741,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-sketch-refs"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2751,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-model-tests-support"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-model",
  "mitcad-model-api",
@@ -2760,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-preview"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-vec3",
@@ -2769,14 +2817,14 @@ dependencies = [
 
 [[package]]
 name = "mitcad-print-keys"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "mitcad-rvt"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-cfb",
@@ -2787,7 +2835,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-sketch"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "harfrust 0.14.0",
  "mitcad-dxf",
@@ -2807,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-solidcraft"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-zip",
  "serde",
@@ -2816,14 +2864,14 @@ dependencies = [
 
 [[package]]
 name = "mitcad-solver"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-vec3",
 ]
 
 [[package]]
 name = "mitcad-testrun"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "libc",
  "serde",
@@ -2832,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "mitcad-thumbnailer"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "mitcad-model",
@@ -2843,14 +2891,14 @@ dependencies = [
 
 [[package]]
 name = "mitcad-thumbnailer-capi"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-thumbnailer",
 ]
 
 [[package]]
 name = "mitcad-update"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "ed25519-dalek",
  "semver",
@@ -2861,14 +2909,14 @@ dependencies = [
 
 [[package]]
 name = "mitcad-usdz"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "mitcad-zip",
 ]
 
 [[package]]
 name = "mitcad-vcs"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "gix",
  "libc",
@@ -2884,11 +2932,11 @@ dependencies = [
 
 [[package]]
 name = "mitcad-vec3"
-version = "0.61.0"
+version = "0.62.0"
 
 [[package]]
 name = "mitcad-zip"
-version = "0.61.0"
+version = "0.62.0"
 dependencies = [
  "miniz_oxide 0.8.9",
  "ruzstd",
@@ -3520,6 +3568,15 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "static_aabb2d_index"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a753368e4dd146a347d0ea692f0f8a37df18df7eee5659d36dd75eb287c6454"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "strict-num"
@@ -4174,6 +4231,26 @@ dependencies = [
  "quote",
  "syn 3.0.6",
  "synstructure",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
+dependencies = [
+ "zerocopy-derive",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

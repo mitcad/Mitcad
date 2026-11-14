@@ -8,16 +8,21 @@
 #   - Joint (J): the pin's top face onto the plate's top face, revolute,
 #     flipped, limited, at rest 30 degrees; the preview shows the pin where
 #     the joint puts it; the handles of the offset and the angle stand on
-#     the joint's frame. The saved design, checked by mitcad-cli: the pin
+#     the joint's frame. The panel's Animate (mitcad#1790) plays the turn
+#     back and forth from the preview over three passes or more, the view
+#     orbited while it plays, until Esc, which leaves the panel open with
+#     its preview again. The saved design, checked by mitcad-cli: the pin
 #     stands on the plate, turned 30 degrees.
 #   - The browser's Joints folder: the joint's row, the component's degrees
 #     of freedom; the joint edited from the timeline (rest 60 degrees).
 #   - Drive Joint from the joint's row in the browser: 45 degrees, kept as
 #     the joint's position.
-#   - Animate Joint (mitcad#1701): every frame from the joint solver, no
-#     preview computed per frame, the whole animation within 20 % of its
-#     intended time; also on the reported design of GitHub #256 when
-#     MITCAD_MITCAD_REPORTED has it.
+#   - Animate Joint (mitcad#1701, mitcad#1790): back and forth through the
+#     limits over three passes or more, every frame from the joint solver,
+#     no preview computed per frame, the view orbited while it plays, until
+#     Esc; the design unchanged (its last undo step still the drive); also
+#     on the reported design of GitHub #256 when MITCAD_MITCAD_REPORTED has
+#     it.
 #   - Joint Origin on the cap's top face in the cap's component (activated
 #     with its radio button), 5 mm up; As-Built Joint of the cap to the
 #     plate; Rigid Group of the pin and the cap, picked in the browser.
@@ -84,22 +89,71 @@ save() {
   ui_expect_new "Saved $FILE" "saved"
 }
 
-# animation_timed joint: Animate Joint's last "Animated <joint>: 36 frames
-# in N ms (intended M ms): S shown, P previews" (mitcad#1701): no frame
-# computed as a preview (no recompute or meshing per frame) and the whole
-# animation within 20 % of its intended time.
-animation_timed() {
-  local line
-  line=$(grep -F "Animated $1: " "$UI_LOG" | tail -1)
-  [[ $line =~ :\ ([0-9]+)\ frames\ in\ ([0-9]+)\ ms\ \(intended\ ([0-9]+)\ ms\):\ ([0-9]+)\ shown,\ ([0-9]+)\ previews$ ]] ||
-    ui_fail "Animate $1 logged no frames and time: '$line'"
-  local frames=${BASH_REMATCH[1]} took=${BASH_REMATCH[2]} intended=${BASH_REMATCH[3]}
-  local shown=${BASH_REMATCH[4]} previews=${BASH_REMATCH[5]}
-  [ "$previews" = 0 ] || ui_fail "Animate $1 computed $previews of its frames as previews"
-  [ "$shown" -ge 1 ] && [ "$shown" -le "$frames" ] || ui_fail "Animate $1 showed $shown of $frames frames"
-  [ $((took * 10)) -ge $((intended * 8)) ] && [ $((took * 10)) -le $((intended * 12)) ] ||
-    ui_fail "Animate $1 took $took ms, intended $intended ms"
-  echo "ok   Animate $1: $frames frames in $took ms (intended $intended ms), $shown shown, no previews"
+# animation_passes name: waits up to 20 s for three passes of <name>'s
+# animation logged since the mark ("Animation of <name>: pass 2 down to
+# -90 deg, 36 frames shown", mitcad#1790) and finds them going both ways,
+# each with frames shown.
+animation_passes() {
+  local lines="" count=0 i
+  for i in $(seq 1 200); do
+    lines=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Animation of $1: pass ")
+    count=$(grep -c . <<< "$lines")
+    [ "$count" -ge 3 ] && break
+    sleep 0.1
+  done
+  [ "$count" -ge 3 ] || ui_fail "$1: fewer than three passes in 20 s: '$lines'"
+  { grep -q " up to " <<< "$lines" && grep -q " down to " <<< "$lines"; } ||
+    ui_fail "$1: the passes do not go both ways: '$lines'"
+  grep -q ", 0 frames shown$" <<< "$lines" && ui_fail "$1: a pass showed no frame: '$lines'"
+  echo "ok   $1 played back and forth: $count passes, frames shown both ways"
+}
+
+# orbit_while_playing name: a Shift + middle drag in the view orbits it
+# while <name>'s animation plays, and the animation plays on. (The default
+# scheme, Middle pan, pans on a plain middle drag: the direction stays and
+# no camera line follows.) The drag back turns the view about where it was,
+# so that the steps after it click where they were written to.
+orbit_while_playing() {
+  local start
+  ui_mark
+  start=$UI_MARK
+  xdotool keydown shift
+  ui_step "orbit (Shift + middle drag)"    ui_view_drag 2 25 25 40 35
+  xdotool keyup shift
+  ui_expect_new "Camera direction" "the view orbits while $1 plays" 8
+  ui_expect_new "Animation of $1: pass " "$1 plays on after the orbit" 10
+  ui_mark
+  xdotool keydown shift
+  ui_step "orbit back (Shift + middle drag)" ui_view_drag 2 40 35 25 25
+  xdotool keyup shift
+  ui_expect_new "Camera direction" "the view orbits back while $1 plays" 8
+  ui_expect_new "Animation of $1: pass " "$1 plays on after the orbit back" 10
+  grep -qF "Animation of $1 stopped" < <(tail -n +$((start + 1)) "$UI_LOG") &&
+    ui_fail "the orbit stopped $1's animation"
+  echo "ok   $1 plays on while the view orbits"
+}
+
+# animation_stopped name previews: Esc (pressed after the mark) stopped
+# <name>'s animation: its last line says three passes or more with frames
+# shown ("Animation of Joint1 stopped: Esc (3 passes; 130 frames in
+# 5213 ms (intended 5200 ms): 127 shown, 0 previews)"), with no preview
+# when `previews` is "none", and no pass is logged after it.
+animation_stopped() {
+  local line passes shown previews
+  ui_expect_new "Animation of $1 stopped: Esc (" "Esc stops $1's animation"
+  line=$(grep -F "Animation of $1 stopped: Esc (" "$UI_LOG" | tail -1)
+  [[ $line =~ \(([0-9]+)\ passes\;\ ([0-9]+)\ frames\ in\ ([0-9]+)\ ms\ \(intended\ ([0-9]+)\ ms\):\ ([0-9]+)\ shown,\ ([0-9]+)\ previews\)$ ]] ||
+    ui_fail "$1's animation logged no passes and frames: '$line'"
+  passes=${BASH_REMATCH[1]} shown=${BASH_REMATCH[5]} previews=${BASH_REMATCH[6]}
+  [ "$passes" -ge 3 ] && [ "$shown" -ge 1 ] || ui_fail "$1 stopped after $passes passes, $shown frames shown"
+  if [ "$2" = none ] && [ "$previews" != 0 ]; then
+    ui_fail "$1's animation computed $previews of its frames as previews"
+  fi
+  sleep 2 # longer than a pass
+  awk -v stop="Animation of $1 stopped: Esc (" -v pass="Animation of $1: pass " \
+    'found && index($0, pass) > 0 { after = 1 } index($0, stop) > 0 { found = 1; after = 0 } END { exit !after }' "$UI_LOG" &&
+    ui_fail "$1's animation went on after Esc"
+  echo "ok   $1 stopped: $passes passes, $shown frames shown, $previews previews, nothing after Esc"
 }
 
 ui_start_display
@@ -134,6 +188,24 @@ ui_mark
 ui_step "rest 30"                        ui_type_in "Panel Joint input rest_rz" "30"
 ui_expect_new "Joint Rest Value: 30 = 30 deg" "rest 30 degrees"
 ui_expect_new "Preview Joint: ok" "previewed"
+
+echo "--- The Joint panel's Animate: the turn back and forth from the preview, until Esc"
+ui_panel_reveal "Panel Joint input animate"
+ui_expect_log "Panel Joint button_animate at" "Animate's Play beside the motion"
+ui_mark
+ui_step "play the turn"                  ui_click_logged "Panel Joint button_animate"
+ui_expect_new "Animating Joint rz in its panel: back and forth from -90 deg to 90 deg, 36 frames a pass in 1440 ms, from 30 deg, frames as previews" \
+  "the turn from its rest value through its limits, each frame the panel's joint previewed"
+ui_expect_new "Joint set aside while its motion is animated" "the panel waits while it plays"
+animation_passes "Joint"
+orbit_while_playing "Joint"
+ui_mark
+ui_step "stop (Esc)"                     ui_key Escape
+animation_stopped "Joint" some
+ui_expect_new "Joint resumed" "the panel goes on"
+ui_expect_new "Preview Joint: ok" "the panel's own preview again"
+grep -qF "Command Joint cancelled" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "Esc cancelled the panel"
+echo "ok   Esc stopped the animation, not the panel"
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_new "Added joint Joint1 (revolute): placed, rz 30 deg, moved O2" "the pin placed by the joint"
@@ -197,13 +269,16 @@ ui_step "a click on the pin"             ui_click_logged "Body F4.b0 in O2"
 ui_expect_new "Selected: 1 face [face F4:" "a click without a drag still selects"
 ui_step "clear the selection (Esc)"      ui_key Escape
 
-echo "--- Animate Joint: Joint1 through its limits, the document unchanged"
+echo "--- Animate Joint: Joint1 back and forth through its limits until Esc, the document unchanged"
 ui_mark
 ui_step "animate (search)"               ui_command "Animate Joint"
-ui_expect_new "Animating Joint1 rz: 36 frames from 45 deg to 45 deg in 1440 ms, frames by the joint solver" \
-  "from 45 degrees to the limits and back, every frame from the joint solver"
-ui_expect_new "Animated Joint1: 36 frames in " "the animation ended" 30
-animation_timed "Joint1"
+ui_expect_new "Animating Joint1 rz: back and forth from -90 deg to 90 deg, 36 frames a pass in 1440 ms, from 45 deg, frames by the joint solver" \
+  "from 45 degrees between the limits, every frame from the joint solver"
+animation_passes "Joint1"
+orbit_while_playing "Joint1"
+ui_mark
+ui_step "stop (Esc)"                     ui_key Escape
+animation_stopped "Joint1" none
 ui_mark
 ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
 ui_expect_new "Undo: Drive Joint1" "the animation left no undo step: the last is the drive"
@@ -422,10 +497,13 @@ for f in design.get("features", []):
   ui_step "joint's menu (right click)"   ui_click_logged "Browser Root/Joints/$JOINT" 3
   ui_expect_new "Context menu: Edit $JOINT | Drive $JOINT | Animate $JOINT" "the joint's menu offers Animate"
   ui_step "animate"                      ui_menu_choose "Animate $JOINT"
-  ui_expect_new "Animating $JOINT rz: 36 frames from " "the animation starts"
-  ui_expect_new "in 1440 ms, frames by the joint solver" "every frame from the joint solver"
-  ui_expect_new "Animated $JOINT: 36 frames in " "the animation ended" 60
-  animation_timed "$JOINT"
+  ui_expect_new "Animating $JOINT rz: back and forth from " "the animation starts"
+  ui_expect_new "in 1440 ms, from " "a pass of 36 frames in 1440 ms"
+  ui_expect_new "frames by the joint solver" "every frame from the joint solver"
+  animation_passes "$JOINT"
+  ui_mark
+  ui_step "stop (Esc)"                   ui_key Escape
+  animation_stopped "$JOINT" none
 else
   echo "skip the reported design of GitHub #256 (MITCAD_MITCAD_REPORTED, unzip, python3)"
 fi

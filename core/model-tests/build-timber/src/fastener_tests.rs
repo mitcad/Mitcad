@@ -250,7 +250,7 @@ fn two_wood_screws_swapped_for_a_ring_nail_keep_their_places_and_joints() {
     assert_eq!(swapped["sizes"][0]["config"], "3.1x90", "{swapped}");
     assert_eq!(
         doc.undo_label(),
-        Some("Swap 2 fastener(s) for Ring nail 3.1x90")
+        Some("Swap 2 fasteners for Ring nail 3.1x90")
     );
     let now = fasteners(&doc);
     assert_eq!(now.len(), others, "the same number of fasteners");

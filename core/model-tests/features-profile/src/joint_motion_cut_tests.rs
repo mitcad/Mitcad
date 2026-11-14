@@ -20,7 +20,7 @@ use mitcad_model_api::DocumentApi;
 
 /// The text of a target's row an automatic scope leaves alone.
 const MOVES: &str =
-    "Moves relative to this component through joints; use Select none, then check it to cut it.";
+    "Moves against this component through joints, so it is left out; check it to cut it as well.";
 
 struct Rig {
     doc: Document<MockKernel>,
@@ -142,10 +142,15 @@ fn an_automatic_cut_leaves_alone_what_turns_against_it() {
     let b = row(rig.components[1].0);
     assert!(b.intersects && !b.eligible && !b.checked, "{b:?}");
     assert_eq!(b.reason.as_deref(), Some(MOVES));
+    // Marked for the list, which lets it be checked (mitcad#1789).
+    assert!(b.joint_motion, "{b:?}");
     // A (grounded), C (no joint) and D (fixed to A) are cut.
     for i in [0, 2, 3] {
         let r = row(rig.components[i].0);
-        assert!(r.eligible && r.checked && r.reason.is_none(), "{r:?}");
+        assert!(
+            r.eligible && r.checked && r.reason.is_none() && !r.joint_motion,
+            "{r:?}"
+        );
     }
     let uid = rig.add(&cut);
     assert_eq!(rig.doc.status(uid), Some(&FeatureStatus::Ok));
@@ -184,7 +189,15 @@ fn an_explicit_scope_still_cuts_a_turning_part() {
     let included: Vec<Value> = (0..4)
         .map(|i| json!({"component": rig.components[i].0, "occurrence": rig.path(i)}))
         .collect();
-    let uid = rig.add(&rig.cut(json!({"type": "explicit", "included": included})));
+    let cut = rig.cut(json!({"type": "explicit", "included": included}));
+    // No row is marked: an explicit scope leaves nothing out for joints.
+    let report = rig.doc.preview_add(&def(cut.clone()), None).unwrap();
+    let rows = report.cut_targets.unwrap().rows;
+    assert!(
+        rows.iter().all(|r| r.eligible && !r.joint_motion),
+        "{rows:?}"
+    );
+    let uid = rig.add(&cut);
     assert_eq!(rig.doc.status(uid), Some(&FeatureStatus::Ok));
     assert_eq!(rig.cut_bodies(), [true; 4]);
 }

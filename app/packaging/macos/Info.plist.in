@@ -92,6 +92,22 @@
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
+      <string>3DM Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.3dm</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>3dm</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
       <string>STEP Model</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
@@ -350,6 +366,24 @@
         <array>
           <string>f3d</string>
           <string>f3z</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.3dm</string>
+      <key>UTTypeDescription</key>
+      <string>3DM Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>3dm</string>
         </array>
       </dict>
     </dict>

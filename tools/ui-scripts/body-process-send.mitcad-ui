@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: MIT
+# Send to Slicer's Process row shows the process set on the body
+# (mitcad#1799), the shared input script of
+# tools/ui-body-process-send-test.sh (Linux) and
+# tools/ui-windows-body-process-send-test.ps1, on
+# tools/ui-scripts/body-process-send.json (Body1 and Body2, the design's
+# processes Fixture Fine and Fixture Draft, none chosen on the root):
+#   1. Body1's Make card sets Fixture Fine on Body1; Send to Slicer with
+#      Body1 shows Fixture Fine as chosen, not Slicer default.
+#   2. Body2's Make card sets Fixture Draft on Body2; Send to Slicer with
+#      both bodies shows Per body, each process with its bodies logged.
+#   3. Fixture Fine chosen in the panel's Process picker is set on both
+#      bodies (not on the root), one undo step, and the row shows it; Send
+#      writes the 3MF (a fixture slicer that does nothing), which the
+#      wrappers read: Fixture Fine for both bodies.
+#   4. Undo gives Body2 its Fixture Draft again: the panel shows Per body.
+wait-idle
+window-resize 1280 860
+focus-main
+
+# 1. Body1's card: Fixture Fine on the body.
+mark
+click-logged '^Ribbon tab MAKE at '
+wait-log '^Ribbon tab shown: MAKE$'
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Make card: Body1: .*; process Slicer default \(default\); '
+wait-log '^Make card process at [0-9]+,[0-9]+$'
+mark
+click-logged '^Make card process at '
+wait-log '^Process picker opened: '
+focus-dialog '^Process Picker$'
+mark
+type 'Fixture Fine'
+wait-log '^Process picker search: Fixture Fine, first Fixture Fine$'
+key Return
+wait-log '^Process picker chose: Fixture Fine$'
+focus-main
+wait-log '^Make card Process set: Fixture Fine$'
+wait-log '^Make card: Body1: .*; process Fixture Fine \(body Body1\); '
+wait-idle
+
+# Send to Slicer with Body1: the body's process is the row's choice.
+mark
+command make.print3d
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print panel: 1 selected: Body1; format 3mf'
+wait-log '^Panel Send to Slicer input process shows: Fixture Fine$'
+expect-no-log '^3D Print process per body: '
+key Escape
+wait-log '^Command Send to Slicer cancelled$'
+wait-idle
+
+# 2. Body2's card: Fixture Draft on the body.
+mark
+click-logged '^Browser Root/Bodies/Body2 at '
+wait-log '^Make card: Body2: .*; process Slicer default \(default\); '
+wait-log '^Make card process at [0-9]+,[0-9]+$'
+mark
+click-logged '^Make card process at '
+wait-log '^Process picker opened: '
+focus-dialog '^Process Picker$'
+mark
+type 'Fixture Draft'
+wait-log '^Process picker search: Fixture Draft, first Fixture Draft$'
+key Return
+wait-log '^Process picker chose: Fixture Draft$'
+focus-main
+wait-log '^Make card Process set: Fixture Draft$'
+wait-log '^Make card: Body2: .*; process Fixture Draft \(body Body2\); '
+wait-idle
+
+# Both bodies selected: Send to Slicer's Process row says Per body.
+mark
+click-logged '^Browser Root/Bodies/Body1 at ' ctrl
+wait-log '^Make card: none$'
+mark
+command make.print3d
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print panel: 2 selected: '
+wait-log '^3D Print process per body: .*Fixture Fine: Body1'
+wait-log '^3D Print process per body: .*Fixture Draft: Body2'
+wait-log '^Panel Send to Slicer input process shows: Per body$'
+wait-log '^Panel Send to Slicer input process at '
+
+# 3. Fixture Fine chosen in the panel: set on both bodies, one undo step.
+capture-undo-depth before
+mark
+click-logged '^Panel Send to Slicer input process at '
+wait-log '^Process picker opened: '
+focus-dialog '^Process Picker$'
+mark
+type 'Fixture Fine'
+wait-log '^Process picker search: Fixture Fine, first Fixture Fine$'
+key Return
+wait-log '^Process picker chose: Fixture Fine$'
+focus-main
+wait-log '^3D Print process set on: (Body1, Body2|Body2, Body1)$'
+wait-log '^3D Print process: design/fixture-fine$'
+wait-log '^Panel Send to Slicer input process shows: Fixture Fine$'
+expect-no-log '^3D Print process set on: .*the design'
+expect-undo-depth ${before} 1
+
+# Send writes the 3MF with Fixture Fine for both bodies.
+mark
+key Return
+wait-log '^3D Print: print settings for bambu_studio'
+wait-log '^3D Print: 2 bodies as 3mf '
+wait-idle
+
+# 4. Undo: Body2 prints with Fixture Draft again, the panel says Per body.
+mark
+command edit.undo
+expect-undo-depth ${before} 0
+mark
+command make.print3d
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print process per body: .*Fixture Draft: Body2'
+wait-log '^Panel Send to Slicer input process shows: Per body$'
+key Escape
+wait-log '^Command Send to Slicer cancelled$'
+expect-never 'TestDriver: FAIL'

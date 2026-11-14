@@ -1,0 +1,29 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "CAM's UI test (mitcad#1013): a 40 x 30 block h = 10 high (F2.b0) on a rectangle of the first sketch, a 12 x 10 rectangle on a second sketch (F3) for a pocket, and a router on grbl with a 6 mm flat end mill (1) and a 5 mm drill (2)."},
+  {"cmd": "add_parameter", "name": "h", "value": 10},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "h"}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [10, 10], "width": 12, "height": 10},
+  {"cmd": "cam_machine_put", "machine": {
+    "id": "router",
+    "machine": {
+      "name": "Bench router",
+      "controller": "grbl",
+      "travel": {"min": [0, 0, -120], "max": [600, 400, 0]},
+      "spindle": {"min_rpm": 8000, "max_rpm": 24000, "spin_up_seconds": 2, "nose_diameter": 50, "nose_length": 80},
+      "max_feed": 5000,
+      "rapid_feed": 6000,
+      "tool_changer": {"kind": "manual"}
+    },
+    "tools": {"tools": [
+      {"number": 1, "name": "6 mm flat end mill", "shape": {"kind": "flat"}, "diameter": 6,
+       "flute_length": 18, "length": 25, "cutting": {"spindle_rpm": 18000, "feed": 1200, "plunge_feed": 300}},
+      {"number": 2, "name": "5 mm drill", "shape": {"kind": "drill", "point_angle": 118}, "diameter": 5,
+       "flute_length": 15, "length": 25, "cutting": {"spindle_rpm": 10000, "feed": 400, "plunge_feed": 200}}
+    ]}
+  }}
+]

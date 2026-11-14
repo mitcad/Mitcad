@@ -1289,6 +1289,16 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-version-watermark"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>" -Version "${PROJECT_VERSION}")
     set_tests_properties(app.ui-windows-version-watermark PROPERTIES TIMEOUT 300)
+    # Sketch mode's badge and the pointer's place clear of the floating
+    # cards, its English plural, and the annotations rolled back while a
+    # sketch is edited (mitcad#1756); tools/ui-sketch-badge-test.sh on Linux.
+    add_test(NAME app.ui-windows-sketch-badge
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-badge-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-badge"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-badge PROPERTIES TIMEOUT 300)
     # A sketch region inside a body picked before the body's face in front
     # of it while an input takes profiles (mitcad#1222); the Linux test's
     # shared input script.
@@ -1381,6 +1391,16 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-offset-vanishing"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-sketch-offset-vanishing PROPERTIES TIMEOUT 300)
+    # Trim on an offset's curve (mitcad#1755): the arc copy cut at the line
+    # across it, the note that the offset is no longer linked to its
+    # source; the Linux test's shared input script.
+    add_test(NAME app.ui-windows-sketch-offset-trim
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-offset-trim-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-offset-trim"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-offset-trim PROPERTIES TIMEOUT 300)
     # A Join made in the Extrude panel on a plate's end: every face of the
     # joined body meshed where the view draws it, the plate's top (its mesh
     # taken from the plate as shown) pickable (GitHub #126, mitcad#1243);
@@ -2116,14 +2136,15 @@ if(MITCAD_MESA_DIR)
     # (mitcad#1750, after mitcad#1492's list of items): a Project, a
     # Rectangle and a dimension as three cells, the hover list, the error
     # badge, Delete from a cell, and a sketch saved without steps. The
-    # Linux test's shared input script (tools/ui-sketch-item-list-test.sh).
+    # Linux test's shared input script (tools/ui-sketch-item-list-test.sh),
+    # run in the Docked and the Floating layout (mitcad#1763).
     add_test(NAME app.ui-windows-sketch-item-list
       COMMAND powershell -NoProfile -ExecutionPolicy Bypass
               -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-item-list-test.ps1"
               -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
               -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-item-list"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
-    set_tests_properties(app.ui-windows-sketch-item-list PROPERTIES TIMEOUT 300)
+    set_tests_properties(app.ui-windows-sketch-item-list PROPERTIES TIMEOUT 600)
     # A sketch value editor's error goes when the editor closes, from the
     # status line and the message band (mitcad#1621). The Linux test's
     # shared input script (tools/ui-sketch-value-error-clears-test.sh).
@@ -2454,6 +2475,17 @@ if(MITCAD_MESA_DIR)
               -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-window-place"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-window-place PROPERTIES TIMEOUT 420)
+    # CAM's CNC group (mitcad#1013): a setup and four operations from their
+    # panels, Generate, out of date, Simulate, Post Process… to grbl,
+    # Machines and Tools… and the Browser's CAM rows. The Linux test's
+    # shared input script (tools/ui-cam-test.sh).
+    add_test(NAME app.ui-windows-cam
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-cam-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-cam"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-cam PROPERTIES TIMEOUT 420)
     # An unknown name and Enter make a user parameter in a drawing tool's
     # field, a sketch dimension and a command panel's field, and name =
     # value typed out still names the field's own parameter (mitcad#1723).
@@ -2466,6 +2498,94 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-parameter-unknown-name"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-parameter-unknown-name PROPERTIES TIMEOUT 300)
+    # A saved Corner Round beside a bend edited from the timeline: the
+    # panel lists its corner and the view highlights it on the edge
+    # between the wall and the bend's side (mitcad#1766). The Linux test's
+    # shared input script (tools/ui-sheet-corner-edit-test.sh).
+    add_test(NAME app.ui-windows-sheet-corner-edit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sheet-corner-edit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sheet-corner-edit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sheet-corner-edit PROPERTIES TIMEOUT 300)
+    # Section Analysis through a pick (mitcad#1769): a hole's round face
+    # selected starts it with the plane through the hole's axis, shown at
+    # once; kept, its Angle turns it about that axis without an Axis; two
+    # faces selected start it with nothing picked. The Linux test is
+    # tools/ui-section-hole-pick-test.sh.
+    add_test(NAME app.ui-windows-section-hole-pick
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-section-hole-pick-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-section-hole-pick"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-section-hole-pick PROPERTIES TIMEOUT 300)
+    # The SOLID tab's MODIFY, SHEET METAL, SURFACE, ASSEMBLE and CONSTRUCT
+    # menus in their sections with separators, and each group's own
+    # buttons, in both layouts (mitcad#1778); as
+    # tools/ui-solid-menus-test.sh on Linux.
+    add_test(NAME app.ui-windows-solid-menus
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-solid-menus-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-solid-menus"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-solid-menus PROPERTIES TIMEOUT 300)
+    # The Thread panel suggests a size from a picked face only while none
+    # is chosen: not in an edit, nor after a size chosen by hand, and then
+    # from the whole size table (mitcad#1781). The Linux test's shared
+    # input script (tools/ui-thread-size-test.sh).
+    add_test(NAME app.ui-windows-thread-size
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-thread-size-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-thread-size"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-thread-size PROPERTIES TIMEOUT 240)
+    # Editing a thread whose first face is gone: the Faces chip says one is
+    # missing, the message names the input, and removing the gone pick lets
+    # the edit build (mitcad#1780). The Linux test's shared input script
+    # (tools/ui-gone-pick-edit-test.sh).
+    add_test(NAME app.ui-windows-gone-pick-edit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-gone-pick-edit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-gone-pick-edit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-gone-pick-edit PROPERTIES TIMEOUT 300)
+    # Send to Slicer's Process row shows the process set on the body
+    # (mitcad#1799): Per body for two bodies of different processes, a
+    # choice set on both bodies in one undo step, the 3MF read back. The
+    # Linux test's shared input script (tools/ui-body-process-send-test.sh).
+    add_test(NAME app.ui-windows-body-process-send
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-body-process-send-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-body-process-send"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-body-process-send PROPERTIES TIMEOUT 300)
+    # The orbit's center (mitcad#1791): Set Orbit Center Here from the
+    # view's context menu, an orbit that keeps that point's place, Clear
+    # Orbit Center, and an orbit about the point under the cursor; the
+    # Linux test's shared input script (tools/ui-view-orbit-center-test.sh).
+    add_test(NAME app.ui-windows-view-orbit-center
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-view-orbit-center-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-view-orbit-center"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-view-orbit-center PROPERTIES TIMEOUT 240)
+    # Project Again's choice of the edge that takes a lost projection's
+    # source's place: the rows in words, the hovered row's edge painted, the
+    # clicked one kept (mitcad#1794). The Linux test's shared input script
+    # (tools/ui-project-again-successor-test.sh).
+    add_test(NAME app.ui-windows-project-again-successor
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-project-again-successor-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-project-again-successor"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-project-again-successor PROPERTIES TIMEOUT 300)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

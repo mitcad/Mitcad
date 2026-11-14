@@ -31,8 +31,10 @@ struct ExportChoice {
   bool dxfConstruction = false;
   // Bodies (mitcad#19): design (where the design shows them, the
   // default) or component (each in its component's coordinates); empty
-  // when the design has no occurrences to choose by.
+  // when the design has no occurrences to choose by. "frame" (mitcad#1775):
+  // in the frame of the coordinate system `frame` (its uid).
   QString coordinates;
+  QString frame;
   // 3MF (mitcad#1679), as Send to Slicer writes the design's print plates
   // (mitcad#1050): `plates` empty writes the bodies; "one_file" every plate
   // in the one file, "file_per_plate" a file per plate beside the path,
@@ -83,10 +85,13 @@ QString exportStartPlates(bool hasPlates, const QString& dialect);
 // A 3MF file (mitcad#1679) offers the design's print plates of `plates`
 // (all in one file, a file per plate, one plate, or the bodies without
 // plates), the slicer, On the print bed, Center on Plate and Drop to Bed.
+// `frames` (uid, name): the design's coordinate systems, which Coordinates
+// offers beside the design's and the components' (mitcad#1775).
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
                                       const QString& sketch, bool occurrences, const QString& designUnit,
-                                      const ExportPlates& plates = {});
+                                      const ExportPlates& plates = {},
+                                      const QVector<QPair<QString, QString>>& frames = {});
 
 // The type Export starts with (mitcad#1164): an index into its list of
 // types (STEP AP214, STEP AP242, IGES, STL, OBJ, BRep, DXF, 3MF, USDZ, web

@@ -1,0 +1,25 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "mitcad#1794: a 60 x 40 block 20 high (Sketch1 F1, Extrude1 F2) with a 10 x 10 notch cut through it across its front edge at x = 25 to 35 (Sketch2 F3, Extrude2 F4), so that the top face and the front face meet in two pieces of that edge. Sketch3 (F5) on XY holds a linked projection of the front top edge under the name of a piece of the top face that the shape no longer has (a lost source), its line from (0, 0) to (60, 0), and two lines of the user's ending on its two ends. Each end lies on another piece, so neither piece alone takes its place: the projection keeps its geometry and warns, and the two pieces are its candidates. All geometry is synthetic."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 60, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [25, -5], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "through_all"}, "operation": "cut", "participants": ["F2.b0"]}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [0, 0], "fixed": true, "reference": true},
+      {"id": "p2", "type": "point", "at": [60, 0], "fixed": true, "reference": true},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2", "fixed": true, "reference": true},
+      {"id": "p4", "type": "point", "at": [0, 30]},
+      {"id": "c5", "type": "line", "start": "p1", "end": "p4"},
+      {"id": "p6", "type": "point", "at": [60, 30]},
+      {"id": "c7", "type": "line", "start": "p2", "end": "p6"}],
+    "projections": [{"source": "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})#3|F2:side(c1[c4,c2])}",
+                     "body": "F2.b0", "by_geometry": true, "entities": ["p1", "p2", "c3"]}]}}
+]

@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: MIT
+# Leaving a refused constraint tool puts the overlay back to the committed
+# sketch (mitcad#1761, GitHub #318), on sketch-conflict-cancel.json's
+# Sketch1: a vertical line c3 at x 5 between two fixed points, the free
+# points p4 (-5, 0) and p5 (25, 5) held 10 mm (k7) and 20 mm (k8) from it.
+# Symmetry of p4 and p5 about c3, and a Coincident of p4 on c3, are refused
+# for conflicting constraints; what blocks them (k7, k8) is painted. Each
+# way of leaving takes the painting away ("Sketch conflict painted: none"):
+#   1. Symmetry refused, Esc: the tool ends, nothing painted.
+#   2. Symmetry refused, another tool (Line): nothing painted.
+#   3. Coincident refused, the tool's next pick: nothing painted.
+#   4. Coincident refused, a command panel (Mirror): nothing painted.
+#   5. Symmetry applied to a selection (no tool) refused, Esc: nothing
+#      painted.
+#   6. Symmetry refused, Finish Sketch: nothing painted.
+# The sketch's state line stays the committed one throughout: the same DOF,
+# never conflicts.
+# The clicks stay within x -30..30 mm, y -25..25 mm: the free part of the
+# view after the fit also in session 0's 1024x768 window on Windows.
+# Run by tools/ui-sketch-conflict-cancel-test.sh (Linux).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+# The committed sketch's state line, as it opens.
+capture dof '^Sketch Sketch1: ([0-9]+ DOF)$'
+key F6
+wait-idle
+
+# 1. Symmetry refused, then Esc.
+mark
+command sketch.constraint.symmetric
+wait-log '^Sketch tool Symmetry$' 10
+sketch-click -5 0
+sketch-click 25 5
+sketch-click 5 15
+wait-log '^Constraint symmetric refused: ' 20
+wait-log '^Status error: Symmetry not added: ' 10
+expect-no-log '^Status error: Symmetry not added: .*\b[kpc][0-9]'
+wait-log '^Sketch conflict painted: k[78]' 10
+screenshot '${MITCAD_TEST_WORK}/sketch-conflict-cancel.png'
+mark
+key Escape
+wait-log '^Sketch tool ended: Symmetry$' 10
+wait-log '^Sketch conflict painted: none$' 10
+expect-no-log '^Sketch Sketch1: '
+
+# 2. Symmetry refused, then another tool.
+mark
+command sketch.constraint.symmetric
+wait-log '^Sketch tool Symmetry$' 10
+sketch-click -5 0
+sketch-click 25 5
+sketch-click 5 15
+wait-log '^Sketch conflict painted: k[78]' 20
+mark
+command sketch.line
+wait-log '^Sketch tool ended: Symmetry$' 10
+wait-log '^Sketch conflict painted: none$' 10
+wait-log '^Sketch tool Line$' 10
+expect-no-log '^Sketch Sketch1: '
+key Escape
+wait-log '^Sketch tool ended: Line$' 10
+
+# 3. Coincident refused, then the tool's next pick.
+mark
+command sketch.constraint.coincident
+wait-log '^Sketch tool Coincident$' 10
+sketch-click -5 0
+sketch-click 5 15
+wait-log '^Constraint coincident refused: ' 20
+wait-log '^Sketch conflict painted: k7 ' 10
+mark
+sketch-click 25 5
+wait-log '^Sketch conflict painted: none$' 10
+expect-no-log '^Sketch tool ended: '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Coincident$' 10
+
+# 4. Coincident refused, then a command panel.
+mark
+command sketch.constraint.coincident
+wait-log '^Sketch tool Coincident$' 10
+sketch-click -5 0
+sketch-click 5 15
+wait-log '^Sketch conflict painted: k7 ' 20
+mark
+command sketch.mirror
+wait-log '^Sketch tool ended: Coincident$' 10
+wait-log '^Sketch conflict painted: none$' 10
+wait-log '^Command Mirror started' 10
+mark
+key Escape
+wait-log '^Command Mirror cancelled' 10
+expect-no-log '^Sketch conflict painted: k'
+wait-idle
+
+# 5. Symmetry applied to the selection, without a tool, then Esc.
+mark
+sketch-click -5 0
+expect-selection 1 0
+sketch-click 25 5 ctrl
+expect-selection 2 0
+sketch-click 5 15 ctrl
+expect-selection 3 0
+mark
+command sketch.constraint.symmetric
+wait-log '^Constraint symmetric refused: ' 20
+wait-log '^Sketch conflict painted: k[78]' 10
+expect-no-log '^Sketch tool Symmetry$'
+mark
+key Escape
+wait-log '^Sketch conflict painted: none$' 10
+expect-selection 0 0
+
+# 6. Symmetry refused, then Finish Sketch.
+mark
+command sketch.constraint.symmetric
+wait-log '^Sketch tool Symmetry$' 10
+sketch-click -5 0
+sketch-click 25 5
+sketch-click 5 15
+wait-log '^Sketch conflict painted: k[78]' 20
+mark
+command sketch.finish
+wait-log '^Sketch conflict painted: none$' 10
+wait-log '^Sketch finished' 20
+
+# The state line never left the committed sketch's: no other DOF, never a
+# conflict of its own.
+expect-never '^Sketch Sketch1: (?!${dof}$)([0-9]+ DOF|.*conflict)'
+expect-never 'TestDriver: FAIL'

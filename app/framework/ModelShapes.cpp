@@ -474,6 +474,33 @@ TopoDS_Shape datumShape(const QJsonObject& datum, double size) {
   return TopoDS_Shape();
 }
 
+TopoDS_Shape frameTriadShape(const QJsonObject& datum, double length, int axis) {
+  if (text(datum, "type") != QStringLiteral("plane") || !(length > 0.0)) {
+    return TopoDS_Shape();
+  }
+  try {
+    const gp_Pnt origin = pointOf(datum.value(QStringLiteral("origin")));
+    const char* keys[] = {"x_axis", "y_axis", "normal"};
+    const auto line = [&](int i) -> TopoDS_Shape {
+      const gp_Vec along = gp_Vec(gp_Dir(vectorOf(datum.value(QLatin1String(keys[i]))))) * length;
+      return BRepBuilderAPI_MakeEdge(origin, origin.Translated(along)).Edge();
+    };
+    if (axis >= 0 && axis < 3) {
+      return line(axis);
+    }
+    TopoDS_Compound compound;
+    BRep_Builder builder;
+    builder.MakeCompound(compound);
+    for (int i = 0; i < 3; ++i) {
+      builder.Add(compound, line(i));
+    }
+    return compound;
+  } catch (const Standard_Failure&) {
+    // A degenerate frame (zero vectors) is not drawn.
+  }
+  return TopoDS_Shape();
+}
+
 bool sketchFrame(const QJsonObject& sketch, geometry::Frame& frame) {
   const QJsonObject f = sketch.value(QStringLiteral("frame")).toObject();
   if (f.isEmpty()) {
@@ -753,6 +780,11 @@ std::vector<SketchEntityDisplay> spatialSketchEntities(const QJsonObject& sketch
     display.signature = QString::fromUtf8(compactJson(t)) + placed;
     display.shape = outline;
     result.push_back(display);
+  }
+  // A 3D sketch's points keep their markers with Show points off
+  // (mitcad#1764): the Sketch Palette's setting, which 3D sketches lack.
+  for (SketchEntityDisplay& entity : result) {
+    entity.spatial = true;
   }
   return result;
 }

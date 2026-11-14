@@ -1408,6 +1408,9 @@ if(APPLE)
   # Configure the bundle after its render worker exists, so its
   # install rules include the worker, denoiser module and their libraries.
   include(packaging/macos/Bundle.cmake)
+  # Finder's thumbnails of designs (mitcad#1696): the Quick Look extension
+  # MitCadThumbnails.appex in the bundle's PlugIns.
+  include("${PROJECT_SOURCE_DIR}/cmake/MacQuickLook.cmake")
 endif()
 
 # The browser's and the timeline's places logged again when they move (mitcad#262).
@@ -3205,6 +3208,36 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
     TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()
 
+# CAM (mitcad#1013, app/COMMANDS.md "The CNC group"): the Make tab's CNC
+# group (New Setup, the operations' panels, Generate, Simulate, Post
+# Process…, Machines and Tools…), the Browser's CAM folder and the
+# toolpaths in the 3D view.
+target_sources(mitcad PRIVATE
+  cam/CamMachinesDialog.cpp
+  cam/CamMachinesDialog.hpp
+  cam/CamSimulateDialog.cpp
+  cam/CamSimulateDialog.hpp
+  cam/CamToolpaths.cpp
+  cam/CamToolpaths.hpp
+  cam/MainWindowCam.cpp
+  view/CamToolpathOverlay.cpp)
+if(BUILD_TESTING)
+  # The work frame, the moves' styles, arcs, segments, the playback's
+  # places and the log lines: plain Qt Core.
+  target_sources(test_app PRIVATE tests/cam_toolpaths.cpp cam/CamToolpaths.cpp cam/CamToolpaths.hpp)
+endif()
+# Simulate's stock (mitcad#1013, phase 3): the height grid of cam_simulate
+# as a surface shaded by the material left, and its overlay in the view.
+target_sources(mitcad PRIVATE
+  cam/CamStock.cpp
+  cam/CamStock.hpp
+  cam/MainWindowCamStock.cpp
+  view/CamStockOverlay.cpp)
+if(BUILD_TESTING)
+  # The runs, the surface, the shades, the snapshots' places and the log
+  # lines: plain Qt Core.
+  target_sources(test_app PRIVATE tests/cam_stock.cpp cam/CamStock.cpp cam/CamStock.hpp)
+endif()
 # Live MCP's input tools (mitcad#1735, docs/mcp.md "Clicks, keys and
 # dialogs"): ui_click and ui_type post mouse and key events to the window,
 # ui_dialog opens a window ui_command refuses for viewing, reads it and
@@ -3229,3 +3262,13 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/origin_preference.cpp view/OriginPreference.cpp view/OriginPreference.hpp)
   target_link_libraries(test_app PRIVATE TKTopAlgo TKBRep)
 endif()
+# Show Dimensions of a sketch's row (mitcad#1772, GitHub mitcad/Mitcad#306,
+# app/COMMANDS.md "Show Dimensions outside sketch mode"): a shown sketch's
+# dimensions drawn over the view outside sketch mode, as sketch mode draws
+# them.
+target_sources(mitcad PRIVATE sketch/ShownDimensions.cpp sketch/ShownDimensions.hpp)
+# The orbit's center (mitcad#1791, GitHub mitcad/Mitcad#300,
+# app/COMMANDS.md "The orbit's center"): Preferences › Navigation's Orbit
+# center (Model or Cursor) and a fixed center set from the view's context
+# menu, with its marker and its test steps.
+target_sources(mitcad PRIVATE view/OrbitCenterView.cpp framework/TestDriverOrbitCenter.cpp)

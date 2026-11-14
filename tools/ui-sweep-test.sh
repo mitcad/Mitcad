@@ -19,7 +19,8 @@
 #     the first loft uses them, shown with their light bulbs), edited to
 #     weight 2; and through a rail along one corner.
 #   - Coil: 3 turns of pitch 10 round a 40 mm diameter, placed by a click.
-#   - Rib and Web on the bracket of ui_rib; then a 2 mm square swept
+#   - Rib and Web on the bracket of ui_rib (the Rib panel with Extend Ends,
+#     End Offset and Direction, mitcad#1746); then a 2 mm square swept
 #     along a line on the base's top with that face as its guide surface
 #     (mitcad#157); its profile at the start of the path, Distance 2 stays
 #     hidden.
@@ -338,6 +339,13 @@ ui_step "pick the rib's line"              ui_click_logged "Sketch entity F6/c1"
 ui_expect_log "Rib Curves: 1 sketch curve [sketch curve c1 of F6]" "line picked"
 ui_step "thickness 4"                      ui_type_in "Panel Rib input thickness" "4"
 ui_expect_log "Preview Rib: ok" "previewed"
+# Extend Ends (mitcad#1746), on for a new rib, and End Offset with it; the
+# line's ends lie on the bracket's faces already, so the volume is the same.
+ui_sync
+expect_row Rib extend_ends shown "Extend Ends shown"
+expect_row Rib end_offset shown "End Offset shown while Extend Ends is on"
+expect_row Rib direction shown "Direction shown (Perpendicular to Chord)"
+expect_row Rib direction_line hidden "Direction Line hidden until Along Line"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_log "Added rib on 1 curve(s), thickness 4" "rib added"
 ui_expect_volume "Body Body1 (F2.b0): volume 20000.000 -> \([0-9.]*\) mm3" 21800 "a triangle 4 thick more"

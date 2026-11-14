@@ -304,6 +304,7 @@ void CommandState::removeRow(const QString& list, int index) {
   dropRow(m_itemsTexts, full, index);
   dropRow(m_itemWords, full, index);
   dropRow(m_itemsWords, full, index);
+  dropRow(m_missing, full, index);
   dropRow(m_choices, full, index);
   dropRow(m_checks, full, index);
   m_rows[full] = std::max(0, m_rows.value(full) - 1);

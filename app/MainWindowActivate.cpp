@@ -16,7 +16,9 @@
 // own outside the panel's range, and the panel says where the feature goes.
 // Picks of several components keep the refusal (the command's or the
 // model's), beside which the panel offers to activate one of them, keeping
-// only its picks.
+// only its picks. A part placed by a pick (Gear, Pulley, ...; mitcad#1752)
+// activates the same way by its Place On, except on another component's
+// shaft, which it takes linked, the panel saying so.
 #include "MainWindow.hpp"
 
 #include <exception>
@@ -108,7 +110,24 @@ void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const 
   // A feature that changes the picked body goes only into the body's own
   // component (mitcad#1634): activated without a question.
   if (activatingInputs(def.id).contains(input.id)) {
-    activateForPick(def, input, item);
+    // A part placed by a pick goes into the picked body's component too
+    // (mitcad#1752), but on another component's shaft it goes in linked,
+    // into the active component, and the panel says why.
+    const bool activates = pickActivates(def.id, item);
+    const bool activated = activates && activateForPick(def, input, item);
+    if (activated || !linksShafts(def.id) || !m_session) {
+      return;
+    }
+    const QString shown = m_session->activationNotice();
+    const QString linked = activates ? QString() : linkedShaftNotice(m_snapshot, def.id, def.name, item);
+    const QString notice = linked.isEmpty() ? keptNotice(m_snapshot, def.name, shown) : linked;
+    if (notice != shown) {
+      if (!linked.isEmpty()) {
+        qDebug().noquote() << QStringLiteral("Not activated for %1: %2 is a shaft, linked")
+                                  .arg(def.name, item.logDescription());
+      }
+      m_session->setActivationNotice(notice);
+    }
     return;
   }
   // Construction planes, axes and points ask (mitcad#960); other features
@@ -133,7 +152,8 @@ bool MainWindow::activateForPick(const CommandDef& def, const InputDef& input, c
   if (input.max == 1) {
     before.removeAll(input.id);
   }
-  const PickActivation activation = activationForPick(m_snapshot, item, m_session->picksOf(before));
+  const PickActivation activation =
+      activationForPick(m_snapshot, item, activatingPicks(def.id, m_session->picksOf(before)));
   if (activation.isEmpty()) {
     return false;
   }
@@ -160,8 +180,16 @@ QString MainWindow::activateForPreselection(const CommandDef& def, const Selecti
   // with those before it.
   PickActivation activation;
   Selection before;
+  QString linked;
   for (const SelectionItem& item : preselection) {
     if (bodyComponent(m_snapshot, item).isEmpty()) {
+      continue;
+    }
+    if (!pickActivates(def.id, item)) {
+      // A part on another component's shaft goes in linked (mitcad#1752).
+      if (linked.isEmpty()) {
+        linked = linkedShaftNotice(m_snapshot, def.id, def.name, item);
+      }
       continue;
     }
     const PickActivation next = activationForPick(m_snapshot, item, before);
@@ -171,7 +199,10 @@ QString MainWindow::activateForPreselection(const CommandDef& def, const Selecti
     activation = next;
     before.append(item);
   }
-  if (activation.isEmpty() || !runModelCommand(activateCommand(activation.component))) {
+  if (activation.isEmpty()) {
+    return linked;
+  }
+  if (!runModelCommand(activateCommand(activation.component))) {
     return QString();
   }
   qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3)")
@@ -184,7 +215,8 @@ QJsonObject MainWindow::activationOffer(const CommandSession& session) const {
   if (inputs.isEmpty() || session.isEditing()) {
     return {};
   }
-  const PickActivation offer = activationForPicks(m_snapshot, session.picksOf(inputs));
+  const PickActivation offer =
+      activationForPicks(m_snapshot, activatingPicks(session.def().id, session.picksOf(inputs)));
   if (offer.isEmpty()) {
     return {};
   }
@@ -195,7 +227,8 @@ QJsonObject MainWindow::activationOffer(const CommandSession& session) const {
 
 void MainWindow::takeActivationOffer(CommandSession& session) {
   const QStringList inputs = activatingInputs(session.def().id);
-  const PickActivation offer = activationForPicks(m_snapshot, session.picksOf(inputs));
+  const PickActivation offer =
+      activationForPicks(m_snapshot, activatingPicks(session.def().id, session.picksOf(inputs)));
   if (offer.isEmpty()) {
     return;
   }
@@ -207,11 +240,13 @@ void MainWindow::takeActivationOffer(CommandSession& session) {
     return;
   }
   // Only the picks of the activated component stay (and those of no
-  // component's body: a datum, a sketch's point).
+  // component's body: a datum, a sketch's point; a part's linked shaft,
+  // mitcad#1752).
   const QString component = offer.component;
-  const int dropped = session.keepPicks(inputs, [this, &component](const SelectionItem& item) {
+  const QString command = session.def().id;
+  const int dropped = session.keepPicks(inputs, [this, &component, &command](const SelectionItem& item) {
     const QString of = bodyComponent(m_snapshot, item);
-    return of.isEmpty() || of == component;
+    return of.isEmpty() || of == component || !pickActivates(command, item);
   });
   qDebug().noquote() << QStringLiteral("Activated %1 for %2 (picked %3), %4 pick(s) dropped")
                             .arg(offer.name, session.def().name, offer.picked.logDescription())

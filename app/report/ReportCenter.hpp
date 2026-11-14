@@ -27,6 +27,12 @@
 // - The log (mitcad#269): every preview offers the log ring's newest lines
 //   (mcp/LogRing.hpp) and the debug log's latest file
 //   (framework/DebugLog.hpp), both left out unless the user checks them.
+// - Include the design (mitcad#1795): Send Feedback's form can ask for a
+//   zip of the open design, the files it refers to, the report's Markdown,
+//   the screenshot and the log of this run, written into `reports` by the
+//   model's design_package query at Preview (for its size) and again at
+//   Send; Send then opens the zip's folder and says how to attach it or
+//   e-mail it, and the issue's body names it.
 //
 // For tests: MITCAD_TEST_LOG_URLS=1 logs the address instead of opening a
 // browser (tools/ui-test-lib.sh sets it); MITCAD_TEST_CRASH=app or
@@ -38,6 +44,7 @@
 #include <functional>
 
 #include <QImage>
+#include <QJsonObject>
 #include <QList>
 #include <QObject>
 #include <QSet>
@@ -66,6 +73,13 @@ public:
     std::function<void(std::function<void()> call)> onModelWorker;
     // A short message in the status bar.
     std::function<void(const QString&)> showHint;
+    // Whether a design is open (not the empty Untitled one a window starts
+    // with), and its file ("" for a design never saved), for Include the
+    // design (mitcad#1795).
+    std::function<bool()> designOpen;
+    std::function<QString()> designFile;
+    // A query of the model (an error or a busy model throws).
+    std::function<QJsonObject(const QJsonObject&)> query;
   };
 
   ReportCenter(QMainWindow& window, Host host, QObject* parent = nullptr);
@@ -122,10 +136,19 @@ private:
   report::Report crashReport(const report::CrashReport& crash, int earlier) const;
   QString diagnostics() const;
   QString recentActions() const;
-  // The preview, then the delivery; true when sent.
-  bool previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent);
+  // The preview, then the delivery; true when sent. `includeDesign`: with
+  // the design's zip (mitcad#1795).
+  bool previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent,
+                      bool includeDesign = false);
+  // `designZip`: where the design's zip goes, "" for none.
   void deliver(const report::Report& report, const QImage& screenshot, QWidget* parent,
-               const QString& logFile = QString());
+               const QString& logFile = QString(), const QString& designZip = QString());
+  // Writes the design's zip at `path` with the report's Markdown, the
+  // screenshot's file (when there is one) and the log of this run.
+  report::DesignZip writeDesignZip(const QString& path, const QString& markdown, const QString& screenshotFile) const;
+  // The folder of the screenshots and design zips: `reports` in the local
+  // application data.
+  static QString reportsFolder();
   void markOffered(const QStringList& files);
   bool offersOn() const;
 

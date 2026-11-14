@@ -1568,7 +1568,13 @@ margin) and to the camera's near plane before they are drawn, so a face
 or edge that runs far past the picture, or close to the eye, is drawn
 along its true line and without gaps. Edges are drawn against the depth
 of the faces with a small tolerance; transparent bodies are drawn
-faintly after the others.
+faintly after the others. As in the 3D view (mitcad#1773), a seam (where
+a round face closes on itself) and the line between pieces of one face
+(faces whose names differ only in their `#k` piece numbers) are not drawn
+where the surface runs on smoothly across them (normals within 0.01 rad);
+a seam at a crease (a closed profile with a sharp corner, extruded as one
+face) is. The model keeps these edges: `edges`, selections and features
+that name them are unchanged.
 Pictures larger than about two million pixels are drawn without the 2x2
 supersampling that smooths the edges of smaller ones.
 

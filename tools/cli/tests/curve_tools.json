@@ -1,0 +1,38 @@
+[
+  {"comment": "The curve tools (mitcad#1777). Cylinder1 (F1): 20 mm diameter, 20 high on XY about the Z axis, its side face F1:side0."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "diameter": 20, "height": 20, "operation": "new_body"}},
+  {"expect": {"feature": "Cylinder1", "status": "ok", "body": "F1.b0", "has_face": "F1:side0"}},
+
+  {"comment": "HelixCurve1 (F2) on the side face: 4 turns of pitch 5 from the face's low end, radius 10 from the face. Pipe1 (F3), 2 mm along it: V = pi 1^2 * 4 sqrt((20 pi)^2 + 5^2)."},
+  {"cmd": "add_feature", "def": {"type": "helix_curve", "axis": {"body": "F1.b0", "face": "F1:side0"},
+    "pitch": 5, "revolutions": 4}},
+  {"expect": {"feature": "HelixCurve1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature_curves"}, "result": [{"name": "HelixCurve1"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"feature": "F2"}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F3.b0", "volume": 792.0644067107494, "tolerance": 1e-4}},
+
+  {"comment": "Sketch1 (F4) on XZ: a line from the Z axis out to 15 along X. Helix1 (F5), a surface helix of it about Z, 4 turns of pitch 5: the helicoid, area 8 pi [F(15) - F(0)], F(r) = r/2 sqrt(r^2 + c^2) + c^2/2 ln(r + sqrt(r^2 + c^2)), c = 5 / 2 pi."},
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_line", "sketch": "F4", "start": [0, 0], "end": [15, 0]},
+  {"cmd": "add_feature", "def": {"type": "helix", "curves": {"sketch": "F4", "curves": ["c1"]}, "surface": true,
+    "axis": "z", "pitch": 5, "revolutions": 4, "operation": "new_body"}},
+  {"expect": {"feature": "Helix1", "status": "ok", "body": "F5.b0", "area": 2860.298789266602, "tolerance": 1e-3}},
+
+  {"comment": "Cylinder2 (F6): 20 mm diameter, 50 high symmetric about XY. IntersectionCurve1 (F7) of the helicoid and Cylinder2's body: one helix on the cylinder, as HelixCurve1. Pipe2 (F8), 2 mm along it: the volume of Pipe1."},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [0, 0], "diameter": 20, "height": 50, "symmetric": true, "operation": "new_body"}},
+  {"expect": {"feature": "Cylinder2", "status": "ok", "body": "F6.b0"}},
+  {"cmd": "add_feature", "def": {"type": "intersection_curve", "first": {"geometry": [{"body": "F5.b0"}]},
+    "second": {"geometry": [{"body": "F6.b0"}]}}},
+  {"expect": {"feature": "IntersectionCurve1", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"feature": "F7"}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe2", "status": "ok", "body": "F8.b0", "volume": 792.0644067107494, "tolerance": 1e-3}},
+
+  {"comment": "HelixCurve2 (F9) about Z, radius 30, 4 turns of pitch 5 moving out 1 per turn (a conical helix from the kernel). Pipe3 (F10), 2 mm along it: V = pi 1^2 L, L = the integral over 8 pi of sqrt(r^2 + (1 / 2 pi)^2 + (5 / 2 pi)^2), r = 30 + t / 2 pi."},
+  {"cmd": "add_feature", "def": {"type": "helix_curve", "axis": "z", "radius": 30, "pitch": 5, "revolutions": 4,
+    "growth": 1}},
+  {"expect": {"feature": "HelixCurve2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"feature": "F9"}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe3", "status": "ok", "body": "F10.b0", "volume": 2527.4321554840217, "tolerance": 1e-3}}
+]

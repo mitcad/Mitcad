@@ -525,11 +525,17 @@ not a corpus, viewport-meshing or rendering speedup claim.
 - `tools/package-macos.sh [build dir]` installs, signs ad hoc, checks and
   makes a `.dmg`. Developer ID signing (`MITCAD_SIGN_IDENTITY`) and
   notarisation (`MITCAD_NOTARY_PROFILE`) need an Apple Developer account.
+  The Finder's Quick Look thumbnail extension
+  (`Contents/PlugIns/MitCadThumbnails.appex`, mitcad#1696) is signed again
+  after the deep signature with its own entitlements (the App Sandbox,
+  `app/packaging/macos/QuickLookThumbnails.entitlements`), then the
+  application around it.
 - `tools/check-bundle-macos.sh <Mitcad.app>`: only system and bundled
   libraries linked, relative rpaths, arm64 everywhere, and `Info.plist`,
-  icon, licence texts, the complete Metal source manifest and the
-  `libqmacstyle` style plug-in present
-  (without it Qt falls back to its own cross-platform style).
+  icon, licence texts, the complete Metal source manifest, the
+  `libqmacstyle` style plug-in
+  (without it Qt falls back to its own cross-platform style) and the
+  sandboxed Quick Look thumbnail extension for `.mitcad` present.
 - `app/platform/macos/*.mm` is Objective-C++ with ARC, linked with AppKit,
   as warning-free as C++ (`mitcad_warnings`); AppKit calls newer than 14.4
   are guarded with `@available`.

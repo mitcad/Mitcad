@@ -1458,7 +1458,7 @@ fn only_the_shown_host_keys_are_trusted() {
         trusted["log"].as_array().unwrap().iter().any(|l| l
             .as_str()
             .unwrap()
-            .contains("1 key(s) of the new scan were not shown")),
+            .contains("a key of the new scan was not shown")),
         "{trusted}"
     );
     // Again: nothing new.

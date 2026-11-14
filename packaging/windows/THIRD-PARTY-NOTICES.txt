@@ -132,4 +132,6 @@ Rust libraries compiled into mitcad.exe and mitcad-cli.exe
   HTTP transport (MIT or Apache-2.0) with reqwest, hyper, h2, tokio and
   their helpers (MIT or Apache-2.0), rustls-platform-verifier (MIT or
   Apache-2.0, the system's root certificates) and the ICU 4X crates of
-  url's idna (Unicode-3.0); TLS by the rustls and ring above.
+  url's idna (Unicode-3.0); TLS by the rustls and ring above. CAM's
+  toolpath offsets: cavalier_contours and static_aabb2d_index (MIT or
+  Apache-2.0).

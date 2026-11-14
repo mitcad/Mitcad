@@ -237,7 +237,7 @@ int exportStartType(const QString& remembered, bool sketch, bool sketches) {
 std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int selectedBodies,
                                       const QVector<QPair<QString, QString>>& sketches,
                                       const QString& sketch, bool occurrences, const QString& designUnit,
-                                      const ExportPlates& plates) {
+                                      const ExportPlates& plates, const QVector<QPair<QString, QString>>& frames) {
   // The last export's choices (mitcad#1164).
   QSettings settings;
   settings.beginGroup(QLatin1String(kExportGroup));
@@ -277,12 +277,21 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   }
   form->addRow(QObject::tr("Bodies:"), bodies);
   // Where the bodies go (mitcad#19): as the design shows them, or each in
-  // its component's coordinates.
+  // its component's coordinates; or in a coordinate system's frame
+  // (mitcad#1775).
   auto* coordinates = new QComboBox;
+  coordinates->setObjectName(QStringLiteral("exportCoordinates"));
   coordinates->addItem(QObject::tr("Where the design shows them"), QStringLiteral("design"));
-  coordinates->addItem(QObject::tr("Each in its component's coordinates"), QStringLiteral("component"));
-  coordinates->setToolTip(QObject::tr("Where the design shows the bodies, or each in its own component's coordinates"));
+  if (occurrences) {
+    coordinates->addItem(QObject::tr("Each in its component's coordinates"), QStringLiteral("component"));
+  }
+  for (const auto& [frameUid, frameName] : frames) {
+    coordinates->addItem(QObject::tr("In %1").arg(frameName), QStringLiteral("frame:") + frameUid);
+  }
+  coordinates->setToolTip(QObject::tr(
+      "Where the design shows bodies, each in its own component's coordinates, or in a coordinate system"));
   form->addRow(QObject::tr("Coor&dinates:"), coordinates);
+  const bool chooseCoordinates = occurrences || !frames.isEmpty();
   auto* unit = unitBox();
   unit->setToolTip(QObject::tr("The length unit of the file; the bodies keep their size"));
   form->addRow(QObject::tr("Unit:"), unit);
@@ -377,7 +386,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     const bool platesChosen = threeMf && hasPlates && !plateBox->currentData().toString().isEmpty();
     const bool bed = platesChosen || (threeMf && onBed->isChecked());
     form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page && !platesChosen);
-    form->setRowVisible(coordinates, occurrences && format != QStringLiteral("dxf") && !page && !bed);
+    form->setRowVisible(coordinates, chooseCoordinates && format != QStringLiteral("dxf") && !page && !bed);
     form->setRowVisible(plateBox, threeMf && hasPlates);
     form->setRowVisible(slicerBox, threeMf);
     form->setRowVisible(onBed, threeMf && !platesChosen);
@@ -431,11 +440,23 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   file->setFocus();
   file->selectAll();
   dialog.resize(480, dialog.sizeHint().height());
+  // What Coordinates offers, for UI tests: "design | component" and the
+  // coordinate systems by name (mitcad#1775).
+  QStringList offered{QStringLiteral("design")};
+  if (occurrences) {
+    offered << QStringLiteral("component");
+  }
+  for (const auto& frameEntry : frames) {
+    offered << frameEntry.second;
+  }
+  const QString coordinatesOffer =
+      chooseCoordinates ? QStringLiteral(", coordinates design (%1)").arg(offered.join(QStringLiteral(" | ")))
+                        : QString();
   qDebug().noquote() << QStringLiteral(
                             "Export dialog opened: unit %1%2, type %3, refinement %4, file %5, dxf unit %6, "
                             "dxf construction %7, plates %8, slicer %9")
                             .arg(unitOffer(unit),
-                                 occurrences ? QStringLiteral(", coordinates design (design | component)") : QString(),
+                                 coordinatesOffer,
                                  exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit),
                                  dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"),
                                  hasPlates ? QStringLiteral("%1 (%2)").arg(startPlates).arg(plates.plates.size())
@@ -456,8 +477,15 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     choice.sketch = sketchBox->currentData().toString();
     choice.dxfUnit = dxfUnit->currentText();
     choice.dxfConstruction = construction->isChecked();
-    if (occurrences) {
+    if (chooseCoordinates) {
       choice.coordinates = coordinates->currentData().toString();
+      // In a coordinate system's frame (mitcad#1775).
+      if (choice.coordinates.startsWith(QStringLiteral("frame:"))) {
+        choice.frame = choice.coordinates.mid(6);
+        choice.coordinates = QStringLiteral("frame");
+      } else if (!occurrences && choice.coordinates == QStringLiteral("design")) {
+        choice.coordinates.clear(); // as before: nothing to choose by
+      }
     }
     if (choice.format == QStringLiteral("3mf")) {
       // The design's print plates and the bed (mitcad#1679).
@@ -483,6 +511,11 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
         message->setText(QObject::tr("UltiMaker Cura has one build plate: choose a file per plate."));
         continue;
       }
+    }
+    if (choice.coordinates == QStringLiteral("frame") && choice.format == QStringLiteral("usdz")) {
+      message->setText(
+          QObject::tr("A USDZ file keeps the design's coordinates: choose them, or another type of file."));
+      continue;
     }
     if (choice.path.isEmpty()) {
       message->setText(QObject::tr("Give the file to write."));

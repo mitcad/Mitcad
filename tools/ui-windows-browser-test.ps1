@@ -34,34 +34,6 @@ param(
 
 Ui-Init $App $Out $QtBin -StepPause 0
 
-# Place-Valid "Browser <path>": the row's place was logged and has not gone
-# out of sight since (BrowserPanel::logLayout).
-function Place-Valid([string]$Text) {
-  $last = "$(Ui-LogLines | Where-Object { $_.Contains("$Text at ") -or $_.EndsWith("$Text out of sight") } |
-    Select-Object -Last 1)"
-  return ($last.Length -gt 0) -and -not $last.EndsWith(' out of sight')
-}
-
-# Browser-Wheel steps: wheel steps over the last row place the browser
-# logged (negative: down the list).
-function Browser-Wheel([int]$Steps) {
-  $line = "$(Ui-LogLines | Where-Object { $_ -match '^Browser (eye |radio )?Root.* at \d+,\d+$' } | Select-Object -Last 1)"
-  $match = [regex]::Match($line, ' at (\d+),(\d+)$')
-  if (-not $match.Success) { Ui-Fail 'no browser row in sight' }
-  $x = [int]$match.Groups[1].Value
-  $y = [int]$match.Groups[2].Value
-  [UiInput]::Move($script:UiWindow, $x, $y, 0)
-  Start-Sleep -Milliseconds 80
-  [UiInput]::Wheel($script:UiWindow, $x, $y, $Steps)
-  Ui-Sync
-}
-
-# Browser-Reveal "Browser <path>" steps: wheels until the row is in sight.
-function Browser-Reveal([string]$Text, [int]$Steps) {
-  for ($i = 0; $i -lt 20 -and -not (Place-Valid $Text); $i++) { Browser-Wheel $Steps }
-  if (-not (Place-Valid $Text)) { Ui-Fail "'$Text' cannot be scrolled into sight" }
-}
-
 # Browser-Scroll: where the rows are scrolled to now.
 function Browser-Scroll { return Ui-LastMatch '^Browser scroll (\d+)$' }
 
@@ -111,7 +83,7 @@ for ($i = 0; $i -lt 50; $i++) {
 }
 if (-not $plane -or $plane -eq '0,0') { Ui-Fail "Plane1's place in the view is not logged ('$plane')" }
 Write-Host "ok   Plane1 in the view at $plane"
-if (Place-Valid 'Browser Root/Construction/Plane1') { Ui-Fail 'every row in sight: nothing to scroll' }
+if (Ui-PlaceValid 'Browser Root/Construction/Plane1') { Ui-Fail 'every row in sight: nothing to scroll' }
 Write-Host 'ok   Plane1''s row is below the rows in sight'
 
 Write-Host '--- A pick in the view scrolls the tree to its row'
@@ -123,7 +95,6 @@ Ui-ExpectNew 'Browser Root/Construction/Plane1 at' 'its row in sight'
 Ui-ExpectNew 'Browser selected: Root/Construction/Plane1' 'and selected'
 
 Write-Host '--- Ctrl+click below, the first selected row scrolled away (mitcad#318)'
-Browser-Reveal 'Browser Root/Bodies/Body1' 3
 Ui-Mark
 Ui-Step 'click Body1'                    { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
 Ui-ExpectNew 'Selected: 1 body [body F2.b0]' 'Body1 selected'
@@ -162,8 +133,10 @@ Ui-Step 'click them again' { Quick-Eyes $quick }
 foreach ($path in $quick) { Ui-ExpectNew "Visibility ${path}: shown" "$path shown again" }
 if ((Ui-LastMatch '^Browser selected: (.*)$') -ne $selected) { Ui-Fail 'the second round changed the selection' }
 
-Browser-Reveal 'Browser Root/Bodies/Body60' -3
-if (Place-Valid 'Browser Root/Bodies/Body1') { Ui-Fail 'Body1''s row is still in sight' }
+# Body60's row wheeled into sight (Ui-BrowserReveal, which Ui-LoggedAt runs too).
+Ui-BrowserReveal 'Browser Root/Bodies/Body60'
+if (-not (Ui-PlaceValid 'Browser Root/Bodies/Body60')) { Ui-Fail "Body60's row cannot be scrolled into sight" }
+if (Ui-PlaceValid 'Browser Root/Bodies/Body1') { Ui-Fail 'Body1''s row is still in sight' }
 $before = Browser-Scroll
 if (-not $before -or [int]$before -le 0) { Ui-Fail "the rows are not scrolled down ('$before')" }
 Write-Host "ok   scrolled down to $before, Body1 out of sight"
@@ -180,7 +153,7 @@ if ($after -ne $before) { Ui-Fail "Ctrl+click scrolled the tree from $before to 
 if ((Ui-LogLines | Select-Object -Skip $script:UiMark) | Where-Object { $_.Contains('Browser scrolled to') }) {
   Ui-Fail 'the tree scrolled to a row'
 }
-if (-not (Place-Valid 'Browser Root/Bodies/Body60')) { Ui-Fail 'Body60''s row left the sight' }
+if (-not (Ui-PlaceValid 'Browser Root/Bodies/Body60')) { Ui-Fail 'Body60''s row left the sight' }
 Write-Host "ok   the scroll position stays at $after"
 
 Write-Host '--- Material... and Appearance... of a selected row are for every selected body (mitcad#703)'
@@ -234,11 +207,9 @@ $both = '(F2\.b0, F61\.b0|F61\.b0, F2\.b0)'
 # it starts with): Body1's row scrolled into sight and clicked, then
 # Body60's Ctrl+clicked.
 function Select-Both {
-  Browser-Reveal 'Browser Root/Bodies/Body1' 3
   Ui-Mark
   Ui-Step 'click Body1'                  { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
   Ui-ExpectNew 'Browser selected: Root/Bodies/Body1' 'Body1 selected'
-  Browser-Reveal 'Browser Root/Bodies/Body60' -3
   $place = Ui-LoggedAt 'Browser Root/Bodies/Body60'
   Ui-Step 'Ctrl+click Body60'            { Ui-ClickWith 'ctrl' $place[0] $place[1] }
   Ui-ExpectNew 'Browser selected: Root/Bodies/Body1, Root/Bodies/Body60' 'both rows selected again'

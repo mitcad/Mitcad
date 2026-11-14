@@ -113,8 +113,13 @@ QString MainWindow::mcpBlockedReason(bool editing) const {
   if (m_mode == Mode::PickPlane) {
     return QStringLiteral("Create Sketch waits for a plane to be picked: pick one or cancel it first.");
   }
-  if (m_drag || m_animation || (m_controller && m_controller->markerDragActive())) {
-    return QStringLiteral("Finish dragging or animating the design before accessing it externally.");
+  if (m_drag || (m_controller && m_controller->markerDragActive())) {
+    return QStringLiteral("Finish dragging the design before accessing it externally.");
+  }
+  if (m_animation) {
+    // It plays until stopped (mitcad#1790).
+    return QStringLiteral("A joint's animation plays until it is stopped: ui_command assemble.animate_joint again "
+                          "stops it (Esc in the application).");
   }
   if (!m_import.isNull()) {
     return QStringLiteral("An import is running; retry when it has finished.");

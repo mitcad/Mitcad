@@ -75,9 +75,35 @@ pub struct SketchStatus {
     /// activated. An import finds with it what of a sketch its file does not
     /// keep.
     pub unmet_inactive: Vec<ConstraintUid>,
+    /// The line distances between lines that are not parallel in the
+    /// solved sketch (mitcad#1774): a line distance holds (or measures) the
+    /// distance of the second line's middle from the first line, which is
+    /// the lines' distance only where they are parallel; the sketch warns
+    /// and shows them as in conflict.
+    pub not_parallel: Vec<ConstraintUid>,
 }
 
 impl SketchStatus {
+    /// The sketch warning about line distances between lines that are not
+    /// parallel (mitcad#1774), `None` when there is none: counted in plain
+    /// words; [`not_parallel`] names them.
+    ///
+    /// [`not_parallel`]: SketchStatus::not_parallel
+    pub fn not_parallel_warning(&self) -> Option<String> {
+        Some(match self.not_parallel.len() {
+            0 => return None,
+            1 => "a distance between lines that are not parallel: it holds the middle of one \
+                  line, not the lines' distance (the Dimension tool gives an angle for such \
+                  lines)"
+                .to_owned(),
+            n => format!(
+                "{n} distances between lines that are not parallel: each holds the middle of \
+                 one line, not the lines' distance (the Dimension tool gives an angle for such \
+                 lines)"
+            ),
+        })
+    }
+
     /// The sketch warning about collapsed curves (mitcad#365), `None` when
     /// none has collapsed: counted in plain words (mitcad#1612). The palette
     /// shows it; [`degenerate`] names what it is about.
@@ -1249,7 +1275,40 @@ pub fn solve_extra(
     let mut solved = built.read(entities, constraints, dimensions);
     built.analyze(&mut solved);
     solved.status.stored_violations = violated;
+    solved.status.not_parallel = not_parallel(dimensions, &solved);
     Ok(solved)
+}
+
+/// How far apart the distances of a line's two ends from the other line
+/// of a line distance may be (millimetres) before the lines count as not
+/// parallel (mitcad#1774); well above what a solve leaves of a Parallel.
+const NOT_PARALLEL_GAP: f64 = 1e-5;
+
+/// The line distances of `dimensions` between lines that are not parallel
+/// in `solved` (mitcad#1774, [`SketchStatus::not_parallel`]): the ends of
+/// the second line lie at distances from the first that differ by more
+/// than [`NOT_PARALLEL_GAP`].
+fn not_parallel(dimensions: &[DimensionInput<'_>], solved: &Solved) -> Vec<ConstraintUid> {
+    let line = |id: &EntityUid| match solved.curves.get(id) {
+        Some(Curve2::Line { a, b }) => Some((*a, *b)),
+        _ => None,
+    };
+    dimensions
+        .iter()
+        .filter_map(|d| {
+            let DimensionKind::LineDistance { a, b } = d.kind else {
+                return None;
+            };
+            let ((a0, a1), (b0, b1)) = (line(a)?, line(b)?);
+            let along = sub(a1, a0);
+            let length = norm(along);
+            if !(length.is_finite() && length > 0.0) {
+                return None;
+            }
+            let from_a = |p: P2| cross(along, sub(p, a0)) / length;
+            ((from_a(b1) - from_a(b0)).abs() > NOT_PARALLEL_GAP).then_some(d.id)
+        })
+        .collect()
 }
 
 /// The constraints and dimensions that `entities`' positions do not meet
@@ -1324,5 +1383,6 @@ pub fn drag_extra(
     built.solve(&told)?;
     let mut solved = built.read(entities, constraints, dimensions);
     built.analyze(&mut solved);
+    solved.status.not_parallel = not_parallel(dimensions, &solved);
     Ok(solved)
 }

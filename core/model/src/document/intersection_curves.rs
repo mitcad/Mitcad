@@ -7,7 +7,6 @@
 //! sketches changes.
 
 use super::{Document, ModelError, Projecting, ProjectionTarget, invalid};
-use crate::features::FeatureDef;
 use crate::ids::{FeatureUid, OccurrenceUid};
 use crate::kernel::{Curve3, Kernel};
 use crate::sketch::ProjectionSource;
@@ -36,9 +35,11 @@ impl<K: Kernel> Document<K> {
         let target = self.projection_target(sketch, occurrence, context, &fail)?;
         let at = self.state.require(source)?;
         let entry = &self.state.features[at];
-        if !matches!(entry.def, FeatureDef::IntersectionCurve(_)) {
+        // A Helix Curve's too (mitcad#1777).
+        if !entry.def.makes_curve() {
             return Err(fail(format!(
-                "{} ({source}) makes no curve to project; pick an intersection curve",
+                "{} ({source}) makes no curve to project; pick an intersection curve or a \
+                 helix curve",
                 entry.name
             )));
         }

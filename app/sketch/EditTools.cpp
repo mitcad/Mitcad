@@ -13,6 +13,7 @@
 #include <QObject>
 #include <QtLogging>
 
+#include "../framework/UserText.hpp"
 #include "SketchController.hpp"
 #include "SketchOverlay.hpp"
 #include "SketchTool.hpp"
@@ -148,6 +149,12 @@ public:
                               .arg(m_extend ? QStringLiteral("Extended") : QStringLiteral("Trimmed"), curve,
                                    text(on),
                                    joined.isEmpty() ? QString() : QStringLiteral(" (joined %1)").arg(joined));
+    // What the model says besides, in words: an offset's curve freed from
+    // its source first (mitcad#1755).
+    const QStringList notes = shownTexts(result, QStringLiteral("notes"), QStringLiteral("note_messages"));
+    if (!notes.isEmpty()) {
+      m_c.notice(QObject::tr("%1: %2").arg(name(), notes.join(QStringLiteral("; "))), NoticeLevel::Information);
+    }
   }
 
   void paint(ToolPreview& preview) const override {
@@ -166,6 +173,25 @@ private:
 
 // ---------------------------------------------------------------------------
 // Sketch dimension
+
+// The id (BodyGeometry::itemId) of the body item a selected body edge or
+// vertex is, of the visible bodies before the sketch: in the sketch plane,
+// and with `outOfPlane` also out of it (mitcad#866). Read now, not off the
+// UI thread (mitcad#1656): a tool takes its selection as it starts. Empty
+// when it is none of them (a hidden body, a body after the sketch, an edge
+// without a name, one out of the plane without `outOfPlane`).
+QString bodySelectionPick(SketchController& c, const SelectionItem& item, bool outOfPlane) {
+  const auto& bodies = c.bodyGeometry(outOfPlane, true).items();
+  const QString ownOccurrence = c.host().sketchOccurrence(c.uid());
+  const auto body = std::find_if(bodies.begin(), bodies.end(), [&item, &ownOccurrence](const BodyItem& candidate) {
+    // Own-component geometry has no occurrence link in this query;
+    // geometry from another component retains the exact source path.
+    return candidate.body == item.owner && candidate.source == item.name &&
+           candidate.isVertex() == (item.kind == SelectKind::Vertex) &&
+           item.occurrence == (candidate.linked ? candidate.occurrence : ownOccurrence);
+  });
+  return body == bodies.end() ? QString() : BodyGeometry::itemId(static_cast<std::size_t>(body - bodies.begin()));
+}
 
 class DimensionTool : public SketchTool {
 public:
@@ -199,25 +225,15 @@ public:
       } else if (item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex) {
         // In the sketch plane or out of it (mitcad#866): what it projects
         // to, projected when the dimension is added.
-        // Now, not off the UI thread (mitcad#1656): the tool takes it as
-        // it starts.
-        const auto& bodies = m_c.bodyGeometry(true, true).items();
-        const QString ownOccurrence = m_c.host().sketchOccurrence(m_c.uid());
-        const auto body = std::find_if(bodies.begin(), bodies.end(), [&item, &ownOccurrence](const BodyItem& candidate) {
-          // Own-component geometry has no occurrence link in this query;
-          // geometry from another component retains the exact source path.
-          return candidate.body == item.owner && candidate.source == item.name &&
-                 candidate.isVertex() == (item.kind == SelectKind::Vertex) &&
-                 item.occurrence == (candidate.linked ? candidate.occurrence : ownOccurrence);
-        });
-        if (body == bodies.end()) {
+        const QString body = bodySelectionPick(m_c, item, true);
+        if (body.isEmpty()) {
           supported = false;
           refused = QObject::tr("Sketch Dimension: %1 cannot be projected onto this sketch: it is not on a visible "
                                 "body before the sketch, where the sketch is edited.")
                         .arg(item.kind == SelectKind::Vertex ? QObject::tr("the body vertex")
                                                              : QObject::tr("the body edge"));
         } else {
-          m_picks << BodyGeometry::itemId(static_cast<std::size_t>(body - bodies.begin()));
+          m_picks << body;
         }
       } else {
         supported = false;
@@ -507,30 +523,7 @@ private:
       }
     }
     for (const auto& [field, item, part] : refs) {
-      const ProjectedItem projected = op.projectBody(item);
-      if (projected.empty()) {
-        return false;
-      }
-      const SketchModel& model = op.model();
-      QString entity = item.isPoint() ? projected.point : projected.curve;
-      if (!part.isEmpty()) {
-        const CurveData* curve = model.curve(projected.curve);
-        entity.clear();
-        if (curve != nullptr && part == QStringLiteral("center")) {
-          entity = curve->center;
-        } else if (curve != nullptr) {
-          // The projected curve's end where the edge's is.
-          const V2 want = part == QStringLiteral("start") ? item.curve.startPoint() : item.curve.endPoint();
-          double nearest = std::numeric_limits<double>::max();
-          for (const QString& end : {curve->start, curve->end}) {
-            const auto at = model.pointAt(end);
-            if (at && dist(*at, want) < nearest) {
-              nearest = dist(*at, want);
-              entity = end;
-            }
-          }
-        }
-      }
+      const QString entity = op.bodyInput(item, part);
       if (entity.isEmpty()) {
         return false;
       }
@@ -1059,6 +1052,15 @@ QString refusal(const QString& type, const QStringList& picks, const QString& en
   if (type == QStringLiteral("fix")) {
     return {};
   }
+  // Body edges and vertices in the sketch plane (mitcad#1782) stay where
+  // the body has them once projected, as the origin and axes stay: a
+  // constraint of only those has nothing of the sketch to move.
+  const auto stays = [&model](const QString& id) { return BodyGeometry::isBodyId(id) || model.isAxisOrOrigin(id); };
+  if (stays(entity) && std::all_of(picks.begin(), picks.end(), stays) &&
+      index + 1 >= needed(type, QStringList(picks) << entity, model)) {
+    return QObject::tr("pick a point or curve of the sketch too: body edges and vertices stay where the body has "
+                       "them");
+  }
   if (type == QStringLiteral("coincident")) {
     // A point and a point or curve, in either order.
     return (index == 0 || point || pickedPoints() > 0) ? QString() : QObject::tr("pick a point to go with the curve");
@@ -1193,6 +1195,13 @@ bool applyEach(SketchController& c, const QString& type, const QVector<QStringLi
     // The axes and the origin a pick stands for, made now (mitcad#500).
     if (!op.axisInputs(picks)) {
       reason = op.error();
+      continue;
+    }
+    // The body edges and vertices it names, projected now (linked) or an
+    // existing projection of them reused, in the constraint's undo step
+    // (mitcad#1782): the constraint is on the projected entities.
+    if (!op.bodyInputs(picks)) {
+      reason = op.error().isEmpty() ? QObject::tr("the body geometry could not be projected") : op.error();
       continue;
     }
     const QJsonObject constraint = build(type, picks, op.model(), clicks);
@@ -1335,6 +1344,45 @@ QVector<QStringList> selectionSets(const QString& type, const QStringList& picks
   return sets;
 }
 
+// The picks a selection gives a constraint, in its order: the sketch's
+// points and curves; its axes and origin as the entities the sketch has for
+// them, else as their picks, made when the constraint is added (mitcad#899;
+// Fix/Unfix leaves them out); and body edges and vertices in the sketch
+// plane by their body ids, projected when the constraint is added
+// (mitcad#1782; not for Fix/Unfix). `outside` is set when a body edge or
+// vertex is selected that is none of those (out of the plane, a hidden
+// body, a body after the sketch).
+QStringList constraintSelectionPicks(SketchController& c, const Selection& selected, const QString& type,
+                                     bool& outside) {
+  const bool fix = type == QStringLiteral("fix");
+  outside = false;
+  QStringList picks;
+  for (const SelectionItem& item : selected) {
+    if (item.owner == c.uid() && (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
+      picks << c.model().selectionPicks({item.name}, !fix);
+    } else if (!fix && (item.kind == SelectKind::Edge || item.kind == SelectKind::Vertex)) {
+      const QString body = bodySelectionPick(c, item, false);
+      if (body.isEmpty()) {
+        outside = true;
+      } else {
+        picks << body;
+      }
+    }
+  }
+  return picks;
+}
+
+// The sketch with the body edges and vertices in its plane as the fixed
+// entities they project to (mitcad#1782), and its axes and origin as the
+// fixed line and point the model makes for them: what a constraint tool
+// decides with.
+SketchModel constraintView(const SketchController& c) {
+  SketchModel view = c.model();
+  c.bodyGeometryShown().addTo(view);
+  view.addAxisPicks();
+  return view;
+}
+
 class ConstraintTool : public SketchTool {
 public:
   // The selection is read when the tool is made, as the Sketch Dimension
@@ -1369,6 +1417,15 @@ public:
       m_c.notice(QObject::tr("%1 does not take that: %2").arg(name(), why));
       prompt();
       return;
+    }
+    // A new constraint begins: the last refusal's blocking items, which its
+    // prompt replaces on the status line, are no longer painted
+    // (mitcad#1761).
+    m_c.setConflict(QStringLiteral("action"), {});
+    // For UI tests: a body edge or vertex picked, projected only when the
+    // constraint is added (mitcad#1782).
+    if (const BodyItem* item = m_c.bodyGeometryShown().item(entity)) {
+      qDebug().noquote() << QStringLiteral("%1 picked %2 of %3 (%4)").arg(name(), item->describe(), item->body, entity);
     }
     m_picks << entity;
     m_clicks.push_back(snap.at);
@@ -1442,26 +1499,28 @@ private:
   }
 
   // The sketch's points and curves selected when the tool started become
-  // its first picks (mitcad#865), when they fit in their order and are
-  // fewer than the constraint takes (constrainSelection applies a selection
-  // that is complete): the tool then waits for the rest. A selection that
-  // does not fit is left as it is, and the notice says why.
+  // its first picks (mitcad#865), and body edges and vertices in the sketch
+  // plane (mitcad#1782), when they fit in their order and are fewer than
+  // the constraint takes (constrainSelection applies a selection that is
+  // complete): the tool then waits for the rest. A selection that does not
+  // fit is left as it is, and the notice says why.
   void takeSelection() {
     const Selection selected = std::exchange(m_selection, {});
     if (m_type == QStringLiteral("fix")) {
       return;
     }
-    QStringList names;
-    for (const SelectionItem& item : selected) {
-      if (item.owner == m_c.uid() &&
-          (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
-        names << item.name;
-      }
-    }
     // The sketch's axes and origin selected (mitcad#899) as the entities
-    // the sketch has for them, else as their picks: made when the
-    // constraint is added (applyEach).
-    const QStringList picks = m_c.model().selectionPicks(names, true);
+    // the sketch has for them, else as their picks, and body items: made
+    // or projected when the constraint is added (applyEach).
+    bool outside = false;
+    const QStringList picks = constraintSelectionPicks(m_c, selected, m_type, outside);
+    if (outside) {
+      const QString why = QObject::tr("it takes body edges and vertices only in the sketch plane, of a visible body "
+                                      "before the sketch");
+      qDebug().noquote() << QStringLiteral("%1 does not take the selection: %2").arg(name(), why);
+      m_c.notice(QObject::tr("%1 does not take the selection: %2").arg(name(), why));
+      return;
+    }
     if (picks.isEmpty()) {
       return;
     }
@@ -1485,20 +1544,26 @@ private:
                               .arg(name(), m_picks.join(QStringLiteral(", ")));
   }
 
-  // The point or curve under the cursor, or the sketch's origin or an axis
-  // (mitcad#500); Fix/Unfix takes only the sketch's entities.
+  // The point or curve under the cursor: the sketch's, a body edge or
+  // vertex in the sketch plane (mitcad#1782), read again after the bodies
+  // changed, or the sketch's origin or an axis (mitcad#500); Fix/Unfix
+  // takes only the sketch's entities.
   QString entityAt(const QPointF& screen) const {
-    const unsigned filter = m_type == QStringLiteral("fix") ? unsigned(PickAll) : unsigned(PickAll | PickAxes);
-    return m_c.entityAt(screen, filter);
+    if (m_type == QStringLiteral("fix")) {
+      return m_c.entityAt(screen, PickAll);
+    }
+    m_c.bodyGeometry();
+    return m_c.entityAt(screen, PickAll | PickBody | PickAxes);
   }
 
-  // The sketch with its axes and origin as the fixed line and point the
-  // model makes for them, as long as it has not changed.
+  // The sketch with the body items in its plane and its axes and origin as
+  // the fixed entities they stand for (constraintView), as long as neither
+  // changed.
   const SketchModel& view() const {
-    if (m_c.modelRevision() != m_viewRevision) {
-      m_view = m_c.model();
-      m_view.addAxisPicks();
-      m_viewRevision = m_c.modelRevision();
+    const std::pair<int, int> key{m_c.modelRevision(), m_c.bodyGeometryShown().revision()};
+    if (key != m_viewKey) {
+      m_view = constraintView(m_c);
+      m_viewKey = key;
     }
     return m_view;
   }
@@ -1528,7 +1593,7 @@ private:
   // The end the constraint would use, shown while picking (mitcad#783).
   QString m_end;
   mutable SketchModel m_view;
-  mutable int m_viewRevision = -1;
+  mutable std::pair<int, int> m_viewKey{-1, -1};
 };
 
 } // namespace
@@ -1584,25 +1649,19 @@ QString constraintName(const QString& type) {
 }
 
 bool constrainSelection(SketchController& c, const QString& type) {
-  QStringList names;
-  for (const SelectionItem& item : c.host().selection()) {
-    if (item.owner == c.uid() &&
-        (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
-      names << item.name;
-    }
-  }
   // The sketch's axes and origin selected (mitcad#899): as the entities
   // the sketch has for them, else as their picks, which applyEach makes in
-  // the constraint's step. Fix/Unfix leaves them out.
-  const QStringList picks = c.model().selectionPicks(names, type != QStringLiteral("fix"));
-  if (picks.isEmpty()) {
+  // the constraint's step; body edges and vertices in the sketch plane
+  // (mitcad#1782), which applyEach projects in it. Fix/Unfix leaves both
+  // out. A body item it cannot take: the tool starts and says why.
+  bool outside = false;
+  const QStringList picks = constraintSelectionPicks(c, c.host().selection(), type, outside);
+  if (picks.isEmpty() || outside) {
     return false;
   }
-  // Decided on the sketch with those picks as the fixed line and point the
-  // model makes for them, as the tool does.
-  SketchModel view = c.model();
-  view.addAxisPicks();
-  const QVector<QStringList> sets = selectionSets(type, picks, view);
+  // Decided on the sketch with those picks as the fixed entities they
+  // stand for, as the tool does.
+  const QVector<QStringList> sets = selectionSets(type, picks, constraintView(c));
   if (sets.isEmpty()) {
     return false;
   }

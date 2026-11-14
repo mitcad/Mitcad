@@ -227,6 +227,15 @@ impl<S> Cache<S> {
                     Read::PrintLayer(bits) => {
                         state.design_layer_height().map(f64::to_bits) == *bits
                     }
+                    // A later flange's definition (mitcad#1776).
+                    Read::WallFlange(plane, key) => {
+                        crate::sheet::folded::wall_flange_key(
+                            &state.features,
+                            &state.feature_index,
+                            &walk.params,
+                            *plane,
+                        ) == *key
+                    }
                     Read::Sketch(uid, version) if before(uid).is_some() => {
                         done.sketches.get(uid).map(|s| s.version) == *version
                     }

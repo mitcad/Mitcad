@@ -60,7 +60,7 @@ void tableTests() {
     CHECK_ROLE(names.insert(name).second, roles[i]);
     CHECK_ROLE(themeColor(roles[i], false).isValid() && themeColor(roles[i], true).isValid(), roles[i]);
   }
-  CHECK(roles.back() == ColorRole::RuleText);
+  CHECK(roles.back() == ColorRole::CamGouge);
   // A palette's lightness picks the value; the 3D view's by its background.
   QPalette night;
   night.setColor(QPalette::Window, QColor(0x14, 0x15, 0x18));
@@ -213,6 +213,7 @@ void reservedHueTests() {
       ColorRole::RuleLogic,  ColorRole::RuleAction, ColorRole::PrintOverhang, ColorRole::PrintThin,
       ColorRole::PrintGap,
       ColorRole::SearchMatch, ColorRole::JointA,    ColorRole::JointB,     ColorRole::JointOrigin,
+      ColorRole::CamStock,    ColorRole::CamLeftThin, ColorRole::CamLeftThick, ColorRole::CamGouge,
   };
   for (const ColorRole role : domain) {
     for (const bool dark : {false, true}) {

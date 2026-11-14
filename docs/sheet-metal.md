@@ -389,6 +389,20 @@ Chamfer's first and second distances follow those boundaries away from the
 corner. Rounding or chamfering a concave hole corner reduces the void and adds
 material; the corresponding external corner removes material.
 
+A corner beside a bend (mitcad#1765), whose one boundary is the panel's
+tangent line to a bend, is a corner of the developed outline: the bend is
+opened into the panel's plane (`reconfigure`), the corner is taken between
+the panel's other boundary and the bend's side at the vertex, and the tool
+is removed from every chart in that plane with `developed_cut`, as Sheet
+Cut removes its profiles; the bend then folds again. The straight side the
+corner may take runs along the bend's side and on along boundaries in line
+with it (the side of the panel beyond the bend). An inside corner there
+would add material across the bend and is refused, as is a corner between
+two bends. An ordinary Fillet or Chamfer on such a corner's thickness edge
+(`corner_at` finds the corner) goes the same way
+(`folded::dressup_corners`), so the body stays a sheet. CLI:
+`cli.sheet_corner_beside_bend`, `cli.sheet_corner_beside_bend_fillet`.
+
 Rectangular relief is a finite-width slot with a straight end; round relief is
 a slot with a semicircular end, with its entered depth measured to the furthest
 tip. Both enter the bend region far enough to separate the moving material
@@ -686,9 +700,10 @@ Decisions made while implementing the command UI and the DXF export:
 
 - **Commands on the model API.** The Sheet Metal group of the Solid tab
   (`app/commands/SheetCommands.cpp`, [app/COMMANDS.md](../app/COMMANDS.md#sheet-metal))
-  has Face, Flange, Bend, Fold, Corner Round, Corner Chamfer, Sheet Cut,
-  Corner Relief, Unfold, Refold, Flat Pattern, Sheet Rules, Edit Sheet Rules,
-  Show Flat Pattern and Export Flat Pattern. It keeps no sheet model: picks
+  has Sheet Rules, Edit Sheet Rules, Face, Flange, Bend, Fold, Corner Relief,
+  Corner Round, Corner Chamfer, Sheet Cut, Unfold, Refold, Flat Pattern and
+  Show Flat Pattern, in that order and in sections (mitcad#1778); Export Flat
+  Pattern is on the Make tab. It keeps no sheet model: picks
   are faces and edges named by their domains, which the `sheet_reference`
   query turns into panels, bends, boundaries and corners (`at` chooses among
   pieces of one curve, and between panels whose coplanar caps the kernel
@@ -1427,21 +1442,41 @@ outline (commands.md, "A flange's profile sketch").
   ends are refused in words.
 - **Making it.** `sheet_flange_profile` reads the flange's definition on a
   copy of the document (its values may be expressions), computes the frame
-  against the sheet at the marker, and adds a hidden fixed construction
-  plane and a sketch on it with the rectangle of the current length and
-  width, its corners on the bend line fixed (one undo step); for a
-  definition with a profile it moves that profile's plane back onto the
-  wall. The Flange panel's Edit Profile runs it and opens the sketch while
-  the panel waits (app/COMMANDS.md, "Flange").
+  against the sheet at the marker, and adds a hidden `flange_wall`
+  construction plane and a sketch on it with the rectangle of the current
+  length and width, its corners on the bend line fixed (one undo step); for
+  a definition with a profile it puts that profile's plane back onto the
+  wall (a fixed plane becomes a `flange_wall` plane). The Flange panel's
+  Edit Profile runs it and opens the sketch while the panel waits
+  (app/COMMANDS.md, "Flange").
+- **Following the wall** (mitcad#1776, GitHub mitcad/Mitcad#310). A
+  `flange_wall` plane (`sheet/folded/profile_plane.rs`) is the wall's
+  sketch frame of the first flange whose `profile` is a sketch on it,
+  worked out at every recompute from the sheet before the plane and the
+  flange's boundary, angle, radius and position; until a flange names such
+  a sketch it is its stored frame. The plane comes before the flange, so it
+  reads the flange's definition, not its result: the read
+  `Read::WallFlange` (the flange's uid and definition fingerprint) makes
+  the cache, the resume after appended features and the result store
+  evaluate it again when the flange changes or comes to name the sketch.
+  A design opened with a profile on a fixed plane of its own (no other
+  feature refers to it, no links, not flipped) gets the `flange_wall`
+  plane with the same frame (`DocState::settle_flange_profiles`). The
+  warning that the sketch no longer lies on its wall stays for a sketch on
+  any other plane.
 - **Tests.** `sheet_profile_tests.rs` (the mock kernel, which trims no
   sheet domains: the sketch made on the wall with its rectangle, one undo
   step, a side slanted 10 degrees by an angle dimension to the bend line,
   the flange naming its profile, saved and reopened, a profile across the
   bend line refused without ids, offsets refused, the plane moved back for
-  another angle and refused for a sketch on no fixed plane of its own);
+  another angle and refused for a sketch on no fixed plane of its own; the
+  plane following the wall after the Face is narrowed and the angle
+  changed, within 1e-6 mm of a profile made anew there; an earlier
+  design's fixed plane made a flange-wall plane when opened, or on Edit
+  Profile when another sketch shares it);
   CLI `cli.sheet_flange_profile` (volumes and Flat Pattern areas of the
-  rectangular and the tapered wall, the warning at another angle and the
-  plane moved back); `tools/ui-sheet-flange-profile-test.sh`
+  rectangular and the tapered wall, the Face narrowed and the angle changed
+  without a warning, the warning for a profile on the XY plane); `tools/ui-sheet-flange-profile-test.sh`
   and the ctest `app.ui-windows-sheet-flange-profile`.
 
 ## Kernel seam

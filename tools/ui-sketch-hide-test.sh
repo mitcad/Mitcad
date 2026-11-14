@@ -14,7 +14,9 @@
 #     section (pixels of a screen dump in its line's or halo's colours, not
 #     the cap's; mitcad#784): in the view the sketch opened in, zoomed in
 #     and zoomed out, from the isometric view and in the perspective view
-#     (fitted); from below, Body1's lower half hides it.
+#     (fitted); from below, Body1's lower half is in front of it: the circle
+#     is not drawn at full strength there (it shows through dimmed,
+#     mitcad#1762).
 #   - Offset (mitcad#223) on a circle under Body1's top: the bodies stay
 #     cut while its panel is open, while it previews and after Cancel and
 #     OK; with the option off, Offset does not turn it on.
@@ -113,7 +115,9 @@ sketch_pixels() {
 # over_section "view" 1|0: with the pointer off the sketch (its hover would
 # draw the circle over the view), a dump: at the circle's point (25, 10)
 # over Body1's cap the circle's line or halo is drawn (1), or neither is
-# (0: hidden by the body in front of the plane).
+# (0: behind the body in front of the plane, at most dimmed: mitcad#1762
+# draws the edited sketch through it faintly, which these colours do not
+# count).
 over_section() {
   local count
   xdotool mousemove $(ui_view_at 3 97)
@@ -128,8 +132,8 @@ over_section() {
     [ "$count" -ge 3 ] || ui_fail "$1: the circle over the section is hidden ($count pixels of its line or halo)"
     echo "ok   $1: the circle is drawn over the section ($count pixels of its line or halo)"
   else
-    [ "$count" -eq 0 ] || ui_fail "$1: the circle shows through the body in front of it ($count pixels)"
-    echo "ok   $1: the body in front of the plane hides the circle"
+    [ "$count" -eq 0 ] || ui_fail "$1: the circle is drawn at full strength through the body in front of it ($count pixels)"
+    echo "ok   $1: behind the body in front of the plane the circle is not drawn at full strength"
   fi
 }
 

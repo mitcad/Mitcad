@@ -725,16 +725,18 @@ const OriginDatum kOriginDatums[] = {
     {"yz", "YZ", "offset-plane"}};
 
 SelectKind datumKind(const QString& type) {
-  // A joint origin's datum is a plane with its frame (mitcad#55).
-  if (type == QStringLiteral("construction_plane") || type == QStringLiteral("joint_origin") || type.size() == 2) {
+  // A joint origin's datum is a plane with its frame (mitcad#55), as a
+  // coordinate system's (mitcad#1775).
+  if (type == QStringLiteral("construction_plane") || type == QStringLiteral("joint_origin") ||
+      type == QStringLiteral("coordinate_system") || type.size() == 2) {
     return SelectKind::Plane;
   }
   if (type == QStringLiteral("construction_axis") || type.size() == 1) {
     return SelectKind::Axis;
   }
   // An Intersection Curve's row picks the feature, as its curve in the view
-  // does (mitcad#1405).
-  if (type == QStringLiteral("intersection_curve")) {
+  // does (mitcad#1405); so does a Helix Curve's (mitcad#1777).
+  if (DocumentSnapshot::Feature::makesCurve(type)) {
     return SelectKind::Feature;
   }
   return SelectKind::Point;
@@ -1047,6 +1049,12 @@ protected:
                     item == currentItem() && item->isSelected() && (item->flags() & Qt::ItemIsEditable) &&
                     state() != QAbstractItemView::EditingState && partsOf(item).name.contains(at);
     m_pressAt = at;
+    // A CAM operation's row may be dragged onto another (mitcad#1013).
+    m_camDragging = false;
+    m_camPress = event->button() == Qt::LeftButton && item != nullptr ? m_panel.nodeOf(item) : BrowserNode();
+    if (m_camPress.type != BrowserNode::Type::CamOperation) {
+      m_camPress = BrowserNode();
+    }
     QTreeWidget::mousePressEvent(event);
   }
 
@@ -1054,6 +1062,18 @@ protected:
     if (m_partPress) {
       event->accept();
       return;
+    }
+    if (m_camPress.isValid() && (event->buttons() & Qt::LeftButton)) {
+      if (!m_camDragging &&
+          (event->position().toPoint() - m_pressAt).manhattanLength() >= QApplication::startDragDistance()) {
+        m_camDragging = true;
+        m_renamePress = false;
+        viewport()->setCursor(Qt::ClosedHandCursor);
+      }
+      if (m_camDragging) {
+        event->accept();
+        return;
+      }
     }
     QTreeWidget::mouseMoveEvent(event);
   }
@@ -1066,6 +1086,24 @@ protected:
       event->accept();
       return;
     }
+    if (m_camDragging && event->button() == Qt::LeftButton) {
+      // A CAM operation let go on another operation's or a setup's row.
+      m_camDragging = false;
+      viewport()->unsetCursor();
+      const BrowserNode source = m_camPress;
+      m_camPress = BrowserNode();
+      QTreeWidgetItem* onto = itemAt(event->position().toPoint());
+      const BrowserNode target = onto != nullptr ? m_panel.nodeOf(onto) : BrowserNode();
+      if ((target.type == BrowserNode::Type::CamOperation || target.type == BrowserNode::Type::CamSetup) &&
+          !(target.type == source.type && target.uid == source.uid)) {
+        emit m_panel.camOperationDropped(source, target);
+      } else {
+        qDebug().noquote() << QStringLiteral("Browser CAM drop: %1 nowhere").arg(source.name);
+      }
+      event->accept();
+      return;
+    }
+    m_camPress = BrowserNode();
     const bool slowClick = m_renamePress && event->button() == Qt::LeftButton;
     m_renamePress = false;
     QTreeWidget::mouseReleaseEvent(event);
@@ -1215,6 +1253,10 @@ private:
   QPoint m_pressAt;
   QTimer m_renameTimer;
   BrowserNode m_renameNode;
+  // A CAM operation's row pressed (mitcad#1013): dragged past the drag
+  // distance it moves onto the row it is let go on.
+  BrowserNode m_camPress;
+  bool m_camDragging = false;
 };
 
 BrowserPanel::BrowserPanel(QWidget* parent) : QWidget(parent), m_tree(new BrowserTree(*this)) {
@@ -1645,6 +1687,12 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("center-of-mass");
   case BrowserNode::Type::Features:
     return QStringLiteral("features") + at;
+  case BrowserNode::Type::CamFolder: // mitcad#1013
+    return QStringLiteral("cam");
+  case BrowserNode::Type::CamSetup:
+    return QStringLiteral("cam-setup:") + node.uid;
+  case BrowserNode::Type::CamOperation:
+    return QStringLiteral("cam-operation:") + node.uid;
   case BrowserNode::Type::None:
     break;
   }
@@ -1671,10 +1719,10 @@ void markBound(QTreeWidgetItem* row, const QString& path, const QStringList& lin
 }
 
 // The light bulb of a row that follows a condition (`bound`: drawn with the
-// fx corner badge) or of a folder that holds such rows (the plain bulb: the
-// folder has no condition of its own), with a tooltip that says what a click
-// does, and a log line for the UI tests ("Browser fx bulb Root/Bodies/Body2
-// off: Shown when …", "Browser bulb Root/Bodies on: …").
+// fx corner badge), with a tooltip that says what a click does, and a log
+// line for the UI tests ("Browser fx bulb Root/Bodies/Body2 off: Shown
+// when …"). A Bodies folder's eye is its own since mitcad#1771 and changes
+// no body, so it has the plain bulb without such a tooltip.
 void markConditionBulb(QTreeWidgetItem* row, const QString& path, bool visible, const QString& tip,
                        bool bound) {
   row->setData(kName, kEyeTipRole, tip);
@@ -1684,15 +1732,6 @@ void markConditionBulb(QTreeWidgetItem* row, const QString& path, bool visible, 
   qDebug().noquote() << QStringLiteral("Browser %1 %2 %3: %4")
                             .arg(bound ? QStringLiteral("fx bulb") : QStringLiteral("bulb"), path,
                                  visible ? QStringLiteral("on") : QStringLiteral("off"), tip);
-}
-
-// Bodies that follow their Show When conditions, as a folder's light bulb
-// says it ("Body2 follows its Show When and is left as it is").
-QString leftToConditions(const QStringList& names) {
-  return names.size() == 1
-             ? BrowserPanel::tr("%1 follows its Show When and is left as it is.").arg(names.first())
-             : BrowserPanel::tr("%1 follow their Show When and are left as they are.")
-                   .arg(names.join(QStringLiteral(", ")));
 }
 
 // The tooltip of a conditioned row's light bulb: the condition, what it
@@ -1795,6 +1834,7 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                          node.type == BrowserNode::Type::ContactSet ||
                          node.type == BrowserNode::Type::Drawing ||
                          node.type == BrowserNode::Type::ImageReference ||
+                         node.type == BrowserNode::Type::CamSetup || node.type == BrowserNode::Type::CamOperation ||
                          (node.type == BrowserNode::Type::NamedView &&
                           node.uid.startsWith(QStringLiteral("named:")));
   if (renamable) {
@@ -1808,7 +1848,8 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
                     node.type == BrowserNode::Type::Joints || node.type == BrowserNode::Type::MotionStudies ||
                     node.type == BrowserNode::Type::ContactSets || node.type == BrowserNode::Type::MotionLinks ||
                     node.type == BrowserNode::Type::Measurements || node.type == BrowserNode::Type::Drawings ||
-                    node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features;
+                    node.type == BrowserNode::Type::ImageReferences || node.type == BrowserNode::Type::Features ||
+                    node.type == BrowserNode::Type::CamFolder || node.type == BrowserNode::Type::CamSetup;
   item->setExpanded(m_expanded.value(key, open));
   return item;
 }
@@ -1831,46 +1872,26 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
   if (def != nullptr && !def->bodies.isEmpty()) {
     folder.type = BrowserNode::Type::Bodies;
     folder.name = tr("Bodies");
-    // The folder's light bulb and Show All / Hide All change the bodies
-    // without a Show When condition (mitcad#863): its state is theirs; it
-    // is greyed only when no body is shown.
-    bool anyVisible = false;
-    bool freeShown = false;
+    // The folder's eye is its own (mitcad#1771): off, it hides every body
+    // in it, their own light bulbs (and Show When conditions, mitcad#863)
+    // as they are; on, each body follows its own. Greyed while the view
+    // shows none of its bodies.
+    const bool folderOn = snapshot.folderShown(component, DocumentSnapshot::Folder::Bodies);
     // Isolate (mitcad#1700): the folder is left out when the isolation
-    // leaves out every body in it; greyed when the view shows none of them.
+    // leaves out every body in it.
     bool anyIsolated = false;
     bool anyShown = false;
-    QStringList conditioned;
     for (const QString& uid : def->bodies) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
       const bool isolated = DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
       anyIsolated = anyIsolated || isolated;
-      anyVisible = anyVisible || body.visible;
       anyShown = anyShown || (body.visible && isolated);
-      if (body.visibleWhen.isEmpty()) {
-        freeShown = freeShown || body.visible;
-      } else {
-        conditioned << (body.name.isEmpty() ? uid : body.name);
-      }
     }
-    const bool allConditioned = conditioned.size() == def->bodies.size();
-    folder.visible = allConditioned ? anyVisible : freeShown;
+    folder.visible = folderOn;
     folder.isolatedOut = !anyIsolated;
     QTreeWidgetItem* bodies = addRow(parent, folder, QStringLiteral("folder"));
     folder.isolatedOut = false; // the other folders follow no isolation
-    gray(bodies, shown && anyShown);
-    // The folder has no condition of its own: the plain bulb, whose
-    // tooltip names the bodies it leaves as they are.
-    if (!conditioned.isEmpty()) {
-      const QString left = leftToConditions(conditioned);
-      QString tip = left;
-      if (!allConditioned) {
-        const QString click = folder.visible ? tr("Clicking the light bulb hides the other bodies.")
-                                             : tr("Clicking the light bulb shows the other bodies.");
-        tip = QStringLiteral("%1 %2").arg(click, left);
-      }
-      markConditionBulb(bodies, m_nodes.value(bodies).path, folder.visible, tip, false);
-    }
+    gray(bodies, shown && anyShown && folderOn);
     for (const QString& uid : def->bodies) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
       BrowserNode node;
@@ -1885,7 +1906,8 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       node.mesh = body.mesh;
       // Left out by Isolate (mitcad#1700): its eye off, its name greyed.
       node.isolatedOut = !DocumentSnapshot::isolationShows(snapshot.isolation, uid, occurrence);
-      const bool drawn = shown && body.visible && !node.isolatedOut;
+      // Its folder hidden (mitcad#1771): greyed, its own eye as it is.
+      const bool drawn = shown && folderOn && body.visible && !node.isolatedOut;
       const QString feature = uid.section(QLatin1Char('.'), 0, 0);
       const DocumentSnapshot::Feature* made = snapshot.feature(feature);
       // In words (mitcad#1741): the body's uid is for agents and logs.
@@ -1949,15 +1971,20 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     }
     folder.type = sketches ? BrowserNode::Type::Sketches : BrowserNode::Type::Construction;
     folder.name = sketches ? tr("Sketches") : tr("Construction");
-    folder.visible = false;
+    // The folder's eye is its own (mitcad#1771): off, it hides everything
+    // in it, the rows' own light bulbs as they are.
+    const bool folderOn = snapshot.folderShown(
+        component, sketches ? DocumentSnapshot::Folder::Sketches : DocumentSnapshot::Folder::Construction);
+    folder.visible = folderOn;
+    bool anyShown = false;
     for (const DocumentSnapshot::Feature* feature : features) {
-      folder.visible = folder.visible || snapshot.isShown(feature->uid);
+      anyShown = anyShown || snapshot.isShown(feature->uid);
     }
     QTreeWidgetItem* rows = addRow(parent, folder, QStringLiteral("folder"));
     // View › Show greys a hidden kind's folder and rows, their light bulbs
-    // as they are (mitcad#1287).
-    const bool kindShown = sketches ? snapshot.showSketches : snapshot.showConstruction;
-    gray(rows, shown && folder.visible && kindShown);
+    // as they are (mitcad#1287); so does the folder's own eye.
+    const bool kindShown = (sketches ? snapshot.showSketches : snapshot.showConstruction) && folderOn;
+    gray(rows, shown && anyShown && kindShown);
     for (const DocumentSnapshot::Feature* feature : features) {
       QTreeWidgetItem* row = addSketchRow(rows, snapshot, *feature, occurrence, component, sketches, shown, kindShown);
       if (sketches) {
@@ -2241,7 +2268,8 @@ void BrowserPanel::addFeaturesFolder(QTreeWidgetItem* parent, const DocumentSnap
     QTreeWidgetItem* row = addRow(rows, node, featureIcon(feature->type), tip);
     markFeatureRow(row, *feature, linked, off, shown);
     for (const DocumentSnapshot::Feature* sketch : std::as_const(sketches)) {
-      addSketchRow(row, snapshot, *sketch, occurrence, component, true, shown, snapshot.showSketches, feature->uid,
+      // View › Show and the Sketches folder's eye (mitcad#1771).
+      addSketchRow(row, snapshot, *sketch, occurrence, component, true, shown, !snapshot.kindHidden(*sketch), feature->uid,
                    users.value(sketch->uid));
     }
   }
@@ -2346,10 +2374,10 @@ void BrowserPanel::addSheetRows(QTreeWidgetItem* bodyRow, const DocumentSnapshot
     }
     QTreeWidgetItem* flatRow = addRow(
         bodyRow, item, QStringLiteral("flat-pattern"),
-        valid ? tr("Flat Pattern of %1: %2 mm2, %3 bend(s); the light bulb shows it flat")
+        valid ? tr("Flat Pattern of %1: %2 mm2, %n bend(s); the light bulb shows it flat", nullptr,
+                   pattern.value(QStringLiteral("bends")).toInt())
                     .arg(body.name)
                     .arg(pattern.value(QStringLiteral("area")).toDouble(), 0, 'f', 2)
-                    .arg(pattern.value(QStringLiteral("bends")).toInt())
               : notValid);
     if (!valid) {
       setNameRole(flatRow, ColorRole::ErrorText);
@@ -2620,6 +2648,74 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     }
   }
 
+  // CAM (mitcad#1013): the root's CAM folder, a row per setup with its eye
+  // (its toolpaths in the view), its operations in order under it, each
+  // with its state's icon and the state in words in its tooltip; a
+  // suppressed one dimmed, a setup whose work frame is not found red.
+  if (!snapshot.camSetups.isEmpty()) {
+    BrowserNode folder;
+    folder.type = BrowserNode::Type::CamFolder;
+    folder.component = rootNode.uid;
+    folder.name = tr("CAM");
+    QTreeWidgetItem* cam = addRow(rootItem, folder, QStringLiteral("folder"));
+    QStringList logged;
+    for (const QJsonValue& value : snapshot.camSetups) {
+      const QJsonObject setup = value.toObject();
+      BrowserNode row;
+      row.type = BrowserNode::Type::CamSetup;
+      row.component = rootNode.uid;
+      row.uid = QString::number(setup.value(QStringLiteral("id")).toInt());
+      row.name = setup.value(QStringLiteral("name")).toString();
+      row.hasEye = true;
+      row.visible = setup.value(QStringLiteral("visible")).toBool(true);
+      const QJsonArray operations = setup.value(QStringLiteral("operations")).toArray();
+      const QString error =
+          mitcad::modelMessage(setup.value(QStringLiteral("work")).toObject().value(QStringLiteral("error")).toString());
+      const QString tooltip = !error.isEmpty()
+                                  ? QStringLiteral("%1: %2").arg(row.name, error)
+                                  : tr("%1: %n operation(s)", nullptr, static_cast<int>(operations.size())).arg(row.name);
+      QTreeWidgetItem* setupItem = addRow(cam, row, QStringLiteral("cnc-setup"), tooltip);
+      if (!error.isEmpty()) {
+        setNameRole(setupItem, ColorRole::ErrorText);
+      } else if (!row.visible) {
+        setNameRole(setupItem, ColorRole::TextHidden);
+      }
+      QStringList states;
+      for (const QJsonValue& entry : operations) {
+        const QJsonObject operation = entry.toObject();
+        BrowserNode op;
+        op.type = BrowserNode::Type::CamOperation;
+        op.component = rootNode.uid;
+        op.uid = QString::number(operation.value(QStringLiteral("id")).toInt());
+        op.name = operation.value(QStringLiteral("name")).toString();
+        op.camSetup = row.uid;
+        op.camState = operation.value(QStringLiteral("state")).toString();
+        const bool suppressed = op.camState == QStringLiteral("suppressed");
+        const QString icon = op.camState == QStringLiteral("up_to_date")    ? QStringLiteral("cnc-op-current")
+                             : op.camState == QStringLiteral("out_of_date") ? QStringLiteral("cnc-op-outdated")
+                             : suppressed                                   ? QStringLiteral("cnc-op-suppressed")
+                                                                            : QStringLiteral("cnc-op-pending");
+        const QString words = op.camState == QStringLiteral("up_to_date")
+                                  ? tr("toolpath up to date")
+                              : op.camState == QStringLiteral("out_of_date")
+                                  ? tr("out of date: the model or the operation changed; Generate computes it again")
+                              : suppressed ? tr("suppressed: left out of the toolpaths and the program")
+                                           : tr("not generated yet: Generate computes its toolpath");
+        QTreeWidgetItem* opItem = addRow(setupItem, op, icon, QStringLiteral("%1: %2").arg(op.name, words));
+        if (suppressed) {
+          setNameRole(opItem, ColorRole::TextHidden);
+        }
+        states << QStringLiteral("%1 %2").arg(op.name, op.camState);
+      }
+      logged << QStringLiteral("%1 [%2]").arg(row.name, states.join(QStringLiteral(", ")));
+    }
+    const QString line = QStringLiteral("Browser CAM: %1").arg(logged.join(QStringLiteral("; ")));
+    if (line != m_loggedCam) {
+      m_loggedCam = line;
+      qDebug().noquote() << line;
+    }
+  }
+
   // Annotations (mitcad#702; the measurement objects of mitcad#649): one
   // folder row that opens the Annotations window, where they are listed
   // and edited; its tooltip counts them and the broken ones.
@@ -2628,14 +2724,24 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
     folder.type = BrowserNode::Type::Measurements;
     folder.component = rootNode.uid;
     folder.name = tr("Annotations");
+    // One whose picks are on features after the timeline marker is rolled
+    // back with them (mitcad#1756: a sketch edited), not broken.
     int broken = 0;
+    int rolledBack = 0;
     for (const QJsonValue& value : snapshot.measurements) {
-      broken += value.toObject().contains(QStringLiteral("error")) ? 1 : 0;
+      const QJsonObject annotation = value.toObject();
+      if (annotation.value(QStringLiteral("rolled_back")).toBool()) {
+        ++rolledBack;
+      } else if (annotation.contains(QStringLiteral("error"))) {
+        ++broken;
+      }
     }
     const int count = static_cast<int>(snapshot.measurements.size());
-    const QString tooltip = broken > 0 ? tr("%n annotation(s), %1 broken", nullptr, count)
-                                             .arg(broken)
-                                       : tr("%n annotation(s)", nullptr, count);
+    QString tooltip = broken > 0 ? tr("%n annotation(s), %1 broken", nullptr, count).arg(broken)
+                                 : tr("%n annotation(s)", nullptr, count);
+    if (rolledBack > 0) {
+      tooltip += tr(", %n rolled back", nullptr, rolledBack);
+    }
     QTreeWidgetItem* item = addRow(rootItem, folder, QStringLiteral("measure"), tooltip);
     // Its level, logged as the feature rows log theirs (mitcad#1051).
     const QString path = m_nodes.value(item).path;
@@ -3110,10 +3216,12 @@ void BrowserPanel::setOwnerMarks(const Selection& owners, bool scroll) {
   }
   // None of the selected or marked rows in sight (as showSelection and
   // logLayout tell it: the middle of the row in the view): the newest
-  // owner's row, its folded parents opened as the tree scrolls to it.
+  // owner's row, its folded parents opened as the tree scrolls to it. A
+  // marked folder (mitcad#1792) only leads to its rows: it does not count.
   const QRect sight = m_tree->viewport()->rect();
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
-    if (!(*it)->isSelected() && !(*it)->data(kName, kOwnerMarkRole).toBool()) {
+    if (!(*it)->isSelected() &&
+        (!(*it)->data(kName, kOwnerMarkRole).toBool() || m_nodes.value(*it).isFolder())) {
       continue;
     }
     bool open = !(*it)->isHidden();
@@ -3157,10 +3265,23 @@ QTreeWidgetItem* BrowserPanel::applyOwnerMarks() {
     if (found.isEmpty()) {
       continue;
     }
+    const bool own = owner.kind != SelectKind::Component;
     for (QTreeWidgetItem* row : std::as_const(found)) {
       marked.insert(row);
+      // The folders on a body's or sketch's path up to its component's row
+      // (mitcad#1792): Bodies, Sketches, Construction, Features, so that
+      // the trail leads down to the row; a folded folder's mark shows
+      // where the row is hidden.
+      for (QTreeWidgetItem* parent = own ? row->parent() : nullptr; parent != nullptr; parent = parent->parent()) {
+        const BrowserNode node = m_nodes.value(parent);
+        if (node.type == BrowserNode::Type::Component) {
+          break;
+        }
+        if (node.isFolder()) {
+          marked.insert(parent);
+        }
+      }
     }
-    const bool own = owner.kind != SelectKind::Component;
     if (own || !deep) {
       target = found.first();
       deep = own;
@@ -3329,6 +3450,17 @@ void BrowserPanel::selectionChanged() {
       items.append(item);
     }
   }
+  // The CAM operation selected (mitcad#1013): its toolpath is the view's
+  // current one.
+  int camOperation = 0;
+  for (QTreeWidgetItem* row : m_tree->selectedItems()) {
+    const BrowserNode node = nodeOf(row);
+    if (node.type == BrowserNode::Type::CamOperation) {
+      camOperation = node.uid.toInt();
+      break;
+    }
+  }
+  emit camOperationSelected(camOperation);
   emit rowsPicked(items, features);
 }
 

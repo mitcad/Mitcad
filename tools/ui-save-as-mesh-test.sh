@@ -212,7 +212,7 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_focus_main
 ui_expect_new "Export dialog: 3MF for 3D printing (*.3mf) to $WORK/meshes/Plate.3mf, refinement high" \
   "3MF with refinement High, the name's extension follows the type"
-ui_expect_new "Exported $WORK/meshes/Plate.3mf: 3mf, 1 body(ies)" "Plate written as 3MF" 30
+ui_expect_new "Exported $WORK/meshes/Plate.3mf: 3mf, 1 body" "Plate written as 3MF" 30
 [ -s "$WORK/meshes/Plate.3mf" ] || ui_fail "no Plate.3mf"
 ui_expect_log "Browser Root/Lid:1/Bodies/Lid at" "the browser lists Lid's body in Lid:1"
 ui_mark
@@ -228,7 +228,7 @@ ui_step "OK (Enter)"                       ui_key Return
 ui_focus_main
 ui_expect_new "Export dialog: 3MF for 3D printing (*.3mf) to $WORK/meshes/Lid.3mf, refinement high" \
   "taken as proposed"
-ui_expect_new "Exported $WORK/meshes/Lid.3mf: 3mf, 1 body(ies)" "Lid written as 3MF" 30
+ui_expect_new "Exported $WORK/meshes/Lid.3mf: 3mf, 1 body" "Lid written as 3MF" 30
 [ -s "$WORK/meshes/Lid.3mf" ] || ui_fail "no Lid.3mf"
 echo "ok   both files written"
 

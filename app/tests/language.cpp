@@ -100,6 +100,32 @@ int languageTests() {
     CHECK(plain.translate("mitcad::ViewController", "%1 View").isEmpty());
     CHECK(!plain.translate("View", "Top View").contains(QLatin1Char('-')));
   }
+  // English's plural forms (mitcad#1756): a count says "1 degree of
+  // freedom" and "17 degrees of freedom", never "degree(s)"; the other
+  // texts are not in it (English already).
+  {
+    const QString english = folder.filePath(QStringLiteral("mitcad_en.qm"));
+    CHECK(QFileInfo::exists(english));
+    QTranslator plurals;
+    CHECK(plurals.load(english));
+    CHECK(plurals.translate("mitcad::sketch::SketchOverlay", "%1: %n degree(s) of freedom", nullptr, 1) ==
+          QStringLiteral("%1: %n degree of freedom"));
+    CHECK(plurals.translate("mitcad::sketch::SketchOverlay", "%1: %n degree(s) of freedom", nullptr, 17) ==
+          QStringLiteral("%1: %n degrees of freedom"));
+    CHECK(plurals.translate("mitcad::BrowserPanel", "%n annotation(s)", nullptr, 1) ==
+          QStringLiteral("%n annotation"));
+    CHECK(plurals.translate("mitcad::BrowserPanel", "%n annotation(s)", nullptr, 2) ==
+          QStringLiteral("%n annotations"));
+    CHECK(plurals.translate("mitcad::AppearanceDialog", "Used by %n body(ies)", nullptr, 3) ==
+          QStringLiteral("Used by %n bodies"));
+    CHECK(plurals.translate("QObject", "Extrude").isEmpty());
+    // Not a language to choose: English is listed once, as itself.
+    int englishes = 0;
+    for (const mitcad::InterfaceLanguage& language : mitcad::availableLanguages()) {
+      englishes += language.code == QStringLiteral("en") ? 1 : 0;
+    }
+    CHECK(englishes == 1);
+  }
   const QString pseudo = folder.filePath(QStringLiteral("mitcad_xx.qm"));
   CHECK(QFileInfo::exists(pseudo));
   const QString marked = mitcad::catalogueText(pseudo, "QObject", "Extrude");

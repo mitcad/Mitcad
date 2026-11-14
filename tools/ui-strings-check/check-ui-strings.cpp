@@ -10,7 +10,8 @@
 // items; no '{x}' quoting in the Rust messages; and no
 // SelectionItem::logDescription() (internal names and ids, mitcad#1741) in
 // a text a person sees: inside a tr() text's .arg() chain or a text
-// setter's arguments (kTextSinks).
+// setter's arguments (kTextSinks); and no count put in with .arg() before a
+// bracketed plural ("%1 face(s)", mitcad#1758) in the app's texts: %n.
 //
 //   mitcad-check-ui-strings DIR|FILE.md...
 //                                  scans the .cpp, .hpp, .mm and .rs files
@@ -53,6 +54,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -108,6 +110,8 @@ const ObjcAllowed kObjcAllowed[] = {
     {"Create", "a menu's title, compared with by the native test input"},
     {"Sketch", "a menu's title, compared with by the native test input"},
     {"Ag", "a sample of a font's letters, measured and not shown"},
+    {"The design has no preview.", "the Quick Look extension's error to the system, which logs it and shows no text"},
+    {"The file has no MitCad preview.", "the Quick Look extension's error to the system, which logs it and shows no text"},
 };
 
 // Rust strings whose quotes belong to a syntax, not to a message: the end
@@ -245,6 +249,50 @@ bool timesInSize(const std::string& text) {
   return false;
 }
 
+// A count put into the text with .arg() before a word whose plural is in
+// brackets: "%1 face(s)", "%2 thin region(s)" (rule 12, mitcad#1758). The
+// brackets stay in every language; tr(text, comment, n) with %n gives the
+// catalogues the count, and each language its own forms. Up to two words
+// may stand between ("%1 hidden feature(s)"), none of them a short word:
+// "%1 of the face(s)" is a name, not a count.
+bool countedBracketedPlural(const std::string& text) {
+  for (std::size_t at = text.find('%'); at != std::string::npos; at = text.find('%', at + 1)) {
+    std::size_t i = at + 1;
+    if (i < text.size() && text[i] == 'L') {
+      ++i;
+    }
+    const std::size_t number = i;
+    while (i < text.size() && digit(text[i])) {
+      ++i;
+    }
+    if (i == number) {
+      continue; // %n, %%, a percent sign
+    }
+    for (int between = 0; between < 3 && i < text.size() && text[i] == ' '; ++between) {
+      const std::size_t start = ++i;
+      while (i < text.size() && (letter(text[i]) || text[i] == '-')) {
+        ++i;
+      }
+      if (i == start) {
+        break;
+      }
+      for (const char* ending : {"(s)", "(es)", "(ies)"}) {
+        if (text.compare(i, std::strlen(ending), ending) == 0 && letter(text[i - 1])) {
+          return true;
+        }
+      }
+      std::string lowered;
+      for (std::size_t k = start; k < i; ++k) {
+        lowered += static_cast<char>(std::tolower(static_cast<unsigned char>(text[k])));
+      }
+      if (kSmallWords.count(lowered)) {
+        break;
+      }
+    }
+  }
+  return false;
+}
+
 // Whether kAllowed lets `text` keep what `rule` retires.
 bool allowedText(const std::string& rule, const std::string& text) {
   for (const Allowed& allowed : kAllowed) {
@@ -321,6 +369,9 @@ std::vector<std::string> broken(const std::string& text, bool source, bool spell
   }
   if (source && timesInSize(text)) {
     add("x in a size");
+  }
+  if (source && countedBracketedPlural(text)) {
+    add("count before (s)");
   }
   return rules;
 }
@@ -1135,6 +1186,10 @@ int selfTest() {
       "  y = tr(\"%1 is not one\").arg(name).arg(item.logDescription());\n"    // 30: a log text
       "  qDebug() << QStringLiteral(\"Picked %1\").arg(item.logDescription());\n" // 31: a log
       "  z->setText(tr(\"Open\")); key(item.logDescription());\n"              // 32: a key
+      "  aa = tr(\"Exported %1 (%2 body(ies), %3)\").arg(a).arg(n).arg(b);\n"  // 33: a count
+      "  ab = tr(\"%L1 hidden feature(s) and %n face(s)\", nullptr, n);\n"    // 34: a count
+      "  ac = tr(\"%n edge(s) of %1; %1 of the face(s), %1 (s)\", nullptr, n);\n" // 35: fine
+      "  ad = QStringLiteral(\"%1 face(s)\").arg(n);\n"                       // 36: a log
       "}\n";
   const std::string markdown =
       "# Title\n"                                                              // 1
@@ -1209,6 +1264,7 @@ int selfTest() {
       "planted.cpp:20 Title Case",      "planted.cpp:21 deg, x in a size",
       "planted.md:9 Title Case, deg",   "planted.cpp:28 Mitcad",
       "planted.cpp:29 logDescription()", "planted.cpp:30 logDescription()",
+      "planted.cpp:33 count before (s)", "planted.cpp:34 count before (s)",
       "core/planted/src/lib.rs:6 '{x}'",  "core/planted/src/lib.rs:9 '{x}'",
       "core/planted/src/lib.rs:11 '{x}'", "core/planted/src/lib.rs:16 '{x}'",
       "core/planted/src/lib.rs:17 '{x}'", "core/planted/src/lib.rs:20 '{x}'",

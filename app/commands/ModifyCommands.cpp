@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// The MODIFY group of the SOLID tab (U4), in menu order; Change
-// Parameters follows (the main window's).
+// The MODIFY group of the SOLID tab (U4), in menu order and in the menu's
+// sections (mitcad#1778); Edit Appearances, Edit Parameters and
+// Configurations follow (the main window's).
 #include "Commands.hpp"
 
 #include "../framework/CommandRegistry.hpp"
@@ -10,26 +11,40 @@ namespace mitcad {
 
 void registerModifyCommands(CommandRegistry& registry, const CommandContext& context) {
   using namespace cmd;
-  registry.add(pressPullCommand(context));
-  registry.add(filletCommand(context));
-  registry.add(chamferCommand(context));
-  registry.add(shellCommand(context));
-  registry.add(draftCommand(context));
-  registry.add(scaleCommand(context));
-  registry.add(combineCommand(context));
-  registry.add(offsetFaceCommand(context));
-  registry.add(replaceFaceCommand(context));
-  registry.add(splitFaceCommand(context));
-  registry.add(splitBodyCommand(context));
-  registry.add(moveCommand(context));
-  registry.add(moveFaceCommand(context)); // mitcad#531
-  registry.add(alignCommand(context));
-  registry.add(deleteFaceCommand(context));
-  registry.add(appearanceCommand(context));
-  registry.add(materialCommand(context)); // mitcad#1059
-  registry.add(dogboneCommand(context)); // mitcad#1011
-  registry.add(mortiseTenonCommand(context)); // mitcad#1012
-  registry.add(convertMeshCommand(context)); // mitcad#1082
+  // Registration order is the menu's order: each section's commands
+  // together, the sections in their order (CommandDef::section).
+  const auto add = [&registry](CommandDef def, const char* section) {
+    def.section = QString::fromLatin1(section);
+    registry.add(def);
+  };
+  // What changes the shape of a body.
+  add(pressPullCommand(context), "shape");
+  add(filletCommand(context), "shape");
+  add(chamferCommand(context), "shape");
+  add(shellCommand(context), "shape");
+  add(draftCommand(context), "shape");
+  // Its faces.
+  add(offsetFaceCommand(context), "faces");
+  add(moveFaceCommand(context), "faces"); // mitcad#531
+  add(replaceFaceCommand(context), "faces");
+  add(splitFaceCommand(context), "faces");
+  add(deleteFaceCommand(context), "faces");
+  // Whole bodies.
+  add(combineCommand(context), "bodies");
+  add(splitBodyCommand(context), "bodies");
+  add(scaleCommand(context), "bodies");
+  add(convertMeshCommand(context), "bodies"); // mitcad#1082
+  // Moving bodies and components.
+  add(moveCommand(context), "move");
+  add(alignCommand(context), "move");
+  // Joinery.
+  add(dogboneCommand(context), "joinery");      // mitcad#1011
+  add(mortiseTenonCommand(context), "joinery"); // mitcad#1012
+  // The look: the Material tool (mitcad#1059), Appearance, then the main
+  // window's Edit Appearances; its Edit Parameters and Configurations are
+  // the last section, "parameters".
+  add(materialCommand(context), "look");
+  add(appearanceCommand(context), "look");
 }
 
 } // namespace mitcad

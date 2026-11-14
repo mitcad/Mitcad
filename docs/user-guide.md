@@ -45,6 +45,7 @@ search: type the start of a command's name and press Enter.
   - [The Make tab](#the-make-tab)
   - [Annotate](#annotate)
   - [Laser cutting](#laser-cutting)
+  - [CNC machining](#cnc-machining)
   - [The selected body on the Make tab](#the-selected-body-on-the-make-tab)
 - [Create features](#create-features)
   - [Extrude](#extrude)
@@ -53,7 +54,10 @@ search: type the start of a command's name and press Enter.
   - [Helix](#helix)
   - [Sweep](#sweep)
   - [Intersection Curve](#intersection-curve)
+  - [Helix Curve](#helix-curve)
   - [Loft](#loft)
+  - [Rib](#rib)
+  - [Web](#web)
   - [Hole](#hole)
   - [Thread](#thread)
   - [Patterns](#patterns)
@@ -860,6 +864,27 @@ view keeps turning, so a long orbit needs no second drag. Where the
 system does not let an application move the cursor (Wayland), the orbit
 stops at the edge.
 
+**Orbit center** on the Navigation page of Tools › Preferences
+(MitCad › Settings… on macOS) sets what an orbit turns about:
+
+- **Model** (the default): the middle of what is shown.
+- **Cursor**: the point of the model under the cursor where the orbit
+  starts. Start the orbit over the part you want to look at, and that
+  point stays where it is on the screen while the view turns. Over empty
+  space the orbit turns about the middle of the model. A small orange
+  ball shows the point while the view turns.
+
+To turn the view about one point for a while, right-click the model
+there and choose **Set Orbit Center Here**. An orange ball marks the
+point. Every orbit then turns about it, whatever Orbit center says: the
+mouse's and the trackpad's, a drag of the orientation cube and the arrow
+keys. You can pan and zoom, for example to move the point to the side of
+the screen, and the center stays. To go back, right-click anywhere in
+the view and choose **Clear Orbit Center**. Opening another design
+clears it too. The middle button keeps what your scheme gives it (pan or
+orbit): a click of it never sets or moves the center. A 3D mouse keeps
+its own center.
+
 The **orientation cube** turns the view. A click on a face, an edge or
 a corner of the cube turns the view there. Drag the cube to orbit. The
 house returns to the home view. The right button opens the cube's menu:
@@ -973,6 +998,19 @@ display styles, the background, Grid and Snaps, and the named views.
 The display styles are Shaded, Shaded with Visible Edges Only, Shaded
 with Hidden Edges, Wireframe and Wireframe with Hidden Edges. Named
 views are stored in the design. MitCad remembers the settings.
+
+In every display style the view draws the edges where the shape changes:
+between two faces, also where they meet smoothly (a fillet and the face it
+rounds), and where one face turns sharply. It does not draw a seam, the
+line where a round face closes on itself (along a cylinder, rod or tube,
+over a ball), nor the line between two pieces of one face on one surface,
+where the surface runs on smoothly. Such a line is not highlighted under
+the pointer and cannot be clicked either; the face on both sides of it can.
+A profile with a sharp corner extruded as one face (a teardrop drawn as one
+closed spline) keeps its line at the corner. The model keeps these edges:
+a feature or an agent that names one still finds it, and a selected one is
+highlighted. Pictures of the design that MitCad makes for agents leave
+them out the same way, and drawings never draw a seam.
 
 **View › Grid and Snaps › Grid Settings…** sets the spacing of the
 layout grid. With **Automatic** (the default) the spacing follows the
@@ -1400,8 +1438,8 @@ submenus.
   - Revolve
   - Sweep ([Sweep](#sweep))
   - Loft ([Loft](#loft))
-  - Rib
-  - Web
+  - Rib ([Rib](#rib))
+  - Web ([Web](#web))
   - Emboss ([Emboss and Wrap Onto](#emboss-and-wrap-onto))
 - On the faces of a body:
   - Hole ([Hole](#hole))
@@ -1412,6 +1450,7 @@ submenus.
   - Helix ([Helix](#helix))
   - Pipe
   - Intersection Curve ([Intersection Curve](#intersection-curve))
+  - Helix Curve ([Helix Curve](#helix-curve))
 - Patterns ([Patterns](#patterns)):
   - Pattern › Rectangular Pattern, Circular Pattern, Pattern on Path,
     Pattern at Points
@@ -1427,31 +1466,43 @@ The toolbar has buttons for Create Sketch, Extrude, Revolve and Hole. The
 command search finds every command by its name, also the commands in the
 submenus.
 
+The other long menus have sections with lines between them too, and no
+submenus.
+
 **Modify:**
 
-- Press Pull ([Press Pull](#press-pull))
-- Fillet ([Fillet](#fillet))
-- Chamfer ([Chamfer](#chamfer))
-- Shell ([Shell](#shell))
-- Draft
-- Scale
-- Combine
-- Offset Face
-- Replace Face
-- Split Face
-- Split Body
-- Move/Copy
-- Move Face ([Move Face](#move-face))
-- Align
-- Delete Face
-- Appearance ([Appearances](#appearances))
-- Material ([Materials](#materials))
-- Dogbone ([Dogbone](#dogbone))
-- Mortise and Tenon ([Mortise and Tenon](#mortise-and-tenon))
-- Edit Appearances ([Appearances](#appearances))
-- Edit Parameters ([Parameters and
-  expressions](#parameters-and-expressions))
-- Configurations ([Configurations](#configurations))
+- Changing the shape:
+  - Press Pull ([Press Pull](#press-pull))
+  - Fillet ([Fillet](#fillet))
+  - Chamfer ([Chamfer](#chamfer))
+  - Shell ([Shell](#shell))
+  - Draft
+- Faces:
+  - Offset Face
+  - Move Face ([Move Face](#move-face))
+  - Replace Face
+  - Split Face
+  - Delete Face
+- Bodies:
+  - Combine
+  - Split Body
+  - Scale
+  - Convert Mesh ([Convert Mesh](#convert-mesh))
+- Moving: Move/Copy, Align
+- Joinery:
+  - Dogbone ([Dogbone](#dogbone))
+  - Mortise and Tenon ([Mortise and Tenon](#mortise-and-tenon))
+- The look:
+  - Material ([Materials](#materials))
+  - Appearance ([Appearances](#appearances))
+  - Edit Appearances ([Appearances](#appearances))
+- Parameters:
+  - Edit Parameters ([Parameters and
+    expressions](#parameters-and-expressions))
+  - Configurations ([Configurations](#configurations))
+
+The toolbar has buttons for Press Pull, Fillet, Chamfer, Shell and
+Combine.
 
 Fillet, Chamfer, Shell, Draft and Replace Face obey the *Tangent Chain*
 option ([Tangent Chain](#tangent-chain)).
@@ -1465,29 +1516,50 @@ see-through surface across the bodies, a little past their edges. It
 shows where the cut runs and which bodies it goes through. Turn the
 option off, and the view shows only the face that you selected.
 
-**Surface:** Surface Extrude, Surface Revolve, Surface Sweep, Surface
-Loft, Patch, Stitch, Thicken, Offset Surface, Ruled Surface, Extend and
-the other surface features ([Surface modeling](#surface-modeling)).
+**Sheet Metal** ([Sheet metal](#sheet-metal)):
+
+- The rules: Sheet Rules, Edit Sheet Rules
+- Making sheets: Face, Flange
+- Bends: Bend, Fold, Corner Relief
+- Edges and corners: Corner Round, Corner Chamfer, Sheet Cut
+- Flat: Unfold, Refold, Flat Pattern, Show Flat Pattern
+
+The toolbar has buttons for Face, Flange, Bend, Unfold and Flat Pattern.
+
+**Surface** ([Surface modeling](#surface-modeling)):
+
+- From profiles: Surface Extrude, Surface Revolve, Surface Sweep, Surface
+  Loft, Surface Helix
+- From edges: Patch, Ruled Surface, Boundary Surface, Blend Surface
+- Changing a surface: Extend, Trim, Untrim, Offset Surface
+- Quality: Match Surface, Fair Surface, Reverse Normal
+- Bodies: Stitch, Unstitch, Thicken
+
+The toolbar has buttons for Surface Extrude, Patch, Trim and Thicken.
 
 **Assemble:** everything that builds an assembly ([Joints and
 constraints](#joints-and-constraints), [Motion studies and contact
 sets](#motion-studies-and-contact-sets), [Motion links](#motion-links)):
 
 - New Component
-- Joint
-- As-Built Joint
-- Joint Origin
-- Rigid Group
-- Drive Joint
-- Assembly Constraint
-- Contact Set
-- Motion Link
-- Animate Joint
-- Motion Study
-- Insert Component
-- Insert from Library
+- Joints:
+  - Joint
+  - As-Built Joint
+  - Joint Origin
+  - Rigid Group
+  - Assembly Constraint
+- Motion:
+  - Drive Joint
+  - Motion Link
+  - Contact Set
+  - Animate Joint
+  - Motion Study
+- Inserting components: Insert Component, Insert from Library
 
-**Construct:**
+The toolbar has buttons for New Component, Joint, Assembly Constraint and
+Insert Component.
+
+**Construct:** a section for each kind.
 
 - Planes: Offset Plane, Plane at Angle, Tangent Plane, Midplane, Plane
   Through Two Edges / Three Points / Edge and Point, Plane Tangent to
@@ -1498,6 +1570,28 @@ sets](#motion-studies-and-contact-sets), [Motion links](#motion-links)):
   face at a point
 - Points: at a vertex, through two edges, through three planes, at the
   center of a circle or sphere, at an edge and a plane, along a path
+- Coordinate System
+
+**Coordinate System** makes a frame of your own: a small triad with its
+X, Y and Z in the axes' colors. Pick its **Origin** (a vertex, a point,
+a circle's center or a sketch point), then its **Z Axis** and **X Axis**
+(an edge, an axis, a plane for its normal, or a cylinder for its axis).
+An edge picked at the origin points away from it, along the edge, so
+three clicks on a corner and two of its edges give a frame in that
+corner. X is turned square to Z. Left empty, an axis is the component's.
+**Flip Z** and **Flip X** turn an axis round, **Offset** moves the
+origin along Z and **Angle** turns the frame about Z. The frame follows
+the geometry you picked when the design changes. It is listed with the
+construction geometry, has its light bulb, and works as a plane with its
+frame: create a sketch on it, use it as a joint's origin or in Align,
+and export the bodies in it (File › Export, Coordinates).
+
+Tangent Plane and Plane Tangent to Face at Point have an **Offset** (0 mm
+at first): the plane moves along its normal by that distance, away from
+the face, or into it when the offset is negative. One feature then gives a
+plane at a distance from a shaft or a cone, for example for a flat or a
+pad. Drag the arrow in the view or type the distance; a parameter or an
+expression works as in Offset Plane's Distance.
 
 A construction plane, axis or point goes into the active component. It
 can use the faces, edges and vertices of another component, its
@@ -1582,6 +1676,7 @@ to the machine.
 | **Materials** | **Edit Materials…** ([Materials](#materials)), **Material**: the Material tool, as in Solid › Modify ([Materials](#materials)) |
 | **Annotate** | **Dimension**, **Note**, **Datum Label**, **Feature Control Frame**, **Hole Callout**, **Material**, **Process Note**, then **Annotations…** ([Annotate](#annotate)) |
 | **3D Print** | **Print Analysis** ([Print Analysis](#print-analysis)), **Send to Slicer** ([Sending bodies to a slicer](#sending-bodies-to-a-slicer)), **Printers…** and **Processes…** ([Print settings](#print-settings)), **Plates…** ([Print plates](#print-plates)) |
+| **CNC** | **New Setup**, **Facing**, **Contour**, **Pocket**, **Adaptive Clearing**, **Rest Machining**, **Drill**, **3D Roughing**, **Raster Finishing**, **Waterline Finishing**, **Generate**, **Simulate**, **Post Process…**, **Machines and Tools…** ([CNC machining](#cnc-machining)) |
 | **Laser** | **Export Flat Pattern…** ([Sheet metal](#sheet-metal)), **Export Face as DXF…** ([Laser cutting](#laser-cutting)) |
 
 Each command has one place on the toolbar: Edit Materials came from the
@@ -1589,7 +1684,7 @@ Modify group, Print Analysis from the Inspect group and Export Flat
 Pattern from the Sheet Metal group of the Solid tab. *Send to Slicer* is
 the command that was called *3D Print*. Their keyboard shortcuts stay as
 they were, and the command search finds them all. Render Image stays on
-the Solid tab, in its Render group. A group for CNC machining comes with CAM.
+the Solid tab, in its Render group.
 
 Right-click a body or a face: the context menu's **Make** submenu has the
 Make tab's commands that take it.
@@ -1638,6 +1733,100 @@ of the outline at the origin. The design does not change. For a
 sheet-metal part, **Export Flat Pattern…** writes its unfolded flat
 pattern with its bend lines, for the same cutters. To lay several parts out on a sheet of
 material, make a cut sheet ([Drawings](#drawings)).
+
+### CNC machining
+
+The **CNC** group turns bodies and sketches into toolpaths for a CNC
+router or mill and writes them as G-code for the machine's controller
+(grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4 and
+LinuxCNC). The setups and operations are kept with the design, not on
+the timeline: changing a toolpath recomputes nothing of the model, and a
+change of the model marks the toolpaths that used it out of date until
+you generate them again.
+
+**CAM is highly experimental: treat its machine code with caution.** A
+wrong toolpath can break the tool, the stock or the machine, or hurt
+you. Before a program runs on a machine, check every toolpath in a
+simulator (**Simulate**, and the controller's own or another G-code
+simulator), then run it first without stock, at a low feed, with a hand
+on the emergency stop. **Post Process…** says this before it writes the
+file, and every program starts with the same notice as comments.
+
+1. **Machines and Tools…** first: the design needs a machine with its
+   tools. **Import from Library…** copies one with its tools from your
+   library or the project's; **New Machine…** adds one (its controller,
+   travel, spindle speeds and nose, fastest feed and rapid rate, who
+   changes the tools). For the machine selected, **Add Tool…** and
+   **Edit Tool…** set a tool's number, name, shape (flat, ball or bull
+   nose end mill, drill, chamfer mill, engraving cutter), diameter, shank
+   diameter, flute length, stick-out, holder and the speeds and feeds the
+   operations use unless they set their own. **Save to Library** writes
+   the machine with its tools to your library or the project's, so other
+   designs can import it; the design keeps its own copy.
+2. **New Setup**: one clamping of the stock. Pick the **Bodies** it
+   machines (none: every body). The **Stock** is a box around them with
+   margins on the sides, above and below, or a body of the design. The
+   **Work Zero** is a corner or the middle of the stock's top or bottom,
+   or a point you pick; **Z Axis** (a planar face, a plane or an axis)
+   and **X Axis** (a straight edge or an axis) turn the work coordinates.
+   Choose the **Work Offset** (G54 to G59), the **Safe Height**, the
+   **Machine**, the **Controller** (the machine's by default) and the
+   **Program Units** (millimeters or inches). With MillenniumOS, **Probe
+   the work zero first** starts the program by probing it.
+3. An operation: **Facing** (the stock's top, or faces and profiles you
+   pick), **Contour** (along faces, sketch profiles, edges or sketch
+   curves: outside, inside or on the line), **Pocket** and **Adaptive
+   Clearing** (the areas of planar faces and sketch profiles, with their
+   islands), **Rest Machining** (what a bigger tool left) and **Drill**
+   (points, vertices, round edges or holes' faces). Pick in the view or
+   select before the command. Choose the **Tool** of the setup's machine.
+   The depths, heights, feeds and speeds left empty come from the stock,
+   the setup and the tool. Values take units: a feed of `40 in` is 40
+   inches per minute, a depth of `-0.125 in` an eighth of an inch down.
+   **Entry** goes down by a plunge, a ramp or a helix; a contour can have
+   **Lead in and out** arcs and **Holding tabs**; drilling can peck and
+   use the controller's canned cycle.
+
+   For freeform parts, three operations machine the bodies' surfaces
+   (pick **Bodies**, none: the setup's, and a **Boundary** of planar
+   faces or sketch profiles the tool's center stays within, none: the
+   stock): **3D Roughing** clears the stock level by level with a flat or
+   bull nose end mill, leaving the **Stock to Leave** on the walls and
+   floors (**Adaptive clearing** keeps the tool's engagement even);
+   **Raster Finishing** runs parallel passes at the **Pass Angle** with
+   the tool resting on the surfaces, and **Waterline Finishing** runs
+   round the bodies at levels, a **Step Down** apart. A ball end mill
+   suits the finishing. Give Raster Finishing a **Steepest Slope** and
+   Waterline Finishing the same angle as its **Shallowest Slope** to
+   finish the flatter areas by passes and the steep walls by waterlines.
+4. **Generate** computes the toolpaths. The view draws them: rapids
+   dashed, cuts solid, the moves down into the material in their own
+   color, an operation out of date dotted and gray. The operation
+   selected in the Browser, or edited in its panel, is drawn thicker in
+   the selection's color. When the machine cannot do something (a speed
+   or feed beyond its limits, the tool running into a clamp), the status
+   line says so.
+5. **Simulate** plays a setup's toolpaths back: drag the slider or click
+   **Play**; the tool is drawn where it is.
+6. **Post Process…** asks for the setup, the controller and the units
+   (the setup's by default) and the file to write; its type is the
+   controller's (`.nc`, `.gcode`, `.tap`, `.ngc`). The dialog repeats that
+   CAM is highly experimental; check the program before it cuts.
+
+In the Browser, the **CAM** folder lists the setups with their
+operations in order. An operation's icon shows its state, its tooltip
+says it in words: up to date, out of date, not generated or suppressed.
+Double-click a setup or an operation to edit it in its panel. The
+right-click menu has **Edit**, **Generate**, **Suppress**, **Move Up**,
+**Move Down** and **Delete** (a setup also **Simulate** and **Post
+Process…**); drag an operation onto another to put it there, or onto a
+setup to move it to the end of that setup. A setup's eye shows and hides
+its toolpaths; the design keeps it, and Undo takes it back.
+
+Faces, profiles, edges and points picked inside a placed component are
+machined where that placement puts them. A component placed twice is
+picked in the placement you want: the same face picked in each placement
+is two outlines.
 
 ### The selected body on the Make tab
 
@@ -1900,6 +2089,13 @@ The helix is right-handed or left-handed. A Growth moves the profiles
 out from the axis by that distance on each turn. A negative Growth
 moves them in. Thus Growth widens the helix into a cone or a spiral.
 
+**Surface Helix** (the Surface group) moves sketch curves the same way
+and makes surfaces. The curves can be open, for example a line, an arc
+or a chain of curves. A line that starts at the axis makes a helicoid, a
+helical surface such as the face of a screw conveyor. Select the curves,
+the axis, the Revolutions and the Pitch. The result is a new surface
+body. Surface Helix has no Growth.
+
 ### Sweep
 
 **Sweep** starts where the path meets the profile. *Distance 1* is
@@ -1979,6 +2175,38 @@ surfaces that they make meet.
   of the sketches are parallel, the curves do not meet, or the result
   divides into branches or into separate pieces (with the points where
   that occurs).
+- First Curves and Second Curves can also be faces, surface bodies or
+  solid bodies. Select faces in the view, or bodies in the Browser. Then
+  the curve is where the faces or bodies meet, as they are. For example,
+  a helical surface and a cylinder about the same axis meet in a helix on
+  the cylinder. Select sketch curves for both inputs, or faces and bodies
+  for both.
+
+### Helix Curve
+
+**Helix Curve** (Create, after Intersection Curve) makes a helical 3D
+curve about an axis. Use it as the path of a Sweep or a Pipe, for
+example for a thread or a spring on a shaft.
+
+- *Axis*: an origin or construction axis, a straight edge, a sketch
+  line, or a cylindrical or conical face.
+- On a cylindrical or conical face, the curve starts at the end of the
+  face. *Radius from Face* (on by default) takes the radius of the face,
+  so the curve lies on the face. On a cone the curve widens or narrows
+  with the cone. Turn it off to give a *Radius* of your own.
+- Give one of these pairs of values, as for Helix: the revolutions and
+  the pitch, the revolutions and the height, or the height and the pitch.
+- *Start Angle* turns the start of the curve about the axis.
+- *Growth* moves the curve out from the axis by that distance on each
+  turn, a conical helix. A negative Growth moves it in.
+- The curve is right-handed or left-handed. *Flip* makes it rise the
+  other way along the axis.
+
+The curve is a path in the same way as the curve of an Intersection
+Curve. Select it in the view or in the timeline for Sweep, Pipe, Loft,
+Pattern on Path, or a construction plane or point along a path. Project
+and Intersect take it in a later sketch. It shows in the Browser in the
+Construction folder, with a light bulb.
 
 ### Loft
 
@@ -1993,6 +2221,173 @@ The condition is one of these:
 
 A face with holes lofts from its outer edges. The loft is solid across
 the holes.
+
+### Rib
+
+A **Rib** is a thin wall that grows from an open chain of sketch curves:
+a stiffener or a gusset between faces of a body. It grows in the sketch
+plane, either up to the faces it reaches (**To Next**) or by a
+**Depth**. Its **Thickness** goes across the sketch plane. The rib joins
+the bodies it reaches.
+
+![A rib between two bosses of different heights, grown straight down to the base](images/rib-web/rib.png)
+
+**Draw the curves.** Make a sketch on a plane that cuts through the
+body where the rib is to stand, for example a construction plane through
+the middle of the body. The sketch plane is the middle of the rib (with
+the Thickness Side Symmetric). Draw the outer edge of the rib in it: a
+line, an arc, a spline or an open chain of them, joined end to end. The
+rib fills the space between these curves and the faces in the way it
+grows. A closed chain (a rectangle, a circle) is not a rib; for walls
+along a closed outline, use Thin Extrude ([Thin
+Extrude](#thin-extrude)). One rib takes one chain: for two separate
+chains, make two ribs, or use a Web.
+
+The panel has these inputs, in this order:
+
+- **Curves**: the sketch curves, all of one sketch. A rib also takes the
+  curve of an Intersection Curve that lies in one plane ([Intersection
+  Curve](#intersection-curve)), and the curves of a 3D sketch that lie in
+  its sketch plane ([3D sketches](#3d-sketches)).
+- **Chain Selection**: when checked, a click on one curve takes every
+  curve joined to it end to end.
+- **Thickness Side**: **Symmetric** (the default) puts half of the
+  thickness on each side of the sketch plane. **Side 1** puts all of it on
+  the side to which the sketch normal points, **Side 2** on the other
+  side.
+- **Thickness**: the thickness of the wall (2 mm at first).
+- **Depth Type**: **To Next** (the default) grows the rib until faces of
+  the bodies close it off. **Depth** grows it by the **Depth** that you
+  give, measured from the curves.
+- **Direction** and **Direction Line**: the way the rib grows (below).
+- **Flip**: turns the way the rib grows round.
+- **Extend Ends** and **End Offset**: continue the ends of the curves to
+  the faces (below).
+- **Objects**: the bodies that the rib joins and stops at. Leave it empty
+  for all the bodies. Select bodies here when the rib must not stop at
+  another body in its way. A rib that reaches none of these bodies
+  fails and says so: a rib always joins a body.
+
+**Direction** sets the way the rib grows in the sketch plane:
+
+- **Perpendicular to Chord** (the default): at right angles to the line
+  from the start of the curves to their end.
+- **Sketch X** or **Sketch Y**: along an axis of the sketch.
+- **Along Line**: along a straight line, edge or axis that you pick in
+  **Direction Line**. It must lie in the sketch plane or be parallel to
+  it.
+
+With Perpendicular to Chord, the chord is the straight line from the
+first point of the chain to its last. Look at the sketch with its normal
+towards you and go along the chord from the first point to the last: the
+rib grows to the left. With Flip it grows to the right. Because the chord
+joins the two ends, a curve added to the chain (for example a line along
+a wall) also turns the rib. Set Direction instead: it keeps the curves as
+they are. A straight chain cannot grow along itself, so a Direction along
+the chord of a straight chain is refused.
+
+**Flip** turns the direction round. For example, draw a slanted line
+between the tops of two bosses of different heights. Set Direction to
+the sketch axis that points down. The rib then grows straight down to the
+base, and with Extend Ends it meets both bosses.
+
+**Extend Ends** is on for a new rib. It continues each open end of the
+curves along its direction, until the rib meets the faces of the bodies.
+The rib then fills up to a curved or slanted face with no gap. So you
+don't have to draw the line into the material, which is awkward against
+a thin wall. If an end meets no face, it stays where it is drawn, and the
+rib shows a warning. Point to the warning to see that end in the view.
+
+**End Offset** (with Extend Ends) moves each end further along its
+direction, into the face it meets. Use it to sink a rib into a thin wall.
+A negative End Offset stops the ends short of the faces. It never makes
+the drawn curves shorter.
+
+A rib made before Extend Ends opens with it off, so it keeps its ends as
+drawn.
+
+When the depth is To Next, the rib must end at faces of the
+bodies across its whole width: faces in the way it grows that close it
+off, from one end of the curves to the other. Where the rib would run out
+past an edge of a body into open space, nothing closes it off, and the
+rib fails. Flip it if it grows away from the body, or set Depth Type to
+Depth. With Extend Ends, the ends of the curves need not touch the faces;
+without it, draw the ends onto the faces or into the material.
+
+**When a rib fails.** The panel and the timeline say why in words. The
+usual causes are:
+
+- *The curves are closed*, or *do not join*: a rib takes one open chain.
+  Remove a curve from a closed chain. Join the ends of the curves with a
+  Coincident constraint, or draw them from the same point.
+- *The curves are in two chains*: make two ribs, or use a Web.
+- *The rib does not end at faces of the bodies*: To Next found nothing
+  that closes it off. Flip it, or give it a depth.
+- *There are no bodies for the rib to reach*: To Next needs a body. Check
+  Objects, or use Depth.
+- *The rib lies inside the bodies*: the curves and the space between them
+  and the faces are all in the material. Move the sketch or the curves to
+  where the rib is to stand.
+- *The direction does not lie in the sketch plane*, or *runs along the
+  chord*: pick another Direction Line, or another Direction.
+- *An end meets no face* (a warning): Extend Ends found no face along
+  that end. The rib is made, with that end as drawn.
+- *A curve leaves the sketch plane* (a 3D sketch), or *an intersection
+  curve is straight or not flat*: a rib grows only in one plane.
+
+### Web
+
+A **Web** makes thin walls along sketch curves, all grown out of the
+sketch plane along its normal. Each curve gets a wall of its own, and
+where the walls cross they join into one body with the bodies they reach.
+The **Thickness** of a wall is in the sketch plane, across its curve.
+
+![A grid of webs on a plate](images/rib-web/web.png)
+
+**Draw the curves.** Make a sketch on the face that the walls stand on,
+or on a plane at the height where they start. Draw the walls as seen
+from above: lines and circular arcs, open, one for each wall, for
+example a grid of lines across a plate. Closed curves (a circle) and
+other curves (a spline, an ellipse) are not taken.
+
+The panel has the inputs of the Rib panel, without Direction, Extend
+Ends and End Offset:
+
+- **Curves** and **Chain Selection**, as for a rib. A web also takes a
+  flat Intersection Curve made of lines and arcs, and the curves of a 3D
+  sketch that lie in its sketch plane.
+- **Thickness Side**: **Symmetric** (the default) puts half of each wall
+  on each side of its curve. **Side 1** puts the wall on the left of the
+  curve, as seen with the sketch normal towards you and along the way
+  the curve was drawn. **Side 2** puts it on the right.
+- **Thickness**: the thickness of each wall (2 mm at first).
+- **Depth Type**: **To Next** (the default) grows the walls along the
+  sketch normal until faces of the bodies close them off, for example
+  from the floor of a box up to its lid. **Depth** grows them by the
+  **Depth** that you give, from the sketch plane.
+- **Flip**: grows the walls against the sketch normal.
+- **Objects**: the bodies that the walls join and stop at; none: all of
+  them.
+
+**Rib or Web?** Use a **Rib** for one wall whose outline you draw from
+the side: a gusset with a slanted edge, a stiffener whose height changes
+along it. Its sketch stands across the body, and the rib grows in that
+plane. Use a **Web** for walls of the same height along curves that you
+draw from above: a grid, a row of stiffeners or curved walls on a plate,
+the walls inside a box. Its sketch lies on the face, and the walls stand
+up from it.
+
+**When a web fails.** The usual causes are:
+
+- *A curve is closed*, or *is not a line or an arc*: draw the walls as
+  open lines and arcs.
+- *The web is thicker than an arc allows*: a wall on the inside of an
+  arc would reach past the center of the arc. Make the arc larger, the
+  wall thinner, or put the wall on the outside with Thickness Side.
+- *The web does not end at faces of the bodies*: with To Next, faces
+  must close off every wall. Flip it, or give it a depth.
+- *There are no bodies for the web to reach*: To Next needs a body.
+  Check Objects, or use Depth.
 
 ### Hole
 
@@ -2131,11 +2526,19 @@ below apply to it.
 
 The first cylindrical face suggests the size, whether you select it
 before Thread (for example from the view's context menu) or pick it in
-the panel. A shaft gets the ISO metric coarse size of its diameter and
-class 6g. A hole gets the size whose tap drill it is and class 6H: a
-5 mm hole gets M6x1 6H. Once the faces are known, *Class* offers only
-the classes of their side, and a new size or designation keeps the
-class on that side.
+the panel. A shaft gets the ISO metric size nearest to its diameter, at
+its coarse pitch: a 60 mm shaft gets M60x5.5. A hole gets the size whose
+tap drill it is: a 5 mm hole gets M6x1. The class stays when it is one
+of the face's side, else it becomes 6g on a shaft and 6H in a hole. When
+the size in the panel already fits the face, it stays. Once the faces
+are known, *Class* offers only the classes of their side, and a new size
+or designation keeps the class on that side.
+
+The face suggests nothing once you have chosen the size: after you
+change *Size*, *Designation* or *Class* (or a custom thread's *Major
+Diameter*), picking a face keeps your choice, and the panel warns if the
+face does not fit it. When you edit a thread, picking its face again
+keeps the thread's size.
 
 When you thread several holes of the same size one after the other, the
 next Thread starts from the settings of your last thread. If the first
@@ -2490,7 +2893,13 @@ too. Where such a chamfer meets other chamfers at a corner, the corner is
 built as without the overflow. A chamfer of an inside corner, such as the
 foot of an octagon standing on a disc, adds material: where it runs past
 the narrow face beside it and the face beyond falls away, the face beyond
-cuts it, so it never hangs out past the body's edge. Where the chamfer is
+cuts it, so it never hangs out past the body's edge. That holds also
+where the octagon's corners lie on the disc's rim, so that each narrow
+face between a side and the rim ends in a point at the corners: a chamfer
+as wide as such a face at its middle, or wider, takes the face away, and
+the disc's side grows up to meet the chamfer. A strip of the face
+narrower than 0.1 % of the chamfer, left where the chamfer is that little
+narrower than the face, is taken away with it. Where the chamfer is
 exactly as wide as the narrow face at one place, so that the face would
 end in a point there, the chamfer fails and the error says where; a
 slightly smaller distance builds. A chamfer is never made smaller than you
@@ -2602,7 +3011,12 @@ This cut cannot change only one occurrence of a shared definition. The
 active component is different: a cut made inside it changes its own
 definition, like its other features. So it can cut its own bodies even
 when the component has several occurrences, and every occurrence shows
-the result. Its row says so. Older
+the result. Its row says so. A component that moves against the active
+component through joints starts unchecked, so that a hole for a shaft
+does not cut the part that turns on it. Its row says why, under its
+name. Check it to cut it as well: MitCad then cuts exactly the checked
+components, and new components that the cut reaches are no longer
+checked automatically. Older
 cuts keep their **Local bodies** scope when you edit them. When you open
 an existing cut, MitCad does not add other component targets.
 
@@ -2873,6 +3287,30 @@ normal of the plane. OK keeps the section in the Analysis folder of the
 browser; Edit Section Analysis opens it again with its axis and angle.
 A design with a turned section needs this version of MitCad.
 
+To look into a hole, a boss or an assembly, you can also pick one face or
+edge under *Faces/Plane* instead of a plane:
+
+- a cylindrical face, such as the inside of a hole or the outside of a
+  boss (also a conical face or a round fillet): the cut goes through its
+  axis;
+- a circular edge or arc: the cut goes through the axis of the circle;
+- a straight edge: the cut goes through the middle of the edge, square to
+  it.
+
+For a face or a circle, the cut first lies in the direction of an origin
+plane: XZ for an axis along Z, XY for an axis along X or Y (for an axis
+at a slant, the first of XY, XZ and YZ that is at least 45 degrees from
+it). The direction of the view does not change it. Type an *Angle* to
+turn the cut about the axis of the face or circle; you do not need an
+*Axis* for this. The cut follows the face or edge when the model
+changes. If the face or edge is gone, the section is red in the Analysis
+folder.
+
+To start quickly, select one such face or edge (or a planar face or a
+plane) first and then start Section Analysis: it uses the selection as
+the plane and shows the section at once. With any other selection, or
+with more than one item selected, the panel opens with nothing picked.
+
 When the Distance puts the Section Analysis plane past every body, the
 panel shows a warning instead of the zero area: "it cuts them all away"
 when the view no longer shows the bodies, "it cuts nothing" when it shows
@@ -3075,7 +3513,27 @@ Above Sketch and Look At.
 Turn it off to read a dense sketch more easily: the points are then not
 drawn, but the point under the pointer still shows, the tools still snap
 to points, you can still drag and select them, and selected points are
-drawn. The setting is kept for the next sketches.
+drawn. The setting is kept for the next sketches, and it applies to the
+sketches shown in the design too: finish a sketch with *Show points* off
+and its points, and those of the other sketches shown, stay hidden until
+you turn *Show points* on again in any sketch. 3D sketches always show
+their points.
+
+*Show dimensions* in the palette applies to the sketch that is open. To
+see a sketch's dimensions after you finish it, for example to check the
+sizes of several components at a glance, right-click the sketch in the
+browser (or in the timeline) and choose **Show Dimensions**. Its
+dimensions are then drawn in the view as sketch mode draws them, facing
+you and readable at any zoom, while the sketch is shown and not open.
+They go with the sketch when you hide it or its component, and the
+design keeps the setting when you save it. You can turn it on for as
+many sketches as you like, in any components. Point at a dimension to
+see its name and expression; double-click it to open the sketch and
+change its value. These dimensions are only for reading: the model's
+tools do not pick them and nothing snaps to them. Each change is one
+step in Undo. When you open the sketch, the palette's *Show dimensions*
+decides again; when you finish it, the sketch's own setting applies.
+3D sketches do not have this setting.
 
 *Show profiles* shades the closed regions of the sketch, which Extrude
 and Revolve take. Each sketch opens with it on. To have sketches open
@@ -3108,6 +3566,19 @@ it cuts the bodies in a color of their own, with hatches, as in Section
 Analysis. The bodies stay cut while the panel of a sketch command is
 open and its preview is shown (Offset, Mirror, the patterns, Project,
 sketch Fillet and others). The option stays on for the next sketch.
+
+While you edit a sketch, also while the panel of a sketch command is
+open, you see all of it through the bodies. What a body hides of the
+sketch is drawn through the body, dimmed: its curves dashed and faint
+in their own colors, its points faint, and its dimensions and
+constraint symbols at about a third of their strength. Projected and
+construction geometry show through the same way. What is in sight looks
+as before. Thus you can turn the view and still see what you drew on
+the other side of a body, for example on a plane through the middle of
+a solid. You select the dimmed items as before. Other sketches
+that the view shows stay hidden behind the bodies. Hide Above Sketch
+still cuts the bodies on the side the sketch faces; from the other side
+the sketch shows through the bodies that are left.
 
 The sketch's X and Y axes run across the view through the sketch's
 origin. The origin has a ring. The sketch always shows its origin and
@@ -3364,6 +3835,18 @@ the curves that cross it. The new ends obey these rules:
   curve.
 - A projected point holds the new end with a coincident constraint.
 
+Trim also cuts the lines and arcs that Offset made. They stay linked to
+their source until you change their shape: when you trim one of them,
+all the copies of that offset first become ordinary sketch geometry, and
+the status line tells you that *the offset is no longer linked to its
+source*. The copies keep their shapes, the points they share and your
+constraints, and where two copies ran smoothly into each other they get
+a tangent constraint. The source does not change. After that, the copies
+no longer follow the source, and MitCad does not make them again, so the
+piece you trimmed stays away. Extend, Sketch Fillet and Chamfer on an
+offset's copy do the same. Undo takes back the trim and the link in one
+step.
+
 **Extend** (Modify) extends a curve at one end. The extended end obeys
 these rules:
 
@@ -3421,6 +3904,17 @@ two points (a Coincident constraint joins them), or three curves that
 end at one point. If an open chain stops where another curve ends on a
 point of its own, the panel tells that too.
 
+**Corners** chooses how the copies meet where the chain turns away from
+the offset, at the outside of a bend: **Sharp** (the copies meet where
+they cross) or **Round**: an arc about the corner of the original, its
+radius the distance, joins the two copies and touches both. This holds
+where two lines, a line and an arc, or two arcs meet at an angle; where
+they meet smoothly (tangent), the copies meet smoothly too.
+A rounded outline at a distance round a triangle is one Offset with
+Round. The arcs need no dimension of their own: they follow the distance
+when you change it with Edit Offset, which shows the offset's Corners and
+can change them. Corners at the inside of a bend stay sharp.
+
 When the offset goes toward the inside of a bend, some curves of the
 copy can vanish: an arc whose radius is smaller than the distance, or a
 short curve whose neighbors' copies cross before they reach it. Offset
@@ -3470,6 +3964,12 @@ leaves out c5, a part too small for this distance*.
 If you offset the copy again, and the first offset later changes so that
 some of its curves vanish or come back, MitCad makes the second offset
 again from the first one's new curves.
+
+The copies stay linked to their source until you trim, extend, fillet or
+chamfer one of them, convert one of them with Convert to Sketch Geometry,
+or delete the offset. Then all the copies of that offset become ordinary
+sketch geometry: they keep their shapes, but they no longer follow the
+source and MitCad does not make them again.
 
 **Rectangular Pattern** (Create › Patterns) copies the curves and points
 of Objects in rows and columns. The first direction is Direction: a line
@@ -3538,7 +4038,9 @@ projected geometry. It makes the selected projected curves and points
 ordinary sketch geometry. They become free, and they no longer follow
 their source. Projected curves that you do not convert can also use a
 corner of a converted curve. Such a corner stays projected, and the
-converted curve stays joined to it.
+converted curve stays joined to it. If you select a copy that Offset
+made, all the copies of that offset become ordinary sketch geometry and
+no longer follow their source.
 
 ### Snaps and auto constraints
 
@@ -3885,6 +4387,19 @@ their positions. If another constraint on one of the circles then
 becomes redundant, MitCad removes it and tells you, but it never removes
 a dimension.
 
+A constraint that the others already hold only in part is kept when it
+fixes something they leave free. For example, an arc tangent to two
+lines at the same distance from a corner can slide along the corner's
+middle line; a Coincident of its center with the corner fixes its
+radius, although the tangents already keep the center on that middle
+line. The Sketch Palette then warns in words what follows from what. A
+constraint that fixes nothing new is refused, and the message says so.
+
+A Distance between two lines is meant for parallel lines: it holds the
+middle of one line at the distance from the other. If the lines are not
+parallel, the Sketch Palette warns about it and the dimension is drawn in
+the conflict color. Make the lines parallel again, or use an angle.
+
 **Tangent at an end.** When the two curves share an end, or one of them
 is a spline, Tangent and Curvature apply at the end where you pick each
 curve. Pick each curve near the end where it should be tangent. While
@@ -3901,6 +4416,21 @@ Coincident between the ends of two curves joins them to one point
 take the sketch's axes and origin (refer to [Dimensions](#dimensions)).
 Equal Spacing keeps intervals equal (refer to
 [Equal Spacing](#equal-spacing)).
+
+**Body edges and corners.** The constraint tools, except Fix/Unfix, also
+take the edges and corners of bodies that lie in the sketch plane. You do
+not have to project them first. For example, on a sketch on a cylinder's
+end face, select Coincident, click a corner of a polygon and then the
+face's outer edge: the corner goes onto the edge. MitCad projects the
+edge into the sketch when it adds the constraint, linked to the body, and
+the constraint holds the sketch geometry on the projection. The
+projection and the constraint are one undo step. If the sketch has a
+projection of the edge already, the constraint uses it. The projected
+edge stays where the body has it, so the sketch's own geometry moves to
+it. A constraint must have at least one point or curve of the sketch.
+Selected body edges and corners in the sketch plane work in the same way.
+Edges that are not in the sketch plane can only be dimensioned (refer to
+[Dimensions](#dimensions)).
 
 **Inactive constraints and dimensions.** An inactive constraint or
 dimension stays in the sketch, but it does not hold the geometry.
@@ -4723,7 +5253,24 @@ a change of the eye. A sketch hides by itself when a feature first uses
 it. The sketch shows again when you delete the last feature that uses
 it. The eye has priority over this automatic behavior. A 3D sketch
 stays shown when a Pipe or a Sweep uses it, so that you can see and edit
-the route.
+the route. A planar sketch's menu also has **Show Dimensions**, a check
+item that draws the sketch's dimensions in the view while the sketch is
+shown and not open (refer to the sketch palette's options in
+[Sketch mode](#sketch-mode)).
+
+**The eyes of the folders.** Each component's **Bodies**, **Sketches**
+and **Construction** folder has an eye of its own. Turn it off to hide
+everything in the folder: the rows turn gray, and their own eyes stay as
+they are. Turn it on again, and each item shows by its own eye. So the
+sketches that you hid one by one stay hidden when you show the Sketches
+folder again. You can still click the eye of an item while its folder is
+hidden: the change shows when you turn the folder on. A body that
+follows **Show When** keeps its condition. Each click of a folder's eye
+is one Undo step (**Hide Sketches**, **Show Sketches**). The design saves
+the folders' eyes; in a project they are yours alone, as **View › Show**
+is. A design saved before keeps every folder on. To turn on or off the
+eyes of all the items in a folder, right-click the folder and choose
+**Show All** or **Hide All**; Show All also turns on the folder's eye.
 
 While **Isolate** is on, the eyes of bodies and components show what
 the view shows. A row that only Isolate hides has a dimmed, closed eye.
@@ -6773,6 +7320,19 @@ Printers or the Processes manager on the current choice, without
 changing it. The box is the row's only control: there is no button
 beside it.
 
+The **Process** row shows the process the bodies you send print with,
+which is also what the 3MF file gets: a process set on a body (for
+example on the Make tab's body card) comes before its component's and
+before the design's. When the bodies print with different processes,
+the row reads **Per body**; hover over it to see each process with its
+bodies. A process chosen in the row is set where the shown one comes
+from: on the bodies that have a process of their own, on the design for
+the others, so that every body sent prints with it (still one Undo
+step). **Slicer default** takes the bodies' own processes away, and the
+design's when some of them print with it. With
+**Send the Design's Plates** on, the row shows the design's process.
+The **Printer** is always the whole design's.
+
 **Choose the materials.** The **Material** row shows what the bodies you
 send print with, and is where you choose it. When the bodies have
 different materials, there is a row for each, one per filament of the
@@ -6931,14 +7491,20 @@ filament, or pause (for magnets, nuts or inserts), at a height of the
 print. The **Filament changes** section of Send to Slicer, under Purge
 volumes, has a row for each change: where it is, what it changes to,
 and its **Edit** and **Remove** buttons. **Add change** and **Add
-pause** open the **Filament Change** window: type a height above the
-print bed in **At** (12, or 12 mm), choose the filament in **Change
-to**, or Pause with its **Message**, and press OK. A change can also sit
-at a construction plane or a flat face: click **Change At** and then the
-plane or face in the view, or right-click a plane or a flat face and
-choose **Filament Change Here…** (on a face of a body that is on a print
-plate, it opens **Plates…** on that plate instead, where the plate's own
-changes are). **Plates…** has the same section for the plate you choose:
+pause** open the **Filament Change** window, where **At** places the
+change or pause in one of two ways, as Extrude chooses its extent:
+**Distance from Bed**, then type the height above the print bed in
+**Height above bed** (12, or 12 mm); or **To Object**, then click a
+construction plane or a flat face in the view: **Plane or face** shows
+its name and the height it gives (*Plane1: 15 mm above the bed*). While
+To Object is chosen, a click in the view goes to that field; click a
+field of the panel to pick there instead, and the field again to pick
+for the change. Choose the filament in **Change to**, or Pause with its
+**Message**, and press OK. **Edit** opens a change in the way it was
+placed. You can also right-click a plane or a flat face and choose
+**Filament Change Here…**: the window opens with that plane or face
+already picked (on a face of a body that is on a print plate, it opens
+**Plates…** on that plate, where the plate's own changes are). **Plates…** has the same section for the plate you choose:
 until you edit it there, a plate prints with the design's changes. Point
 at a row to see its plane or face in the view. Such a change follows the model: a
 change at the top face of a base stays there when the base gets
@@ -7710,6 +8276,16 @@ Add Constraint adds rows and does not close the panel. MitCad solves
 the rows together with the joints. The set is one timeline feature.
 Its rows are under it in the Joints folder.
 
+**Animate in the panels.** The Joint and Assembly Constraint panels
+have Animate. Thus you can watch a mechanism move while you make it,
+before OK. Select the motion: a free motion of the joint's type, or a
+row's offset or angle. Play plays it back and forth in the preview,
+through its limits. Without limits, a turn goes once round, a slide
+25 mm either way and an angle from 0 to 180 degrees. You can orbit, pan
+and zoom the view while it plays. Esc, Play again or a change of an
+input stops it. The panel then shows its preview again. Animate changes
+nothing in the joint or the constraint.
+
 **What a joint connects.** Select a joint: its row in a Joints folder,
 or its cell in the timeline. The view then highlights what its two sides
 are built on, where the components are. The faces, edges, vertices,
@@ -7860,7 +8436,7 @@ a set touch:
 
 - A drag of a component
 - Drive Joint
-- Animate Joint
+- Animate Joint, which turns back there
 - The playback of a motion study
 
 Touch means within 0.01 mm. The motion says so. Drive Joint's panel
@@ -7874,9 +8450,22 @@ starts do not stop it. Thus you can move components apart. In the browser's
 and delete it. A suppressed set stops nothing. A design can have
 several contact sets.
 
-**Animate Joint** (Assemble) plays a joint's free motion through its
-range. It plays the joint selected in the timeline, else the newest
-one. It changes nothing in the design.
+**Animate Joint** (Assemble) plays a joint's free motion back and forth
+through its limits until you stop it. Thus you can look for binding and
+clearances from several sides. Without limits, a turn goes once round
+and back, and a slide 25 mm either way. It plays the joint selected in
+the timeline, else the newest one. You can orbit, pan and zoom the view
+while it plays. These stop it:
+
+- Esc
+- Animate Joint again
+- Another command
+- Another selection in the timeline
+- A change of the design, Undo too
+
+It changes nothing in the design. At a contact of a contact set, the
+motion turns back. Thus you see the stop on every pass. The status bar
+says where, once.
 
 A **motion study** keys joints along a number of steps. Start one with
 Assemble › Motion Study, or with Play on a study in the browser's
@@ -8459,6 +9048,7 @@ follow when the sketch changes. The extents of the four features are:
 | Surface Revolve | A full turn or an angle about a sketch line, an axis or a straight edge |
 | Surface Sweep | Along a path of sketch curves or edges |
 | Surface Loft | Through sections in order. Each section is a sketch curve with the curves joined to it, or a profile. A 3D sketch's curves can be sections in any plane. Rails guide a loft of profiles; a rail can be curves of a 3D sketch |
+| Surface Helix | Revolutions of a pitch about a sketch line, an axis or a straight edge, rising along it ([Helix](#helix)) |
 
 **Offset Surface** copies the faces you select out along their normals
 by a distance. The faces can be faces of a solid or of a surface. The
@@ -9298,9 +9888,14 @@ the ends of the edge, and constrain them to other geometry of the design.
 flange. The sketch stays in the timeline before the flange: edit it later
 and the flange and its flat pattern follow. The wall cannot cross the bend
 line. With a profile the Length, Width, Hem and Corner rows are hidden.
-If you change the flange's Angle or Position later, Edit Profile puts the
-sketch back on the wall. **Remove Profile** makes the wall a rectangle
-again.
+The sketch's plane follows the wall: when you change the sheet so that
+its edge moves (a dimension of the base sketch, say), or change the
+flange's Angle, Radius or Position, the sketch lies on the wall again
+when you open it, with its lines where they were on the wall. A design
+made with an earlier version gets this plane when it is opened. If you
+put the sketch on another plane yourself, the flange warns that the
+sketch no longer lies on its wall; the wall still follows the sketch's
+outline. **Remove Profile** makes the wall a rectangle again.
 
 **Bend** makes one bend between two edges. With the Bend Type *Double
 Bend*, it makes two opposite bends of the angle with a straight between
@@ -9316,6 +9911,19 @@ SheetFold1, whose bend joins both sides of the fold line." Move the new
 fold before SheetFold1 in the timeline, or make SheetFold1 with a separate
 line on each arm. A Bend whose moving face an earlier bend also joins to
 the stationary face is refused the same way.
+
+**Corner Round** and **Corner Chamfer** take edges through the thickness
+at corners of a flat face. This includes a corner where a bend starts: a
+side of a wall (or of the face) that meets the bend line at an angle other
+than 90 degrees, such as the slanted side of a profiled flange. Select the
+edge between that side and the side of the bend. The corner is rounded or
+bevelled as it lies in the flat pattern: the bend's side is trimmed with
+the wall's, through the bend and on into the face beyond it where its side
+runs on in line, and the Flat Pattern shows the rounded outline. A round
+larger than the bend's straight side allows, or an inside corner there,
+is refused with the reason. An ordinary **Fillet** or **Chamfer** on such
+an edge does the same, with a warning, and the body stays a sheet metal
+body.
 
 **Corner Relief** takes faces of the two bends that meet. When the bends
 leave several flat faces, it also takes the Face they leave. For bends
@@ -11029,7 +11637,12 @@ MitCad writes the bodies where the design shows them, also the bodies
 of moved components. A STEP file is then an assembly, with the parts
 placed as the components are. In a design with components, the
 Coordinates row writes each body in its own component's coordinates
-instead.
+instead. When the design has coordinate systems (Construct › Coordinate
+System), the Coordinates row also offers each of them: choose *In
+CoordinateSystem1* to write the bodies in that frame, with its origin at
+0, 0, 0 and its axes as the file's X, Y and Z. This works for STEP,
+IGES, BRep, OBJ, STL and 3MF files, for example to give a CAM program or
+an inspection program the part in the frame it is set up in.
 
 The refinements Low, Medium and High apply to the mesh exports (STL,
 OBJ, 3MF, USDZ). They keep each curved face in approximately 5 000,
@@ -12353,7 +12966,13 @@ elsewhere places it (hold **Alt** to place it anywhere). Between two
 picks, place the dimension above or below them for the horizontal
 distance, beside them for the vertical one, and between them, or
 diagonally beyond them, for the distance straight from one to the
-other (from an edge: square to it). Clicking the same edge or circle
+other (from an edge: square to it). A radius has one arrow, on the arc
+at the end of its leader, pointing along the leader: with its value
+outside the circle, the leader comes in from the value; on the hollow
+side of an arc, such as a fillet in an inside corner with its value
+beyond the fillet's center, the leader runs through the center to the
+arc; elsewhere off the arc's ends, it bends to come in square to the
+nearer end. Clicking the same edge or circle
 twice counts once: it never makes a dimension of 0. The annotation keeps
 what it picked, not a place on the paper: when you change the design, the
 dimension changes with it. A tool stays on for the next annotation; Esc,
@@ -13114,6 +13733,9 @@ MitCad. The report has:
   by default.
 - A screenshot of the window, if you tick it. To crop it, drag over the
   part to keep. **Whole Window** undoes the crop.
+- **Include the design**, if you tick it (off by default; offered while
+  a design is open). MitCad then makes a zip for the report, so that the
+  developers can open your design as you see it.
 
 **Preview** shows everything that the report contains, section by
 section. There you can edit any part, untick what must not be sent,
@@ -13121,7 +13743,8 @@ change the title, or Cancel. MitCad masks folders and file paths, your
 user name and the computer's name before you see the preview
 (`<path>/<file>.f3d`, `<user>`, `<host>`). The names of program and
 source files stay, so that a stack stays readable. Your design and its
-files are never attached.
+files are never attached, unless you include the design: then they go
+into the zip below, which you attach yourself.
 
 **Send** opens MitCad's issue form in your web browser, with the title
 and the report filled in. Nothing is sent until you submit the form
@@ -13129,6 +13752,27 @@ there. MitCad holds no account or token. If the report is too long for
 the form's link, the report is on the clipboard. Paste it over the
 shortened text. MitCad saves a screenshot in the `reports` folder of
 its data folder, and the message says where. Drag it into the form.
+
+**Include the design.** The zip is in the same `reports` folder, named
+after the report's title and the time, for example
+`Bug-Fillet-fails-20261113-142501.zip`. It holds:
+
+- The open design as it is now, also with changes you have not saved
+- The designs it links and the image files of its textures, at their
+  places in the project, and the project's data that opening them needs
+- The report, the screenshot and the log of this run
+
+Nothing else of the project goes in: not its other designs, not files
+outside it, not your own settings in it. Unzipped, it opens as a project
+again. Names in the zip are not masked.
+
+**Preview** shows the zip's name and size in the section **Design**.
+Untick the section to send the report without it. After **Send**, MitCad
+opens the zip's folder in your file manager, and the issue's text names
+the zip. Attach the zip to the issue: drag it into the comment box. Or
+e-mail it to testfile@mitcad.org and write its name in the issue. An
+issue takes files of at most 25 MB. For a larger zip, the preview and
+the message say to e-mail it.
 
 **Error reports.** When MitCad crashes, it writes a crash report. The
 report holds the version, the platform, the signal or exception, the

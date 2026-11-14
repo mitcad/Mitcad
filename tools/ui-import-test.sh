@@ -134,7 +134,7 @@ ui_step "fit (F6)"                         ui_key F6
 echo "--- STEP"
 ui_mark
 ui_step "File > Export a STEP file"        export_to "$WORK/block.step"
-ui_expect_new "Exported $WORK/block.step: step, 1 body(ies)" "the block written as STEP"
+ui_expect_new "Exported $WORK/block.step: step, 1 body" "the block written as STEP"
 [ -s "$WORK/block.step" ] || ui_fail "no STEP file"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/block.step"
@@ -156,7 +156,7 @@ ui_expect_log "Undo: Import block.step" "the import, its component with it, is o
 echo "--- STL"
 ui_mark
 ui_step "File > Export an STL file"        export_to "$WORK/block.stl"
-ui_expect_new "Exported $WORK/block.stl: stl, 1 body(ies)" "the block written as STL"
+ui_expect_new "Exported $WORK/block.stl: stl, 1 body" "the block written as STL"
 ui_mark
 ui_step "File > Import it"                 import_from "$WORK/block.stl"
 ui_step "in millimetres (Enter)"           type_into_dialog 'Insert Mesh' ""
@@ -171,7 +171,7 @@ ui_mark
 ui_step "File > Export a USDZ file"        export_to "$WORK/block.usdz"
 ui_expect_new "Export dialog: USDZ for AR and 3D viewers (*.usdz) to $WORK/block.usdz" \
   "the extension chose the USDZ type"
-ui_expect_new "Exported $WORK/block.usdz: usdz, 1 body(ies), 1 material(s)" "the block written as USDZ"
+ui_expect_new "Exported $WORK/block.usdz: usdz, 1 body, 1 material" "the block written as USDZ"
 # A package: a zip whose first file, the binary layer, starts 64-byte
 # aligned (the stored name block.usdc at 30, the padding, PXR-USDC).
 [ "$(head -c 2 "$WORK/block.usdz")" = 'PK' ] || ui_fail "no zip package"
@@ -280,7 +280,7 @@ echo "--- FreeCAD document"
 mkdir -p "$WORK/fc"
 ui_mark
 ui_step "File > Export the block as B-rep" export_to "$WORK/fc/PartShape.brp"
-ui_expect_new "Exported $WORK/fc/PartShape.brp: brep, 1 body(ies)" "the block written as B-rep"
+ui_expect_new "Exported $WORK/fc/PartShape.brp: brep, 1 body" "the block written as B-rep"
 cat > "$WORK/fc/Document.xml" << 'EOF'
 <?xml version='1.0' encoding='utf-8'?>
 <Document SchemaVersion="4" ProgramVersion="0.21R33771 (Git)" FileVersion="1">
@@ -705,10 +705,10 @@ ui_mark
 ui_step "File > Export a STEP file"        export_to "$WORK/pin.step"
 ui_expect_new "Export dialog opened: unit mm (mm | cm | m | in | ft), coordinates design (design | component)" \
   "Export offers the coordinates, the design's first"
-ui_expect_new "Exported $WORK/pin.step: step, 1 body(ies), mm, design coordinates" "written where the design shows it"
+ui_expect_new "Exported $WORK/pin.step: step, 1 body, mm, design coordinates" "written where the design shows it"
 ui_mark
 ui_step "File > Export in component coordinates" export_local "$WORK/pin-local.step"
-ui_expect_new "Exported $WORK/pin-local.step: step, 1 body(ies), mm, component coordinates" \
+ui_expect_new "Exported $WORK/pin-local.step: step, 1 body, mm, component coordinates" \
   "written in its component's coordinates"
 cat > "$WORK/placed.json" << EOF
 [

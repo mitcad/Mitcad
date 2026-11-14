@@ -72,19 +72,24 @@ struct Feedback {
   QString contact;
   bool diagnostics = true;
   QImage screenshot; // null when left out
+  // Include the design (mitcad#1795): a zip of the open design and the
+  // files it refers to, the report, the screenshot and the log.
+  bool includeDesign = false;
 };
 
 // Help > Send Feedback: the kind, a summary, a description, an optional
-// contact address, diagnostics (on) and a screenshot of the window (off;
-// croppable). Preview builds the report and shows ReportPreviewDialog;
+// contact address, diagnostics (on), a screenshot of the window (off;
+// croppable) and Include the design (off; offered while a design is open,
+// mitcad#1795). Preview builds the report and shows ReportPreviewDialog;
 // the form closes when that sends.
 class FeedbackDialog : public QDialog {
   Q_OBJECT
 
 public:
   // `preview` shows the report's preview for what the form holds and
-  // returns whether it was sent.
-  FeedbackDialog(const QImage& screenshot, std::function<bool(const Feedback&)> preview, QWidget* parent);
+  // returns whether it was sent; `designOpen` offers Include the design.
+  FeedbackDialog(const QImage& screenshot, bool designOpen, std::function<bool(const Feedback&)> preview,
+                 QWidget* parent);
 
   Feedback feedback() const;
 
@@ -98,6 +103,7 @@ private:
   QLineEdit* m_contact = nullptr;
   QCheckBox* m_diagnostics = nullptr;
   QCheckBox* m_screenshot = nullptr;
+  QCheckBox* m_design = nullptr;
   ScreenshotView* m_view = nullptr;
   QWidget* m_viewRow = nullptr;
 };
@@ -111,8 +117,10 @@ class ReportPreviewDialog : public QDialog {
 
 public:
   // `logFile`: the latest debug log (mitcad#269), offered unchecked; "" none.
+  // `design`: the design's zip (mitcad#1795), its path "" when the form did
+  // not ask for it; offered checked, with its size.
   ReportPreviewDialog(const Report& report, const QImage& screenshot, const QString& destination, QWidget* parent,
-                      const QString& logFile = QString());
+                      const QString& logFile = QString(), const DesignZip& design = DesignZip());
 
   // The report as edited, with the sections left out unchecked.
   Report report() const;
@@ -120,6 +128,8 @@ public:
   QImage screenshot() const;
   // The debug log's file when the user checked it, else "".
   QString logFile() const;
+  // Whether the design's zip is still included (made, and checked).
+  bool designIncluded() const;
 
 protected:
   void showEvent(QShowEvent* event) override;
@@ -135,6 +145,8 @@ private:
   QGroupBox* m_screenshotBox = nullptr;
   QString m_logFile;
   QGroupBox* m_logFileBox = nullptr;
+  DesignZip m_design;
+  QGroupBox* m_designBox = nullptr;
 };
 
 // Logs "<what> at x,y" for UI tests, in the main window's coordinates (the

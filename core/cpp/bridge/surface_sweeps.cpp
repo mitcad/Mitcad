@@ -111,4 +111,12 @@ std::shared_ptr<geometry::Shape> loft_sheet(rust::Str feature, rust::Slice<const
   return geometry::loft_sheet(std::string(feature), chains_of(curves, chains), ruled, closed);
 }
 
+std::shared_ptr<geometry::Shape> helix_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
+                                             rust::Slice<const std::size_t> chains, rust::Slice<const double> axis,
+                                             double pitch, double revolutions, bool left_handed) {
+  need(axis, 6, "the axis");
+  return geometry::helix_sheet(std::string(feature), chains_of(curves, chains),
+                               gp_Ax1(point(axis), direction(axis, 3, "the axis")), pitch, revolutions, left_handed);
+}
+
 } // namespace mitcad::bridge

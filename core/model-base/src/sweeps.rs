@@ -391,6 +391,20 @@ pub enum ThicknessLocation {
 /// `wall1(<curve>)` and `wall2(<curve>)` (left and right), `tip0(<curve>)`
 /// and `tip1(<curve>)`, `start(<curve>)` in the sketch plane and
 /// `end(<curve>)` at the depth.
+///
+/// With `extend_ends` (a rib's only, mitcad#1746) each open end of the
+/// chain is continued straight along its end tangent until the rib, across
+/// its whole thickness and depth, meets the faces of `bodies`: the
+/// continuation fills up to a curved or slanted face with no gap, and
+/// `end_offset` moves the faces it stops at along that tangent (positive:
+/// further into them). Faces of a continuation: `extend0` or `extend1`
+/// along it, its tip `tip0` or `tip1`. An end whose continuation meets no
+/// face of the bodies within their bounds stays as drawn, and the shape
+/// carries a note saying so ([`crate::Kernel::notes`]).
+///
+/// With `direction` (a rib's, a unit vector in the sketch plane) the rib
+/// grows along it instead of at right angles to the chord (mitcad#1746);
+/// `flip` turns it as it turns the chord's.
 #[derive(Debug, Clone)]
 pub struct RibSpec<'a, S> {
     pub feature: FeatureUid,
@@ -402,6 +416,9 @@ pub struct RibSpec<'a, S> {
     pub depth: Option<f64>,
     pub flip: bool,
     pub bodies: Vec<S>,
+    pub extend_ends: bool,
+    pub end_offset: f64,
+    pub direction: Option<[f64; 3]>,
 }
 
 /// Input of [`crate::Kernel::helix`] (FreeCAD's additive and subtractive

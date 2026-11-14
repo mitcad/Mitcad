@@ -11,21 +11,35 @@
 #include <utility>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepLib.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
+#include <Geom2d_Line.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom_Surface.hxx>
+#include <Precision.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Dir2d.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
+#include <gp_Vec2d.hxx>
 
 #include "history.hpp"
 #include "spine.hpp"
@@ -363,6 +377,65 @@ ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& section
       }
     }
     return parts.shape("surface loft");
+  });
+}
+
+ShapePtr helix_sheet(const std::string& feature, const std::vector<Path>& chains, const gp_Ax1& axis, double pitch,
+                     double revolutions, bool left_handed) {
+  detail::require_positive("helix pitch", pitch);
+  detail::require_positive("helix revolutions", revolutions);
+  return detail::run("surface helix", [&] {
+    SheetParts parts;
+    const gp_Dir up = axis.Direction();
+    for (const Path& chain : chains) {
+      const ChainWire wire = chain_wire(chain);
+      // A helix through the curves' middle: with the axis as the fixed
+      // binormal every helix of the axis and pitch moves the curves alike,
+      // by the screw motion (as the solid helix's profiles move).
+      Bnd_Box box;
+      BRepBndLib::Add(wire.wire, box);
+      if (box.IsVoid()) {
+        throw std::invalid_argument("surface helix: a chain has no extent");
+      }
+      const gp_Pnt middle((box.CornerMin().XYZ() + box.CornerMax().XYZ()) / 2.0);
+      const gp_Vec offset(axis.Location(), middle);
+      const double along = offset.Dot(gp_Vec(up));
+      const gp_Vec radial = offset - gp_Vec(up) * along;
+      double radius = radial.Magnitude();
+      gp_Dir x = detail::any_normal(up);
+      if (radius > Precision::Confusion()) {
+        x = gp_Dir(radial);
+      } else {
+        radius = 1.0;
+      }
+      gp_Ax3 axes(axis.Location().Translated(gp_Vec(up) * along), up, x);
+      if (left_handed) {
+        axes.YReverse();
+      }
+      // On the unrolled cylinder the helix is a line: a turn rises a pitch.
+      const occ::handle<Geom_Surface> surface = new Geom_CylindricalSurface(axes, radius);
+      const gp_Vec2d step(kFullTurn, pitch);
+      const occ::handle<Geom2d_Line> line = new Geom2d_Line(gp_Pnt2d(0.0, 0.0), gp_Dir2d(step));
+      BRepBuilderAPI_MakeEdge helix(line, surface, 0.0, revolutions * step.Magnitude());
+      if (!helix.IsDone()) {
+        throw std::runtime_error("surface helix: the helix could not be built");
+      }
+      TopoDS_Edge edge = helix.Edge();
+      const int samples = std::max(32, static_cast<int>(std::ceil(revolutions * 32.0)));
+      BRepLib::BuildCurves3d(edge, 1.0e-7, GeomAbs_C1, 14, samples);
+      const TopoDS_Wire spine = BRepBuilderAPI_MakeWire(edge).Wire();
+      BRepOffsetAPI_MakePipeShell pipe(spine);
+      pipe.SetTolerance(1.0e-6, 1.0e-6, 1.0e-2);
+      pipe.SetMode(up);
+      pipe.Add(wire.wire, false, false);
+      detail::build(pipe);
+      if (!pipe.IsDone()) {
+        throw std::runtime_error("the curves could not be moved along the helix");
+      }
+      parts.add(pipe.Shape());
+      parts.name(pipe, feature, wire);
+    }
+    return parts.shape("surface helix");
   });
 }
 

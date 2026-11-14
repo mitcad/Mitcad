@@ -139,6 +139,17 @@ void AutosaveManager::tick() {
     qWarning().noquote() << QStringLiteral("Autosave failed: %1").arg(QString::fromUtf8(e.what()));
     return;
   }
+  // The results computed since the last save, taken with the snapshot
+  // (mitcad#1796); a failure to take them does not hold the design back.
+  std::function<QByteArray()> storeResults;
+  try {
+    if (results) {
+      ScopedTiming timing("autosave results");
+      storeResults = results();
+    }
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Autosave of results failed: %1").arg(QString::fromUtf8(e.what()));
+  }
   QJsonObject about{
       {QStringLiteral("format"), QStringLiteral("mitcad-autosave")},
       {QStringLiteral("session"), m_session},
@@ -157,7 +168,8 @@ void AutosaveManager::tick() {
   const quint64 generation = m_generation;
   const quint64 revision = now.revision;
   m_pool.start([this, generation, revision, directory = m_directory, session = m_session, name = taken.name,
-                data = std::move(taken.design), about = std::move(about)]() mutable {
+                data = std::move(taken.design), about = std::move(about),
+                storeResults = std::move(storeResults)]() mutable {
     const mac::ThreadQualityScope quality(mac::ThreadQuality::Utility);
     QString error;
     const bool ok = publishAutosave(directory, session, data, std::move(about), error);
@@ -166,6 +178,25 @@ void AutosaveManager::tick() {
                                 .arg(name, QString::number(data.size()), directory);
     } else {
       qWarning().noquote() << QStringLiteral("Autosave of %1 failed: %2").arg(name, error);
+    }
+    // Then the results (the design first: it is what recovers the work).
+    if (storeResults) {
+      QByteArray stored;
+      try {
+        stored = storeResults();
+      } catch (const std::exception& e) {
+        qWarning().noquote() << QStringLiteral("Autosave of results failed: %1").arg(QString::fromUtf8(e.what()));
+      }
+      if (!stored.isEmpty()) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, stored] {
+              if (resultsStored) {
+                resultsStored(stored);
+              }
+            },
+            Qt::QueuedConnection);
+      }
     }
     QMetaObject::invokeMethod(
         this, [this, generation, revision, ok] { written(generation, revision, ok); }, Qt::QueuedConnection);

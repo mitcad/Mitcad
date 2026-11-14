@@ -47,7 +47,7 @@ const QRegularExpression& topologicalPattern() {
 
 const QRegularExpression& idPattern() {
   // F57 (and F2 of F2.b0), O3, k12, p15, c4.
-  static const QRegularExpression pattern(kBefore + QStringLiteral("(?:F|O|k|p|c)\\d+") + kAfter);
+  static const QRegularExpression pattern(kBefore + QStringLiteral("(?:F|O|k|p|c)\\d{1,5}") + kAfter);
   return pattern;
 }
 

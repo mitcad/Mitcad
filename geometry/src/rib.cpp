@@ -11,11 +11,13 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <Bnd_Box.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopoDS.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Pln.hxx>
@@ -69,19 +71,27 @@ ShapePtr band_prism(const TopoDS_Face& band, const Names& names, const gp_Vec& o
   return detail::named_prism(face, vector, near, far);
 }
 
-// The tool cut by the bodies, keeping the pieces that hold a face named
-// `keep`: it must end at the bodies, so no piece may hold `far`.
-ShapePtr to_bodies(const ShapePtr& tool, const std::vector<ShapePtr>& bodies, const std::string& keep,
-                   const std::string& far, const char* what) {
-  if (bodies.empty()) {
-    throw std::invalid_argument(std::string("there are no bodies for the ") + what + " to reach");
+// True when a face of the shape has a name matching `name`.
+bool holds(const Shape& shape, const std::string& name) {
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& face : shape.face_names(i)) {
+      if (name_matches(face, name)) {
+        return true;
+      }
+    }
   }
+  return false;
+}
+
+// The tool cut by the shapes, one piece per solid, its faces named after
+// the tool's.
+std::vector<ShapePtr> cut_pieces(const ShapePtr& tool, const std::vector<TopoDS_Shape>& shapes, const char* what) {
   BRepAlgoAPI_Cut cut;
   NCollection_List<TopoDS_Shape> arguments;
   arguments.Append(tool->occt());
   NCollection_List<TopoDS_Shape> tools;
-  for (const ShapePtr& body : bodies) {
-    tools.Append(body->occt());
+  for (const TopoDS_Shape& shape : shapes) {
+    tools.Append(shape);
   }
   cut.SetArguments(arguments);
   cut.SetTools(tools);
@@ -92,20 +102,36 @@ ShapePtr to_bodies(const ShapePtr& tool, const std::vector<ShapePtr>& bodies, co
   }
   detail::FaceNamer namer(cut.Shape());
   namer.carry(cut, *tool);
-  std::vector<ShapePtr> kept;
+  std::vector<ShapePtr> pieces;
   for (const detail::FaceNamer::Piece& piece : namer.pieces()) {
-    bool holds = false;
-    for (int i = 0; i < piece.shape->face_count() && !holds; ++i) {
-      for (const std::string& name : piece.shape->face_names(i)) {
-        holds = holds || name_matches(name, keep);
-      }
-    }
-    if (holds) {
-      if (detail::has_face_named(*piece.shape, far)) {
+    pieces.push_back(piece.shape);
+  }
+  return pieces;
+}
+
+std::vector<TopoDS_Shape> shapes_of(const std::vector<ShapePtr>& bodies) {
+  std::vector<TopoDS_Shape> shapes;
+  for (const ShapePtr& body : bodies) {
+    shapes.push_back(body->occt());
+  }
+  return shapes;
+}
+
+// The tool cut by the bodies, keeping the pieces that hold a face named
+// `keep`: it must end at the bodies, so no piece may hold `far`.
+ShapePtr to_bodies(const ShapePtr& tool, const std::vector<ShapePtr>& bodies, const std::string& keep,
+                   const std::string& far, const char* what) {
+  if (bodies.empty()) {
+    throw std::invalid_argument(std::string("there are no bodies for the ") + what + " to reach");
+  }
+  std::vector<ShapePtr> kept;
+  for (const ShapePtr& piece : cut_pieces(tool, shapes_of(bodies), what)) {
+    if (holds(*piece, keep)) {
+      if (detail::has_face_named(*piece, far)) {
         throw std::invalid_argument(std::string("the ") + what +
                                     " does not end at faces of the bodies; flip it or give it a depth");
       }
-      kept.push_back(piece.shape);
+      kept.push_back(piece);
     }
   }
   if (kept.empty()) {
@@ -126,7 +152,94 @@ double reach(const RibSpec& spec, const std::vector<TopoDS_Wire>& wires) {
   return 2.0 * std::sqrt(box.SquareExtent()) + 10.0;
 }
 
-ShapePtr rib_tool(const RibSpec& spec) {
+// One open end of a rib's chain (mitcad#1746): where it is, its tangent out
+// of the chain, and its names.
+struct RibEnd {
+  gp_Pnt point;
+  gp_Dir outward;
+  const char* which; // "start" or "end", for the notes
+  const char* tip;
+  const char* extend;
+  const char* reach;
+};
+
+// What the notes of an end that stays as drawn say (no names or places in
+// the text; the place goes with the note).
+void stays(const RibEnd& end, const char* why, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
+  notes.emplace_back(std::string("the ") + end.which + " of the rib's curves " + why + "; it stays where it is drawn",
+                     end.point);
+}
+
+// The continuation of one end of a rib (mitcad#1746): the band beyond the
+// end's tip, along the end's tangent for `length` and as deep as the rib,
+// cut by the bodies (moved along the tangent by the end offset), and of it
+// the pieces that touch the rib: so it fills from the tip up to the faces
+// the end meets, whatever their shape. Null when there is nothing between
+// the tip and the faces, or with a note when the continuation meets no
+// face that closes it off.
+ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, const gp_Vec& depth, double low,
+                   double high, double length, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
+  if (spec.bodies.empty()) {
+    stays(end, "has no bodies to be continued to", notes);
+    return nullptr;
+  }
+  // Along the way the rib grows, the continuation would have no width.
+  if (gp_Vec(end.outward).Crossed(depth).Magnitude() <= 1.0e-6 * depth.Magnitude()) {
+    stays(end, "runs along the rib's direction there and cannot be continued", notes);
+    return nullptr;
+  }
+  const gp_Dir normal = spec.frame.normal();
+  const gp_Pnt p = end.point;
+  const gp_Pnt q = p.Translated(gp_Vec(end.outward) * length);
+  const std::string reach_name = face_name(spec.feature, end.reach);
+  const std::string far_side = face_name(spec.feature, "end");
+  BRepBuilderAPI_MakeWire outline;
+  Names names;
+  const auto add = [&](const gp_Pnt& from, const gp_Pnt& to, const std::string& name) {
+    outline.Add(BRepBuilderAPI_MakeEdge(from, to).Edge());
+    if (!outline.IsDone()) {
+      throw std::invalid_argument("the rib's ends cannot be continued");
+    }
+    names.emplace_back(outline.Edge(), name);
+  };
+  add(p, q, face_name(spec.feature, end.extend));
+  add(q, q.Translated(depth), reach_name);
+  add(q.Translated(depth), p.Translated(depth), far_side);
+  add(p.Translated(depth), p, face_name(spec.feature, end.tip));
+  const TopoDS_Face band = band_face(gp_Pln(p, normal), outline.Wire(), "rib");
+  const ShapePtr slab = band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
+                                   {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")});
+  // The faces it stops at, moved along the tangent by the offset (copies:
+  // the bodies stay as they are).
+  std::vector<TopoDS_Shape> stops = shapes_of(spec.bodies);
+  if (spec.end_offset != 0.0) {
+    gp_Trsf move;
+    move.SetTranslation(gp_Vec(end.outward) * spec.end_offset);
+    for (TopoDS_Shape& stop : stops) {
+      stop = stop.Moved(TopLoc_Location(move));
+    }
+  }
+  std::vector<ShapePtr> kept;
+  for (const ShapePtr& piece : cut_pieces(slab, stops, "rib")) {
+    BRepExtrema_DistShapeShape distance(piece->occt(), drawn.occt());
+    if (!distance.IsDone() || distance.Value() > 1.0e-5) {
+      continue;
+    }
+    // Not closed off by the faces: it would run on to the far side of the
+    // bodies' bounds (or, up to the next faces, past their depth).
+    if (holds(*piece, reach_name) || (!spec.depth && holds(*piece, far_side))) {
+      stays(end, "meets no face of the bodies when continued along its curve", notes);
+      return nullptr;
+    }
+    kept.push_back(piece);
+  }
+  if (kept.empty()) {
+    return nullptr;
+  }
+  return detail::fused(kept, "the rib");
+}
+
+ShapePtr rib_tool(const RibSpec& spec, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   const Path& chain = spec.chains.front();
   const TopoDS_Wire wire = detail::path_wire(chain);
   const detail::Spine spine(wire);
@@ -138,6 +251,18 @@ ShapePtr rib_tool(const RibSpec& spec) {
   }
   const gp_Dir normal = spec.frame.normal();
   gp_Dir across = normal.Crossed(gp_Dir(chord));
+  if (spec.direction) {
+    // Its Direction (mitcad#1746), kept in the sketch plane.
+    const gp_Vec given(*spec.direction);
+    const gp_Vec flat = given - gp_Vec(normal) * given.Dot(gp_Vec(normal));
+    if (flat.Magnitude() <= 1.0e-6) {
+      throw std::invalid_argument("the rib's direction does not lie in its sketch plane");
+    }
+    across = gp_Dir(flat);
+    if (gp_Vec(across).Crossed(gp_Vec(gp_Dir(chord))).Magnitude() <= 1.0e-6) {
+      throw std::invalid_argument("the rib's direction runs along its curves' chord");
+    }
+  }
   if (spec.flip) {
     across.Reverse();
   }
@@ -170,11 +295,26 @@ ShapePtr rib_tool(const RibSpec& spec) {
   const auto [low, high] = sides(spec.location, spec.thickness);
   const ShapePtr tool = band_prism(band, names, gp_Vec(normal) * low, gp_Vec(normal) * (high - low),
                                    {face_name(spec.feature, "wall2")}, {face_name(spec.feature, "wall1")});
-  if (spec.depth) {
-    return tool;
+  const ShapePtr drawn = spec.depth ? tool
+                                    : to_bodies(tool, spec.bodies, face_name(spec.feature, "side", chain.front().name),
+                                                face_name(spec.feature, "end"), "rib");
+  if (!spec.extend_ends) {
+    return drawn;
   }
-  return to_bodies(tool, spec.bodies, face_name(spec.feature, "side", chain.front().name),
-                   face_name(spec.feature, "end"), "rib");
+  // Extend Ends (mitcad#1746): each end continued along its tangent, far
+  // enough to leave the bodies' bounds (and the offset's more).
+  const RibEnd ends[] = {
+      {a, spine.tangent(0.0).Reversed(), "start", "tip0", "extend0", "reach0"},
+      {b, spine.tangent(spine.length()), "end", "tip1", "extend1", "reach1"},
+  };
+  const double run_out = reach(spec, {wire}) + std::abs(spec.end_offset);
+  std::vector<ShapePtr> parts{drawn};
+  for (const RibEnd& end : ends) {
+    if (const ShapePtr more = extension(spec, *drawn, end, depth, low, high, run_out, notes)) {
+      parts.push_back(more);
+    }
+  }
+  return detail::fused(parts, "the rib");
 }
 
 // The band of a web along one curve in the sketch plane, between the offsets
@@ -283,9 +423,21 @@ ShapePtr rib(const RibSpec& spec) {
   if (!spec.web && spec.chains.size() != 1) {
     throw std::invalid_argument("a rib grows from one chain of curves");
   }
+  if (spec.web && spec.extend_ends) {
+    throw std::invalid_argument("a web's curves end where they are drawn");
+  }
+  if (spec.web && spec.direction) {
+    throw std::invalid_argument("a web grows along the sketch normal");
+  }
   return detail::run(what, [&] {
-    const ShapePtr tool = spec.web ? web_tool(spec) : rib_tool(spec);
-    return detail::finished(*tool, spec.web ? "the web" : "the rib");
+    std::vector<std::pair<std::string, gp_Pnt>> notes;
+    const ShapePtr tool = spec.web ? web_tool(spec) : rib_tool(spec, notes);
+    const ShapePtr result = detail::finished(*tool, spec.web ? "the web" : "the rib");
+    // The ends that stay as drawn (mitcad#1746), each at its end.
+    for (const auto& [note, at] : notes) {
+      result->add_note(note, {Shape::NotePlace::at(at.X(), at.Y(), at.Z())});
+    }
+    return result;
   });
 }
 

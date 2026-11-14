@@ -51,8 +51,23 @@ void TestDriver::testRibbonLabels(const QStringList& expected) {
       if (!button->objectName().startsWith(QLatin1String("ribbonMenu_"))) continue;
       // These captions are ordinary words (Create, Sheet Metal, ...), not
       // file formats or user names. Check the actual text used by painting.
+      // An acronym that is the group's name (CNC, mitcad#1013) is written
+      // in capitals as a word is, not shouted: the allowed ones are listed
+      // here, in English and as the interface language shows them (the
+      // pseudo-language's too), so that no other caption passes in
+      // capitals.
+      static const char* const captionAcronyms[] = {"CNC"};
       const QString text = button->text();
-      if (text.isEmpty() || text == text.toUpper() || button->font().capitalization() == QFont::AllUppercase) {
+      QString words = text;
+      words.remove(QChar(0x25BE)); // the menu's arrow
+      words = words.trimmed();
+      bool acronym = false;
+      for (const char* name : captionAcronyms) {
+        acronym = acronym || words == QLatin1String(name) ||
+                  words == QCoreApplication::translate("RibbonName", name);
+      }
+      const bool shouting = words == words.toUpper() && !acronym;
+      if (text.isEmpty() || shouting || button->font().capitalization() == QFont::AllUppercase) {
         m_waitDetail = QStringLiteral("all-caps group caption: %1").arg(text);
         return false;
       }

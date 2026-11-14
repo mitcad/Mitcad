@@ -13,8 +13,15 @@
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <SelectMgr_Selection.hxx>
+#include <SelectMgr_SensitiveEntity.hxx>
+#include <Select3D_SensitiveEntity.hxx>
+#include <StdSelect_BRepOwner.hxx>
+#include <StdSelect_BRepSelectionTool.hxx>
 #include <BRep_Tool.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <NCollection_Array1.hxx>
@@ -138,13 +145,14 @@ void fineLinesOfALargeBody() {
     BRep_Tool::PolygonOnTriangulation(copy, copied, triangulation, location);
     CHECK(copied.IsNull());
   }
-  // Drawn: every edge's copy where the body has it.
+  // Drawn: every edge's copy where the body has it, but the side's seam
+  // (mitcad#1773).
   int drawn = 0;
   for (TopExp_Explorer it(edges.drawn(), TopAbs_EDGE); it.More(); it.Next()) {
     ++drawn;
     CHECK(edges.copyOf(it.Current()).IsNull()); // copies, not the body's edges
   }
-  CHECK(drawn == 3);
+  CHECK(drawn == 2);
 
   // A large circle is cut by the deviation, finer than the angle.
   const mitcad::ViewEdges largeEdges(large);
@@ -215,12 +223,84 @@ void sketchCurvesCutAsBodyEdges() {
   const occ::handle<Poly_Polygon3D>& straight = BRep_Tool::Polygon3D(line, location);
   CHECK(!straight.IsNull() && straight->NbNodes() == 2);
 }
+// The edges of the body's edge selection that are owned by distinct
+// edges.
+int pickedEdges(const occ::handle<SelectMgr_Selection>& selection) {
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> owners;
+  for (int i = 0; i < selection->Entities().Length(); ++i) {
+    const occ::handle<StdSelect_BRepOwner> owner =
+        occ::handle<StdSelect_BRepOwner>::DownCast(selection->Entities().Value(i)->BaseSensitive()->OwnerId());
+    if (!owner.IsNull() && owner->HasShape()) {
+      owners.Add(owner->Shape());
+    }
+  }
+  return owners.Extent();
+}
+
+// Smooth seams (mitcad#1773): a cylinder's side seam is not drawn and not
+// picked, its two circles are; a box keeps its 12 edges. The highlight of
+// the side face alone leaves its seam out too; one of the whole body
+// takes the body's seams.
+void smoothSeamsLeftOut() {
+  const TopoDS_Shape cylinder = BRepPrimAPI_MakeCylinder(5.0, 10.0).Shape();
+  const mitcad::ViewEdges edges(cylinder);
+  CHECK(edges.size() == 3); // copies of all three, the seam's too
+  CHECK(edges.drawnCount() == 2);
+  CHECK(edges.seamCount() == 1);
+  int drawn = 0;
+  int seams = 0;
+  for (TopExp_Explorer it(cylinder, TopAbs_EDGE); it.More(); it.Next()) {
+    if (edges.smoothSeam(it.Current())) {
+      ++seams;
+      CHECK(BRepAdaptor_Curve(TopoDS::Edge(it.Current())).GetType() == GeomAbs_Line);
+    }
+  }
+  CHECK(seams == 2); // the seam, twice on its face
+  for (TopExp_Explorer it(edges.drawn(), TopAbs_EDGE); it.More(); it.Next()) {
+    ++drawn;
+    CHECK(BRepAdaptor_Curve(TopoDS::Edge(it.Current())).GetType() == GeomAbs_Circle);
+  }
+  CHECK(drawn == 2);
+
+  // Picking: the seam's entities dropped, the circles' kept.
+  occ::handle<SelectMgr_Selection> selection = new SelectMgr_Selection(2);
+  StdSelect_BRepSelectionTool::Load(selection, cylinder, TopAbs_EDGE, 0.01, 0.1, false);
+  CHECK(pickedEdges(selection) == 3);
+  mitcad::dropSmoothSeams(selection, edges);
+  CHECK(pickedEdges(selection) == 2);
+
+  // The side face's highlight alone.
+  TopoDS_Shape side;
+  for (TopExp_Explorer it(cylinder, TopAbs_FACE); it.More(); it.Next()) {
+    if (BRepAdaptor_Surface(TopoDS::Face(it.Current())).GetType() == GeomAbs_Cylinder) {
+      side = it.Current();
+    }
+  }
+  CHECK(!side.IsNull());
+  const std::vector<const mitcad::ViewEdges*> caches{&edges};
+  const mitcad::ViewEdges sideEdges(side, caches);
+  CHECK(sideEdges.drawnCount() == 2);
+  CHECK(sideEdges.seamCount() == 1);
+  const mitcad::ViewEdges whole(cylinder, caches);
+  CHECK(whole.seamCount() == 1);
+  CHECK(whole.drawnCount() == 2);
+
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(20.0, 20.0, 10.0).Shape();
+  const mitcad::ViewEdges boxEdges(box);
+  CHECK(boxEdges.drawnCount() == 12);
+  CHECK(boxEdges.seamCount() == 0);
+  occ::handle<SelectMgr_Selection> boxSelection = new SelectMgr_Selection(2);
+  StdSelect_BRepSelectionTool::Load(boxSelection, box, TopAbs_EDGE, 0.01, 0.1, false);
+  mitcad::dropSmoothSeams(boxSelection, boxEdges);
+  CHECK(pickedEdges(boxSelection) == 12);
+}
 } // namespace
 
 int main() {
   fineLinesOfALargeBody();
   highlightsOnTheBodysLines();
   sketchCurvesCutAsBodyEdges();
+  smoothSeamsLeftOut();
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

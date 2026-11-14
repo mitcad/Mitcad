@@ -1,0 +1,13 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Annotations rolled back with the timeline (mitcad#1756), on a reported design (opened with --open, never committed; tools/cli/annotations-rolled-back-reported-test.cmake): 172 features, the sketch the owner edited (F44) the 37th; two material labels (Material1, Material2) on bodies of later features (F132.b0, F113.b0), a dimension (Offset1) on a body of an earlier one."},
+  {"comment": "Editing the sketch puts the marker right after it: the labels are rolled back with those features, without a warning; the dimension stays measured."},
+  {"cmd": "set_marker", "position": 37},
+  {"expect": {"query": {"query": "annotations"}, "some": {"name": "Material1", "rolled_back": true}}},
+  {"expect": {"query": {"query": "annotations"}, "some": {"name": "Material2", "rolled_back": true}}},
+  {"expect": {"query": {"query": "annotations"}, "none": {"name": "Offset1", "rolled_back": true}}},
+  {"expect": {"query": {"query": "annotations"}, "none": {"level": "warning"}}},
+  {"comment": "The sketch finished: the marker at the end again, nothing rolled back, no warning."},
+  {"cmd": "set_marker", "position": 172},
+  {"expect": {"query": {"query": "annotations"}, "none": {"rolled_back": true}}},
+  {"expect": {"query": {"query": "annotations"}, "none": {"level": "warning"}}}
+]

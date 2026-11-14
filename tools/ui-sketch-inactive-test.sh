@@ -18,8 +18,9 @@
 #      constraint and no dimension.
 #   5. Sketch2 (F2): two horizontal lines and a parallel between them that
 #      their horizontals imply. Edited, the Sketch Palette shows the
-#      redundant constraint as a warning (mitcad#1051) that counts it
-#      ("Redundant: 1 constraint follows from the others", mitcad#1171), a
+#      redundant constraint as a warning (mitcad#1051) that says in words
+#      what it follows from ("Redundant: the Parallel between two lines
+#      follows from …", mitcad#1171, mitcad#1774), a
 #      link whose click selects the two lines; the log keeps its id.
 #   6. Sketch3 (F3): a 60 x 40 outline with corners rounded by 10, fixed
 #      reference lines and arcs as a projection makes them (mitcad#1171).
@@ -166,13 +167,13 @@ EOF2
   { cat "$WORK/check.log"; ui_fail "the saved sketch"; }
 echo "ok   no constraint and no dimension saved"
 
-echo "--- Redundant constraints: a warning that counts them (mitcad#1051, mitcad#1171)"
+echo "--- Redundant constraints: a warning in words (mitcad#1051, mitcad#1171, mitcad#1774)"
 read -r tx ty <<< "$(ui_logged_at "Timeline Sketch2")"
 ui_mark
 ui_step "double-click Sketch2"           double_click_at "$tx" "$ty"
 ui_expect_new "Editing sketch F2 (Sketch2)" "Sketch2 edited"
-ui_expect_new "Sketch Palette warnings: Redundant: 1 constraint follows from the others" \
-  "the Sketch Palette shows the redundant constraint as a warning that counts it"
+ui_expect_new "Sketch Palette warnings: Redundant: the Parallel between two lines follows from" \
+  "the Sketch Palette shows the redundant constraint as a warning that says what it follows from"
 ui_expect_new "Sketch Palette redundant: k9" "the log keeps its id"
 ui_expect_new "Palette warning 0 at" "the warning is a link"
 ui_mark

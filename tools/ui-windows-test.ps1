@@ -605,12 +605,12 @@ $file = Join-Path $Out 'block.mitcad'
 '@ | Set-Content -Encoding ascii $file
 $log = Invoke-Mitcad 'block20' @('--open', $file, '--screenshot', (Join-Path $Out 'block20.png'))
 Expect-Log $log 'Opened .*block\.mitcad' 'opened with --open'
-Expect-Log $log 'Recomputed 3 feature\(s\)' 'sketch, extrude and fillet recomputed'
+Expect-Log $log 'Recomputed 3 features ' 'sketch, extrude and fillet recomputed'
 if ($log.Contains('Recompute failed')) { Fail 'a recompute failed' }
 $low = Check-Shot 'block20'
 
 $log = Invoke-Mitcad 'block35' @('--open', $file, '--set', 'd3=35', '--screenshot', (Join-Path $Out 'block35.png'))
-Expect-Log $log 'Recomputed 2 feature\(s\)' 'd3=35 recomputed extrude and fillet'
+Expect-Log $log 'Recomputed 2 features ' 'd3=35 recomputed extrude and fillet'
 $high = Check-Shot 'block35'
 if ($low -and $high -and $low.Shades.Count -ge 2 -and $high.Shades.Count -ge 2) {
   $lowRatio = Side-Ratio $low
@@ -629,7 +629,7 @@ $log = Invoke-Mitcad 'store1' @('--open', $file, '--screenshot', (Join-Path $Out
 Expect-Log $log 'Result store: restored 0, evaluated 3; stored 2 ' 'the first open stored two results'
 $log = Invoke-Mitcad 'store2' @('--open', $file, '--screenshot', (Join-Path $Out 'store2.png')) $store
 Expect-Log $log 'Result store: restored 2, evaluated 1; stored 0 ' 'the second open took them from the store'
-Expect-Log $log 'Recomputed 1 feature\(s\)' 'only the sketch computed'
+Expect-Log $log 'Recomputed 1 feature ' 'only the sketch computed'
 $stored = Check-Shot 'store2'
 if ($low -and $stored -and $stored.Shades.Count -eq $low.Shades.Count) {
   Pass 'the stored block is drawn as the computed one'

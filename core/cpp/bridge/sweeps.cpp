@@ -301,6 +301,11 @@ std::shared_ptr<geometry::Shape> rib_solid(rust::Str feature, const Frame& frame
     spec.depth = input.depth;
   }
   spec.flip = input.flip;
+  spec.extend_ends = input.extend_ends;
+  spec.end_offset = input.end_offset;
+  if (input.has_direction) {
+    spec.direction = direction(input.direction);
+  }
   for (std::size_t i = 0; i < bodies.size(); ++i) {
     spec.bodies.push_back(body_at(bodies, i));
   }

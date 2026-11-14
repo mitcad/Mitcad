@@ -101,8 +101,10 @@ void OcctViewer::stepSpaceMouse() {
     const bool aboutEye = style.mode == SpaceMouseMode::Fly && !camera->IsOrthographic();
     if (m_spaceMouse.turning() && !m_spaceMousePivot && !aboutEye) {
       // The orbit's centre, taken as the motion begins, as a mouse orbit
-      // takes it when its drag begins (Fly turns about the eye instead).
-      m_spaceMousePivot = GravityPoint(m_context, m_view);
+      // takes it when its drag begins (Fly turns about the eye instead);
+      // OCCT's own, the middle of what is shown: the mouse's fixed or
+      // cursor center (mitcad#1791) is not the 3D mouse's.
+      m_spaceMousePivot = AIS_ViewController::GravityPoint(m_context, m_view);
     }
     moveSpaceMouseCamera(*camera, m_spaceMousePivot.value_or(camera->Center()), m_spaceMouse, seconds, style);
   } catch (const Standard_Failure& failure) {

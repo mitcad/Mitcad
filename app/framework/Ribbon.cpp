@@ -808,7 +808,9 @@ QString displayName(const QString& name) {
   for (QString& word : words) {
     // A word that starts with a digit is a term in capitals ("3D PRINT" is
     // "3D Print", mitcad#1049).
-    word = word.at(0).isDigit() ? word.toUpper() : word.at(0).toUpper() + word.mid(1);
+    // So is an acronym ("CNC" stays CNC, mitcad#1013).
+    const bool acronym = word == QLatin1String("cnc");
+    word = word.at(0).isDigit() || acronym ? word.toUpper() : word.at(0).toUpper() + word.mid(1);
   }
   // In the interface language (kRibbonNames); English, title-cased, when it
   // has no translation.
@@ -1013,10 +1015,11 @@ const QStringList& Ribbon::groups(const QString& tab) {
   static const QStringList cutSheet = {QStringLiteral("CLOSE DRAWING"), QStringLiteral("PARTS"),
                                        QStringLiteral("EXPORT")};
   // mitcad#1049: what every method needs first (the materials, the
-  // annotations), then a group per manufacturing method. CNC comes with
-  // CAM's commands (mitcad#1013): a group without commands is not listed.
+  // annotations), then a group per manufacturing method: CNC beside 3D
+  // Print (mitcad#1013, cam/MainWindowCam.cpp). A group without commands
+  // is not listed.
   static const QStringList make = {QStringLiteral("MATERIALS"), QStringLiteral("ANNOTATE"),
-                                   QStringLiteral("3D PRINT"), QStringLiteral("LASER")};
+                                   QStringLiteral("3D PRINT"), QStringLiteral("CNC"), QStringLiteral("LASER")};
   // The Start tab (mitcad#1258): no groups, the Start page is its content.
   static const QStringList start;
   if (tab == kStart) {
@@ -1231,6 +1234,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     }
   }
   int pinnedCount = 0;
+  QStringList ownButtons; // the group's own buttons' command ids, in order
   bool firstEntry = true;
   QString section;
   for (const Entry& entry : entries) {
@@ -1253,6 +1257,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
         button->setObjectName(QStringLiteral("ribbon_") + def->id);
         buttons->addWidget(button);
         ++pinnedCount;
+        ownButtons << def->id;
       }
       continue;
     }
@@ -1289,7 +1294,16 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
       buttons->addWidget(button);
       m_splitButtons.insert(path, button);
       ++pinnedCount;
+      ownButtons << primary->id;
     }
+  }
+  // The group's own buttons in the menu's order (mitcad#1778), whether the
+  // row shows them or folds them: "Ribbon group SOLID/MODIFY buttons:
+  // solid.press_pull, solid.fillet, ...". Not the extras' or the user's
+  // pins ("Ribbon group SOLID/CREATE pinned: ...").
+  if (!ownButtons.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Ribbon group %1 buttons: %2")
+                              .arg(key(tab, group), ownButtons.join(QStringLiteral(", ")));
   }
   connect(menu, &QMenu::aboutToShow, menu, [menu, name = key(tab, group)] {
     qDebug().noquote() << QStringLiteral("Ribbon menu %1: %2").arg(name, menuEntries(menu));

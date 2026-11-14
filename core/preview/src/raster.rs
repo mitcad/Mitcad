@@ -15,6 +15,12 @@
 //!   of its face has, compared by position, so a periodic face's seam is
 //!   none) and, per view, its silhouettes (a side between a triangle facing
 //!   the eye and one facing away); a mesh body also has its sharp sides.
+//!   As the 3D view (mitcad#1773): pieces of one face on one surface
+//!   (`Mesh::face_surfaces`) are taken as one face, so the side between
+//!   them is no edge, and a side within one surface whose two triangles
+//!   have their own corners there (a seam's two copies, two pieces' meshes)
+//!   is an edge only where their normals part by more than
+//!   [`SEAM_CREASE_RADIANS`] at both its ends: a crease (a teardrop's tip).
 //!   They are drawn against the faces' depth with the slack of the faces'
 //!   slope over two samples, so that an edge on its own faces shows and one
 //!   behind other faces does not.
@@ -67,6 +73,10 @@ const LIGHT: [f64; 3] = [0.3, -0.5, 1.0];
 const TRANSPARENT_OPACITY: f64 = 0.25;
 /// The sharp sides of a mesh body: facets turning by more than this.
 const SHARP_DEGREES: f64 = 40.0;
+/// A side within one surface is drawn where the surface's normals on its
+/// two sides part by more than this (mitcad#1773): the 3D view's tolerance
+/// of smooth seams (`smooth_seams.hpp`, `kSmoothSeamAngle`).
+pub const SEAM_CREASE_RADIANS: f64 = 1.0e-2;
 /// Subpixel steps of the fill grid.
 const SUB: i64 = 256;
 /// How far past the picture's sides triangles and edges are clipped,
@@ -85,6 +95,10 @@ pub struct Mesh {
     pub triangles: Vec<[u32; 3]>,
     /// Each face's number of triangles, in order.
     pub face_triangles: Vec<u32>,
+    /// Each face's surface (mitcad#1773): faces with the same number are
+    /// pieces of one face on one surface, their meshes taken as one face's
+    /// for the edges. Empty (or shorter than the faces): each face its own.
+    pub face_surfaces: Vec<u32>,
     /// Each face's colour (sRGB, 0 to 1).
     pub face_colors: Vec<[f64; 3]>,
     /// The edges' colour (sRGB).
@@ -203,12 +217,29 @@ pub(crate) fn mesh_edges(mesh: &Mesh) -> MeshEdges {
     if start < mesh.triangles.len() {
         ranges.push(start..mesh.triangles.len());
     }
-    for range in ranges {
-        // The sides of the face's triangles in their order: the triangles
-        // that have each (looked up by position, never iterated).
+    // The ranges of each surface (pieces of one face together, in their
+    // first face's order); a face without a surface number on its own.
+    let mut surfaces: Vec<Vec<std::ops::Range<usize>>> = Vec::new();
+    let mut surface_at: HashMap<u32, usize> = HashMap::new();
+    for (face, range) in ranges.into_iter().enumerate() {
+        match mesh.face_surfaces.get(face) {
+            Some(&surface) => {
+                let at = *surface_at.entry(surface).or_insert_with(|| {
+                    surfaces.push(Vec::new());
+                    surfaces.len() - 1
+                });
+                surfaces[at].push(range);
+            }
+            None => surfaces.push(vec![range]),
+        }
+    }
+    let crease = SEAM_CREASE_RADIANS.cos();
+    for surface in surfaces {
+        // The sides of the surface's triangles in their order: the
+        // triangles that have each (looked up by position, never iterated).
         let mut index: HashMap<SideKey, usize> = HashMap::new();
         let mut sides: Vec<(Vec3, Vec3, Vec<u32>)> = Vec::new();
-        for t in range {
+        for t in surface.into_iter().flatten() {
             let corners = mesh.triangles[t].map(vertex);
             let keys = corners.map(key);
             if keys[0] == keys[1] || keys[1] == keys[2] || keys[2] == keys[0] {
@@ -233,10 +264,13 @@ pub(crate) fn mesh_edges(mesh: &Mesh) -> MeshEdges {
             let boundary = match triangles.as_slice() {
                 [first, second] => {
                     let (n1, n2) = (facets[*first as usize], facets[*second as usize]);
-                    let turned = mesh.faceted
-                        && norm(n1) > 0.0
-                        && norm(n2) > 0.0
-                        && dot(n1, n2) < sharp * norm(n1) * norm(n2);
+                    let turned = if mesh.faceted {
+                        norm(n1) > 0.0
+                            && norm(n2) > 0.0
+                            && dot(n1, n2) < sharp * norm(n1) * norm(n2)
+                    } else {
+                        seam_crease(mesh, *first, *second, a, b, crease)
+                    };
                     // A sliver (a pole's triangle) has no side it faces:
                     // no silhouette.
                     let solid = |n: Vec3| {
@@ -265,6 +299,37 @@ pub(crate) fn mesh_edges(mesh: &Mesh) -> MeshEdges {
         folds,
         facets,
     }
+}
+
+/// Whether the side from `a` to `b` between two triangles of one surface
+/// is a crease (mitcad#1773): at both of its ends the triangles have
+/// corners of their own (a seam's two copies, two pieces' meshes) whose
+/// normals part by more than the angle whose cosine is `crease`. A side
+/// whose triangles share their corners lies inside the surface's mesh.
+fn seam_crease(mesh: &Mesh, first: u32, second: u32, a: Vec3, b: Vec3, crease: f64) -> bool {
+    let corner = |t: u32, p: Vec3| -> Option<u32> {
+        let at = key(p);
+        mesh.triangles
+            .get(t as usize)?
+            .iter()
+            .copied()
+            .find(|&i| mesh.vertices.get(i as usize).is_some_and(|&v| key(v) == at))
+    };
+    let parted = |p: Vec3| -> bool {
+        let (Some(i), Some(j)) = (corner(first, p), corner(second, p)) else {
+            return false;
+        };
+        if i == j {
+            return false;
+        }
+        let (Some(&n), Some(&m)) = (mesh.normals.get(i as usize), mesh.normals.get(j as usize))
+        else {
+            return false;
+        };
+        let length = norm(n) * norm(m);
+        length > 0.0 && dot(n, m) < crease * length
+    };
+    parted(a) && parted(b)
 }
 
 /// The sides of one triangle that lie along another's of the same face,

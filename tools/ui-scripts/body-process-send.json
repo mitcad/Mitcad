@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Two boxes and two processes for Send to Slicer's Process row (mitcad#1799): Body1, 20 x 20 x 10 mm at x = -30, and Body2, 20 x 20 x 20 mm at x = 10; the design's processes Fixture Fine (0.12 mm layers) and Fixture Draft (0.28 mm layers), none chosen on the root, no printer."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-30,-10],"length":20,"width":20,"height":10,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[10,-10],"length":20,"width":20,"height":20,"operation":"new_body"}},
+  {"cmd":"create_print_profile","kind":"process","id":"fixture-fine","name":"Fixture Fine","values":{"layer_height":0.12}},
+  {"cmd":"create_print_profile","kind":"process","id":"fixture-draft","name":"Fixture Draft","values":{"layer_height":0.28}}
+]

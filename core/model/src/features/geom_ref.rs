@@ -1047,11 +1047,13 @@ impl PathRef {
             // Intersection curves (mitcad#1405).
             Self::FeatureCurve(feature) => {
                 let entry = ctx.feature(*feature)?;
-                if matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                // Or a Helix Curve (mitcad#1777).
+                if entry.def.makes_curve() {
                     Ok(())
                 } else {
                     Err(format!(
-                        "{} ({feature}) makes no curve: a path names an intersection curve",
+                        "{} ({feature}) makes no curve: a path names an intersection curve \
+                         or a helix curve",
                         entry.name
                     ))
                 }
@@ -1303,6 +1305,88 @@ pub(crate) fn resolve_axis(
         (Datum::Axis(axis), _) => Ok(axis),
         (other, GeomRef::Datum(uid)) => Err(not_a(r, *uid, &other, "an axis")),
         _ => Err(reference.error(|what| format!("{what} is not an axis"))),
+    }
+}
+
+/// What a section's plane pick gives (mitcad#1769), in its component's
+/// coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SectionPick {
+    /// A plane: an origin plane, a construction plane, a planar face, a
+    /// fixed plane.
+    Plane(DatumPlane),
+    /// An axis the section's plane contains: a cylindrical, conical or
+    /// toroidal face's, or a circular edge's or arc's (through its centre
+    /// along its normal), pointing along its largest component.
+    Axis(DatumAxis),
+    /// A straight edge: the plane through its middle, normal to it from
+    /// its start to its end.
+    Across { point: Vec3, normal: Vec3 },
+}
+
+/// A section's plane reference (mitcad#1769): a plane as
+/// [`resolve_plane`] takes it, or one pick that places a plane: a face
+/// round about an axis, a circular edge or a straight edge.
+pub(crate) fn resolve_section_pick(
+    r: &mut impl Resolver,
+    reference: &GeomRef,
+) -> Result<SectionPick, String> {
+    match reference {
+        GeomRef::Face { body, face } => match surface_of(r, *body, face)? {
+            SurfaceGeometry::Plane { origin, normal } => {
+                Ok(SectionPick::Plane(DatumPlane::on_plane(origin, normal)))
+            }
+            SurfaceGeometry::Cylinder { origin, axis, .. }
+            | SurfaceGeometry::Cone { origin, axis, .. }
+            | SurfaceGeometry::Torus {
+                center: origin,
+                axis,
+                ..
+            } => Ok(SectionPick::Axis(DatumAxis {
+                origin,
+                direction: unit(axis).ok_or("the axis has no direction")?,
+            })),
+            // Neither a plane nor round about an axis: refused as a plane
+            // reference refuses it.
+            other => Err(placed_at(
+                NoticePlace::face(face.to_string()),
+                *body,
+                "the face is not planar",
+                format!("face {face} is not planar ({})", other.kind()),
+            )),
+        },
+        GeomRef::Edge { body, edge } => match curve_of(r, *body, edge)? {
+            CurveGeometry::Line { start, end } => {
+                let normal = unit(sub(end, start)).filter(|_| norm(sub(end, start)) > LINEAR);
+                normal
+                    .map(|normal| SectionPick::Across {
+                        point: scale(add(start, end), 0.5),
+                        normal,
+                    })
+                    .ok_or_else(|| {
+                        placed_at(
+                            NoticePlace::edge(edge.to_string()),
+                            *body,
+                            "the edge has no length",
+                            format!("edge {edge} has no length"),
+                        )
+                    })
+            }
+            CurveGeometry::Circle { center, normal, .. } => Ok(SectionPick::Axis(DatumAxis {
+                origin: center,
+                direction: canonical_axis(unit(normal).ok_or("the circle has no normal")?),
+            })),
+            other => Err(placed_at(
+                NoticePlace::edge(edge.to_string()),
+                *body,
+                "the edge is neither straight nor circular",
+                format!(
+                    "edge {edge} is neither straight nor circular ({})",
+                    other.kind()
+                ),
+            )),
+        },
+        _ => resolve_plane(r, reference).map(SectionPick::Plane),
     }
 }
 

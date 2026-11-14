@@ -26,6 +26,13 @@
 #   - A block edge out of its plane selected, then Sketch Dimension (D): the
 #     selection is used, the edge projected (linked) and the distance from
 #     the point added.
+# Sketch6 is on the end face of a cylinder beside the block (mitcad#1782):
+#   - Coincident, a hexagon's corner and the face's outer edge: the edge
+#     projected (linked) when the constraint is added, the corner on it;
+#     one undo takes both back. Esc after picking the edge changes nothing.
+#   - Tangent between a sketch line and the edge: projected again.
+#   - Concentric between a sketch circle and the edge: the projection
+#     reused.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch-body-picks-test.sh [screenshot.png]
@@ -45,6 +52,10 @@ TOP='F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})'
 # sketch's x and y are the design's), with two free points: (20, 10) and
 # (45, 25). Sketch3 (F4) on the same face, empty. Sketch4 (F5) on the XY
 # plane 30 up, 10 above the block's top, with a free point at (20, 10).
+# Sketch5 (F6) a circle of 24 at (-25, 20), Extrude2 (F7) 20 up: Body2
+# (F7.b0), a cylinder beside the block. Sketch6 (F8) on its top end face
+# (the design's x and y), with a hexagon about the face's centre (corner at
+# (-19, 20)), a line above the face and a circle of 6 at (-50, 20).
 cat > "$WORK/model.json" << EOF
 [
   {"cmd": "sketch.create"},
@@ -59,7 +70,15 @@ cat > "$WORK/model.json" << EOF
   {"cmd": "sketch.create", "plane": {"face": "$TOP", "body": "F2.b0"}},
   {"cmd": "sketch.create"},
   {"cmd": "sketch.redefine_plane", "sketch": "F5", "offset": 30},
-  {"cmd": "sketch.add_point", "sketch": "F5", "at": [20, 10]}
+  {"cmd": "sketch.add_point", "sketch": "F5", "at": [20, 10]},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F6", "center": [-25, 20], "diameter": 24},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F6", "region": "r{c1}"}],
+    "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": {"face": "F7:end(r{c1})", "body": "F7.b0"}},
+  {"cmd": "sketch.polygon", "sketch": "F8", "center": [-25, 20], "vertex": [-19, 20], "sides": 6},
+  {"cmd": "sketch.add_line", "sketch": "F8", "start": [-37, 36], "end": [-15, 37]},
+  {"cmd": "sketch.circle", "sketch": "F8", "mode": "center", "center": [-50, 20], "radius": 3}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -352,5 +371,110 @@ ui_mark
 ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
 ui_expect_new "Sketch finished" "Sketch4 finished"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+
+echo "--- Sketch6 on the cylinder's end face: constraints to its edge (mitcad#1782)"
+# The face's outer edge, a circle of 12 about (-25, 20), is picked at its
+# lower left, away from the hexagon (its corners 6 from the centre).
+EDGE_X=-33.49
+EDGE_Y=11.51
+edit_sketch Sketch6 F8
+ui_expect_log "Sketch Sketch6: 11 DOF" "a hexagon, a line and a circle, free"
+ui_expect_log "Sketch Sketch6: 0 linked projection(s)" "nothing projected yet"
+ui_mark
+ui_step "coincident (Shift+C)"           ui_key shift+c
+ui_expect_new "Sketch tool Coincident" "Coincident active"
+ui_step "pick the face's edge"           ui_sketch_click "$EDGE_X" "$EDGE_Y"
+ui_expect_new "Coincident picked the body edge E{" "the edge in the sketch plane picked"
+ui_expect_new "of F7.b0 (body:" "the cylinder's edge"
+ui_step "Esc"                            ui_key Escape
+ui_sync
+since_mark "Projected the body" && ui_fail "a pick projected the edge"
+since_mark "Added constraint" && ui_fail "a constraint added"
+echo "ok   Esc after the pick: nothing projected"
+
+echo "--- Coincident: a hexagon's corner on the edge, in one undo step"
+ui_mark
+ui_step "pick the corner (-19, 20)"      ui_sketch_click -19 20
+ui_step "pick the face's edge"           ui_sketch_click "$EDGE_X" "$EDGE_Y"
+ui_expect_new "Projected the body edge E{" "the edge projected when the constraint is added"
+ui_expect_new "Added constraint coincident k" "the corner on the projected edge"
+ui_expect_new "Sketch Sketch6: 10 DOF" "the corner held on the circle"
+ui_expect_new "Sketch Sketch6: 1 linked projection(s)" "one linked projection"
+since_mark "not added" && ui_fail "the constraint was refused"
+[ -n "$SHOT" ] && ui_capture "$SHOT"
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_mark
+ui_step "undo (Ctrl+Z)"                  ui_key ctrl+z
+ui_expect_new "Undo: Add Constraint to Sketch6" "one undo step, named after the constraint"
+ui_expect_new "Sketch Sketch6: 11 DOF" "the constraint gone"
+ui_expect_new "Sketch Sketch6: 0 linked projection(s)" "the projection gone with it"
+
+echo "--- Tangent: a sketch line to the edge"
+ui_mark
+ui_step "tangent (Shift+T)"              ui_key shift+t
+ui_expect_new "Sketch tool Tangent" "Tangent active"
+ui_step "pick the line"                  ui_sketch_click -26 36.5
+ui_step "pick the face's edge"           ui_sketch_click "$EDGE_X" "$EDGE_Y"
+ui_expect_new "Projected the body edge E{" "the edge projected"
+ui_expect_new "Added constraint tangent k" "the line tangent to the projected edge"
+ui_expect_new "Sketch Sketch6: 10 DOF" "the line held"
+ui_expect_new "Sketch Sketch6: 1 linked projection(s)" "one linked projection"
+ui_step "end the tool (Esc)"             ui_key Escape
+
+echo "--- Concentric: a sketch circle with the edge, its projection reused"
+ui_mark
+ui_step "concentric (Shift+O)"           ui_key shift+o
+ui_expect_new "Sketch tool Concentric" "Concentric active"
+ui_step "pick the circle"                ui_sketch_click -47 20
+ui_step "pick the face's edge"           ui_sketch_click "$EDGE_X" "$EDGE_Y"
+ui_expect_new "Added constraint concentric k" "the circle concentric with the projected edge"
+ui_expect_new "Sketch Sketch6: 8 DOF" "the circle's centre held at the face's"
+since_mark "Projected the body" && ui_fail "the edge was projected a second time"
+since_mark "Sketch Sketch6: 2 linked projection(s)" && ui_fail "a second projection"
+echo "ok   still one projection"
+ui_step "end the tool (Esc)"             ui_key Escape
+
+echo "--- Coincident again: the corner on the edge, by the same projection"
+ui_mark
+ui_step "coincident (Shift+C)"           ui_key shift+c
+ui_step "pick the corner (-19, 20)"      ui_sketch_click -19 20
+ui_step "pick the face's edge"           ui_sketch_click "$EDGE_X" "$EDGE_Y"
+ui_expect_new "Added constraint coincident k" "the corner on the edge"
+ui_expect_new "Sketch Sketch6: 7 DOF" "the corner held"
+since_mark "Projected the body" && ui_fail "the edge was projected again"
+ui_step "end the tool (Esc)"             ui_key Escape
+ui_mark
+ui_step "finish sketch (Ctrl+Enter)"     ui_key ctrl+Return
+ui_expect_new "Sketch finished" "Sketch6 finished"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+save
+
+# expect_sketch6 python-expression description: a Python expression on
+# Sketch6 (s) of the saved design is true.
+expect_sketch6() {
+  python3 - "$FILE" "$1" << 'PY' || ui_fail "$2: $1"
+import json, math, sys
+doc = json.load(open(sys.argv[1]))
+s = next(f for f in doc["features"] if f["uid"] == "F8")
+entities = s.get("entities", [])
+points = {e["id"]: e["at"] for e in entities if e.get("type") == "point"}
+projections = s.get("projections", [])
+centre = [-25, 20]
+def off(e):
+    # The distance of the face's centre from the line of e.
+    a, b = points[e["start"]], points[e["end"]]
+    return abs((b[0] - a[0]) * (a[1] - centre[1]) - (b[1] - a[1]) * (a[0] - centre[0])) / math.dist(a, b)
+sys.exit(0 if eval(sys.argv[2]) else 1)
+PY
+  echo "ok   $2"
+}
+expect_sketch6 'len(projections) == 1 and projections[0].get("by_geometry") and projections[0].get("body") == "F7.b0"' \
+  "one linked projection of the cylinder's edge"
+expect_sketch6 'any(abs(math.dist(p, centre) - 12) < 1e-4 for p in points.values())' \
+  "the hexagon's corner on the edge"
+expect_sketch6 'any(e.get("type") == "line" and not e.get("reference") and abs(off(e) - 12) < 1e-4 for e in entities)' \
+  "the line tangent to the edge"
+expect_sketch6 'any(e.get("type") == "circle" and abs(e.get("radius", 0) - 3) < 1e-6 and math.dist(points[e["center"]], centre) < 1e-4 for e in entities)' \
+  "the circle concentric with the edge"
 
 ui_finish "UI sketch body picks test"

@@ -7,6 +7,8 @@ pub(crate) use bends::{bend, flange, fold};
 // A flange's profile sketch (mitcad#1648).
 pub(crate) use bends::{flange_profile_layout, warn_moved_profile};
 pub(crate) use corners::{corner_chamfer, corner_round};
+// An ordinary Fillet or Chamfer at corners beside a bend (mitcad#1765).
+pub(crate) use corners::{CornerSize, dressup_corners};
 // Unfold, Refold, graph development and the minimal Cut (mitcad#208).
 pub(crate) mod cut;
 pub(crate) mod develop;
@@ -25,6 +27,9 @@ mod perforate;
 pub(crate) use perforate::perforate;
 mod convert;
 pub(crate) use convert::convert;
+// The plane of a flange's profile sketch on the flange's wall (mitcad#1776).
+mod profile_plane;
+pub(crate) use profile_plane::{flange_wall_plane, wall_flange_key};
 
 use super::*;
 use crate::features::sheet::SheetRulesDef;

@@ -108,37 +108,6 @@ function Hide-Body1([string]$Command) {
   Ui-ExpectNone "Preview ${Command}: " 'the preview not computed again'
 }
 
-# Place-Valid "text": whether the last line about it gives its place
-# ("<text> at x,y") and not "<text> out of sight" (BrowserPanel::logLayout).
-function Place-Valid([string]$Text) {
-  $last = [string](Ui-LogLines | Where-Object { $_.Contains("$Text at ") -or $_.Contains("$Text out of sight") } |
-    Select-Object -Last 1)
-  return ($last -ne '' -and -not $last.EndsWith(' out of sight'))
-}
-
-# Click-Row "Browser <path>" (or "Browser eye|radio <path>"): a browser row
-# clicked, scrolled into sight first by wheel steps over the rows (down, then
-# up) when it is not: rows below the card's edge in session 0's 1024x768
-# desktop are scrolled to; a place the row has left is never clicked.
-function Click-Row([string]$Text) {
-  foreach ($steps in @(-2, 2)) {
-    for ($i = 0; $i -lt 8 -and -not (Place-Valid $Text); $i++) {
-      $row = Ui-LogLines | Select-String -Pattern '^Browser (?:eye |radio )?Root.* at (\d+),(\d+)$' |
-        Select-Object -Last 1
-      if (-not $row) { break }
-      $x = [int]$row.Matches[0].Groups[1].Value
-      $y = [int]$row.Matches[0].Groups[2].Value
-      [UiInput]::Move($script:UiWindow, $x, $y, 0)
-      Start-Sleep -Milliseconds 80
-      [UiInput]::Wheel($script:UiWindow, $x, $y, $steps)
-      Ui-Sync
-      Start-Sleep -Milliseconds 300
-    }
-  }
-  if (-not (Place-Valid $Text)) { Ui-Fail "'$Text' is out of sight (scrolled away, folded or gone)" }
-  Ui-ClickLogged $Text
-}
-
 $cli = @('mitcad-cli.exe', '..\tools\cli\mitcad-cli.exe', 'tools\cli\mitcad-cli.exe') |
   ForEach-Object { Join-Path (Split-Path $script:UiApp) $_ } | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $cli) { Ui-Fail "no mitcad-cli.exe beside $($script:UiApp)" }
@@ -320,7 +289,7 @@ Ui-ExpectNew 'Command Extrude cancelled' 'Extrude cancelled'
 
 Write-Host '--- Offset Plane: a shown origin stays shown, picked in the view (mitcad#1030)'
 Ui-Mark
-Ui-Step 'show the origin'                { Click-Row 'Browser eye Root/Origin' }
+Ui-Step 'show the origin'                { Ui-ClickLogged 'Browser eye Root/Origin' }
 Ui-ExpectNew 'Visibility Root/Origin: shown' 'the Origin folder''s light bulb on'
 Ui-ExpectNew $originOn 'the origin shown'
 Ui-Mark
@@ -350,7 +319,7 @@ Ui-ExpectNew 'Pick face F4.b0/F4:end(' 'Body2''s top face can be picked'
 # below it, so a plane is in front of or behind each point of its top face.
 Ui-ExpectNew 'Pick face F7.b0/F7:end(' 'Part''s top face, which the origin planes run through, can be picked'
 Ui-Mark
-Ui-Step 'activate Part (radio)'          { Click-Row 'Browser radio Root/Part:1' }
+Ui-Step 'activate Part (radio)'          { Ui-ClickLogged 'Browser radio Root/Part:1' }
 Ui-ExpectNew 'Create Sketch is waiting for a plane: pick one or press Esc.' 'other browser actions wait for the plane pick'
 Ui-ExpectNone 'Activated Part' 'Part not activated'
 Ui-Step 'pick Part''s top face'          { Ui-ClickPick 'face F7.b0/F7:end(' }
@@ -381,7 +350,7 @@ Ui-Mark
 Ui-Step 'create sketch (F7)'             { Ui-Key 'F7' }
 Ui-ExpectNew 'Create Sketch: origin planes shown' 'the origin planes shown'
 Ui-Mark
-Ui-Step 'show the origin'                { Click-Row 'Browser eye Root/Origin' }
+Ui-Step 'show the origin'                { Ui-ClickLogged 'Browser eye Root/Origin' }
 Ui-ExpectNew 'Visibility Root/Origin: shown (during Create Sketch)' 'the Origin folder shown during the pick'
 Ui-ExpectNew $originOn 'its light bulb on'
 Ui-Step 'pick XY'                        { Ui-ClickLogged 'Datum xy' }
@@ -403,7 +372,7 @@ Ui-Mark
 Ui-Step 'hide Part:1'                    { Ui-ClickLogged 'Browser eye Root/Part:1' }
 Ui-ExpectNew 'Visibility Root/Part:1: hidden (during Extrude)' 'Part:1 hidden during Extrude'
 Ui-Mark
-Ui-Step 'activate Part (radio)'          { Click-Row 'Browser radio Root/Part:1' }
+Ui-Step 'activate Part (radio)'          { Ui-ClickLogged 'Browser radio Root/Part:1' }
 Ui-ExpectNew 'Finish the command or the sketch first.' 'other browser actions wait for the command'
 Ui-ExpectNone 'Activated Part' 'Part not activated'
 Ui-Mark

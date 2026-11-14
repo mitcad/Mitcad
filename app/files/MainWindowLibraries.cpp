@@ -54,6 +54,7 @@ void MainWindow::registerLibraryCommands() {
   insert.mode = CommandDef::Mode::Model;
   insert.tab = QStringLiteral("SOLID");
   insert.group = QStringLiteral("ASSEMBLE");
+  insert.section = QStringLiteral("insert"); // after Insert Component (mitcad#1778)
   insert.keywords = {QStringLiteral("library"), QStringLiteral("fastener"), QStringLiteral("screw"),
                      QStringLiteral("bolt"), QStringLiteral("nut"), QStringLiteral("washer"),
                      QStringLiteral("standard part"), QStringLiteral("iso")};

@@ -78,10 +78,19 @@ struct DocumentSnapshot {
     // Again, DXF export) asks isSketch().
     bool isSpatialSketch() const { return type == QStringLiteral("spatial_sketch"); }
     bool isAnySketch() const { return isSketch() || isSpatialSketch(); }
-    // Construction planes, axes and points, and Intersection Curves
-    // (mitcad#1405): the Browser's Construction folder, their light bulbs.
+    // A feature whose output is a 3D curve that paths, Project and the view
+    // take: an Intersection Curve (mitcad#1405) or a Helix Curve
+    // (mitcad#1777).
+    static bool makesCurve(const QString& featureType) {
+      return featureType == QStringLiteral("intersection_curve") || featureType == QStringLiteral("helix_curve");
+    }
+    bool makesCurve() const { return makesCurve(type); }
+    // Construction planes, axes and points, the curve features
+    // (mitcad#1405, mitcad#1777) and coordinate systems (mitcad#1775): the
+    // Browser's Construction folder, their light bulbs.
     bool isConstruction() const {
-      return type.startsWith(QStringLiteral("construction_")) || type == QStringLiteral("intersection_curve");
+      return type.startsWith(QStringLiteral("construction_")) || makesCurve() ||
+             type == QStringLiteral("coordinate_system");
     }
     // Joints, as-built joints, joint origins and rigid groups (mitcad#55):
     // the browser's Joints folder.
@@ -212,6 +221,16 @@ struct DocumentSnapshot {
   // the plane is not there), and one by name (an empty object when none).
   QJsonArray imageReferences;
   QJsonObject imageReference(const QString& name) const;
+  // CAM (mitcad#1013): the `cam_setups` query's setups (each with its
+  // operations and their states, its work frame) and the design's
+  // machines; empty when the design has none. A setup's `visible` is its
+  // eye (its toolpaths in the view), kept in the design. A setup and an
+  // operation by id (an empty object when none; `setup` gives the
+  // operation's setup).
+  QJsonArray camSetups;
+  QJsonArray camMachines;
+  QJsonObject camSetup(int id) const;
+  QJsonObject camOperation(int id, QJsonObject* setup = nullptr) const;
   // Saved in the document (P9): the root's Origin folder shown, and what
   // the view is isolated to (bodies and occurrences; none: everything).
   bool originShown = false;
@@ -229,8 +248,31 @@ struct DocumentSnapshot {
   bool showOrigins = true;
   bool showConstruction = true;
   bool showSketches = true;
+  // The eyes of each component's Bodies, Sketches and Construction folders
+  // (mitcad#1771): display state the design keeps (the model's
+  // set_folder_visible, the `document` query's display.folders). A hidden
+  // folder leaves out everything in it, the items' own light bulbs as they
+  // are; the model leaves a hidden Bodies folder's bodies out of the
+  // `instances` query itself.
+  enum class Folder { Bodies, Sketches, Construction };
+  // The folders hidden, by component uid; a component with none hidden has
+  // no entry.
+  QHash<QString, QVector<Folder>> hiddenFolders;
+  // Whether a component's folder is shown by its eye.
+  bool folderShown(const QString& component, Folder folder) const {
+    return !hiddenFolders.value(component).contains(folder);
+  }
+  // The model's name of a folder: bodies, sketches, construction.
+  static QString folderKey(Folder folder);
+  // Show Dimensions of a sketch's row (mitcad#1772): the planar sketches
+  // whose dimensions the view draws while they are shown and not edited
+  // (the `document` query's display.sketch_dimensions; display state the
+  // design keeps, the model's set_sketch_dimensions_shown).
+  QStringList sketchDimensions;
+  bool sketchDimensionsShown(const QString& sketch) const { return sketchDimensions.contains(sketch); }
   // Whether View › Show hides a feature's kind: a sketch, construction
-  // geometry or a joint origin.
+  // geometry or a joint origin; or its component's Sketches or
+  // Construction folder is hidden by its eye (mitcad#1771).
   bool kindHidden(const Feature& feature) const;
   // Whether View › Show hides the feature of this uid (false for none).
   bool kindHidden(const QString& feature) const;

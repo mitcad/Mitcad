@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "SketchItemList.hpp"
 
+#include <QApplication>
 #include <QDebug>
 #include <QEvent>
 #include <QFont>
@@ -12,23 +13,32 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPixmap>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSet>
 #include <QStringList>
+#include <QStyle>
+#include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <QtLogging>
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <utility>
 #include <vector>
 
+#include "../browser/FeatureStatus.hpp"
 #include "../browser/TimelinePresentation.hpp"
+#include "../framework/ChromeStyle.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
 #include "../framework/PlaceWatcher.hpp"
 #include "../framework/Selection.hpp"
 #include "../framework/TestSync.hpp"
+#include "../framework/Theme.hpp"
 #include "../framework/UiSizes.hpp"
 #include "../OcctViewer.hpp"
 #include "SketchController.hpp"
@@ -41,11 +51,115 @@ namespace {
 
 constexpr int kKeyRole = Qt::UserRole;
 constexpr int kItemsRole = Qt::UserRole + 1;
+// A cell whose icon is drawn in its disabled colours (a step of inactive
+// items, mitcad#1763).
+constexpr int kDimmedRole = Qt::UserRole + 2;
 // The hover list's rows: no more in sight at once, the rest scroll.
 constexpr int kMostRows = 12;
 // How long the hover list waits for the pointer to come over it after
 // leaving its cell.
 constexpr int kHideMs = 400;
+
+// Where a cell's icon is: in the middle of its cell, both ways
+// (mitcad#1760). The delegate paints it there and logPlaces logs it.
+QRect iconRect(const QRect& cell, const QSize& icon) {
+  return {cell.left() + (cell.width() - icon.width()) / 2, cell.top() + (cell.height() - icon.height()) / 2,
+          icon.width(), icon.height()};
+}
+
+// A selected cell as the timeline draws one (TimelineWidget's stripColors):
+// a tint of the accent colour and its ring, which the icon in its own
+// colours stays readable on (mitcad#1763; the style's full accent fill and
+// its selected icon mode left the icon nearly invisible).
+timeline::CellLook selectedLook(const QPalette& palette) {
+  const QColor accent = accentColor(palette);
+  QColor fill = accent;
+  if (chromeStyle() == ChromeStyle::Floating) {
+    fill.setAlphaF(0.24f);
+  } else {
+    fill.setAlphaF(isDarkPalette(palette) ? 0.30f : 0.18f);
+  }
+  timeline::CellLook look;
+  look.fill = fill;
+  look.outerRing = accent;
+  return look;
+}
+
+// How CellDelegate draws a cell, in the words logged for it: "selected",
+// "dimmed", both or "plain", then its icon's colours ("icon normal", or
+// "icon disabled" for a dimmed cell or a disabled one).
+QString cellLook(bool selected, bool dimmed, bool enabled) {
+  QStringList look;
+  if (selected) {
+    look << QStringLiteral("selected");
+  }
+  if (dimmed) {
+    look << QStringLiteral("dimmed");
+  }
+  if (look.isEmpty()) {
+    look << QStringLiteral("plain");
+  }
+  look << ((dimmed || !enabled) ? QStringLiteral("icon disabled") : QStringLiteral("icon normal"));
+  return look.join(QStringLiteral(", "));
+}
+
+// Paints a cell: the style's background (hover, focus) over the whole
+// cell, the selection as the timeline's, and the icon in its middle in its
+// own colours (a dimmed cell's icon was made in its disabled colours,
+// badgedIcon). The list's default left-aligned decoration put it off the
+// cell's middle. `painted` hears how each cell was drawn.
+class CellDelegate : public QStyledItemDelegate {
+public:
+  using Painted = std::function<void(const QString& key, const QString& look)>;
+
+  CellDelegate(QObject* parent, Painted painted) : QStyledItemDelegate(parent), m_painted(std::move(painted)) {}
+
+  void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+    QStyleOptionViewItem cell(option);
+    initStyleOption(&cell, index);
+    const QIcon icon = cell.icon;
+    const QSize size = cell.decorationSize;
+    const bool selected = cell.state.testFlag(QStyle::State_Selected);
+    const bool dimmed = index.data(kDimmedRole).toBool();
+    cell.icon = QIcon();
+    cell.text.clear();
+    cell.features &= ~QStyleOptionViewItem::HasDecoration;
+    cell.state &= ~QStyle::State_Selected;
+    QStyle* style = cell.widget != nullptr ? cell.widget->style() : QApplication::style();
+    style->drawControl(QStyle::CE_ItemViewItem, &cell, painter, cell.widget);
+    if (selected) {
+      timeline::paintCellFrame(*painter, QRectF(option.rect), selectedLook(cell.palette));
+    }
+    // Never the selected mode: the icon keeps its colours on the tint.
+    const QIcon::Mode mode = cell.state.testFlag(QStyle::State_Enabled) ? QIcon::Normal : QIcon::Disabled;
+    icon.paint(painter, iconRect(option.rect, size), Qt::AlignCenter, mode, QIcon::Off);
+    if (m_painted) {
+      m_painted(index.data(kKeyRole).toString(), cellLook(selected, dimmed, mode == QIcon::Normal));
+    }
+  }
+
+private:
+  Painted m_painted;
+};
+
+// The hover list's rows: a selected row's icon in its own colours, not the
+// style's selected mode, which tints it into the selection's fill
+// (mitcad#1763).
+class RowDelegate : public QStyledItemDelegate {
+public:
+  using QStyledItemDelegate::QStyledItemDelegate;
+
+protected:
+  void initStyleOption(QStyleOptionViewItem* option, const QModelIndex& index) const override {
+    QStyledItemDelegate::initStyleOption(option, index);
+    if (option->state.testFlag(QStyle::State_Selected) && !option->icon.isNull()) {
+      const qreal ratio = option->widget != nullptr ? option->widget->devicePixelRatioF() : qApp->devicePixelRatio();
+      QIcon normal;
+      normal.addPixmap(option->icon.pixmap(option->decorationSize, ratio, QIcon::Normal), QIcon::Selected);
+      option->icon = normal;
+    }
+  }
+};
 
 // The worse of two levels: an error over a warning over information.
 int rank(NoticeLevel level) {
@@ -155,6 +269,7 @@ SketchItemList::SketchItemList(SketchController& controller, QWidget* parent)
   setUniformItemSizes(true);
   setIconSize(uiIconSize(timeline::icon, timeline::icon));
   setGridSize(uiIconSize(timeline::cell, timeline::cell));
+  setItemDelegate(new CellDelegate(this, [this](const QString& key, const QString& look) { logLook(key, look); }));
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   // The view's selection is the one selection: the cells only show it, so
   // a click or a key never changes them by itself.
@@ -186,28 +301,38 @@ SketchItemList::SketchItemList(SketchController& controller, QWidget* parent)
 }
 
 SketchItemList::~SketchItemList() {
-  // The hover list lives over the view, which outlives the list.
+  // The hover list lives in the window, which outlives the list.
   if (m_hover) {
     m_hover->deleteLater();
   }
 }
 
-// The timeline strip's height (TimelineWidget's stripHeight): the list
-// shares the timeline's place in a stack, which takes its pages' largest
-// size hint, so a taller hint would make the timeline's place taller and the
-// view under it shorter whether or not a sketch is open.
-namespace {
-int timelineRowHeight() { return uiIconSize(timeline::icon) + (timeline::height - timeline::icon); }
-} // namespace
-
+// One row of cells high (mitcad#1760): the list has no marker, so none of
+// the timeline strip's band above its cells. The list shares the
+// timeline's place in a stack; MainWindow::updateTimelinePlace lets only the
+// page in sight size it, so the place is this high in sketch mode and the
+// timeline's height outside it.
 QSize SketchItemList::sizeHint() const {
-  const int cell = uiIconSize(timeline::cell);
-  return {cell * 16, std::min(cell + 8, timelineRowHeight())};
+  const int cell = gridSize().height();
+  return {gridSize().width() * 16, cell};
 }
 
 QSize SketchItemList::minimumSizeHint() const {
-  const int cell = uiIconSize(timeline::cell);
-  return {cell * 4, std::min(cell + 4, timelineRowHeight())};
+  const int cell = gridSize().height();
+  return {gridSize().width() * 4, cell};
+}
+
+void SketchItemList::resizeEvent(QResizeEvent* event) {
+  // The rows that fit in the middle of the list's height, the rest of it
+  // even above and below them: a place taller than a row (a docked panel
+  // made taller) keeps the icons in the middle of the bar, as a cell keeps
+  // its icon in its middle.
+  const int cell = std::max(1, gridSize().height());
+  const int rows = std::max(1, height() / cell);
+  const int spare = std::max(0, height() - rows * cell);
+  setViewportMargins(0, spare / 2, 0, spare - spare / 2);
+  QListWidget::resizeEvent(event);
+  schedulePlaces();
 }
 
 NoticeLevel SketchItemList::markOf(const QString& id, QString& why) const {
@@ -237,10 +362,11 @@ NoticeLevel SketchItemList::markOf(const QString& id, QString& why) const {
   return NoticeLevel::Hint;
 }
 
-QIcon SketchItemList::badgedIcon(const QString& name, NoticeLevel level, int count, const QSize& size) const {
+QIcon SketchItemList::badgedIcon(const QString& name, NoticeLevel level, int count, const QSize& size,
+                                 bool dimmed) const {
   const QIcon icon = themeIcon(name);
   const bool badge = isProblem(level) || level == NoticeLevel::Information;
-  if (!badge && count < 2) {
+  if (!badge && count < 2 && !dimmed) {
     return icon;
   }
   const qreal ratio = devicePixelRatioF();
@@ -249,7 +375,11 @@ QIcon SketchItemList::badgedIcon(const QString& name, NoticeLevel level, int cou
   pixmap.fill(Qt::transparent);
   QPainter painter(&pixmap);
   painter.setRenderHint(QPainter::Antialiasing);
-  icon.paint(&painter, QRect(QPoint(0, 0), size));
+  // Dimmed: the disabled colours at their opacity (themeIcon), under a
+  // badge and a count in full colour. A colour of their own (setForeground)
+  // does nothing for a cell that shows its icon only (mitcad#1763).
+  icon.paint(&painter, QRect(QPoint(0, 0), size), Qt::AlignCenter, dimmed ? QIcon::Disabled : QIcon::Normal,
+             QIcon::Off);
   if (badge) {
     const qreal side = size.width() * 0.5;
     paintNoticeBadge(painter, QRectF(size.width() - side, 0.0, side, side), level, palette().color(QPalette::Base));
@@ -559,6 +689,7 @@ void SketchItemList::rebuild() {
     m_loggedSteps.clear();
     m_loggedPlaces.clear();
     m_loggedSelection.clear();
+    m_loggedLooks.clear();
     return;
   }
   m_shownConflicts = m_c.conflicts();
@@ -585,11 +716,14 @@ void SketchItemList::rebuild() {
   m_marking = true;
   clear();
   QStringList logged;
-  const QColor dimmed = palette().color(QPalette::Disabled, QPalette::Text);
+  // The new cells' looks are logged as they are painted again.
+  m_loggedLooks.clear();
   for (const Cell& cell : m_cells) {
     const int made = static_cast<int>(cell.items.size());
-    auto* entry = new QListWidgetItem(badgedIcon(cell.icon, cell.level, made, iconSize()), QString(), this);
+    auto* entry =
+        new QListWidgetItem(badgedIcon(cell.icon, cell.level, made, iconSize(), cell.dimmed), QString(), this);
     entry->setData(kKeyRole, cell.key);
+    entry->setData(kDimmedRole, cell.dimmed);
     QStringList ids;
     for (const ItemRow& row : cell.items) {
       ids << row.id;
@@ -599,9 +733,6 @@ void SketchItemList::rebuild() {
     // readers; never as text in the cell.
     entry->setData(Qt::AccessibleTextRole, cell.name);
     entry->setSizeHint(gridSize());
-    if (cell.dimmed) {
-      entry->setForeground(dimmed);
-    }
     logged << cell.logged;
   }
   m_marking = false;
@@ -672,6 +803,7 @@ void SketchItemList::showSelection() {
       scrollToItem(first, QAbstractItemView::EnsureVisible);
     }
   }
+  logUnpaintedLooks();
 }
 
 void SketchItemList::schedulePlaces() {
@@ -684,14 +816,27 @@ void SketchItemList::logPlaces() {
     return;
   }
   QStringList lines;
+  // The bar it is in (mitcad#1760): the timeline's card (Floating) or
+  // panel (Docked), whose place it takes.
+  const QWidget* bar = this;
+  while (bar->parentWidget() != nullptr && bar->objectName() != QLatin1String("timelineDock")) {
+    bar = bar->parentWidget();
+  }
+  const auto rectText = [](const QWidget* part, const QRect& area) {
+    const QPoint at = GlassCard::mapToHost(part, area.topLeft());
+    return QStringLiteral("%1,%2 %3x%4").arg(at.x()).arg(at.y()).arg(area.width()).arg(area.height());
+  };
+  lines << QStringLiteral("Sketch steps bar at %1").arg(rectText(bar, bar->rect()));
   const QRect inSight = viewport()->rect();
   for (int i = 0; i < count(); ++i) {
     const QRect cell = visualItemRect(item(i));
     if (!inSight.contains(cell.center())) {
       continue;
     }
+    const QString key = item(i)->data(kKeyRole).toString();
     const QPoint at = GlassCard::mapToHost(viewport(), cell.center());
-    lines << QStringLiteral("Sketch step %1 at %2,%3").arg(item(i)->data(kKeyRole).toString()).arg(at.x()).arg(at.y());
+    lines << QStringLiteral("Sketch step %1 at %2,%3").arg(key).arg(at.x()).arg(at.y());
+    lines << QStringLiteral("Sketch step %1 icon at %2").arg(key, rectText(viewport(), iconRect(cell, iconSize())));
   }
   const QString logged = lines.join(QLatin1Char('\n'));
   if (logged != m_loggedPlaces) {
@@ -700,6 +845,32 @@ void SketchItemList::logPlaces() {
       qDebug().noquote() << line;
     }
   }
+  // Shown now: the cells' looks too where it is never painted.
+  logUnpaintedLooks();
+}
+
+void SketchItemList::logUnpaintedLooks() {
+  // An exposed window paints its cells, and the delegate logs each as it
+  // draws it.
+  const QWindow* handle = window()->windowHandle();
+  if (!isVisible() || !m_c.isActive() || (handle != nullptr && handle->isExposed())) {
+    return;
+  }
+  for (int i = 0; i < count(); ++i) {
+    const QListWidgetItem* cell = item(i);
+    const bool enabled = isEnabled() && cell->flags().testFlag(Qt::ItemIsEnabled);
+    logLook(cell->data(kKeyRole).toString(), cellLook(cell->isSelected(), cell->data(kDimmedRole).toBool(), enabled));
+  }
+}
+
+void SketchItemList::logLook(const QString& key, const QString& look) {
+  // A plain cell only once it was drawn otherwise (selected, dimmed).
+  const auto logged = m_loggedLooks.constFind(key);
+  if (logged == m_loggedLooks.cend() ? look.startsWith(QLatin1String("plain")) : logged.value() == look) {
+    return;
+  }
+  m_loggedLooks.insert(key, look);
+  qDebug().noquote() << QStringLiteral("Sketch step %1 drawn: %2").arg(key, look);
 }
 
 // ---------------------------------------------------------------------------
@@ -715,9 +886,19 @@ void SketchItemList::showHoverList(const QString& key, const QRect& cellRect) {
     return;
   }
   if (!m_hover) {
-    // Over the view, as the sketch's value fields are: it is no window of
-    // its own, and the pointer can go onto its rows.
-    auto* frame = new QFrame(&m_c.viewer());
+    // A child of the window, raised over its other children, as the message
+    // history is: above every floating card (mitcad#1763: as a child of
+    // the view the message band's card lay over its lower rows, which the
+    // pointer then never reached), and no window of its own, so that the
+    // pointer goes onto its rows. With native glass the cards are windows
+    // of their own (GlassCard::setWindowed): it is then a tool window
+    // over them, as they are over the main window.
+    QWidget* host = m_c.viewer().window();
+    auto* frame = glassActive() ? new QFrame(host, Qt::Tool | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint)
+                                : new QFrame(host);
+    if (frame->isWindow()) {
+      frame->setAttribute(Qt::WA_ShowWithoutActivating); // the keys stay with the main window
+    }
     frame->setObjectName(QStringLiteral("sketchStepItems"));
     frame->setFrameShape(QFrame::StyledPanel);
     frame->setAutoFillBackground(true);
@@ -746,6 +927,7 @@ void SketchItemList::showHoverList(const QString& key, const QRect& cellRect) {
     m_hoverRows->viewport()->setMouseTracking(true);
     m_hoverRows->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_hoverRows->setIconSize(uiIconSize(16, 16));
+    m_hoverRows->setItemDelegate(new RowDelegate(m_hoverRows));
     m_hoverRows->viewport()->setAutoFillBackground(false);
     layout->addWidget(m_hoverRows);
     frame->installEventFilter(this);
@@ -780,9 +962,12 @@ void SketchItemList::fillHoverList(const Cell& cell) {
   }
   m_hoverTitle->setText(title);
   m_hoverRows->clear();
+  // An inactive item's row: its words in the disabled text colour, its icon
+  // in its disabled colours.
   const QColor dimmed = palette().color(QPalette::Disabled, QPalette::Text);
   for (const ItemRow& row : cell.items) {
-    auto* entry = new QListWidgetItem(badgedIcon(row.icon, row.level, 1, m_hoverRows->iconSize()), row.text, m_hoverRows);
+    auto* entry = new QListWidgetItem(badgedIcon(row.icon, row.level, 1, m_hoverRows->iconSize(), row.dimmed),
+                                      row.text, m_hoverRows);
     entry->setData(kKeyRole, row.id);
     if (!row.why.isEmpty()) {
       entry->setToolTip(row.why);
@@ -806,19 +991,25 @@ void SketchItemList::placeHoverList(const QRect& cellRect) {
   if (!m_hover) {
     return;
   }
+  // In the window's coordinates, over the view's area.
   QWidget& view = m_c.viewer();
-  const QPoint top = view.mapFromGlobal(viewport()->mapToGlobal(cellRect.topLeft()));
-  const QPoint bottom = view.mapFromGlobal(viewport()->mapToGlobal(cellRect.bottomLeft()));
+  QWidget* host = view.window();
+  const QRect area(host->mapFromGlobal(view.mapToGlobal(QPoint(0, 0))), view.size());
+  const QPoint top = host->mapFromGlobal(viewport()->mapToGlobal(cellRect.topLeft()));
+  const QPoint bottom = host->mapFromGlobal(viewport()->mapToGlobal(cellRect.bottomLeft()));
   const QSize size = m_hover->sizeHint().expandedTo(m_hover->size());
   // Above its cell where the view has room for it, else below; inside the
-  // view either way (the Docked chrome has the list below the view).
+  // view either way (the Docked chrome has the list below the view). Over
+  // the cards there (the Floating message band right above the timeline's
+  // card, mitcad#1763).
   int y = top.y() - size.height() - 4;
-  if (y < 0) {
+  if (y < area.top()) {
     y = bottom.y() + 4;
   }
-  y = std::clamp(y, 0, std::max(0, view.height() - size.height()));
-  const int x = std::clamp(top.x(), 0, std::max(0, view.width() - size.width()));
-  m_hover->move(x, y);
+  y = std::clamp(y, area.top(), std::max(area.top(), area.bottom() + 1 - size.height()));
+  const int x = std::clamp(top.x(), area.left(), std::max(area.left(), area.right() + 1 - size.width()));
+  // A tool window (native glass) is placed on the screen.
+  m_hover->move(m_hover->isWindow() ? host->mapToGlobal(QPoint(x, y)) : QPoint(x, y));
 }
 
 void SketchItemList::hideHoverList() {
@@ -875,7 +1066,9 @@ void SketchItemList::logRowPlaces() {
     if (!inSight.contains(place.center())) {
       continue;
     }
-    const QPoint at = GlassCard::mapToHost(m_hoverRows->viewport(), place.center());
+    // In the main window's coordinates, also from a tool window (native glass).
+    QWidget* host = m_c.viewer().window();
+    const QPoint at = host->mapFromGlobal(m_hoverRows->viewport()->mapToGlobal(place.center()));
     lines << QStringLiteral("Sketch step item %1 at %2,%3").arg(row->data(kKeyRole).toString()).arg(at.x()).arg(at.y());
   }
   const QString logged = lines.join(QLatin1Char('\n'));

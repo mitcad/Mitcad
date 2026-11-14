@@ -180,7 +180,18 @@ for frontend in $frontends; do
       echo 'expect-model-bodies 1 1000'
       echo 'capture-undo-depth before'
       action inspect.section
-      echo "click-logged 'Datum yz'"
+      if [ "$frontend" = native ]; then
+        echo "click-logged 'Datum yz'"
+      else
+        # Commands do not reveal hidden origins. Pick the actual browser
+        # row, as the Move/Copy parity workflow does, rather than an old
+        # viewport position now covered by the body.
+        echo 'mark'
+        echo "click-logged '^Browser arrow Root/Origin at '"
+        echo 'wait-idle 60'
+        echo "expect-log '^Browser Root/Origin/YZ at '"
+        echo "click-logged '^Browser Root/Origin/YZ at '"
+      fi
       echo "expect-log 'Section Analysis Faces/Plane: 1 plane'"
       echo "expect-log 'Inspect Section Analysis: area 100, length 40' 30"
       visible axis true
@@ -190,7 +201,11 @@ for frontend in $frontends; do
       echo 'expect-model-bodies 1 1000'
       echo 'expect-undo-depth ${before} 0'
       input_click 'Section Analysis' axis
-      echo "click-logged 'Datum z'"
+      if [ "$frontend" = native ]; then
+        echo "click-logged 'Datum z'"
+      else
+        echo "click-logged '^Browser Root/Origin/Z at '"
+      fi
       echo "expect-log 'Section Analysis Axis: 1 axis'"
       echo "expect-log 'Inspect Section Analysis: area 141\.42' 30"
       echo 'expect-shown-body F2.b0 - 500'

@@ -38,3 +38,6 @@ mod own_parameter_tests;
 mod sketch3d_own_parameter_tests;
 // Remove Name: a parameter's automatic name back (mitcad#1577).
 mod remove_name_tests;
+// A linked projection whose source edge was merged with, or split from,
+// edges on the same curve (mitcad#1784).
+mod projection_successor_tests;

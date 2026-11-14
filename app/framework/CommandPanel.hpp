@@ -148,7 +148,9 @@ private:
     QLabel* note = nullptr;      // error or value under the field
     QPushButton* select = nullptr;
     QToolButton* clear = nullptr;
-    QListWidget* order = nullptr; // an ordered selection's items
+    QListWidget* order = nullptr; // an ordered selection's items, or any of several while one is gone
+    QWidget* picks = nullptr;     // `order` with its buttons (mitcad#1780)
+    bool missingShown = false;    // the chip shows gone picks in the error colour
     QLineEdit* edit = nullptr;
     int leftAt = -1; // the cursor as the field lost the keyboard
     // A value field's mark (InputDef::markFor, mitcad#980), in the field;

@@ -736,7 +736,7 @@ cp "$CA/part.mitcad" "$WORK/replacement-file-before.mitcad"
 ui_step "export the exchange file"       ui_command "Export"
 ui_step "the STEP filename"              ui_type_path "Export" "$WORK/exchange.step"
 ui_focus_main
-ui_expect_new "Exported $WORK/exchange.step: step, 1 body(ies)" "a valid exchange file"
+ui_expect_new "Exported $WORK/exchange.step: step, 1 body" "a valid exchange file"
 
 # Diverge in a different design: the original remains editable and its
 # held lock remains valid, but sending the project now needs resolution.

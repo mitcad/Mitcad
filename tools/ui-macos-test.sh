@@ -95,13 +95,13 @@ cat > "$file" << 'EOF'
 EOF
 ui_run_app block20 --ui=qt --open "$file" --screenshot "$UI_OUT/block20.png"
 ui_expect_log 'Opened .*block\.mitcad' 'opened with --open'
-ui_expect_log 'Recomputed 3 feature\(s\)' 'sketch, extrude and fillet recomputed'
+ui_expect_log 'Recomputed 3 features ' 'sketch, extrude and fillet recomputed'
 ui_expect_no_log 'Recompute failed' 'no recompute failed'
 ui_check_shot block20
 low_ok=$UI_SHOT_OK low_shades=$UI_SHOT_SHADES low_ratio=$UI_SHOT_RATIO
 
 ui_run_app block35 --ui=qt --open "$file" --set d3=35 --screenshot "$UI_OUT/block35.png"
-ui_expect_log 'Recomputed 2 feature\(s\)' 'd3=35 recomputed extrude and fillet'
+ui_expect_log 'Recomputed 2 features ' 'd3=35 recomputed extrude and fillet'
 ui_check_shot block35
 if [ "$low_ok" = 1 ] && [ "$UI_SHOT_OK" = 1 ]; then
   message="side faces / top face $low_ratio -> $UI_SHOT_RATIO"
@@ -122,7 +122,7 @@ ui_expect_log 'Result store: restored 0, evaluated 3; stored 2 ' 'the first open
 MITCAD_RESULT_STORE=$results MITCAD_RESULT_STORE_MIN_MS=0 \
   ui_run_app store2 --ui=qt --open "$file" --screenshot "$UI_OUT/store2.png"
 ui_expect_log 'Result store: restored 2, evaluated 1; stored 0 ' 'the second open took them from the store'
-ui_expect_log 'Recomputed 1 feature\(s\)' 'only the sketch computed'
+ui_expect_log 'Recomputed 1 feature ' 'only the sketch computed'
 ui_check_shot store2
 if [ "$low_ok" = 1 ] && [ "$UI_SHOT_OK" = 1 ] && [ "$UI_SHOT_SHADES" = "$low_shades" ]; then
   ui_pass 'the stored block is drawn as the computed one'

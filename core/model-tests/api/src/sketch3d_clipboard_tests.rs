@@ -262,7 +262,7 @@ fn a_reference_outside_the_copy_is_kept_or_left_out_in_words() {
     assert_eq!(warnings.len(), 1, "{early}");
     let warning = warnings[0].as_str().unwrap();
     assert!(
-        warning.contains("1 link(s) to geometry outside the copy left out"),
+        warning.contains("a link to geometry outside the copy left out"),
         "{warning}"
     );
     // No ids or names of features (mitcad#1327).
@@ -346,7 +346,7 @@ fn planar_geometry_goes_onto_a_plane_of_a_3d_sketch() {
         warnings[0]
             .as_str()
             .unwrap()
-            .contains("1 relation(s) and dimension(s) left out"),
+            .contains("a relation or dimension left out"),
         "{pasted}"
     );
     let target = sketch(&doc, "F2");

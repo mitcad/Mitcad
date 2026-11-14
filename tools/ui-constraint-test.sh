@@ -10,7 +10,9 @@
 #   - Assembly Constraint: the pin's top rim, then the hole's top rim: the pin is
 #     a ghost until the hole is picked, the row's type follows the picks
 #     (Automatic (Insert)), Flip turns the rims the same way, and OK
-#     inserts the pin through the hole.
+#     inserts the pin through the hole; before it, the panel's Animate
+#     (mitcad#1790) plays the insert's offset back and forth from the
+#     preview until Esc, which leaves the panel open.
 #   - Undone, a row of the pin's top rim and the hole's face: Automatic
 #     (Insert (Axis)); OK puts the pin on the hole's axis at the height it
 #     had, a second row added and removed on the way; the Joints folder
@@ -97,6 +99,29 @@ ui_step "flip"                           ui_click_logged "Panel Assembly Constra
 ui_expect_new "Assembly Constraint: Flip = on" "the rims the same way: the pin through the hole"
 ui_expect_new "Preview Assembly Constraint: ok" "previewed"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
+
+echo "--- The panel's Animate: the insert's offset back and forth from the preview, until Esc"
+ui_panel_reveal "Panel Assembly Constraint input animate"
+ui_expect_log "Panel Assembly Constraint button_animate at" "Animate's Play beside the row's value"
+ui_mark
+ui_step "play the offset"                ui_click_logged "Panel Assembly Constraint button_animate"
+ui_expect_new "Animating Constraint 1 offset in its panel: back and forth from -25 mm to 25 mm, 36 frames a pass in 1440 ms, from 0 mm, frames as previews" \
+  "the insert's offset 25 mm either way, each frame the panel's set previewed"
+passes="" count=0
+for _ in $(seq 1 200); do
+  passes=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Animation of Constraint 1: pass ")
+  count=$(grep -c . <<< "$passes")
+  [ "$count" -ge 3 ] && break
+  sleep 0.1
+done
+[ "$count" -ge 3 ] && grep -q " up to " <<< "$passes" && grep -q " down to " <<< "$passes" ||
+  ui_fail "the offset did not play back and forth over three passes: '$passes'"
+echo "ok   the offset played back and forth: $count passes"
+ui_mark
+ui_step "stop (Esc)"                     ui_key Escape
+ui_expect_new "Animation of Constraint 1 stopped: Esc (" "Esc stops it"
+ui_expect_new "Preview Assembly Constraint: ok" "the panel's own preview again"
+grep -qF "Command Assembly Constraint cancelled" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "Esc cancelled the panel"
 ui_mark
 ui_step "OK (Enter)"                     ui_key Return
 ui_expect_new "Added constraint Constraint1: insert placed, moved O2; DOF 1" "the pin inserted, turning about the axis"

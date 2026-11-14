@@ -126,6 +126,8 @@
 #include <Prs3d_PointAspect.hxx>
 #include <Prs3d_ShadingAspect.hxx>
 #include <Quantity_Color.hxx>
+#include <Quantity_ColorRGBA.hxx>
+#include <Graphic3d_AspectLine3d.hxx>
 #include <SelectMgr_Selection.hxx>
 #include <SelectMgr_SensitiveEntity.hxx>
 #include <SelectMgr_ViewerSelector.hxx>
@@ -169,6 +171,13 @@ const Quantity_Color kSketchHaloDark = viewRole(ColorRole::SketchHalo, true);
 const Quantity_Color kSketchHaloLight = viewRole(ColorRole::SketchHalo, false);
 constexpr double kSketchLineWidth = 2.0;
 constexpr double kSketchHaloWidth = 6.0;
+// The edited sketch through the bodies (mitcad#1762): its curves' and
+// points' copies about a third as strong as the entities, the curves
+// dashed. OCCT blends in linear light, where an alpha of 0.5 shows about
+// as a third of the way from a light face to the curve's colour (the
+// overlay's dimensions and symbols, blended by Qt in sRGB, take 0.35).
+constexpr double kSketchThroughOpacity = 0.5;
+constexpr double kSketchThroughWidth = 2.0;
 // A feature's input lines on a dark background (mitcad#957): the
 // selection blue lightened, over the dark halo, so that it stands out
 // (about 4.6:1 against the dark background, where the plain selection
@@ -615,6 +624,23 @@ void setEdgeStyle(const occ::handle<AIS_Shape>& object, const Quantity_Color& co
   drawer->SetLineAspect(new Prs3d_LineAspect(color, type, width));
   drawer->SetFreeBoundaryAspect(new Prs3d_LineAspect(color, type, width));
   drawer->SetUnFreeBoundaryAspect(new Prs3d_LineAspect(color, type, width));
+}
+
+// The lines setEdgeStyle gave an object at `opacity`, blended where they
+// are drawn (OCCT draws lines in its opaque pass; MaskBlend blends them
+// there), with an alpha cutoff low enough to keep them.
+void setLineOpacity(const occ::handle<AIS_Shape>& object, double opacity) {
+  const occ::handle<Prs3d_Drawer>& drawer = object->Attributes();
+  for (const occ::handle<Prs3d_LineAspect>& line :
+       {drawer->WireAspect(), drawer->LineAspect(), drawer->FreeBoundaryAspect(), drawer->UnFreeBoundaryAspect()}) {
+    if (line.IsNull()) {
+      continue;
+    }
+    Quantity_ColorRGBA color = line->Aspect()->ColorRGBA();
+    color.SetAlpha(static_cast<float>(opacity));
+    line->Aspect()->SetInteriorColor(color);
+    line->Aspect()->SetAlphaMode(Graphic3d_AlphaMode_MaskBlend, 0.01f);
+  }
 }
 
 // A sketch curve's line type: dashed construction geometry, a dash-dot
@@ -1486,6 +1512,22 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   sketchPoints.SetImmediate(true);
   sketchPoints.SetClearDepth(false);
   m_viewer->InsertLayerAfter(m_sketchPointLayer, sketchPoints, Graphic3d_ZLayerId_Top);
+  // The edited sketch through the bodies (mitcad#1762): faint copies of its
+  // curves and points just after the points' layer, without depth, so that
+  // what a body hides shows through it. In sight, the entity drawn before
+  // in the same colour lies under its copy, which blends into it. The copy
+  // writes no depth (without the test OCCT draws with every depth passing
+  // and would write the hidden line's depth). Immediate, as the layers
+  // around it are: after the points' layer the picking groups change only
+  // where they did (the input lines' layer that follows writes no depth
+  // either), and it holds nothing that can be picked.
+  Graphic3d_ZLayerSettings sketchThrough;
+  sketchThrough.SetName("edited sketch, through the bodies");
+  sketchThrough.SetImmediate(true);
+  sketchThrough.SetEnableDepthTest(false);
+  sketchThrough.SetEnableDepthWrite(false);
+  sketchThrough.SetClearDepth(false);
+  m_viewer->InsertLayerAfter(m_sketchThroughLayer, sketchThrough, m_sketchPointLayer);
   // Image references drawn through the bodies (mitcad#782): over the
   // bodies and their edges, without depth, before the sketches, their
   // halos, previews and highlights, so that what is traced stays on top.
@@ -2343,6 +2385,7 @@ void OcctViewer::applyInactiveGhosts(bool faded) {
     if (look != m_sketchEntityLooks.end() && restyle(object)) {
       styleSketchEntity(object, look->second);
       m_context->Redisplay(object, false);
+      updateSketchThrough(object, look->second);
     }
   }
   for (const auto& [key, profile] : m_profiles) {
@@ -2597,7 +2640,9 @@ void OcctViewer::showBody(BodyEntry& entry) {
         partners.push_back(other.edges.get());
       }
     }
-    entry.edges = same ? same : std::make_shared<const ViewEdges>(shape, partners);
+    // Its smooth seams (mitcad#1773) by its faces' names too: pieces of one
+    // face that a split left.
+    entry.edges = same ? same : std::make_shared<const ViewEdges>(shape, partners, entry.shape.get());
   }
   entry.object = makeBody(*entry.shape, inactive || seeThrough ? BodyDisplay::Style::Ghost : entry.style, color,
                          componentColors ? std::vector<BodyDisplay::FaceLook>{} : entry.faceLooks,
@@ -2730,6 +2775,8 @@ OcctViewer::EdgeDrawing OcctViewer::edgeDrawing(const std::string& uid) const {
   const ViewEdges& edges = *found->second.edges;
   drawing.shown = true;
   drawing.edges = static_cast<int>(edges.size());
+  drawing.drawnEdges = static_cast<int>(edges.drawnCount());
+  drawing.seams = static_cast<int>(edges.seamCount());
   for (const auto& [key, copy] : edges.copies()) {
     TopLoc_Location location;
     const occ::handle<Poly_Polygon3D>& polygon = BRep_Tool::Polygon3D(copy, location);
@@ -2901,6 +2948,9 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
         styleSketchEntity(kept, look->second);
         m_context->Redisplay(kept, false);
       }
+      if (look != m_sketchEntityLooks.end()) {
+        updateSketchThrough(kept, look->second); // mitcad#1762
+      }
       m_sketchEntities.push_back(existing->second.second);
       m_sketchEntityKeys.emplace(key, existing->second);
       shown.erase(existing);
@@ -2923,8 +2973,9 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     look.constrained = entity.constrained;
     look.reference = entity.reference;
     look.temporary = entity.temporary;
-    // Show points off for its sketch (mitcad#1705): no marker, still pickable.
-    look.hidden = isPoint && !m_hiddenPointsSketch.isEmpty() && entity.sketch == m_hiddenPointsSketch;
+    look.spatial = entity.spatial;
+    // Show points off (mitcad#1705, mitcad#1764): no marker, still pickable.
+    look.hidden = sketchPointHidden(look);
     PickInfo info;
     info.item = {isPoint ? SelectKind::SketchPoint : SelectKind::SketchCurve, entity.sketch,
                  entity.id, entity.geometry};
@@ -2954,6 +3005,8 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
       m_context->SetZLayer(halo, m_sketchHaloLayer);
       m_sketchEntityHalos[object.get()] = halo;
     }
+    // The edited sketch's copy through the bodies (mitcad#1762).
+    updateSketchThrough(object, look);
     m_sketchEntities.push_back(object);
     // A key shown twice (not expected) keeps the first in the map; the
     // other is taken away with the rest below.
@@ -2963,6 +3016,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
     }
   }
   for (const auto& [key, entry] : shown) {
+    removeSketchThrough(entry.second.get());
     m_sketchEntityLooks.erase(entry.second.get());
     const auto halo = m_sketchEntityHalos.find(entry.second.get());
     if (halo != m_sketchEntityHalos.end()) {
@@ -2974,6 +3028,7 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
   logSketchHalos();
   logSketchLayers();
   logSketchPointMarkers();
+  logSketchThrough();
   // For UI tests (mitcad#286): per shown sketch (and the occurrence placing
   // it), how many of its entities take the fully constrained colour and how
   // many the unconstrained blue; construction, centre lines and projected
@@ -3013,34 +3068,33 @@ void OcctViewer::setSketchEntities(const std::vector<SketchEntityDisplay>& entit
   sceneChanged();
 }
 
-void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const {
-  if (look.point) {
-    // A light fill with an outline that tells the point's state, apart
-    // from the selection's blue on either background (mitcad#946); faded as
-    // the curves are.
-    const sketch::PointState state = look.reference      ? sketch::PointState::Reference
-                                     : look.construction ? sketch::PointState::Construction
-                                     : look.constrained  ? sketch::PointState::Constrained
-                                                         : sketch::PointState::Free;
-    const sketch::PointMarkerLook plain = sketch::pointMarkerLook(state, m_backgroundDark);
-    const sketch::PointMarkerLook marker = drawnInactive(object) ? sketch::fadedLook(plain, m_paper, kInactiveFade)
-                                           : look.temporary ? sketch::fadedLook(plain, m_paper, kTemporaryFade)
-                                                            : plain;
-    const double ratio = devicePixelRatioF();
-    if (look.hidden) {
-      // Show points off (mitcad#1705): an image of the marker's size with
-      // nothing in it. The point stays in the scene, so that the view still
-      // detects it under the pointer (the overlay paints its hover ball) and
-      // picks it; a selected one gets its ball as before (setHighlights).
-      QImage blank = sketch::pointMarkerImage(plain, ratio);
-      blank.fill(Qt::transparent);
-      setPointImage(object, sketchMarkerImage(QStringLiteral("hidden %1").arg(ratio), blank));
-      return;
-    }
-    setPointImage(object, sketchMarkerImage(sketch::pointMarkerKey(marker, ratio),
-                                            sketch::pointMarkerImage(marker, ratio)));
-    return;
+QImage OcctViewer::sketchPointMarker(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look,
+                                     QString& key) const {
+  // A light fill with an outline that tells the point's state, apart
+  // from the selection's blue on either background (mitcad#946); faded as
+  // the curves are.
+  const sketch::PointState state = look.reference      ? sketch::PointState::Reference
+                                   : look.construction ? sketch::PointState::Construction
+                                   : look.constrained  ? sketch::PointState::Constrained
+                                                       : sketch::PointState::Free;
+  const sketch::PointMarkerLook plain = sketch::pointMarkerLook(state, m_backgroundDark);
+  const sketch::PointMarkerLook marker = drawnInactive(object) ? sketch::fadedLook(plain, m_paper, kInactiveFade)
+                                         : look.temporary ? sketch::fadedLook(plain, m_paper, kTemporaryFade)
+                                                          : plain;
+  const double ratio = devicePixelRatioF();
+  if (look.hidden) {
+    // Show points off (mitcad#1705): an image of the marker's size with
+    // nothing in it.
+    QImage blank = sketch::pointMarkerImage(plain, ratio);
+    blank.fill(Qt::transparent);
+    key = QStringLiteral("hidden %1").arg(ratio);
+    return blank;
   }
+  key = sketch::pointMarkerKey(marker, ratio);
+  return sketch::pointMarkerImage(marker, ratio);
+}
+
+Quantity_Color OcctViewer::sketchCurveColor(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const {
   const Quantity_Color& own = look.reference      ? kReferenceColor
                               : look.construction ? kConstructionColor
                               : look.centerline   ? (m_backgroundDark ? kCenterlineColorDark : kCenterlineColor)
@@ -3048,10 +3102,120 @@ void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const S
                                                   : kSketchColor;
   // Pale outside the active component (mitcad#420); a little lighter when
   // shown only for a command (mitcad#546).
-  const Quantity_Color color = drawnInactive(object) ? inactiveColor(own, m_paper)
-                               : look.temporary      ? inactiveColor(own, m_paper, kTemporaryFade)
-                                                     : own;
-  setEdgeStyle(object, color, kSketchLineWidth, sketchLineType(look.construction, look.centerline));
+  return drawnInactive(object) ? inactiveColor(own, m_paper)
+         : look.temporary      ? inactiveColor(own, m_paper, kTemporaryFade)
+                               : own;
+}
+
+void OcctViewer::styleSketchEntity(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) const {
+  if (look.point) {
+    // A point without its marker (Show points off, mitcad#1705) stays in
+    // the scene, so that the view still detects it under the pointer (the
+    // overlay paints its hover ball) and picks it; a selected one gets its
+    // ball as before (setHighlights).
+    QString key;
+    const QImage image = sketchPointMarker(object, look, key);
+    setPointImage(object, sketchMarkerImage(key, image));
+    return;
+  }
+  setEdgeStyle(object, sketchCurveColor(object, look), kSketchLineWidth,
+               sketchLineType(look.construction, look.centerline));
+}
+
+void OcctViewer::styleSketchThrough(const occ::handle<AIS_Shape>& through, const occ::handle<AIS_Shape>& object,
+                                    const SketchEntityLook& look) const {
+  if (look.point) {
+    // The marker's own image faint (kSketchThroughOpacity), shared per look.
+    QString key;
+    QImage image = sketchPointMarker(object, look, key).convertToFormat(QImage::Format_ARGB32);
+    for (int row = 0; row < image.height(); ++row) {
+      auto* pixels = reinterpret_cast<QRgb*>(image.scanLine(row));
+      for (int column = 0; column < image.width(); ++column) {
+        const QRgb pixel = pixels[column];
+        pixels[column] = qRgba(qRed(pixel), qGreen(pixel), qBlue(pixel),
+                               static_cast<int>(std::lround(qAlpha(pixel) * kSketchThroughOpacity)));
+      }
+    }
+    setPointImage(through, sketchMarkerImage(key + QStringLiteral(" through"), image));
+    return;
+  }
+  // The curve's colour, dashed (a centre line keeps its
+  // dash-dot), faint (kSketchThroughOpacity), blended in place.
+  const Aspect_TypeOfLine own = sketchLineType(look.construction, look.centerline);
+  setEdgeStyle(through, sketchCurveColor(object, look), kSketchThroughWidth,
+               own == Aspect_TOL_SOLID ? Aspect_TOL_DASH : own);
+  setLineOpacity(through, kSketchThroughOpacity);
+}
+
+void OcctViewer::setSketchThrough(const QString& sketch) {
+  if (sketch == m_throughSketch) {
+    return;
+  }
+  m_throughSketch = sketch;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look != m_sketchEntityLooks.end()) {
+      updateSketchThrough(object, look->second);
+    }
+  }
+  logSketchThrough();
+  sceneChanged();
+}
+
+void OcctViewer::updateSketchThrough(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) {
+  const auto info = m_pickInfo.find(object.get());
+  const bool wanted = !m_throughSketch.isEmpty() && !look.hidden && info != m_pickInfo.end() &&
+                      info->second.item.owner == m_throughSketch;
+  const auto existing = m_sketchEntityThrough.find(object.get());
+  if (!wanted) {
+    if (existing != m_sketchEntityThrough.end()) {
+      m_context->Remove(existing->second, false);
+      m_sketchEntityThrough.erase(existing);
+    }
+    return;
+  }
+  if (existing != m_sketchEntityThrough.end()) {
+    styleSketchThrough(existing->second, object, look);
+    m_context->Redisplay(existing->second, false);
+    return;
+  }
+  // The entity's own edge, with the polygons it was given (one shape,
+  // drawn from that polyline, never meshed by its size).
+  occ::handle<AIS_Shape> through = new AIS_Shape(object->Shape());
+  through->Attributes()->SetAutoTriangulation(false);
+  styleSketchThrough(through, object, look);
+  display(through, AIS_WireFrame, PickInfo(), false);
+  m_context->SetZLayer(through, m_sketchThroughLayer);
+  m_sketchEntityThrough[object.get()] = through;
+}
+
+void OcctViewer::removeSketchThrough(const AIS_InteractiveObject* object) {
+  const auto through = m_sketchEntityThrough.find(object);
+  if (through != m_sketchEntityThrough.end()) {
+    m_context->Remove(through->second, false);
+    m_sketchEntityThrough.erase(through);
+  }
+}
+
+void OcctViewer::logSketchThrough() {
+  int curves = 0;
+  int points = 0;
+  for (const auto& [object, through] : m_sketchEntityThrough) {
+    const auto look = m_sketchEntityLooks.find(object);
+    if (look != m_sketchEntityLooks.end()) {
+      ++(look->second.point ? points : curves);
+    }
+  }
+  const QString line = m_throughSketch.isEmpty()
+                           ? QStringLiteral("none")
+                           : QStringLiteral("%1 %2 curve(s), %3 point(s), dimmed, curves dashed")
+                                 .arg(m_throughSketch)
+                                 .arg(curves)
+                                 .arg(points);
+  if (line != m_loggedSketchThrough) {
+    m_loggedSketchThrough = line;
+    qDebug().noquote() << QStringLiteral("Sketch through the bodies: %1").arg(line);
+  }
 }
 
 Aspect_TypeOfLine OcctViewer::sketchCurveLineType(const SelectionItem& item) const {
@@ -3178,19 +3342,29 @@ void OcctViewer::logSketchPointMarkers() {
   }
 }
 
-bool OcctViewer::sketchPointHidden(const AIS_InteractiveObject* object, const SketchEntityLook& look) const {
-  if (!look.point || m_hiddenPointsSketch.isEmpty()) {
-    return false;
+OcctViewer::SketchPointMarkers OcctViewer::sketchPointMarkers(const QString& sketch) const {
+  SketchPointMarkers markers;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    const auto info = m_pickInfo.find(object.get());
+    if (look == m_sketchEntityLooks.end() || !look->second.point || info == m_pickInfo.end() ||
+        info->second.item.owner != sketch) {
+      continue;
+    }
+    ++(look->second.hidden ? markers.hidden : markers.drawn);
   }
-  const auto info = m_pickInfo.find(object);
-  return info != m_pickInfo.end() && info->second.item.owner == m_hiddenPointsSketch;
+  return markers;
 }
 
-void OcctViewer::setHiddenSketchPoints(const QString& sketch) {
-  if (sketch == m_hiddenPointsSketch) {
+bool OcctViewer::sketchPointHidden(const SketchEntityLook& look) const {
+  return m_sketchPointsHidden && look.point && !look.spatial;
+}
+
+void OcctViewer::setSketchPointsHidden(bool hidden) {
+  if (hidden == m_sketchPointsHidden) {
     return;
   }
-  m_hiddenPointsSketch = sketch;
+  m_sketchPointsHidden = hidden;
   // The points shown restyled in place: they keep their picks, and the
   // hover and selection on them stay.
   bool restyled = false;
@@ -3199,15 +3373,17 @@ void OcctViewer::setHiddenSketchPoints(const QString& sketch) {
     if (look == m_sketchEntityLooks.end() || !look->second.point) {
       continue;
     }
-    const bool hidden = sketchPointHidden(object.get(), look->second);
-    if (hidden == look->second.hidden) {
+    const bool pointHidden = sketchPointHidden(look->second);
+    if (pointHidden == look->second.hidden) {
       continue;
     }
-    look->second.hidden = hidden;
+    look->second.hidden = pointHidden;
     styleSketchEntity(object, look->second);
     m_context->Redisplay(object, false);
+    updateSketchThrough(object, look->second); // no faint marker without its marker
     restyled = true;
   }
+  logSketchThrough();
   logSketchPointMarkers();
   if (restyled) {
     sceneChanged();
@@ -3235,6 +3411,7 @@ void OcctViewer::restyleSketchEntities() {
     }
     styleSketchEntity(object, look->second);
     m_context->Redisplay(object, false);
+    updateSketchThrough(object, look->second);
     const auto halo = m_sketchEntityHalos.find(object.get());
     if (halo != m_sketchEntityHalos.end()) {
       styleSketchHalo(halo->second, look->second);
@@ -3274,7 +3451,17 @@ void OcctViewer::setDatums(const std::vector<DatumDisplay>& datums) {
                  datum.geometry.isEmpty() ? SelectionItem::kindName(datum.kind) : datum.geometry};
     info.item.occurrence = datum.occurrence;
     markInactive(object, isInactiveItem(info.item)); // pale outside the active component (mitcad#420)
-    const int mode = styleDatum(object, datum.kind, datum.occurrence.isEmpty() ? datum.uid : QString());
+    int mode = 0;
+    if (datum.axis >= 0 && datum.axis < 3) {
+      // A coordinate system's triad (mitcad#1775): each axis solid in its
+      // colour, as the view cube's.
+      const ColorRole role = datum.axis == 0 ? ColorRole::AxisX : datum.axis == 1 ? ColorRole::AxisY : ColorRole::AxisZ;
+      const Quantity_Color color = viewRole(role, m_backgroundDark);
+      setEdgeStyle(object, drawnInactive(object) ? inactiveColor(color, m_paper) : color, 3.0, Aspect_TOL_SOLID);
+      mode = AIS_WireFrame;
+    } else {
+      mode = styleDatum(object, datum.kind, datum.occurrence.isEmpty() ? datum.uid : QString());
+    }
     display(object, mode, std::move(info), true);
     m_datums.push_back(object);
   }
@@ -6963,6 +7150,9 @@ void OcctViewer::bindGestures() {
 void OcctViewer::setNavigation(const NavigationSettings& settings) {
   endScrollDrag(); // the gestures are bound anew
   cancelPointerInteraction();
+  if (settings.orbitCenter != m_navigation.orbitCenter) {
+    qDebug().noquote() << QStringLiteral("View orbit center: %1").arg(QLatin1String(orbitCenterId(settings.orbitCenter)));
+  }
   m_navigation = settings;
   m_navigation.customBindings = normalizedNavigationBindings(settings.customBindings, NavigationScheme::Custom);
   m_navigation.orbitSpeed = sanitizeNavigationSpeed(settings.orbitSpeed);
@@ -7956,6 +8146,10 @@ void OcctViewer::updateNavigation() {
       line += QStringLiteral(", Print Analysis overlay set %1 time(s)").arg(m_navigationPrintOverlays);
     }
     qDebug().noquote() << line;
+    // A Cursor orbit's marker goes with it; a fixed center's stays.
+    if (!m_orbitCenter && m_orbitMarkerAt) {
+      showOrbitMarker(std::nullopt);
+    }
     emit navigationFinished();
   }
 }
@@ -8444,6 +8638,9 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
         }
         const NCollection_Vec2<int> pixel = toDevicePixels(event->position());
         m_context->MoveTo(pixel.x(), pixel.y(), m_view, false);
+        // The model point there, for Set Orbit Center Here (mitcad#1791).
+        m_contextPoint = pickedModelPoint();
+        m_contextPointGlobal = event->globalPosition().toPoint();
         const auto item = itemFor(m_context->DetectedOwner());
         const SelectionItem target = item && accepts(m_context->DetectedOwner()) ? *item : SelectionItem();
         m_contextPick = false;
@@ -8766,9 +8963,16 @@ void OcctViewer::turnView(double right, double up) {
   AbortViewAnimation();
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   try {
-    // About the centre a mouse orbit turns about; with a constrained
-    // orbit about Z, which then stays up.
-    const gp_Pnt centre = GravityPoint(m_context, m_view);
+    // About the centre a mouse orbit turns about (mitcad#1791: the fixed
+    // center, or with Orbit center Cursor the model point under the cursor
+    // when it is over the view); with a constrained orbit about Z, which
+    // then stays up.
+    std::optional<NCollection_Vec2<int>> cursor;
+    const QPoint pointer = mapFromGlobal(QCursor::pos());
+    if (rect().contains(pointer) && !cubeArea().contains(pointer)) {
+      cursor = toDevicePixels(pointer);
+    }
+    const gp_Pnt centre = orbitPivot(cursor);
     const gp_Dir vertical = m_navigation.constrainedOrbit ? gp_Dir(0.0, 0.0, 1.0) : camera->Up();
     if (!turnCamera(*camera, centre, vertical, right, up)) {
       return;

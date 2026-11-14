@@ -67,9 +67,10 @@ pub(super) struct ExportCommand {
     /// ones: what the application shows (mitcad#13).
     #[serde(default)]
     colors: BTreeMap<String, [f64; 3]>,
-    /// `design` (the default) or `component` (mitcad#17, mitcad#19).
+    /// `design` (the default) or `component` (mitcad#17, mitcad#19), or
+    /// `{"frame": <coordinate system>}` (mitcad#1775).
     #[serde(default)]
-    coordinates: Option<Coordinates>,
+    coordinates: Option<CoordinatesInput>,
     /// Only the placements by this occurrence (`O1/O4` or `Arm:1/Pin:2`).
     #[serde(default)]
     occurrence: Option<String>,
@@ -392,6 +393,16 @@ fn animation_of<K: Kernel>(
         }
     };
     Ok(poses)
+}
+
+/// `coordinates`: `design`, `component`, or a coordinate system's frame by
+/// uid or name, `{"frame": "CoordinateSystem1"}` (mitcad#1775).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CoordinatesInput {
+    Design,
+    Component,
+    Frame(String),
 }
 
 /// `plates` (mitcad#1050).
@@ -765,8 +776,21 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             Some(input) => Some(animation_of(self, input)?),
             None => None,
         };
+        // A coordinate system by uid or name (mitcad#1775).
+        let coordinates = match &command.coordinates {
+            None => None,
+            Some(CoordinatesInput::Design) => Some(Coordinates::Design),
+            Some(CoordinatesInput::Component) => Some(Coordinates::Component),
+            Some(CoordinatesInput::Frame(text)) => {
+                let is_frame = |def: &FeatureDef| matches!(def, FeatureDef::CoordinateSystem(_));
+                let entry = self
+                    .feature_by_text(text, Some(&is_frame))?
+                    .ok_or_else(|| ApiError(format!("there is no coordinate system {text}")))?;
+                Some(Coordinates::Frame(entry.uid))
+            }
+        };
         let placement = ExportPlacement {
-            coordinates: command.coordinates,
+            coordinates,
             within,
             on_bed,
             occurrences,

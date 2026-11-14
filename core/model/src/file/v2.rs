@@ -164,6 +164,10 @@ struct FileOut<'a> {
     // Filament changes at print heights (mitcad#1596), when there are any.
     #[serde(skip_serializing_if = "<[crate::print_changes::ChangeSchedule]>::is_empty")]
     filament_changes: &'a [crate::print_changes::ChangeSchedule],
+    // CAM setups, their operations and the machines they use
+    // (mitcad#1013), when there are any.
+    #[serde(skip_serializing_if = "crate::cam::CamState::is_empty")]
+    cam: &'a crate::cam::CamState,
     // The design's statistics (mitcad#1088), when anything of them is
     // known. Read apart from the definition (`file/mod.rs`, `load_parts`,
     // which takes it out before the unknown fields), so not in
@@ -556,6 +560,7 @@ pub(super) fn save_with(
         next_comment: next_comment_out(state),
         print_plates: &state.print_plates,
         filament_changes: &state.filament_changes,
+        cam: &state.cam,
         statistics,
         preview,
     };
@@ -868,7 +873,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 44] = [
+const TOP_FIELDS: [&str; 45] = [
     "format",
     "version",
     "units",
@@ -935,6 +940,8 @@ const TOP_FIELDS: [&str; 44] = [
     "next_occurrence",
     // Filament changes at print heights (mitcad#1596).
     "filament_changes",
+    // CAM setups, operations and machines (mitcad#1013).
+    "cam",
 ];
 
 fn schema(message: impl Into<String>) -> FileError {
@@ -1565,6 +1572,18 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // CAM (mitcad#1013): read tolerantly, so that fields a newer MitCad
+    // adds inside the section are ignored; each machine and setup checked.
+    // An input whose body or sketch is gone is kept (its toolpath says so).
+    let cam = match top.remove("cam") {
+        None | Some(Value::Null) => crate::cam::CamState::default(),
+        Some(value) => {
+            let mut cam = serde_json::from_value::<crate::cam::CamState>(value)
+                .map_err(|e| schema(format!("cam: {e}")))?;
+            cam.check().map_err(|e| invalid(format!("cam: {e}")))?;
+            cam
+        }
+    };
     // Drawings (mitcad#707): definitions only; their views are projected
     // when they are asked for, so one whose subject is gone loads and says
     // why.
@@ -2050,6 +2069,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.purge_volumes = purge_volumes;
     state.print_plates = print_plates;
     state.filament_changes = filament_changes;
+    state.cam = cam;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {
             return Err(invalid(format!(

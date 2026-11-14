@@ -43,6 +43,8 @@ int visibleTextTests() {
   CHECK(ids("Vertex V{a|b|c}").contains(QStringLiteral("V{")));
   CHECK(ids("Body: F9.b0") == QStringList{QStringLiteral("F9")});
   CHECK(ids("Point p15 of Sketch1") == QStringList{QStringLiteral("p15")});
+  // A version's short commit hash is not an id even when it reads as one.
+  CHECK(ids("other.mitcad v1 Version 1 (c553889), saved by Ada").isEmpty());
   CHECK(ids("Constraint k12, curve c4") == (QStringList{QStringLiteral("k12"), QStringLiteral("c4")}));
   CHECK(ids("in O1/O3") == (QStringList{QStringLiteral("O1"), QStringLiteral("O3")}));
   CHECK(ids("Extrude1 (F57)") == QStringList{QStringLiteral("F57")});

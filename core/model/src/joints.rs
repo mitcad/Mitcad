@@ -632,6 +632,7 @@ pub(crate) fn placed_geometry(def: &FeatureDef) -> bool {
             | FeatureDef::ConstructionAxis(_)
             | FeatureDef::ConstructionPoint(_)
             | FeatureDef::JointOrigin(_)
+            | FeatureDef::CoordinateSystem(_)
     )
 }
 
@@ -1752,13 +1753,41 @@ fn check_still(
     Ok(())
 }
 
-/// Why a solve failed, by the joints' and constraint rows' names.
+/// The names of these joints and constraint rows of the solve, each once
+/// in their order, as the timeline shows them, and their features as
+/// places (mitcad#1753).
+fn fighting(
+    state: &DocState,
+    mechanism: &Mechanism,
+    ids: impl IntoIterator<Item = JointId>,
+) -> (Vec<String>, Vec<crate::notice::NoticePlace>) {
+    let mut names: Vec<String> = Vec::new();
+    let mut places: Vec<crate::notice::NoticePlace> = Vec::new();
+    for j in ids {
+        let (uid, row) = mechanism.relation(j);
+        let text = relation_name(state, uid, row);
+        if !names.contains(&text) {
+            names.push(text);
+        }
+        let place = crate::notice::NoticePlace::joint(uid);
+        if !places.contains(&place) {
+            places.push(place);
+        }
+    }
+    (names, places)
+}
+
+/// Why a solve failed (mitcad#1753): in words, which joints and constraint
+/// rows work against each other, by the names the timeline shows, and what
+/// to do (free a motion, remove one of them, drive only one of them), the
+/// joints painted as its places; the detail for agents names the driven
+/// motions the contradiction holds.
 fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) -> String {
     let name = |j: JointId| {
         let (uid, row) = mechanism.relation(j);
         relation_name(state, uid, row)
     };
-    let list = |names: Vec<String>| match names.as_slice() {
+    let list = |names: &[String]| match names {
         [] => String::new(),
         [one] => one.clone(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
@@ -1770,7 +1799,7 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
             joints.extend(&c.involved);
             targets.extend(&c.targets);
         }
-        let involved = joints
+        let involved: Vec<String> = joints
             .iter()
             .map(|j| {
                 let text = name(*j);
@@ -1794,25 +1823,56 @@ fn solve_error(state: &DocState, mechanism: &Mechanism, result: &RigidResult) ->
                 }
             })
             .collect();
-        format!("over-constrained: {} cannot all hold", list(involved))
+        let detail = format!("over-constrained: {} cannot all hold", list(&involved));
+        let (names, places) = fighting(state, mechanism, joints.iter().copied());
+        // A joint held at a driven value among them: driving only one of
+        // them may let the others hold.
+        let driven = targets
+            .iter()
+            .any(|(j, _)| mechanism.relation(*j).1.is_none());
+        let message = match (names.as_slice(), driven) {
+            ([one], _) => format!("{one} cannot hold: free one of its motions, or remove it"),
+            (_, false) => format!(
+                "{} work against each other and cannot all hold: free a motion of one of \
+                 them, or remove one of them",
+                list(&names)
+            ),
+            (_, true) => format!(
+                "{} cannot all hold at their positions: free a motion of one of them, remove \
+                 one of them, or drive only one of them",
+                list(&names)
+            ),
+        };
+        crate::notice::said_at(message, detail, places)
     } else {
-        let mut all: Vec<String> = Vec::new();
-        for (_, _, id) in &mechanism.joints {
-            let text = name(*id);
-            if !all.contains(&text) {
-                all.push(text);
-            }
-        }
+        let (names, places) = fighting(
+            state,
+            mechanism,
+            mechanism.joints.iter().map(|(_, _, id)| *id),
+        );
         let what = if mechanism.joints.iter().any(|(_, row, _)| row.is_some()) {
             "the joints and constraints"
         } else {
             "the joints"
         };
-        format!(
+        let detail = format!(
             "{what} cannot all hold ({}) from where the occurrences are: their limits or \
              sizes keep them apart",
-            list(all)
-        )
+            list(&names)
+        );
+        let message = match names.as_slice() {
+            [one] => format!(
+                "{one} cannot hold from where the occurrences are, as limits or sizes keep it \
+                 apart: change a limit or a size, free one of its motions, or remove it"
+            ),
+            _ => format!(
+                "{} cannot all hold from where the occurrences are, as limits or sizes keep \
+                 them apart: change a limit or a size, free a motion of one of them, or \
+                 remove one of them",
+                list(&names)
+            ),
+        };
+        crate::notice::said_at(message, detail, places)
     }
 }
 

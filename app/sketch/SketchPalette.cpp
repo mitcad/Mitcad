@@ -214,7 +214,8 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   }
   m_constraints = check(tr("Show constraints"), QStringLiteral("paletteConstraints"), QString());
   // Off, the points are drawn only under the pointer and when selected
-  // (mitcad#1705); remembered for the next sketches.
+  // (mitcad#1705); remembered for the next sketches, and the finished
+  // sketches shown follow it too (mitcad#1764).
   m_points = check(tr("Show points"), QStringLiteral("palettePoints"),
                    tr("Draw the end, center and sketch points; hidden points still snap and show under the "
                       "pointer"));

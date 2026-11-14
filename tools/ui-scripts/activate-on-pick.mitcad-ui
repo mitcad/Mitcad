@@ -16,6 +16,9 @@
 #      edge (one
 #      pick dropped, the notice says so); the preview shows and OK adds the
 #      fillet.
+#   4. Gear (a part placed by a pick, mitcad#1752) on the top face of
+#      Lid's block, Base active: Lid is activated as for Fillet, the panel
+#      says "Gear goes into Lid (now active)."; OK adds the gear in Lid.
 # Run by tools/ui-activate-on-pick-test.sh (Linux) and
 # tools/ui-windows-activate-on-pick-test.ps1 (Windows).
 expect-ever 'View area'
@@ -127,4 +130,48 @@ command edit.undo
 expect-log '^Undo: Activate Lid$'
 wait-idle
 expect-undo-depth ${before_two} 0
+
+# 4. A part placed by a pick (mitcad#1752), Base active again: Gear on the
+#    top face of Lid's block activates Lid as Hole does, and OK adds the
+#    gear in Lid: Base keeps its volume, and Base and Lid hold all three
+#    bodies' (the root has none of its own).
+capture-undo-depth before_gear
+capture-model-number baseBefore '{"query":"properties","components":["Base"]}' total.volume
+mark
+command solid.gear
+expect-log '^Command Gear started'
+wait-log '^Pick places:' 20
+# Gear waits for its pick (mitcad#656): the panel's own "Pick where the
+# gear goes" before the click, which the check after it leaves out.
+wait-log '^Panel Gear error: Pick where the gear goes$' 30
+wait-idle
+mark
+click-pick 'face F4[.]b0/F4:end'
+wait-log '^Activated Lid for Gear [(]picked face F4:end[(].* of F4[.]b0'
+wait-log '^Panel Gear notice: Gear goes into Lid [(]now active[)][.]$'
+wait-log '^Place Gear: face face F4:end[(]'
+wait-log '^Preview Gear: ok' 30
+wait-idle
+expect-no-log '^Activate component asked|^Panel Gear error: |^Panel Gear offers: |^Not activated for Gear'
+expect-undo-depth ${before_gear} 1
+mark
+button '^OK$'
+wait-log '^Added gear ' 30
+wait-idle
+expect-undo-depth ${before_gear} 2
+capture-model-number allAfter '{"query":"properties"}' total.volume
+expect-model-bodies 3 ${allAfter}
+capture-model-number baseAfter '{"query":"properties","components":["Base"]}' total.volume
+expect-near ${baseAfter} ${baseBefore}
+capture-model-number partsAfter '{"query":"properties","components":["Base","Lid"]}' total.volume
+expect-near ${partsAfter} ${allAfter}
+mark
+command edit.undo
+expect-log '^Undo: Add Gear'
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Activate Lid$'
+wait-idle
+expect-undo-depth ${before_gear} 0
 expect-never 'Recompute failed|TestDriver: FAIL'

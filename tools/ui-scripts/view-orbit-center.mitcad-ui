@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: MIT
+# The orbit's center (mitcad#1791, GitHub mitcad/Mitcad#300) on
+# view-orbit-center.json, a 60 x 40 x 20 block, its middle at 0,0,10:
+#   1. Set Orbit Center Here in the view's context menu, right-clicked on
+#      the top face near its front right corner (30,-20,20), fixes the
+#      center there; with Orbit center Cursor too, an orbit (Shift + middle
+#      drag) turns about it: its place on the screen stays (within 2 px)
+#      while the block's middle moves.
+#   2. A middle drag (a pan), a middle click and the wheel leave it where
+#      it is.
+#   3. Clear Orbit Center clears it.
+#   4. With Orbit center Cursor an orbit started over the top face turns
+#      about the face's point under the cursor: its place stays where the
+#      drag began.
+# Run by tools/ui-view-orbit-center-test.sh (Linux) and
+# tools/ui-windows-view-orbit-center-test.ps1 (Windows).
+wait-idle
+view-navigation middle-pan
+# The isometric view. The design may open in it already (the UI tests'
+# start view): the camera then logs no new line, so the wait reads the
+# whole log, not only since a mark.
+command view.iso
+wait-log '^View iso$'
+wait-log '^Camera direction -0[.]577 0[.]577 -0[.]577 up ' 30
+expect-view-orbit-center none
+
+# 1. The fixed center near the top front right corner, away from the middle.
+mark
+click-view-point 26,-16,20 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Set Orbit Center Here'
+expect-no-log '^Context menu: .*Clear Orbit Center'
+popup 'Set Orbit Center Here'
+wait-log '^Orbit center set at '
+capture-view-orbit-center center fixed
+# The fixed center comes before Orbit center Cursor.
+view-orbit-center cursor
+wait-log '^View orbit center: cursor$'
+capture-view-point at ${center}
+capture-view-point middle 0,0,10
+capture-view-orientation before
+mark
+drag 40 55 55 62 middle shift
+wait-log '^Orbit about the fixed center at '
+expect-no-log '^Orbit about the point under the cursor'
+expect-view-point 0,0,10 ${middle} moved 2
+expect-view-point ${center} ${at} same 2
+expect-view-orientation ${before} changed
+
+# 2. Pan, a middle click and zoom keep it.
+drag 60 50 50 48 middle
+expect-view-orbit-center ${center}
+mark
+click 50 50 middle
+expect-no-log '^Orbit center (set|cleared)'
+expect-view-orbit-center ${center}
+wheel 50 50 -1
+expect-view-orbit-center ${center}
+
+# 3. Clear Orbit Center.
+mark
+click-view-point ${center} right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Clear Orbit Center'
+popup 'Clear Orbit Center'
+wait-log '^Orbit center cleared$'
+expect-view-orbit-center none
+
+# 4. Orbit center Cursor: about the top face's point under the cursor.
+mark
+command view.iso
+wait-log '^Camera direction -0[.]577 0[.]577 -0[.]577 up ' 30
+capture-view-point start 26,-16,20
+capture-view-point middle 0,0,10
+mark
+drag-view-point 26,-16,20 120 60 middle shift
+wait-log '^Orbit about the point under the cursor at '
+expect-view-point 0,0,10 ${middle} moved 2
+capture-view-orbit-center pivot last
+expect-view-point ${pivot} ${start} same 2
+view-orbit-center model
+wait-log '^View orbit center: model$'
+expect-never 'TestDriver: FAIL'

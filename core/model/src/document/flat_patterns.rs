@@ -414,6 +414,41 @@ impl<K: Kernel> Document<K> {
         answer
     }
 
+    /// The `sheet_corner_edges` query (mitcad#1766): the thickness edge
+    /// each stored corner of a Corner Round or Corner Chamfer lies on in
+    /// the body at the marker (between two walls, or between a wall and
+    /// the side of a bend for a corner beside a bend), null for a corner
+    /// the body has no edge for. An edit highlights the corners by them.
+    pub fn sheet_corner_edges_json(
+        &self,
+        body: BodyUid,
+        corners: &[crate::features::sheet_folded::SheetCorner],
+    ) -> Result<Value, String> {
+        let (state, thickness) = self.sheet_at(body)?;
+        let shape = self.last_result().bodies.get(&body).map(|s| &s.value);
+        let names: Vec<String> = shape
+            .and_then(|s| self.kernel().edges(s).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|edge| edge.name)
+            .collect();
+        // A point on an edge: its middle, which chooses among pieces.
+        let at = |name: &str| {
+            let parsed = name.parse::<crate::topo::EdgeName>().ok()?;
+            let half = crate::datum::PathParameter::Fraction(0.5);
+            let on = self
+                .kernel()
+                .path_point(shape?, std::slice::from_ref(&parsed), half)
+                .ok()?;
+            Some(on.point)
+        };
+        let edges: Vec<Option<String>> = corners
+            .iter()
+            .map(|corner| crate::sheet::pick::corner_edge(state, thickness, corner, &names, &at))
+            .collect();
+        Ok(json!({"body": body, "edges": edges}))
+    }
+
     /// The `sheet_seam` query (mitcad#210): the boundaries of the seam two
     /// panels of a sheet share, which a Bend folds.
     pub fn sheet_seam_json(

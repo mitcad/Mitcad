@@ -172,6 +172,26 @@ elif [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$render_servic
      [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$render_service/Contents/Info.plist")" != 'XPC!' ]; then
   fail "$render_service" "the private renderer's bundle identity or type is wrong"
 fi
+# Finder's thumbnails of designs (mitcad#1696): the Quick Look extension,
+# signed with the App Sandbox (macOS loads app extensions only sandboxed),
+# for the .mitcad type the application exports.
+quicklook="$contents/PlugIns/MitCadThumbnails.appex"
+quicklook_plist="$quicklook/Contents/Info.plist"
+if [ ! -x "$quicklook/Contents/MacOS/MitCadThumbnails" ]; then
+  fail "$quicklook" "the Quick Look thumbnail extension is missing"
+elif ! codesign --verify --strict "$quicklook" 2>/dev/null; then
+  fail "$quicklook" "the Quick Look thumbnail extension has no valid code signature"
+elif ! codesign --display --entitlements - --xml "$quicklook" 2>/dev/null | grep -q com.apple.security.app-sandbox; then
+  fail "$quicklook" "the Quick Look thumbnail extension is not signed with the App Sandbox"
+fi
+if [ ! -f "$quicklook_plist" ] || ! plutil -lint "$quicklook_plist" >/dev/null; then
+  fail "$quicklook" "the Quick Look extension's Info.plist is missing or invalid"
+elif [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$quicklook_plist")" != \
+       com.apple.quicklook.thumbnail ] || \
+     [ "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:QLSupportedContentTypes:0' "$quicklook_plist")" != \
+       "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist").project" ]; then
+  fail "$quicklook" "the Quick Look extension is not a thumbnail extension for the application's .mitcad type"
+fi
 for license in cycles/LICENSE openimagedenoise/LICENSE.txt openimagedenoise/third-party-programs.txt \
                embree-copyright.txt tbb-copyright.txt openimageio-copyright.txt \
                opencolorio-copyright.txt cgltf-copyright.txt sse2neon-copyright.txt; do

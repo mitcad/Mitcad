@@ -150,6 +150,15 @@ pub struct ResultStore {
     quick: Option<u64>,
 }
 
+/// A result read from a document for the store, its shapes not yet
+/// compressed nor written ([`ResultStore::prepare`], [`ResultStore::finish`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingResult {
+    key: u128,
+    meta: Meta,
+    variant: Variant,
+}
+
 /// What [`crate::Document::persist_results`] wrote.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PersistReport {
@@ -315,6 +324,7 @@ enum StoredRead {
     Pieces(FeatureUid, Vec<Hex>),
     PrintBed(BodyUid, Option<String>),
     PrintLayer(Option<u64>),
+    WallFlange(FeatureUid, Option<Hex>),
 }
 
 impl StoredRead {
@@ -343,6 +353,7 @@ impl StoredRead {
             Read::Pieces(uid, fits) => Self::Pieces(*uid, fits.iter().map(|f| Hex(*f)).collect()),
             Read::PrintBed(uid, face) => Self::PrintBed(*uid, face.clone()),
             Read::PrintLayer(bits) => Self::PrintLayer(*bits),
+            Read::WallFlange(plane, key) => Self::WallFlange(*plane, hex(key)),
         }
     }
 
@@ -373,6 +384,7 @@ impl StoredRead {
             Self::Pieces(uid, fits) => Read::Pieces(*uid, fits.iter().map(|f| f.0).collect()),
             Self::PrintBed(uid, face) => Read::PrintBed(*uid, face.clone()),
             Self::PrintLayer(bits) => Read::PrintLayer(*bits),
+            Self::WallFlange(plane, key) => Read::WallFlange(*plane, version(key)),
         })
     }
 }
@@ -500,8 +512,12 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::DerivedPart(_) | FeatureDef::BoundLength(_) => false,
         // Intersection curves (mitcad#1405): the curve is made again.
         FeatureDef::IntersectionCurve(_) => false,
+        // Helix curves (mitcad#1777): likewise.
+        FeatureDef::HelixCurve(_) => false,
         // 3D sketches (mitcad#1521): solved again from their definitions.
         FeatureDef::SpatialSketch(_) => false,
+        // Coordinate systems (mitcad#1775): a datum, as construction planes.
+        FeatureDef::CoordinateSystem(_) => false,
         // Base features too, also those that only bring in bodies
         // (mitcad#887): a stored body keeps the names evaluating derives.
         _ => true,
@@ -860,7 +876,8 @@ impl ResultStore {
 
     /// Writes the result of `entry` (evaluated with `params`) to the store,
     /// before the variants stored for other inputs; returns the bytes of
-    /// the file.
+    /// the file and its shapes ([`ResultStore::prepare`] and
+    /// [`ResultStore::finish`] at once).
     pub fn write<K: Kernel>(
         &self,
         kernel: &K,
@@ -869,10 +886,25 @@ impl ResultStore {
         params: &Parameters,
     ) -> Result<(u64, usize), String> {
         let start = Instant::now();
+        let pending = self.prepare(kernel, entry, output, params)?;
+        self.finish_from(pending, start)
+    }
+
+    /// What [`ResultStore::write`] reads of the document: the result's
+    /// head and its shapes as the kernel writes them (on the thread that
+    /// owns the document), so that [`ResultStore::finish`] can compress
+    /// and write them on any thread, whatever the document does meanwhile
+    /// (mitcad#1796: results stored at autosave in the background).
+    pub fn prepare<K: Kernel>(
+        &self,
+        kernel: &K,
+        entry: &FeatureEntry,
+        output: &Output<K::Shape>,
+        params: &Parameters,
+    ) -> Result<PendingResult, String> {
         let mut shapes = Vec::new();
         let mut store = |shape: &K::Shape| -> Result<usize, String> {
-            let bytes = kernel.shape_bytes(shape).map_err(|e| e.to_string())?;
-            shapes.push(miniz_oxide::deflate::compress_to_vec_zlib(&bytes, LEVEL));
+            shapes.push(kernel.shape_bytes(shape).map_err(|e| e.to_string())?);
             Ok(shapes.len() - 1)
         };
         let mut changes = Vec::with_capacity(output.changes.len());
@@ -926,7 +958,6 @@ impl ResultStore {
             },
             shapes,
         };
-        let shape_count = variant.shapes.len();
         let meta = Meta {
             feature: entry.uid,
             def: Hex(output.def_fp),
@@ -934,7 +965,32 @@ impl ResultStore {
             kind: entry.def.type_name().to_owned(),
             document: self.label.clone(),
         };
-        let path = self.path(key(entry.uid, output.def_fp));
+        Ok(PendingResult {
+            key: key(entry.uid, output.def_fp),
+            meta,
+            variant,
+        })
+    }
+
+    /// Compresses the shapes of a result [`ResultStore::prepare`] took and
+    /// writes it to the store as [`ResultStore::write`] does; returns the
+    /// bytes of the file and its shapes. Any thread may call it, while
+    /// documents use the store: the file is written whole or not at all.
+    pub fn finish(&self, pending: PendingResult) -> Result<(u64, usize), String> {
+        self.finish_from(pending, Instant::now())
+    }
+
+    fn finish_from(&self, pending: PendingResult, start: Instant) -> Result<(u64, usize), String> {
+        let PendingResult {
+            key: file_key,
+            meta,
+            mut variant,
+        } = pending;
+        for shape in &mut variant.shapes {
+            *shape = miniz_oxide::deflate::compress_to_vec_zlib(shape, LEVEL);
+        }
+        let shape_count = variant.shapes.len();
+        let path = self.path(file_key);
         // The variants stored before for other inputs stay, if this build
         // stored them.
         let mut variants = match read_file(&path) {

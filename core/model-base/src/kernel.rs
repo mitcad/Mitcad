@@ -1984,6 +1984,46 @@ pub trait Kernel: Send {
     ) -> Result<Vec<FaceSeparation>, KernelError> {
         Err(KernelError::Unsupported("face separations"))
     }
+
+    // Curve tools: helical curves, sections of faces and bodies, and helices
+    // of sketch curves (mitcad#1777; `features::helix_curve`,
+    // `features::intersection_curve`, `features::helix`).
+
+    /// A helix that moves out from its axis as it turns (see
+    /// [`HelixCurveSpec`], its `growth` not zero): a curve on the cone its
+    /// turns lie on, in model space, in order along it from its start, each
+    /// piece running along it. A helix whose radius would reach the axis
+    /// before its last turn is an error.
+    fn helix_curve(&self, _spec: &HelixCurveSpec) -> Result<Vec<Curve3>, KernelError> {
+        Err(KernelError::Unsupported("growing helical curves"))
+    }
+
+    /// Where the shapes of `first` together meet the shapes of `second`
+    /// together ([`SectionPart`]: a whole body, or some of its faces): the
+    /// section's pieces in model space, each once and in no particular
+    /// order; a piece ends where a face of either side ends. Empty when they
+    /// do not meet. A face name that finds no face of its shape is an
+    /// error. The shapes are left as they are.
+    fn shape_section(
+        &self,
+        _first: &[SectionPart<'_, Self::Shape>],
+        _second: &[SectionPart<'_, Self::Shape>],
+    ) -> Result<Vec<Curve3>, KernelError> {
+        Err(KernelError::Unsupported("sections of faces and bodies"))
+    }
+
+    /// A surface body of chains of curves (each in order, running along
+    /// it; open or closed; `features::path::wall_chains`) moved by the
+    /// helix's screw motion ([`HelixSpec`]: its axis, pitch, revolutions and
+    /// hand; no growth, ends or seam shift; the regions and bodies are not
+    /// used). Faces `<feature>:side(<curve>)`.
+    fn helix_sheet(
+        &self,
+        _spec: &HelixSpec<'_, Self::Shape>,
+        _chains: &[Vec<crate::sweeps::PathCurve>],
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("helices of curves"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of
@@ -3293,4 +3333,33 @@ pub struct FaceSeparation {
     /// its body); zero where a face has none (an apex, a pole).
     pub normal_a: Vec3,
     pub normal_b: Vec3,
+}
+
+// Curve tools (mitcad#1777).
+
+/// What [`Kernel::helix_curve`] builds: a helix about the axis through
+/// `origin` along `direction` (a unit vector, the way it rises), starting
+/// at `origin + radius x_axis` (`x_axis` a unit vector at right angles to
+/// `direction`), turning `revolutions` times right-handed about
+/// `direction` (left-handed with `left_handed`) while it rises `pitch` per
+/// turn and moves `growth` out from the axis per turn (negative: in).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HelixCurveSpec {
+    pub origin: Vec3,
+    pub direction: Vec3,
+    pub x_axis: Vec3,
+    pub radius: f64,
+    pub pitch: f64,
+    pub revolutions: f64,
+    pub left_handed: bool,
+    pub growth: f64,
+}
+
+/// One side's shape of [`Kernel::shape_section`]: the whole `shape` when
+/// `faces` is empty, else those faces of it (each name every face it
+/// resolves to).
+#[derive(Debug, Clone, Copy)]
+pub struct SectionPart<'a, S> {
+    pub shape: &'a S,
+    pub faces: &'a [FaceName],
 }

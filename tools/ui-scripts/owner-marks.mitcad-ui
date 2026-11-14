@@ -1,19 +1,26 @@
 # SPDX-License-Identifier: MIT
 # Where what is picked in the view is (mitcad#1704, app/COMMANDS.md
-# "Selection"), on owner-marks.json (Body1 of Extrude1, an unused Sketch2):
-#   1. A face of Body1 picked in the view marks Body1's row and Extrude1
-#      in the timeline, as owner marks: neither is selected.
+# "Selection"), on owner-marks.json (Body1 of Extrude1, an unused Sketch2;
+# Part:1, hidden at first, with a body and an unused sketch):
+#   1. A face of Body1 picked in the view marks Body1's row and its Bodies
+#      folder (mitcad#1792) and Extrude1 in the timeline, as owner marks:
+#      none is selected.
 #   2. Delete with the face selected acts on the face selection, as before:
 #      Extrude1 goes (not the marked body row); Undo brings it back.
-#   3. A profile of Sketch2 picked (in the dark theme) marks Sketch2's row
-#      and Sketch2 in the timeline; Esc clears the selection and the marks.
+#   3. A profile of Sketch2 picked (in the dark theme) marks Sketch2's row,
+#      its Sketches folder and Sketch2 in the timeline; Esc clears the
+#      selection and the marks.
 #   4. After Collapse All a face picked again opens the Bodies folder and
-#      scrolls to the marked row.
+#      scrolls to the marked row (the marked folder does not stop it).
+#   5. In Part:1 (mitcad#1792), the root's body and sketch hidden: a face
+#      marks Part:1, its Bodies folder, folded or open, and the body's row.
+#   6. A profile of Part's sketch marks Part:1, its Sketches folder and the
+#      sketch's row; Esc clears them.
 # Run by tools/ui-owner-marks-test.sh (Linux) and
 # tools/ui-windows-owner-marks-test.ps1 (Windows), Docked and Floating.
 expect-ever 'View area'
 wait-idle
-expect-model-bodies 1 4000
+expect-model-bodies 2 5000
 command view.fit
 wait-idle
 capture-undo-depth baseline
@@ -22,7 +29,7 @@ capture-undo-depth baseline
 mark
 click-visible-face
 expect-selection 1 0
-wait-log '^Browser owner marks: Root/Bodies/Body1$'
+wait-log '^Browser owner marks: Root/Bodies, Root/Bodies/Body1$'
 wait-log '^Timeline owner marks: F2 Extrude1$'
 wait-idle
 expect-no-log '^Browser selected: .*Body1'
@@ -36,13 +43,13 @@ mark
 key Delete
 wait-log '^Deleted Extrude1$'
 expect-no-log '^Deleted body '
-expect-model-bodies 0 0
+expect-model-bodies 1 1000
 expect-undo-depth ${baseline} 1
 wait-log '^Browser owner marks: none$'
 wait-log '^Timeline owner marks: none$'
 mark
 command edit.undo
-expect-model-bodies 1 4000
+expect-model-bodies 2 5000
 expect-undo-depth ${baseline} 0
 wait-idle
 
@@ -52,7 +59,7 @@ wait-idle
 mark
 click-visible-item profile
 expect-selection 1 1
-wait-log '^Browser owner marks: Root/Sketches/Sketch2$'
+wait-log '^Browser owner marks: Root/Sketches, Root/Sketches/Sketch2$'
 wait-log '^Timeline owner marks: F3 Sketch2$'
 wait-idle
 expect-no-log '^Browser selected: .*Sketch2'
@@ -74,8 +81,70 @@ wait-idle
 mark
 click-visible-face
 expect-selection 1 0
-wait-log '^Browser owner marks: Root/Bodies/Body1$'
+wait-log '^Browser owner marks: Root/Bodies, Root/Bodies/Body1$'
 wait-log '^Browser scrolled to Root/Bodies/Body1$'
 wait-idle
 screenshot '${MITCAD_TEST_WORK}/owner-marks-revealed-${MITCAD_TEST_CHROME}.png'
+
+# 5. In a placed component (mitcad#1792): Part:1 shown, the root's Body1
+#    and Sketch2 hidden. A face of Part's body marks Part:1, its Bodies
+#    folder (folded: the mark shows where the row is) and the body's row;
+#    the folder opened shows the trail down to the body.
+focus-main
+focus-widget modelView
+mark
+key Escape
+expect-selection 0 0
+wait-log '^Browser owner marks: none$'
+model-command '{"cmd":"set_body_visible","uid":"F2.b0","visible":false}'
+model-command '{"cmd":"set_feature_visible","uid":"F3","visible":false}'
+model-command '{"cmd":"set_occurrence_visible","occurrence":"O1","visible":true}'
+wait-idle
+command view.fit
+wait-idle
+mark
+click-logged '^Browser arrow Root/Part:1 at '
+wait-log '^Browser Root/Part:1/Bodies at '
+wait-idle
+mark
+click-visible-face
+expect-selection 1 0
+wait-log '^Browser owner marks: Root/Part:1, Root/Part:1/Bodies, Root/Part:1/Bodies/Body[0-9]+$'
+wait-idle
+expect-no-log '^Browser selected: .*Body'
+expect-no-log '^Browser scrolled to '
+screenshot '${MITCAD_TEST_WORK}/owner-marks-component-face-folded-${MITCAD_TEST_CHROME}.png'
+mark
+click-logged '^Browser arrow Root/Part:1/Bodies at '
+wait-log '^Browser Root/Part:1/Bodies/Body[0-9]+ at '
+wait-idle
+expect-selection 1 0
+screenshot '${MITCAD_TEST_WORK}/owner-marks-component-face-${MITCAD_TEST_CHROME}.png'
+
+# 6. A profile of Part's unused sketch marks Part:1, its Sketches folder
+#    and the sketch's row; Esc clears them all.
+focus-main
+focus-widget modelView
+mark
+key Escape
+expect-selection 0 0
+wait-log '^Browser owner marks: none$'
+mark
+click-visible-item profile
+expect-selection 1 1
+wait-log '^Browser owner marks: Root/Part:1, Root/Part:1/Sketches, Root/Part:1/Sketches/Sketch[0-9]+$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/owner-marks-component-profile-folded-${MITCAD_TEST_CHROME}.png'
+mark
+click-logged '^Browser arrow Root/Part:1/Sketches at '
+wait-log '^Browser Root/Part:1/Sketches/Sketch[0-9]+ at '
+wait-idle
+expect-selection 1 1
+screenshot '${MITCAD_TEST_WORK}/owner-marks-component-profile-${MITCAD_TEST_CHROME}.png'
+focus-main
+focus-widget modelView
+mark
+key Escape
+expect-selection 0 0
+wait-log '^Browser owner marks: none$'
 expect-never 'TestDriver: FAIL'

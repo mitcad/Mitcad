@@ -812,7 +812,7 @@ def main():
                 "wait-log 'Chat: message queued \\(1 waiting\\)' 30",
                 "screenshot '" + str(work / "account-go.png") + "'",
                 "wait-log 'Chat: " + shown_name + " account error: " + error_code + "' 60",
-                "wait-log 'Chat notice \\(warning\\): 1 waiting message\\(s\\) were not sent\\.' 30",
+                "wait-log 'Chat notice \\(warning\\): 1 waiting message was not sent\\.' 30",
                 "wait-log 'Chat: turn ended' 60",
                 "expect-widget-property chatPanel chatState account-error",
                 "expect-widget-property chatState text " + state_line,

@@ -873,7 +873,7 @@ CommandDef interferenceCommand(const CommandContext& context) {
       result.text = QObject::tr("No interference between %1 bodies.").arg(answer.value(QStringLiteral("bodies")).toInt());
       result.log = QStringLiteral("none");
     } else {
-      result.text = QObject::tr("%1 interference(s):").arg(pairs.size()) +
+      result.text = QObject::tr("%n interference(s):", nullptr, static_cast<int>(pairs.size())) +
                     QStringLiteral("<table width='100%'>%1</table>").arg(rows.join(QString()));
       result.log = log.join(QStringLiteral("; "));
       result.shape = overlaps;
@@ -886,6 +886,29 @@ CommandDef interferenceCommand(const CommandContext& context) {
 
 // ---------------------------------------------------------------------------
 // Section Analysis
+
+// A pick that has an axis the section's plane contains and turns about
+// (mitcad#1769): a cylindrical, conical or toroidal face, a circular edge
+// or arc.
+bool ownsSectionAxis(const SelectionItem& item) {
+  switch (item.kind) {
+  case SelectKind::Face:
+    return item.geometry == QStringLiteral("cylinder") || item.geometry == QStringLiteral("cone") ||
+           item.geometry == QStringLiteral("torus");
+  case SelectKind::Edge:
+    return isCircular(item);
+  default:
+    return false;
+  }
+}
+
+// What Section Analysis' plane input takes (mitcad#1769): a plane or a
+// planar face; a face round about an axis or a circular edge (the plane
+// through its axis); a straight edge (the plane through its middle,
+// normal to it).
+bool placesSectionPlane(const SelectionItem& item) {
+  return isPlanar(item) || ownsSectionAxis(item) || (item.kind == SelectKind::Edge && isLine(item));
+}
 
 // The model's `section_plane` answer for the panel's plane and axis: moved
 // by `offset`, flipped with `flip`, and turned by the panel's Angle about
@@ -964,7 +987,9 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> sectionPlane(const CommandState& state,
 // axis, so that the knob follows the turned normal.
 std::optional<Manipulator> sectionRing(const CommandState& state, const CommandContext& context) {
   const Selection& plane = state.items(QStringLiteral("plane"));
-  if (plane.isEmpty() || state.items(QStringLiteral("axis")).isEmpty()) {
+  // About the Axis, else about the picked face's or circle's own axis
+  // (mitcad#1769), which the model's answer gives too.
+  if (plane.isEmpty() || (state.items(QStringLiteral("axis")).isEmpty() && !ownsSectionAxis(plane.first()))) {
     return std::nullopt;
   }
   const auto picked = sectionQuery(state, context, 0.0, false, false);
@@ -1000,7 +1025,11 @@ CommandDef sectionCommand() {
   def.keywords = {QStringLiteral("cut"), QStringLiteral("clip"), QStringLiteral("cross section")};
   def.keepsSection = true;
   def.inputs = {
-      selectionInput(QStringLiteral("plane"), QObject::tr("Faces/Plane"), kPlaneKinds, 1, 1).withAccepts(isPlanar),
+      // A face round about an axis, a circular or a straight edge places
+      // the plane too (mitcad#1769).
+      selectionInput(QStringLiteral("plane"), QObject::tr("Faces/Plane"), kPlaneKinds | SelectKind::Edge, 1, 1)
+          .withAccepts(placesSectionPlane)
+          .withTooltip(QObject::tr("A plane or planar face; through the axis of a round face or circular edge; across a straight edge")),
       valueInput(QStringLiteral("offset"), QObject::tr("Distance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withManipulator([](const CommandState& state, const CommandContext& context) -> std::optional<Manipulator> {
             const Selection& plane = state.items(QStringLiteral("plane"));
@@ -1029,9 +1058,12 @@ CommandDef sectionCommand() {
     const auto plane = sectionPlane(state, context);
     if (!plane) {
       const double angle = state.value(QStringLiteral("angle"));
-      result.error = state.items(QStringLiteral("axis")).isEmpty() && std::isfinite(angle) && angle != 0.0
-                         ? QObject::tr("Select an axis for the angle.")
-                         : QObject::tr("The plane cannot be found.");
+      const Selection& picked = state.items(QStringLiteral("plane"));
+      const bool ownAxis = !picked.isEmpty() && ownsSectionAxis(picked.first());
+      result.error =
+          state.items(QStringLiteral("axis")).isEmpty() && !ownAxis && std::isfinite(angle) && angle != 0.0
+              ? QObject::tr("Select an axis for the angle.")
+              : QObject::tr("The plane cannot be found.");
       return result;
     }
     const QJsonObject fixed{{QStringLiteral("origin"), QJsonArray{plane->first.X(), plane->first.Y(), plane->first.Z()}},
@@ -1088,7 +1120,9 @@ CommandDef sectionCommand() {
       return Built::failure(QObject::tr("Angle: check the value."), QStringLiteral("angle"));
     }
     const Selection& axis = state.items(QStringLiteral("axis"));
-    if (axis.isEmpty() && angle != 0.0) {
+    // A round face or a circular edge turns about its own axis (mitcad#1769).
+    const bool ownAxis = ownsSectionAxis(plane.first());
+    if (axis.isEmpty() && !ownAxis && angle != 0.0) {
       return Built::failure(QObject::tr("Select an axis for the angle."), QStringLiteral("axis"));
     }
     if (!axis.isEmpty()) {
@@ -1097,8 +1131,19 @@ CommandDef sectionCommand() {
         definition.insert(QStringLiteral("axis_occurrence"), axis.first().occurrence);
       }
       definition.insert(QStringLiteral("angle"), angle);
+    } else if (angle != 0.0) {
+      definition.insert(QStringLiteral("angle"), angle);
     }
     return Built::of(definition);
+  };
+  // Started with one item selected that places a plane (mitcad#1769): it is
+  // the plane, and the section shows at once. Any other selection, or
+  // several items, starts with nothing picked.
+  def.preselected = [](const Selection& selection, CommandState& state, const CommandContext&) {
+    if (selection.size() != 1 || state.items(QStringLiteral("plane")).isEmpty()) {
+      state.items(QStringLiteral("plane")).clear();
+      state.items(QStringLiteral("axis")).clear();
+    }
   };
   def.load = [](const QJsonObject& analysis, CommandState& state, const CommandContext& context) {
     SelectionItem plane = itemOf(analysis.value(QStringLiteral("plane")), context);

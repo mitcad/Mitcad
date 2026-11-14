@@ -54,6 +54,15 @@ struct GeneralSettings;
 // is complete; the prior snapshot stays until that publication succeeds.
 // Recovery also reads version 1's fixed `<id>.mitcad` snapshots.
 //
+// With each design file the results computed since the last save go to
+// the result store (P7d, mitcad#1796): the window's `results` takes them
+// from the model with the snapshot (their shapes' bytes, on the UI thread
+// while the model is idle) and the manager's thread writes them after the
+// design file, so that a design recovered after the program was killed
+// opens from the store instead of computing them again (they are written
+// at Save and after an open too). `resultsStored` gets what was written,
+// on the UI thread.
+//
 // A session that ended without removing its files left work to recover
 // (Recovery.hpp). A document recovered from them is this session's then
 // (recovered()): the earlier session's files stay, under the lock this
@@ -87,6 +96,13 @@ public:
   std::function<QString()> blocked;
   std::function<State()> state;
   std::function<Snapshot()> snapshot;
+  // Optional: takes the results to store with a snapshot and returns what
+  // writes them (on the manager's thread; its answer is the result store's
+  // report as JSON), or nothing when there are none.
+  std::function<std::function<QByteArray()>()> results;
+  // Optional: what writing the results gave (results' answer), on the UI
+  // thread.
+  std::function<void(const QByteArray&)> resultsStored;
 
   // Starts, changes or stops the timer (Preferences, General);
   // MITCAD_TEST_AUTOSAVE_SECONDS replaces the minutes for tests.

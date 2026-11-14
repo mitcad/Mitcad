@@ -20,13 +20,12 @@ use crate::kernel::Kernel;
 
 /// Whether a feature has a light bulb of its own: sketches and
 /// construction planes, axes, points and joint origins, intersection
-/// curves (mitcad#1405) and 3D sketches (mitcad#1524).
+/// curves (mitcad#1405), helix curves (mitcad#1777) and 3D sketches
+/// (mitcad#1524).
 fn has_visibility(def: &FeatureDef) -> bool {
     crate::joints::placed_geometry(def)
-        || matches!(
-            def,
-            FeatureDef::IntersectionCurve(_) | FeatureDef::SpatialSketch(_)
-        )
+        || def.makes_curve()
+        || matches!(def, FeatureDef::SpatialSketch(_))
 }
 
 /// Whether a feature keeps a display size (mitcad#1748): construction

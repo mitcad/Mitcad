@@ -282,10 +282,34 @@ public:
     turnStep->setSuffix(QStringLiteral("°"));
     turnStep->setValue(int(std::lround(sanitizeTurnStep(m_settings.turnStep))));
     turnStep->setToolTip(tr("How far an arrow key turns the 3D view"));
-    turnForm->addRow(tr("Arrow key step:"), turnStep);
+    // What an orbit turns about (mitcad#1791): the model's middle, or the
+    // model point under the cursor where the orbit starts.
+    auto* orbitCenter = new QComboBox;
+    orbitCenter->setObjectName(QStringLiteral("navigationOrbitCenter"));
+    orbitCenter->addItem(tr("Model"), int(OrbitCenter::Model));
+    orbitCenter->addItem(tr("Cursor"), int(OrbitCenter::Cursor));
+    orbitCenter->setCurrentIndex(orbitCenter->findData(int(m_settings.orbitCenter)));
+    orbitCenter->setToolTip(tr("What an orbit turns about: the middle of the model, or the model point under the cursor"));
+    // The arrow key step and the orbit center, both about turning the view,
+    // in one row, so that Preferences still fits a 1366 x 768 screen
+    // (mitcad#1751's limit; the orbit center's own row made the Navigation
+    // page the tallest).
+    auto* turnRow = new QHBoxLayout;
+    turnRow->addWidget(turnStep);
+    turnRow->addSpacing(12);
+    auto* orbitCenterLabel = new QLabel(tr("Orbit center:"));
+    orbitCenterLabel->setBuddy(orbitCenter);
+    turnRow->addWidget(orbitCenterLabel);
+    turnRow->addWidget(orbitCenter);
+    turnRow->addStretch(1);
+    turnForm->addRow(tr("Arrow key step:"), turnRow);
     layout->addLayout(turnForm);
     connect(turnStep, &QSpinBox::valueChanged, this, [this](int degrees) {
       m_settings.turnStep = degrees;
+      notify();
+    });
+    connect(orbitCenter, &QComboBox::currentIndexChanged, this, [this, orbitCenter] {
+      m_settings.orbitCenter = static_cast<OrbitCenter>(orbitCenter->currentData().toInt());
       notify();
     });
     auto* flags = new QGridLayout;

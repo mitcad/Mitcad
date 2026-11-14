@@ -5,6 +5,7 @@
 # check-all sources: app/framework/CommandSessionVisibility.cpp app/framework/CommandPanel.cpp app/framework/CommandPresenter.hpp
 # check-all sources: app/commands/FilletCommands.cpp app/framework/TestDriver.cpp core/model/src/document/components.rs
 # check-all sources: tools/ui-scripts/activate-on-pick.mitcad-ui tools/ui-scripts/activate-on-pick.json tools/cli
+# check-all sources: app/commands/GearCommands.cpp app/commands/PlaceInputs.cpp
 # A feature that changes the picked body activates its component
 # (mitcad#1634) through the real UI, the shared input script
 # tools/ui-scripts/activate-on-pick.mitcad-ui (also run by
@@ -14,7 +15,8 @@
 # says where the fillet goes, OK adds it, and Undo takes back the fillet,
 # then the activation; Esc after the activation leaves Lid active; an edge
 # of each component gives the refusal and the Activate Lid button, which
-# keeps Lid's edge.
+# keeps Lid's edge. Gear on the top face of Lid's block (a part placed by
+# a pick, mitcad#1752) activates Lid as well, and OK adds the gear in Lid.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-activate-on-pick-test.sh
@@ -44,6 +46,9 @@ ui_expect_log 'Command Fillet cancelled' 'Esc cancelled Fillet after the activat
 ui_expect_log 'Panel Fillet offers: Activate Lid (drops 1)' 'an edge of each component offers Activate Lid'
 ui_expect_log 'Panel Fillet notice: Fillet goes into Lid (now active). 1 pick of another component dropped.' \
   'the Activate button kept Lid'"'"'s edge'
+ui_expect_log 'Activated Lid for Gear (picked face ' 'Gear on Lid'"'"'s face activated Lid'
+ui_expect_log 'Panel Gear notice: Gear goes into Lid (now active).' 'the panel says where the gear goes'
+ui_expect_log 'Added gear ' 'OK added the gear in Lid'
 ui_expect_log 'TestDriver: done' 'the picked body'"'"'s component is activated'
 # Lid activated three times for Fillet: by the first pick twice, by the
 # button once; never by a question (anchored: the driver echoes its own

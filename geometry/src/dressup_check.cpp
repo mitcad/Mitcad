@@ -46,6 +46,7 @@
 #include <gp_Vec.hxx>
 
 #include "face_select.hpp"
+#include "proximity.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry::detail {
@@ -75,8 +76,6 @@ constexpr double kSliver = 0.01;
 // of the size, and the least cosine of its angle with the boundary's normal
 // there that tells the side.
 constexpr double kRayReach = 4.0;
-constexpr double kTransverse = 0.05;
-
 // Whether a shape is closed solids only (as the dressup's own check).
 bool closed_solids(const TopoDS_Shape& shape) {
   int solids = 0;
@@ -160,60 +159,6 @@ std::vector<FacePoint> face_points(const TopoDS_Face& face, int wanted) {
     }
   }
   return points;
-}
-
-// Which side of a closed body's boundary a point lies on, as a ray from it
-// first crosses the boundary (mitcad#1257).
-enum class RaySide { Inside, Outside, Near };
-
-// The side of `point` by the first crossing of the boundary (loaded into
-// `boundary`) along a ray in `direction`: leaving the body there (along the
-// face's outward normal), the point lies inside it; entering it, outside.
-// Near where the boundary lies within `close` of the point along the ray:
-// the point is then no farther than that from it on either side. None where
-// the ray meets nothing up to `reach`, or meets the boundary at a tangent
-// or on a face's edge: a solid classifier tells then. (A classifier's rays
-// run through the whole body: on a body of long spline faces, a thread's,
-// it took 60 ms a point in a debug build, 40 times as long as the rounding
-// it checked; a short ray meets only the faces near the point.)
-std::optional<RaySide> ray_side(IntCurvesFace_ShapeIntersector& boundary, const gp_Pnt& point,
-                                const gp_Dir& direction, double close, double reach) {
-  boundary.Perform(gp_Lin(point, direction), -close, reach);
-  if (!boundary.IsDone() || boundary.NbPnt() == 0) {
-    return std::nullopt;
-  }
-  int first = 1;
-  for (int i = 2; i <= boundary.NbPnt(); ++i) {
-    if (boundary.WParameter(i) < boundary.WParameter(first)) {
-      first = i;
-    }
-  }
-  const double along_ray = boundary.WParameter(first);
-  if (along_ray <= close) {
-    return RaySide::Near;
-  }
-  // (On an edge or a vertex, two faces' crossings at once.)
-  if (boundary.State(first) != TopAbs_IN) {
-    return std::nullopt;
-  }
-  for (int i = 1; i <= boundary.NbPnt(); ++i) {
-    if (i != first && boundary.WParameter(i) - along_ray <= Precision::Confusion()) {
-      return std::nullopt;
-    }
-  }
-  const TopoDS_Face& face = boundary.Face(first);
-  const BRepAdaptor_Surface surface(face, false);
-  const std::optional<gp_Dir> normal =
-      outward_normal(surface, face, boundary.UParameter(first), boundary.VParameter(first));
-  if (!normal) {
-    return std::nullopt;
-  }
-  const double cosine = normal->Dot(direction);
-  // (Grazing: too near a tangent to tell.)
-  if (std::abs(cosine) < kTransverse) {
-    return std::nullopt;
-  }
-  return cosine > 0.0 ? RaySide::Inside : RaySide::Outside;
 }
 
 std::string millimetres(double value) {
@@ -630,7 +575,21 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
     IntCurvesFace_ShapeIntersector rays;
     rays.Load(input.occt(), Precision::Confusion());
     std::vector<std::unique_ptr<BRepClass3d_SolidClassifier>> solids;
+    // (Rays through the whole body.)
+    const double through = length_through(input.occt());
     const auto classified_wrong = [&](const gp_Pnt& point) {
+      // A ray that crosses the boundary transversely, away from its edges,
+      // first tells the side as the classifier would (only a point within
+      // the confusion tolerance of the boundary is on it), far cheaper on
+      // a body of long spline edges: the classifier measures its ray
+      // against every edge whose box it crosses (a thread's helices span
+      // the body), 90 ms a point on a threaded ring (mitcad#1796). A point
+      // on the boundary, or rays that meet nothing or only tangents and
+      // edges, go to the classifier.
+      const std::optional<RaySide> told = skew_ray_side(rays, point, Precision::Confusion(), through);
+      if (told && *told != RaySide::Near) {
+        return *told == (side == DressupSide::Within ? RaySide::Outside : RaySide::Inside);
+      }
       if (solids.empty()) {
         for (TopExp_Explorer solid(input.occt(), TopAbs_SOLID); solid.More(); solid.Next()) {
           solids.push_back(std::make_unique<BRepClass3d_SolidClassifier>(solid.Current()));
@@ -657,6 +616,16 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
     for (int f = 0; f < input.face_count(); ++f) {
       builder.Add(boundary, input.face(f));
     }
+    // Whether a point is farther from the boundary than `than`, told
+    // without measuring how far where it is not (mitcad#1785: on a body
+    // with a modelled thread a full measure took a second).
+    std::optional<Proximity> near_boundary;
+    const auto farther = [&](const gp_Pnt& point, double than) {
+      if (!near_boundary) {
+        near_boundary.emplace(boundary);
+      }
+      return !within_distance(Proximity(BRepBuilderAPI_MakeVertex(point).Vertex()), *near_boundary, than);
+    };
     const int per_face = std::clamp(kPoints / static_cast<int>(made.size()), 1, kFacePoints);
     int distances = 0;
     // Made faces reaching to the wrong side of the body; of concave edges
@@ -770,6 +739,9 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
           }
           ++distances;
           ++past_measured;
+          if (!farther(foot->at, std::max(allowed, farthest_past))) {
+            continue;
+          }
           BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(foot->at).Vertex(), boundary);
           if (distance.IsDone() && distance.Value() > allowed && distance.Value() > farthest_past) {
             farthest_past = distance.Value();
@@ -792,6 +764,9 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
         }
         ++distances;
         ++measured;
+        if (!farther(point, std::max(allowed, deepest))) {
+          continue;
+        }
         BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(), boundary);
         if (distance.IsDone() && distance.Value() > allowed && distance.Value() > deepest) {
           deepest = distance.Value();

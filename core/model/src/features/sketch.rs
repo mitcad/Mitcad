@@ -108,7 +108,7 @@ impl FeatureInfo for SketchDef {
                 let entry = ctx
                     .feature(*feature)
                     .map_err(|e| format!("projection of {}: {e}", projection.source))?;
-                if !matches!(entry.def, super::FeatureDef::IntersectionCurve(_)) {
+                if !entry.def.makes_curve() {
                     return Err(format!(
                         "projection of {}: {} makes no curve",
                         projection.source, entry.name
@@ -347,17 +347,29 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         let crate::sketch::project::Followed {
             def: followed,
             reports: follow,
-        } = crate::sketch::project::follow_links(self, &frame, &mut |projection| {
-            source_curves(projection, &frame, ctx)
+        } = crate::sketch::project::follow_links_with(self, &frame, &mut |projection| {
+            let curves = source_curves(projection, &frame, ctx)?;
+            // A source edge that is gone: the edges that may have taken its
+            // place (mitcad#1784).
+            let successors = if curves.is_empty() {
+                successor_curves(projection, ctx)
+            } else {
+                Vec::new()
+            };
+            Ok(project::Found { curves, successors })
         })?;
-        // Linked projections that could not follow say so (mitcad#232).
+        // Linked projections that could not follow say so (mitcad#232);
+        // one that followed an edge in its source's place tells it
+        // (mitcad#1784).
         for report in &follow {
-            if let Some(warning) = self
-                .projections
-                .get(report.projection)
-                .and_then(|p| report.warning(p))
-            {
+            let Some(projection) = self.projections.get(report.projection) else {
+                continue;
+            };
+            if let Some(warning) = report.warning(projection) {
                 ctx.warn(warning);
+            }
+            if let Some(info) = report.info(projection) {
+                ctx.inform(info);
             }
         }
         let def = followed.as_ref().unwrap_or(self);
@@ -393,6 +405,11 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         // A line or round curve the constraints collapsed leaves no region
         // (mitcad#365).
         if let Some(warning) = solved.status.degenerate_warning() {
+            ctx.warn(warning);
+        }
+        // A line distance between lines that are not parallel holds the
+        // middle of one of them only (mitcad#1774).
+        if let Some(warning) = solved.status.not_parallel_warning() {
             ctx.warn(warning);
         }
         // Where linked projections and what hangs on them are now (the
@@ -698,6 +715,63 @@ pub(crate) fn source_curves<K: Kernel>(
         }
     }
     Ok(Vec::new())
+}
+
+/// The edges that may have taken the place of a linked projection's
+/// source edge that is gone (mitcad#1784): those between the faces it lay
+/// between, as their names are now ([`super::projection_successors`]), each
+/// with its curves in the sketch's component's coordinates. None for
+/// another source, a section, a chain or an outline, and where the body or
+/// its link is not there (the source's own lookup says why).
+pub(crate) fn successor_curves<K: Kernel>(
+    projection: &Projection,
+    ctx: &mut super::EvalContext<'_, K>,
+) -> Vec<crate::sketch::successor::Successor> {
+    let ProjectionSource::Topo(TopoName::Edge(edge)) = &projection.source else {
+        return Vec::new();
+    };
+    if projection.section || projection.outline || !projection.chain.is_empty() {
+        return Vec::new();
+    }
+    let (component, moved) = match &projection.link {
+        Some(link) => match ctx.linked(link) {
+            Ok((component, t)) => (component, Some(t)),
+            Err(_) => return Vec::new(),
+        },
+        None => (ctx.component(), None),
+    };
+    let shapes = match (projection.body, projection.after) {
+        (Some(body), Some(after)) => match ctx.body_after(after, body) {
+            Some(shape) => vec![(body, shape)],
+            None => return Vec::new(),
+        },
+        (Some(body), None) => match ctx.body_in(component, body) {
+            Ok(shape) => vec![(body, shape)],
+            Err(_) => return Vec::new(),
+        },
+        (None, _) => ctx.bodies_in(component),
+    };
+    let mut out = Vec::new();
+    for (_, shape) in shapes {
+        for name in super::projection_successors::successor_edges(ctx.kernel, &shape, edge) {
+            let curves = match ctx.kernel.curves_of(&shape, &TopoName::Edge(name.clone())) {
+                Ok(curves) if !curves.is_empty() => curves,
+                _ => continue,
+            };
+            let curves = match &moved {
+                Some(t) => curves
+                    .iter()
+                    .map(|c| project::transform_curve(t, c))
+                    .collect(),
+                None => curves,
+            };
+            out.push(crate::sketch::successor::Successor {
+                name: name.to_string(),
+                curves,
+            });
+        }
+    }
+    out
 }
 
 /// The model curve of another sketch's curve or point (mitcad#904; a 3D

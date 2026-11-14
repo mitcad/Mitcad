@@ -513,8 +513,8 @@ CommandDef MainWindow::platesCommand() {
           [](int, const CommandState&, const CommandContext&) {}),
   };
   // The chosen plate's filament changes (mitcad#1643), as Send to Slicer's
-  // section edits the design's: a row per event, Add change and Add pause,
-  // Change At.
+  // section edits the design's: a row per event, Add change and Add pause
+  // (each placed in Filament Change, mitcad#1800).
   for (const InputDef& row : filamentChangeInputs(hasPlate)) {
     def.inputs.append(row);
   }
@@ -522,7 +522,8 @@ CommandDef MainWindow::platesCommand() {
   def.accept = [](const CommandState&, const CommandContext&) { return true; };
   def.init = [this, follow](CommandState& state, const CommandContext&) {
     follow(state);
-    // A change Filament Change Here… asked for, once the panel shows.
+    // Filament Change on a change Filament Change Here… asked for, once
+    // the panel shows.
     TestSync::singleShot(0, this, [this] { addPendingFilamentChange(); });
   };
   // A note row's button or the plate settings beside the panel changed the

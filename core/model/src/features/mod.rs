@@ -144,7 +144,7 @@ pub use coil::{CoilDef, Helix};
 pub use loft::{EndCondition, LoftDef, LoftSectionDef};
 pub use path::{CurvePath, SketchCurves};
 pub use pipe::PipeDef;
-pub use rib::{RibDef, RibExtent, WebDef};
+pub use rib::{RibDef, RibDirection, RibExtent, WebDef};
 pub use sweep::{PathExtent, SweepDef};
 
 // Components and occurrences (F6).
@@ -306,6 +306,16 @@ pub use spatial_sketch::{SpatialSketchDef, SpatialSketchOutput};
 // Pipe and Sweep along curves of 3D sketches (mitcad#1523).
 pub mod spatial_path;
 pub use spatial_path::SpatialPath;
+// Coordinate System: a frame at a point with axes along edges, for
+// sketches, joints and exports in a chosen frame (mitcad#1775).
+pub mod coordinate_system;
+pub use coordinate_system::CoordinateSystemDef;
+// Helix Curve: a helical 3D curve about an axis, a path (mitcad#1777).
+pub mod helix_curve;
+pub use helix_curve::HelixCurveDef;
+// The edges that may have taken a lost projection source's place
+// (mitcad#1784).
+pub(crate) mod projection_successors;
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -482,6 +492,10 @@ feature_types! {
     IntersectionCurve(IntersectionCurveDef),
     // 3D Sketch (mitcad#1521).
     SpatialSketch(SpatialSketchDef),
+    // Coordinate System (mitcad#1775).
+    CoordinateSystem(CoordinateSystemDef),
+    // Helix Curve (mitcad#1777).
+    HelixCurve(HelixCurveDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -530,6 +544,16 @@ impl FeatureDef {
             FeatureDef::MoveFace(m) => Some(&mut m.transform),
             _ => None,
         }
+    }
+
+    /// Whether the feature makes a 3D curve ([`FeatureOutput::curve`]) that
+    /// later features take as a path, project or grow from: an Intersection
+    /// Curve (mitcad#1405) or a Helix Curve (mitcad#1777).
+    pub fn makes_curve(&self) -> bool {
+        matches!(
+            self,
+            FeatureDef::IntersectionCurve(_) | FeatureDef::HelixCurve(_)
+        )
     }
 }
 
@@ -688,8 +712,9 @@ pub struct FeatureOutput<S> {
     /// What the feature picked, drawn where it was (a Fillet's or a
     /// Chamfer's edges, mitcad#957); None when the kernel gave nothing.
     pub inputs: Option<FeatureInputs>,
-    /// The 3D curve of an Intersection Curve (mitcad#1405), in its
-    /// component's coordinates: its pieces in order, each running along it.
+    /// The 3D curve of an Intersection Curve (mitcad#1405) or a Helix Curve
+    /// (mitcad#1777), in its component's coordinates: its pieces in order,
+    /// each running along it.
     pub curve: Option<Vec<crate::sweeps::PathCurve>>,
 }
 

@@ -297,6 +297,11 @@ BrowserController::BrowserController(DocumentHost& host, QWidget* window)
   follow(m_browser, &BrowserPanel::doubleClicked, &BrowserController::browserDoubleClicked);
   follow(m_browser, &BrowserPanel::deleteRequested, &BrowserController::deleteKeyed);
   follow(m_browser, &BrowserPanel::contextMenuRequested, &BrowserController::browserMenu, true);
+  // CAM (mitcad#1013): an operation dragged onto another or a setup, and
+  // the operation whose row is selected.
+  follow(m_browser, &BrowserPanel::camOperationDropped, &BrowserController::camDropped);
+  connect(m_browser, &BrowserPanel::camOperationSelected, this,
+          [this](int operation) { m_host.setCurrentCamOperation(operation); });
 
   follow(m_timeline, &TimelineWidget::featuresClicked, &BrowserController::featuresClicked);
   follow(m_timeline, &TimelineWidget::editRequested, &BrowserController::editFeature);
@@ -738,6 +743,8 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   // mitcad#1263: a kept analysis and an image reference.
   case BrowserNode::Type::Analysis:
   case BrowserNode::Type::ImageReference:
+  // mitcad#1013: a CAM setup's toolpaths, the window's display state.
+  case BrowserNode::Type::CamSetup:
     return true;
   default:
     return false;
@@ -761,6 +768,12 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   QJsonArray commands;
   QString label;
   switch (node.type) {
+  case BrowserNode::Type::CamSetup:
+    // Its toolpaths in the view (mitcad#1013): the eye kept in the design,
+    // one undo step (Hide Setup 1) as a body's.
+    commands.append(cmd("cam_setup_edit", {{QStringLiteral("setup"), node.uid.toInt()},
+                                           {QStringLiteral("changes"), QJsonObject{{QStringLiteral("visible"), show}}}}));
+    break;
   case BrowserNode::Type::Origin:
     // Shown: the light bulb and View › Show › Origins both on, one undo step
     // (mitcad#1642); either alone drew nothing. Hidden: the light bulb off.
@@ -789,47 +802,16 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
     commands.append(cmd("set_occurrence_visible",
                         {{QStringLiteral("occurrence"), node.occurrence}, {QStringLiteral("visible"), show}}));
     break;
-  case BrowserNode::Type::Bodies: {
-    // Bodies with a Show When condition follow it (mitcad#863): the folder
-    // changes the others.
-    const QStringList kept = conditionedBodies(node.component);
-    const DocumentSnapshot::Component* component = m_snapshot.component(node.component);
-    for (const QString& uid : component != nullptr ? component->bodies : QStringList()) {
-      if (m_snapshot.bodies.value(uid).visibleWhen.isEmpty()) {
-        commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), show}}));
-      }
-    }
-    label = show ? tr("Show Bodies") : tr("Hide Bodies");
-    if (!kept.isEmpty()) {
-      keptByConditions(label, node.path, kept);
-      if (commands.isEmpty()) {
-        m_host.showStatus(bodiesFollowConditions(kept), NoticeLevel::Information);
-        return;
-      }
-    }
-    done = commands.isEmpty(); // an empty folder: nothing to change
-    break;
-  }
+  case BrowserNode::Type::Bodies:
   case BrowserNode::Type::Sketches:
-  case BrowserNode::Type::Construction: {
-    const bool sketches = node.type == BrowserNode::Type::Sketches;
-    // The sketches the folder holds: not those shown under their features
-    // (mitcad#1699).
-    const QHash<QString, int> used = sketches && m_browser->consumeSketches()
-                                         ? BrowserPanel::sketchUsers(m_snapshot, node.component)
-                                         : QHash<QString, int>();
-    for (const DocumentSnapshot::Feature& feature : m_snapshot.features) {
-      if (feature.component == node.component && feature.isActive() &&
-          (sketches ? feature.isAnySketch() && !used.contains(feature.uid) : feature.isConstruction())) {
-        commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), feature.uid},
-                                                    {QStringLiteral("visible"), show}}));
-      }
-    }
-    const QString what = sketches ? tr("Sketches") : tr("Construction");
-    label = (show ? tr("Show %1") : tr("Hide %1")).arg(what);
-    done = commands.isEmpty();
+  case BrowserNode::Type::Construction:
+    // The folder's eye is its own (mitcad#1771): it hides or shows the
+    // folder, display state the design keeps, and changes no light bulb in
+    // it (nor a body's Show When, mitcad#863); one undo step, `Hide
+    // Sketches`. Show All / Hide All in its menu set the light bulbs
+    // (setFolderContents).
+    commands.append(folderCommand(node, show));
     break;
-  }
   case BrowserNode::Type::FlatPattern:
     // The sheet shown flat in place of the folded body (mitcad#210).
     done = m_host.runModelCommand(cmd("set_flat_pattern", {{QStringLiteral("body"), node.uid},
@@ -880,6 +862,104 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
     if (!condition.isEmpty()) {
       conditionRemoved(node.name);
     }
+  }
+}
+
+QJsonObject BrowserController::folderCommand(const BrowserNode& node, bool visible) {
+  const DocumentSnapshot::Folder folder = node.type == BrowserNode::Type::Bodies ? DocumentSnapshot::Folder::Bodies
+                                          : node.type == BrowserNode::Type::Sketches
+                                              ? DocumentSnapshot::Folder::Sketches
+                                              : DocumentSnapshot::Folder::Construction;
+  return cmd("set_folder_visible", {{QStringLiteral("component"), node.component},
+                                    {QStringLiteral("folder"), DocumentSnapshot::folderKey(folder)},
+                                    {QStringLiteral("visible"), visible}});
+}
+
+QStringList BrowserController::folderFeatures(const BrowserNode& node) const {
+  QStringList uids;
+  const bool sketches = node.type == BrowserNode::Type::Sketches;
+  // The sketches the folder holds: not those shown under their features
+  // (mitcad#1699).
+  const QHash<QString, int> used = sketches && m_browser->consumeSketches()
+                                       ? BrowserPanel::sketchUsers(m_snapshot, node.component)
+                                       : QHash<QString, int>();
+  for (const DocumentSnapshot::Feature& feature : m_snapshot.features) {
+    if (feature.component == node.component && feature.isActive() &&
+        (sketches ? feature.isAnySketch() && !used.contains(feature.uid) : feature.isConstruction())) {
+      uids << feature.uid;
+    }
+  }
+  return uids;
+}
+
+bool BrowserController::folderContentsShown(const BrowserNode& node) const {
+  if (!node.visible) {
+    return false; // the folder hidden by its eye (mitcad#1771)
+  }
+  if (node.type != BrowserNode::Type::Bodies) {
+    const QStringList uids = folderFeatures(node);
+    return std::any_of(uids.begin(), uids.end(), [this](const QString& uid) { return m_snapshot.isShown(uid); });
+  }
+  // The bodies without a Show When condition, which Show All and Hide All
+  // change (mitcad#863); all of them when every one has a condition.
+  bool anyVisible = false;
+  bool freeShown = false;
+  bool allConditioned = true;
+  const DocumentSnapshot::Component* component = m_snapshot.component(node.component);
+  for (const QString& uid : component != nullptr ? component->bodies : QStringList()) {
+    const DocumentSnapshot::Body body = m_snapshot.bodies.value(uid);
+    anyVisible = anyVisible || body.visible;
+    if (body.visibleWhen.isEmpty()) {
+      allConditioned = false;
+      freeShown = freeShown || body.visible;
+    }
+  }
+  return allConditioned ? anyVisible : freeShown;
+}
+
+void BrowserController::setFolderContents(const BrowserNode& node, bool show) {
+  QJsonArray commands;
+  QString label;
+  QStringList kept;
+  if (node.type == BrowserNode::Type::Bodies) {
+    // Bodies with a Show When condition follow it (mitcad#863): Show All
+    // and Hide All change the others.
+    kept = conditionedBodies(node.component);
+    const DocumentSnapshot::Component* component = m_snapshot.component(node.component);
+    for (const QString& uid : component != nullptr ? component->bodies : QStringList()) {
+      if (m_snapshot.bodies.value(uid).visibleWhen.isEmpty()) {
+        commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), show}}));
+      }
+    }
+    label = show ? tr("Show Bodies") : tr("Hide Bodies");
+  } else {
+    for (const QString& uid : folderFeatures(node)) {
+      commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), show}}));
+    }
+    const QString what = node.type == BrowserNode::Type::Sketches ? tr("Sketches") : tr("Construction");
+    label = (show ? tr("Show %1") : tr("Hide %1")).arg(what);
+  }
+  // Show All shows a hidden folder too (mitcad#1771), in the same undo
+  // step: what it shows is then in the view.
+  if (show && !node.visible) {
+    commands.append(folderCommand(node, true));
+  }
+  if (!kept.isEmpty()) {
+    keptByConditions(label, node.path, kept);
+    if (commands.isEmpty()) {
+      m_host.showStatus(bodiesFollowConditions(kept), NoticeLevel::Information);
+      return;
+    }
+  }
+  if (commands.isEmpty()) {
+    return; // an empty folder: nothing to change
+  }
+  if (m_host.runVisibilityCommands(commands, label)) {
+    const QString verb = show ? QStringLiteral("shown") : QStringLiteral("hidden");
+    const QString during = m_host.activeCommandName();
+    qDebug().noquote() << (during.isEmpty()
+                               ? QStringLiteral("Visibility %1: %2").arg(node.path, verb)
+                               : QStringLiteral("Visibility %1: %2 (during %3)").arg(node.path, verb, during));
   }
 }
 
@@ -1037,6 +1117,14 @@ void BrowserController::rename(const BrowserNode& node, const QString& name) {
   case BrowserNode::Type::ImageReference: // mitcad#782
     command = cmd("rename_image_reference", {{QStringLiteral("name"), node.uid}, {QStringLiteral("new_name"), name}});
     break;
+  case BrowserNode::Type::CamSetup: // mitcad#1013
+    command = cmd("cam_setup_edit", {{QStringLiteral("setup"), node.uid.toInt()},
+                                     {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
+    break;
+  case BrowserNode::Type::CamOperation:
+    command = cmd("cam_operation_edit", {{QStringLiteral("operation"), node.uid.toInt()},
+                                         {QStringLiteral("changes"), QJsonObject{{QStringLiteral("name"), name}}}});
+    break;
   default:
     return;
   }
@@ -1109,6 +1197,12 @@ void BrowserController::browserDoubleClicked(const BrowserNode& node) {
   case BrowserNode::Type::ImageReference: // mitcad#782: its panel
     m_host.editImageReference(node.uid);
     break;
+  case BrowserNode::Type::CamSetup: // mitcad#1013: their panels
+    m_host.editCamSetup(node.uid.toInt());
+    break;
+  case BrowserNode::Type::CamOperation:
+    m_host.editCamOperation(node.uid.toInt());
+    break;
   default:
     break;
   }
@@ -1160,6 +1254,13 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
   QStringList features, names, skipped, bodies;
   Selection bodyItems;
   QJsonArray commands;
+  // CAM setups deleted take their operations with them (mitcad#1013).
+  QStringList camSetups;
+  for (const BrowserNode& node : nodes) {
+    if (node.type == BrowserNode::Type::CamSetup) {
+      camSetups << node.uid;
+    }
+  }
   for (const BrowserNode& node : nodes) {
     QJsonObject command;
     QString name = node.name;
@@ -1219,6 +1320,17 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
       command = cmd("delete_center_of_mass");
       name = tr("the Center of Mass marker");
       break;
+    case BrowserNode::Type::CamSetup: // mitcad#1013
+      command = cmd("cam_setup_delete", {{QStringLiteral("setup"), node.uid.toInt()}});
+      name = tr("setup %1 with its operations").arg(node.name);
+      break;
+    case BrowserNode::Type::CamOperation:
+      if (camSetups.contains(node.camSetup)) {
+        continue;
+      }
+      command = cmd("cam_operation_delete", {{QStringLiteral("operation"), node.uid.toInt()}});
+      name = tr("operation %1").arg(node.name);
+      break;
     default:
       break;
     }
@@ -1230,6 +1342,64 @@ void BrowserController::deleteNodes(const QVector<BrowserNode>& nodes) {
     return;
   }
   deleteTargets(features, commands, names, skipped, bodies);
+}
+
+// ---------------------------------------------------------------------------
+// CAM (mitcad#1013)
+
+int BrowserController::camIndex(const BrowserNode& node) const {
+  const QJsonArray rows = node.type == BrowserNode::Type::CamSetup
+                              ? m_snapshot.camSetups
+                              : m_snapshot.camSetup(node.camSetup.toInt()).value(QStringLiteral("operations")).toArray();
+  for (int i = 0; i < rows.size(); ++i) {
+    if (QString::number(rows.at(i).toObject().value(QStringLiteral("id")).toInt()) == node.uid) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void BrowserController::moveCamSetup(const BrowserNode& node, int index) {
+  if (index < 0 || index >= m_snapshot.camSetups.size() || !canChange()) {
+    return;
+  }
+  if (m_host.runModelCommand(cmd("cam_setup_move", {{QStringLiteral("setup"), node.uid.toInt()},
+                                                    {QStringLiteral("index"), index}}))) {
+    qDebug().noquote() << QStringLiteral("CAM setup %1 moved to %2").arg(node.name).arg(index + 1);
+  }
+}
+
+void BrowserController::moveCamOperation(const BrowserNode& node, int setup, int index) {
+  if (index < 0 || !canChange()) {
+    return;
+  }
+  QJsonObject command = cmd("cam_operation_move", {{QStringLiteral("operation"), node.uid.toInt()},
+                                                   {QStringLiteral("index"), index}});
+  if (QString::number(setup) != node.camSetup) {
+    command.insert(QStringLiteral("setup"), setup);
+  }
+  if (m_host.runModelCommand(command)) {
+    qDebug().noquote() << QStringLiteral("CAM operation %1 moved to %2 of %3")
+                              .arg(node.name)
+                              .arg(index + 1)
+                              .arg(m_snapshot.camSetup(setup).value(QStringLiteral("name")).toString());
+  }
+}
+
+void BrowserController::camDropped(const BrowserNode& source, const BrowserNode& target) {
+  // Onto an operation: into its place (in its setup); onto a setup: last
+  // in it.
+  qDebug().noquote() << QStringLiteral("Browser CAM drop: %1 onto %2").arg(source.name, target.name);
+  if (target.type == BrowserNode::Type::CamOperation) {
+    moveCamOperation(source, target.camSetup.toInt(), std::max(0, camIndex(target)));
+    return;
+  }
+  const int setup = target.uid.toInt();
+  int count = static_cast<int>(m_snapshot.camSetup(setup).value(QStringLiteral("operations")).toArray().size());
+  if (target.uid == source.camSetup) {
+    --count; // it is one of them
+  }
+  moveCamOperation(source, setup, std::max(0, count));
 }
 
 void BrowserController::newComponent(const BrowserNode& node) {
@@ -1862,6 +2032,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     });
     menu.separator();
     visibility();
+    // Its dimensions drawn in the view outside sketch mode (mitcad#1772);
+    // a 3D sketch's are not.
+    if (node.featureType != QStringLiteral("spatial_sketch")) {
+      const bool on = m_snapshot.sketchDimensionsShown(node.uid);
+      menu.addCheckable(tr("Show Dimensions"), on, [this, node, on] { setSketchDimensionsShown(node.uid, !on); });
+    }
     renameEntry();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     timelineEntry(node.uid);
@@ -1888,34 +2064,42 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       menu.add(QStringLiteral("look-at"), tr("Look At"), [this, item] { m_host.lookAt(item); });
     }
     break;
-  case BrowserNode::Type::Origin:
+  case BrowserNode::Type::Origin: {
+    const QString entry = node.visible ? tr("Hide All") : tr("Show All");
+    const QString icon = node.visible ? QStringLiteral("eye-off") : QStringLiteral("eye");
+    menu.addWithTip(icon, entry, [this, node] { toggleVisibility(node); }, QString());
+    break;
+  }
   case BrowserNode::Type::Bodies:
   case BrowserNode::Type::Sketches:
   case BrowserNode::Type::Construction: {
-    // A Bodies folder's bodies that follow Show When are left as they are
-    // (mitcad#863): the entry's tooltip names them; with nothing else in the
-    // folder it is disabled, the tooltip saying why.
+    // Show All / Hide All set the light bulbs in the folder (the folder's
+    // eye only hides or shows the folder, mitcad#1771); Show All shows a
+    // hidden folder too. A Bodies folder's bodies that follow Show When are
+    // left as they are (mitcad#863): the entry's tooltip names them; with
+    // nothing else to change it is disabled, the tooltip saying why.
+    const bool hide = folderContentsShown(node);
     QString blocked;
     QString tip;
     if (node.type == BrowserNode::Type::Bodies) {
       const QStringList kept = conditionedBodies(node.component);
       const DocumentSnapshot::Component* def = m_snapshot.component(node.component);
-      if (!kept.isEmpty() && def != nullptr && kept.size() == def->bodies.size()) {
+      if (!kept.isEmpty() && def != nullptr && kept.size() == def->bodies.size() && node.visible) {
         blocked = bodiesFollowConditions(kept);
       } else if (!kept.isEmpty()) {
         tip = leftToConditions(kept);
       }
     }
-    const QString entry = node.visible ? tr("Hide All") : tr("Show All");
-    const QString icon = node.visible ? QStringLiteral("eye-off") : QStringLiteral("eye");
+    const QString entry = hide ? tr("Hide All") : tr("Show All");
+    const QString icon = hide ? QStringLiteral("eye-off") : QStringLiteral("eye");
     if (!blocked.isEmpty()) {
       qDebug().noquote() << QStringLiteral("%1 disabled: %2").arg(entry, blocked);
-      menu.add(icon, entry, [this, node] { toggleVisibility(node); }, blocked);
+      menu.add(icon, entry, [this, node, hide] { setFolderContents(node, !hide); }, blocked);
     } else {
       if (!tip.isEmpty()) {
         qDebug().noquote() << QStringLiteral("%1 tooltip: %2").arg(entry, tip);
       }
-      menu.addWithTip(icon, entry, [this, node] { toggleVisibility(node); }, tip);
+      menu.addWithTip(icon, entry, [this, node, hide] { setFolderContents(node, !hide); }, tip);
     }
     break;
   }
@@ -2127,6 +2311,69 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     visibility();
     menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
     break;
+  // CAM (mitcad#1013): a new setup, every setup's toolpaths; a setup's
+  // panel, toolpaths, playback and program, its place among the setups;
+  // an operation's panel, toolpath, suppression and place.
+  case BrowserNode::Type::CamFolder:
+    menu.add(QStringLiteral("cnc-setup"), tr("New Setup"), [this] {
+      if (canChange()) {
+        m_host.startCommand(QStringLiteral("make.cam_setup"), {}, nullptr);
+      }
+    });
+    menu.add(QStringLiteral("cnc-generate"), tr("Generate"), [this] { m_host.runCamAction(QStringLiteral("generate"), 0); });
+    break;
+  case BrowserNode::Type::CamSetup: {
+    const int id = node.uid.toInt();
+    menu.add(QStringLiteral("edit"), tr("Edit"), [this, id] { m_host.editCamSetup(id); });
+    menu.add(QStringLiteral("cnc-generate"), tr("Generate"),
+             [this, id] { m_host.runCamAction(QStringLiteral("generate"), id); });
+    menu.add(QStringLiteral("cnc-simulate"), tr("Simulate"),
+             [this, id] { m_host.runCamAction(QStringLiteral("simulate"), id); });
+    menu.add(QStringLiteral("cnc-post"), tr("Post Process…"), [this, id] { m_host.runCamAction(QStringLiteral("post"), id); });
+    menu.separator();
+    const int index = camIndex(node);
+    const int count = static_cast<int>(m_snapshot.camSetups.size());
+    menu.add(QStringLiteral("view-arrow-up"), tr("Move Up"), [this, node, index] { moveCamSetup(node, index - 1); },
+             index > 0 ? QString() : tr("It is the first setup"));
+    menu.add(QStringLiteral("view-arrow-down"), tr("Move Down"), [this, node, index] { moveCamSetup(node, index + 1); },
+             index + 1 < count ? QString() : tr("It is the last setup"));
+    menu.separator();
+    visibility();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
+  case BrowserNode::Type::CamOperation: {
+    const int id = node.uid.toInt();
+    const bool suppressed = node.camState == QStringLiteral("suppressed");
+    menu.add(QStringLiteral("edit"), tr("Edit"), [this, id] { m_host.editCamOperation(id); });
+    menu.add(QStringLiteral("cnc-generate"), tr("Generate"), [this, node] {
+      m_host.runCamAction(QStringLiteral("generate"), node.camSetup.toInt());
+    });
+    menu.add(QStringLiteral("suppress"), suppressed ? tr("Unsuppress") : tr("Suppress"), [this, node, suppressed] {
+      if (canChange() &&
+          m_host.runModelCommand(cmd("cam_operation_edit",
+                                     {{QStringLiteral("operation"), node.uid.toInt()},
+                                      {QStringLiteral("changes"), QJsonObject{{QStringLiteral("suppressed"), !suppressed}}}}))) {
+        qDebug().noquote() << QStringLiteral("CAM operation %1 %2")
+                                  .arg(node.name, suppressed ? QStringLiteral("unsuppressed") : QStringLiteral("suppressed"));
+      }
+    });
+    menu.separator();
+    const int index = camIndex(node);
+    const int count = static_cast<int>(
+        m_snapshot.camSetup(node.camSetup.toInt()).value(QStringLiteral("operations")).toArray().size());
+    menu.add(QStringLiteral("view-arrow-up"), tr("Move Up"),
+             [this, node, index] { moveCamOperation(node, node.camSetup.toInt(), index - 1); },
+             index > 0 ? QString() : tr("It is the setup's first operation"));
+    menu.add(QStringLiteral("view-arrow-down"), tr("Move Down"),
+             [this, node, index] { moveCamOperation(node, node.camSetup.toInt(), index + 1); },
+             index + 1 < count ? QString() : tr("It is the setup's last operation"));
+    menu.separator();
+    renameEntry();
+    menu.add(QStringLiteral("delete"), tr("Delete"), [this, node] { deleteNode(node); });
+    break;
+  }
   default:
     break;
   }
@@ -2149,7 +2396,7 @@ void BrowserController::featuresClicked(const QStringList& uids) {
 
 SelectionItem BrowserController::featureItem(const QString& uid) const {
   const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
-  if (feature != nullptr && feature->type == QStringLiteral("intersection_curve")) {
+  if (feature != nullptr && feature->makesCurve()) {
     // Where its component's first occurrence shows it, as its sketches are
     // (a projection of another component's curve goes through that link).
     return featureCurveItem(uid, m_snapshot.firstOccurrence(feature->component));
@@ -2519,6 +2766,11 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
   if (feature->isSketch() && feature->projectAgain > 0) {
     menu.add(QStringLiteral("project"), tr("Project Again"), [this, uid] { projectAgain(uid); });
   }
+  // Show Dimensions (mitcad#1772): as the sketch's row in the browser has it.
+  if (feature->isSketch()) {
+    const bool on = m_snapshot.sketchDimensionsShown(uid);
+    menu.addCheckable(tr("Show Dimensions"), on, [this, uid, on] { setSketchDimensionsShown(uid, !on); });
+  }
   // Renamed in place where the menu was opened.
   menu.add(QStringLiteral("edit"), tr("Rename"), [this, uid, row] {
     if (!canChange()) {
@@ -2765,6 +3017,18 @@ void BrowserController::projectAgain(const QString& sketch) {
                                           : QStringLiteral("Project Again in %1: %2")
                                                 .arg(name, logged.join(QStringLiteral("; "))));
   m_host.showStatus(message, warnings.isEmpty() ? NoticeLevel::Success : NoticeLevel::Warning);
+}
+
+void BrowserController::setSketchDimensionsShown(const QString& sketch, bool shown) {
+  const QJsonObject command = cmd("set_sketch_dimensions_shown",
+                                  {{QStringLiteral("sketch"), sketch}, {QStringLiteral("shown"), shown}});
+  if (!m_host.runVisibilityCommands(QJsonArray{command}, QString())) {
+    return;
+  }
+  const DocumentSnapshot::Feature* feature = m_snapshot.feature(sketch);
+  qDebug().noquote() << QStringLiteral("Show Dimensions of %1: %2")
+                            .arg(feature != nullptr ? feature->name : sketch,
+                                 shown ? QStringLiteral("on") : QStringLiteral("off"));
 }
 
 void BrowserController::findInBrowser(const SelectionItem& item) {
