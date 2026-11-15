@@ -178,6 +178,36 @@ impl<K: Kernel> Document<K> {
     }
 }
 
+impl<K: Kernel> Document<K> {
+    /// Adds a feature suppressed, with an importer's note, without building
+    /// it (mitcad#1802): an item suppressed in the file whose inputs are
+    /// bodies of features suppressed before it (a removal of a suppressed
+    /// pattern's copy), which no state of the import holds to build it on.
+    /// Its definition is checked as any feature's (its references come
+    /// before it); unsuppressing it builds it where it stands.
+    pub fn add_import_suppressed(
+        &mut self,
+        def: &FeatureDef<ValueInput>,
+        name: Option<&str>,
+        note: &str,
+        component: Option<ComponentUid>,
+    ) -> Result<Added, ModelError> {
+        let component = component.unwrap_or(self.state.assembly.active);
+        self.state.editable(component)?;
+        let note = note.trim().to_owned();
+        self.apply(|state| {
+            let name = name.map(str::trim).filter(|n| !n.is_empty());
+            let added = state.add_feature_in(def, name, component)?;
+            let position = state.require(added.uid)?;
+            Arc::make_mut(&mut state.features[position]).suppressed = true;
+            if !note.is_empty() {
+                state.import_notes.insert(added.uid, note);
+            }
+            Ok((format!("Add {}", added.name), added))
+        })
+    }
+}
+
 /// A feature's status as the queries give it: `warning` for one that
 /// succeeded with warnings. An import note alone is information
 /// (mitcad#1040): the feature stays `ok`, its `level` is `info`.

@@ -252,5 +252,9 @@ void shell_thin_parts_tests();
 // Outlines of faces seen along a direction: Project of a curved face
 // (mitcad#1265).
 void face_outline_tests();
+// Tapers whose walls meet or vanish within the extrusion (mitcad#1851).
+void taper_event_tests();
+// Press Pull on a face continued Straight or Along the walls (mitcad#1850).
+void press_pull_tests();
 
 } // namespace test

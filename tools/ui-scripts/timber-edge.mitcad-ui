@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: MIT
+# Timber's Along an edge (mitcad#1814) through the real panel, on
+# timber-edge.json (a plate 1800 x 750 x 9 from the origin, its length the
+# parameter plate_length, and a cylinder beside it) with the timber
+# library the runner makes (a dimensioned 98 x 48 member, flat):
+#   1. Timber, Mode Along an edge; the plate's long edge at y = 0 and its
+#      top face: the member is 1800 long, its side flush with the edge, on
+#      the face (end A at 0, 49, 33).
+#   2. Inset 10, Start 50, End 20, Lift 5: 1730 long, end A at 50, 59, 38;
+#      Place (Enter) logs its length and place; Close keeps it.
+#   3. The plate's length changed to 1500: the member follows, 1430 long,
+#      its offsets kept (its box from x 50 to 1480, y 10, z 14).
+#   3b. Its edit panel (Derived Component): Inset 30 and On edge in one
+#      undo step, the member where they say; Undo.
+#   4. Timber again: the plate's top face picked first offers its nearest
+#      straight edge; the cylinder's round top edge is refused in words,
+#      naming no edge.
+# Run by tools/ui-timber-edge-test.sh (Linux),
+# tools/ui-windows-timber-edge-test.ps1 (Windows) and
+# tools/ui-macos-timber-edge-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 2 13092477.796077
+
+# 1. Along an edge, flush.
+mark
+command build.timber
+wait-log '^BUILD timber starts with ' 60
+wait-idle
+mark
+click-logged '^Panel Timber input how=along at '
+wait-log '^View hint Timber: Click the straight edge the member runs along, or the face beside it' 20
+mark
+click-logged '^Panel Timber input along_edge at '
+wait-log '^Pick places:' 20
+# Keep the requested geometry clear of the command card at this window size.
+command view.fit
+wait-idle
+click-pick 'edge F1[.]b0/E[{](?:F1:side0[|]F1:top|F1:top[|]F1:side0)[}] at '
+wait-idle
+mark
+click-logged '^Panel Timber input along_face at '
+wait-log '^Pick places:' 20
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^Inspect Timber: along an edge, length 1800[.]00 mm, flat; end A at -?0[.]00, 49[.]00, 33[.]00; ' 30
+wait-idle
+
+# 2. The offsets.
+mark
+type-in '^Panel Timber input along_inset at ' '10 mm'
+type-in '^Panel Timber input along_start at ' '50 mm'
+type-in '^Panel Timber input along_end at ' '20 mm'
+type-in '^Panel Timber input along_lift at ' '5 mm'
+wait-log '^Inspect Timber: along an edge, length 1730[.]00 mm, flat; end A at 50[.]00, 59[.]00, 38[.]00; inset 10 mm, start 50 mm, end 20 mm, lift 5 mm;' 30
+wait-idle
+mark
+key Return
+wait-log '^Placed .* length along an edge, 1730[.]00 mm; end A at 50[.]00, 59[.]00, 38[.]00' 30
+capture member '^New body .* [(](F[0-9]+[.]b[0-9]+)[)]: volume ' 30
+wait-idle
+# The plate and the cylinder, and the member 98 x 48 x 1730 (8137920 mm3).
+expect-model-bodies 3 21230397.796077
+# Close keeps what was placed.
+key Escape
+wait-idle
+expect-model-bodies 3 21230397.796077
+
+# 3. The plate 1500 long: the member follows, its offsets kept.
+mark
+model-command '{"cmd": "set_parameter", "name": "plate_length", "value": 1500}'
+wait-idle 60
+expect-model-bodies 3 17794197.796077
+capture-model-number length '{"query": "build_parts"}' parts.0.length
+expect-near ${length} 1430
+capture-model-number minx '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.0
+capture-model-number maxx '{"query": "properties", "bodies": ["${member}"]}' total.bbox.max.0
+capture-model-number miny '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.1
+capture-model-number minz '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.2
+expect-near ${minx} 50
+expect-near ${maxx} 1480
+expect-near ${miny} 10
+expect-near ${minz} 14
+
+# 3b. The member's edit panel (Derived Component, mitcad#1812): its
+# edge, face, offsets and lie; Inset 30 and On edge, OK: one undo step,
+# 48 across the face from 30, 98 up from the lift (z 14 to 112); Undo.
+capture-undo-depth before
+mark
+dblclick-logged '^Timeline DerivedComponent1 at '
+expect-log '^Editing F\d+ with Derived Component$'
+wait-log '^Inspect Derived Component: .*, along an edge: inset 10[^,]*, start 50[^,]*, end 20[^,]*, lift 5[^,]*, lie flat; changes: none$' 30
+wait-idle
+type-in '^Panel Derived Component input along_inset at ' '30 mm'
+qt-choice input_lie 'On edge'
+wait-idle
+wait-log '^Inspect Derived Component: .*; changes: inset 30 mm, lie edge$' 30
+mark
+button '^OK$'
+wait-log '^Derived component C\d+ edited: inset 30 mm, lie edge$' 30
+wait-idle 60
+expect-undo-depth ${before} 1
+capture-model-number miny '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.1
+capture-model-number maxy '{"query": "properties", "bodies": ["${member}"]}' total.bbox.max.1
+capture-model-number minz '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.2
+capture-model-number maxz '{"query": "properties", "bodies": ["${member}"]}' total.bbox.max.2
+capture-model-number maxx '{"query": "properties", "bodies": ["${member}"]}' total.bbox.max.0
+expect-near ${miny} 30
+expect-near ${maxy} 78
+expect-near ${minz} 14
+expect-near ${maxz} 112
+expect-near ${maxx} 1480
+command edit.undo
+wait-idle 60
+expect-undo-depth ${before} 0
+capture-model-number miny '{"query": "properties", "bodies": ["${member}"]}' total.bbox.min.1
+capture-model-number maxz '{"query": "properties", "bodies": ["${member}"]}' total.bbox.max.2
+expect-near ${miny} 10
+expect-near ${maxz} 62
+
+# 4. Timber again: the face first, then a round edge, refused in words.
+mark
+command build.timber
+wait-log '^BUILD timber starts with ' 60
+wait-idle
+mark
+click-logged '^Panel Timber input how=along at '
+wait-idle
+mark
+click-logged '^Panel Timber input along_edge at '
+wait-log '^Pick places:' 20
+click-pick 'face F1[.]b0/F1:top at '
+wait-log '^BUILD timber along an edge: face F1:top of F1[.]b0 picked first, its nearest straight edge edge E[{]' 20
+wait-log '^Inspect Timber: along an edge, length ' 30
+wait-idle
+# The plate and the cylinder both in view before the round edge is picked:
+# the member just placed can hide the cylinder in a small window.
+command view.fit
+wait-idle
+mark
+click-logged '^Panel Timber input along_edge at '
+wait-log '^Pick places:' 20
+# Zoomed in on the cylinder, so that its round edge is big enough to be a
+# place of its own in a small window.
+wheel-logged '^Pick face F2[.]b0/F2:top at ' 8
+wait-idle
+mark
+click-logged '^Panel Timber input along_edge at '
+wait-log '^Pick places:' 20
+click-pick 'edge F2[.]b0/E[{](?:F2:side0[|]F2:top|F2:top[|]F2:side0)[}] at '
+wait-idle
+mark
+click-logged '^Panel Timber input along_face at '
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:top at '
+wait-log '^Inspect Timber: (?:along an edge refused|failed): [^;]*the edge is curved: a member along an edge needs a straight edge' 30
+expect-no-log '^Inspect Timber: (?:along an edge refused|failed): [^;]*E[{]'
+wait-idle
+key Escape
+wait-idle
+expect-model-bodies 3 17794197.796077
+expect-never 'TestDriver: FAIL'

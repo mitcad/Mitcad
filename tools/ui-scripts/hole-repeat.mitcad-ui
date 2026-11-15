@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: MIT
+# Repeat runs a value's reaction with the repeated value (mitcad#1844) and
+# keeps typed only what was typed (mitcad#1845), on hole-repeat.json: two
+# boxes 40 x 40 x 20 apart (F1, F2).
+#   1. Hole on F1's top face: Countersink, Tapped, Thread Type Custom,
+#      Major Diameter 12 mm. Its sizes are filled for the custom 12 (the
+#      countersink just over the major diameter); OK adds it.
+#   2. Enter with no command running repeats Hole. Before the panel is
+#      there the repeated Major Diameter is evaluated, so that its
+#      reaction fills the sizes for 12 mm again (before mitcad#1844 it
+#      read the value as not a number and filled nothing), and the
+#      panel's Major Diameter and Countersink Diameter are those of the
+#      repeated hole. The Countersink Diameter followed the thread at the
+#      OK, so it follows it after Repeat: Major Diameter 16 mm fills it
+#      for 16 (before mitcad#1845 the restored value counted as typed and
+#      was kept). Then 24 mm is typed in it, and OK adds the hole on F2.
+#   3. Enter repeats it again: the typed 24 mm stays typed, kept when
+#      Major Diameter changes to 12 mm.
+# Run by tools/ui-hole-repeat-test.sh (Linux),
+# tools/ui-windows-hole-repeat-test.ps1 (Windows) and
+# tools/ui-macos-hole-repeat-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. A tapped countersink hole with a custom thread of 12 mm.
+mark
+command solid.hole
+expect-log '^Command Hole started'
+wait-idle
+click-pick 'face F1.b0/F1:top'
+wait-log '^Hole Place On: 1 face'
+wait-idle 30
+mark
+qt-choice input_type 'Countersink'
+wait-log '^Hole: Hole Type = Countersink'
+wait-idle 30
+mark
+qt-choice input_tap 'Tapped'
+wait-log '^Hole: Hole Tap Type = Tapped'
+wait-idle 30
+mark
+qt-choice input_standard 'Custom'
+wait-log '^Hole: Thread Type = Custom'
+wait-idle 30
+mark
+type-in '^Panel Hole input thread_major at ' '12 mm'
+capture cs '^Hole sizes for custom 12(?:[.]0+)?: .*cs_diameter ([0-9.]+ mm)' 30
+wait-log '^Preview Hole: ok' 60
+wait-idle 30
+expect-input-text cs_diameter '^${cs:re}$'
+mark
+key Return
+wait-log '^Added 1 hole[(]s[)]' 60
+wait-idle 60
+
+# 2. Enter repeats Hole: the sizes follow the repeated 12 mm, and the
+# Countersink Diameter, not typed at the OK, follows a new Major Diameter.
+mark
+key Return
+wait-log '^Repeat Hole [(]Enter[)]'
+wait-log '^Command Hole started'
+wait-log '^Hole sizes for custom 12(?:[.]0+)?: ' 30
+wait-log '^Panel Hole repeated: .*thread_major=12 mm' 30
+wait-log '^Panel Hole repeated as set by hand: sized_typed [[][]]' 30
+wait-idle 30
+expect-no-log '^Hole sizes for custom nan'
+expect-input-text thread_major '^12 mm$'
+expect-input-text cs_diameter '^${cs:re}$'
+mark
+click-pick 'face F2.b0/F2:top'
+wait-log '^Hole Place On: 1 face'
+wait-idle 30
+mark
+type-in '^Panel Hole input thread_major at ' '16 mm'
+capture cs16 '^Hole sizes for custom 16(?:[.]0+)?: [^;]*cs_diameter ([0-9.]+ mm)' 30
+wait-log '^Preview Hole: ok' 60
+wait-idle 30
+expect-no-log '^Hole sizes for custom 16(?:[.]0+)?: .*; kept '
+expect-input-text cs_diameter '^${cs16:re}$'
+mark
+type-in '^Panel Hole input cs_diameter at ' '24 mm'
+wait-log '^Hole cs_diameter typed: kept when the size changes' 30
+wait-log '^Preview Hole: ok' 60
+wait-idle 30
+mark
+key Return
+wait-log '^Added 1 hole[(]s[)]' 60
+wait-idle 60
+
+# 3. Enter repeats it: the Countersink Diameter typed at the OK stays
+# typed, kept when the Major Diameter changes.
+mark
+key Return
+wait-log '^Repeat Hole [(]Enter[)]'
+wait-log '^Command Hole started'
+wait-log '^Panel Hole repeated: .*thread_major=16 mm' 30
+wait-log '^Panel Hole repeated as set by hand: sized_typed [[]cs_diameter[]]' 30
+wait-idle 30
+expect-input-text cs_diameter '^24 mm$'
+mark
+type-in '^Panel Hole input thread_major at ' '12 mm'
+wait-log '^Hole sizes for custom 12(?:[.]0+)?: [^;]*; kept cs_diameter' 30
+wait-idle 30
+expect-input-text cs_diameter '^24 mm$'
+mark
+key Escape
+wait-log '^Command Hole cancelled'
+wait-idle
+expect-never 'TestDriver: FAIL'

@@ -11,23 +11,34 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include <QClipboard>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QEvent>
+#include <QFont>
 #include <QFormLayout>
+#include <QGuiApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
+#include <QMouseEvent>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
 #include <QStringList>
+#include <QToolButton>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtLogging>
 #include <QtMath>
@@ -55,9 +66,11 @@
 #include "../framework/LengthUnits.hpp"
 #include "../framework/ModelShapes.hpp"
 #include "../framework/Numbers.hpp"
+#include "../framework/PanelTree.hpp"
 #include "../framework/Theme.hpp"
 #include "CommandSupport.hpp"
 #include "PrintAnalysis.hpp"
+#include "PropertiesReport.hpp"
 #include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
@@ -1559,16 +1572,19 @@ CommandDef printAnalysisCommand(const CommandContext& model) {
 }
 
 // ---------------------------------------------------------------------------
-// Physical Properties
+// Physical Properties (mitcad#1816; app/COMMANDS.md "Physical Properties"):
+// several bodies as a summary and a table of rows, equal bodies merged; one
+// body (or a row clicked) as its values in three groups, the last, More,
+// collapsed unless it was opened earlier in the session.
 
-// A body's or the total's box and counts (mitcad#1095), where the model
-// gives them: "10 × 20 × 20 mm" along the design's axes and "6 / 12 / 8".
+// A body's or the total's box and counts as the log has written them since
+// mitcad#1095: "10 × 20 × 20 mm" along the design's axes and "6 / 12 / 8".
 QString boxSizeText(const QJsonObject& value) {
   const QJsonArray size = value.value(QStringLiteral("bbox")).toObject().value(QStringLiteral("size")).toArray();
   if (size.size() != 3) {
     return QString();
   }
-  return QStringLiteral("%1 × %2 × %3 mm").arg(n(size[0].toDouble()), n(size[1].toDouble()), n(size[2].toDouble()));
+  return QStringLiteral("%1 x %2 x %3 mm").arg(n(size[0].toDouble()), n(size[1].toDouble()), n(size[2].toDouble()));
 }
 
 QString topologyText(const QJsonObject& value) {
@@ -1592,169 +1608,330 @@ QString propertiesTitle(const QJsonObject& answer) {
                          : QObject::tr("Properties: %1").arg(names.join(QStringLiteral(", ")));
 }
 
+// Off the UI thread: the answer for the window and the log lines the UI
+// tests have read since mitcad#1095 and #1110 (each body's volume, mass
+// and center by its occurrence; its box and counts, and the total's).
 Inspection propertiesInspection(const QJsonObject& answer) {
-  // Keep the report's semantics across both frontends: a section heading
-  // or a label/value row. Flattening an HTML table loses its columns and
-  // makes all native text inherit the headings' emphasis.
-  QJsonArray rows;
-  const auto heading = [&rows](const QString& key, const QString& text) {
-    rows.append(QJsonObject{{QStringLiteral("key"), key}, {QStringLiteral("heading"), text}});
-  };
-  const auto row = [&rows](const QString& key, const QString& label, const QString& value) {
-    rows.append(QJsonObject{{QStringLiteral("key"), key}, {QStringLiteral("label"), label},
-                            {QStringLiteral("value"), value}});
-  };
   QStringList log;
-  int index = 0;
+  QStringList boxes;
+  const auto boxLine = [&boxes](const QString& name, const QJsonObject& value) {
+    QStringList shown;
+    const QString box = boxSizeText(value);
+    if (!box.isEmpty()) {
+      shown << QStringLiteral("Bounding Box %1").arg(box);
+    }
+    const QString topology = topologyText(value);
+    if (!topology.isEmpty()) {
+      shown << QStringLiteral("Faces / Edges / Vertices %1").arg(topology);
+    }
+    if (!shown.isEmpty()) {
+      boxes << QStringLiteral("%1: %2").arg(name, shown.join(QStringLiteral(", ")));
+    }
+  };
   for (const QJsonValue& value : answer.value(QStringLiteral("bodies")).toArray()) {
     const QJsonObject body = value.toObject();
-    // A body of a component has a group per occurrence, its center and
-    // box where that occurrence places it (mitcad#1110): "Body1 in Arm:2".
     const QString bodyName = body.value(QStringLiteral("name")).toString();
     const QString occurrence = body.value(QStringLiteral("occurrence")).toString();
-    const QString name = occurrence.isEmpty() ? bodyName : QObject::tr("%1 in %2").arg(bodyName, occurrence);
-    const QString prefix = QStringLiteral("propertiesBody%1_").arg(index++);
-    heading(prefix + QStringLiteral("heading"), name);
-    // A built-in material by its name as the language shows it, not its id
-    // (mitcad#1689); another by its id as before.
-    QString madeOf = body.value(QStringLiteral("material")).toString(QStringLiteral("steel"));
-    for (const auto& [id, shown] : physicalMaterials()) {
-      if (id == madeOf) {
-        madeOf = shown;
-        break;
-      }
-    }
-    row(prefix + QStringLiteral("material"), QObject::tr("Material"), madeOf);
-    row(prefix + QStringLiteral("density"), QObject::tr("Density"),
-        QStringLiteral("%1 g/cm³").arg(n(body.value(QStringLiteral("density")).toDouble(), 4)));
-    // Its material's mechanical, thermal and printing values, in the design's
-    // units (mitcad#1213); a value not given has no row.
-    for (const QJsonValue& entry : body.value(QStringLiteral("material_properties")).toArray()) {
-      const QJsonObject property = entry.toObject();
-      row(prefix + QStringLiteral("material_") + property.value(QStringLiteral("key")).toString(),
-          property.value(QStringLiteral("name")).toString(), property.value(QStringLiteral("text")).toString());
-    }
-    row(prefix + QStringLiteral("mass"), QObject::tr("Mass"),
-        QStringLiteral("%1 kg").arg(n(body.value(QStringLiteral("mass")).toDouble(), 6)));
-    row(prefix + QStringLiteral("volume"), QObject::tr("Volume"),
-        QStringLiteral("%1 mm³").arg(n(body.value(QStringLiteral("volume")).toDouble())));
-    row(prefix + QStringLiteral("area"), QObject::tr("Area"),
-        QStringLiteral("%1 mm²").arg(n(body.value(QStringLiteral("area")).toDouble())));
-    row(prefix + QStringLiteral("center"), QObject::tr("Center of Mass"),
-        xyz(body.value(QStringLiteral("center_of_mass"))) + QStringLiteral(" mm"));
-    const QJsonArray moments = body.value(QStringLiteral("principal_moments")).toArray();
-    if (moments.size() == 3) {
-      row(prefix + QStringLiteral("moments"), QObject::tr("Principal Moments"),
-          QStringLiteral("%1, %2, %3 kg mm²")
-              .arg(n(moments[0].toDouble()), n(moments[1].toDouble()), n(moments[2].toDouble())));
-    }
-    const QString bodyBox = boxSizeText(body);
-    if (!bodyBox.isEmpty()) {
-      row(prefix + QStringLiteral("bbox"), QObject::tr("Bounding Box"), bodyBox);
-    }
-    const QString topology = topologyText(body);
-    if (!topology.isEmpty()) {
-      row(prefix + QStringLiteral("topology"), QObject::tr("Faces / Edges / Vertices"), topology);
-    }
-    log << QStringLiteral("%1 volume %2 mass %3 center %4")
+    const QString name = occurrence.isEmpty() ? bodyName : QStringLiteral("%1 in %2").arg(bodyName, occurrence);
+    // The material shown, "No material" and "mass none" for a body without
+    // one (mitcad#1817): never a default's.
+    const bool noMaterial = body.value(QStringLiteral("no_material")).toBool();
+    const QString materialId = body.value(QStringLiteral("material")).toString();
+    const QString madeOf = noMaterial ? QStringLiteral("No material")
+                                      : body.value(QStringLiteral("material_name")).toString(materialId);
+    log << QStringLiteral("%1 volume %2 mass %3 center %4 material %5")
                .arg(name, n(body.value(QStringLiteral("volume")).toDouble()),
-                    n(body.value(QStringLiteral("mass")).toDouble(), 6),
-                    xyz(body.value(QStringLiteral("center_of_mass"))));
+                    body.contains(QStringLiteral("mass")) ? n(body.value(QStringLiteral("mass")).toDouble(), 6)
+                                                          : QStringLiteral("none"),
+                    xyz(body.value(QStringLiteral("center_of_mass"))), madeOf);
+    boxLine(name, body);
   }
-  const QJsonObject total = answer.value(QStringLiteral("total")).toObject();
-  heading(QStringLiteral("propertiesTotal_heading"), QObject::tr("Total"));
-  row(QStringLiteral("propertiesTotal_mass"), QObject::tr("Mass"),
-      QStringLiteral("%1 kg").arg(n(total.value(QStringLiteral("mass")).toDouble(), 6)));
-  row(QStringLiteral("propertiesTotal_volume"), QObject::tr("Volume"),
-      QStringLiteral("%1 mm³").arg(n(total.value(QStringLiteral("volume")).toDouble())));
-  row(QStringLiteral("propertiesTotal_area"), QObject::tr("Area"),
-      QStringLiteral("%1 mm²").arg(n(total.value(QStringLiteral("area")).toDouble())));
-  row(QStringLiteral("propertiesTotal_center"), QObject::tr("Center of Mass"),
-      xyz(total.value(QStringLiteral("center_of_mass"))) + QStringLiteral(" mm"));
-  const QString totalBox = boxSizeText(total);
-  if (!totalBox.isEmpty()) {
-    row(QStringLiteral("propertiesTotal_bbox"), QObject::tr("Bounding Box"), totalBox);
-  }
-  const QString totalTopology = topologyText(total);
-  if (!totalTopology.isEmpty()) {
-    row(QStringLiteral("propertiesTotal_topology"), QObject::tr("Faces / Edges / Vertices"), totalTopology);
-  }
+  boxLine(QStringLiteral("Total"), answer.value(QStringLiteral("total")).toObject());
   Inspection result;
-  result.report.insert(QStringLiteral("property_rows"), rows);
+  result.report.insert(QStringLiteral("answer"), answer);
   result.report.insert(QStringLiteral("title"), propertiesTitle(answer));
+  result.report.insert(QStringLiteral("boxes"), boxes.join(QStringLiteral("; ")));
   result.log = log.join(QStringLiteral("; "));
   return result;
 }
 
-void presentProperties(const Inspection& result, QWidget* window) {
-  qDebug().noquote() << QStringLiteral("Physical properties: %1").arg(result.log);
-  QDialog dialog(window);
-  dialog.setObjectName(QStringLiteral("physicalPropertiesDialog"));
-  const QString title = result.report.value(QStringLiteral("title")).toString(QObject::tr("Properties"));
-  dialog.setWindowTitle(title);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* report = new QWidget;
-  report->setObjectName(QStringLiteral("physicalPropertiesReport"));
-  auto* form = new QFormLayout(report);
-  form->setContentsMargins(4, 4, 4, 4);
-  form->setHorizontalSpacing(12);
-  form->setVerticalSpacing(4);
-  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-  // What the window shows of the boxes and counts, for the log (UI tests,
-  // mitcad#1095): "Body1: Bounding Box 10 x 20 x 20 mm, ...; Total: ...".
-  QStringList shownGroups;
-  QStringList shownRows;
-  QString shownHeading;
-  const auto closeGroup = [&shownGroups, &shownRows, &shownHeading]() {
-    if (!shownRows.isEmpty()) {
-      shownGroups << QStringLiteral("%1: %2").arg(shownHeading, shownRows.join(QStringLiteral(", ")));
+// Whether More is open: kept while MitCad runs (mitcad#1816).
+bool g_propertiesMoreOpen = false;
+
+// The row of the table under the pointer, read from the moves the table's
+// viewport gets (as the command panel's choices, mitcad#1794: the UI
+// tests' moves count as the pointer's): `hovered` with its number, -1
+// once the pointer leaves the rows.
+class PropertiesRowHover : public QObject {
+public:
+  PropertiesRowHover(QTreeWidget* table, std::function<void(int)> hovered)
+      : QObject(table), m_table(table), m_hovered(std::move(hovered)) {
+    table->setMouseTracking(true);
+    table->viewport()->setMouseTracking(true);
+    table->viewport()->installEventFilter(this);
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::MouseMove) {
+      const QTreeWidgetItem* item = m_table->itemAt(static_cast<QMouseEvent*>(event)->position().toPoint());
+      update(item != nullptr ? item->data(0, Qt::UserRole).toInt() : -1);
+    } else if (event->type() == QEvent::Leave || event->type() == QEvent::Hide) {
+      update(-1);
     }
-    shownRows.clear();
-  };
-  for (const QJsonValue& entry : result.report.value(QStringLiteral("property_rows")).toArray()) {
-    const QJsonObject row = entry.toObject();
-    const QString key = row.value(QStringLiteral("key")).toString();
-    if (row.contains(QStringLiteral("heading"))) {
-      closeGroup();
-      shownHeading = row.value(QStringLiteral("heading")).toString();
-      auto* heading = new QLabel(QStringLiteral("<b>%1</b>").arg(shownHeading.toHtmlEscaped()));
-      heading->setObjectName(key);
-      heading->setTextFormat(Qt::RichText);
-      form->addRow(heading);
-      continue;
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  void update(int row) {
+    if (row != m_row) {
+      m_row = row;
+      m_hovered(row);
     }
-    const QString caption = row.value(QStringLiteral("label")).toString();
-    if (key.endsWith(QStringLiteral("_bbox")) || key.endsWith(QStringLiteral("_topology"))) {
-      shownRows << QStringLiteral("%1 %2").arg(
-                       caption, row.value(QStringLiteral("value")).toString().replace(QChar(0x00D7), QLatin1Char('x')));
-    }
-    auto* value = new QLabel(row.value(QStringLiteral("value")).toString());
-    value->setObjectName(key);
+  }
+
+  QTreeWidget* m_table;
+  std::function<void(int)> m_hovered;
+  int m_row = -1;
+};
+
+using PropertyValues = QVector<QPair<QString, QString>>;
+
+// Label and value rows into a form; a value can be selected and copied.
+void addValueRows(QFormLayout* form, const PropertyValues& values, const QString& key) {
+  int index = 0;
+  for (const auto& [caption, text] : values) {
+    auto* value = new QLabel(text);
+    value->setObjectName(QStringLiteral("%1_%2").arg(key).arg(index++));
     value->setTextFormat(Qt::PlainText);
     value->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
-    value->setFocusPolicy(Qt::StrongFocus);
     value->setWordWrap(true);
     value->setAccessibleName(caption);
     auto* label = new QLabel(caption);
-    label->setObjectName(key + QStringLiteral("_label"));
     label->setTextFormat(Qt::PlainText);
     label->setBuddy(value);
     form->addRow(label, value);
   }
-  closeGroup();
+}
+
+QFormLayout* valueForm(QWidget* parent) {
+  auto* form = new QFormLayout(parent);
+  form->setContentsMargins(4, 2, 4, 2);
+  form->setHorizontalSpacing(12);
+  form->setVerticalSpacing(4);
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  return form;
+}
+
+QLabel* groupHeading(const QString& text, const QString& key) {
+  auto* heading = new QLabel(QStringLiteral("<b>%1</b>").arg(text.toHtmlEscaped()));
+  heading->setObjectName(key);
+  heading->setTextFormat(Qt::RichText);
+  return heading;
+}
+
+QString valuesLog(const PropertyValues& values) {
+  QStringList shown;
+  for (const auto& [caption, text] : values) {
+    shown << QStringLiteral("%1 %2").arg(caption, text);
+  }
+  return propertiesLogText(shown.join(QStringLiteral(", ")));
+}
+
+// A body's values in their groups (Physical, Place and size, More), with
+// the line the log gives them: "<name>: Physical: Material Steel, ...;
+// Place and size: ...; More (collapsed): ...".
+QWidget* bodyGroups(const PropertiesBody& body, const QString& unit, QString& logged) {
+  const PropertiesGroups groups = propertiesGroups(body, unit);
+  auto* widget = new QWidget;
+  widget->setObjectName(QStringLiteral("propertiesGroups"));
+  auto* layout = new QVBoxLayout(widget);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(2);
+  layout->addWidget(groupHeading(QObject::tr("Physical"), QStringLiteral("propertiesPhysical")));
+  auto* physical = new QWidget;
+  addValueRows(valueForm(physical), groups.physical, QStringLiteral("propertiesPhysical"));
+  layout->addWidget(physical);
+  layout->addWidget(groupHeading(QObject::tr("Place and size"), QStringLiteral("propertiesPlace")));
+  auto* place = new QWidget;
+  addValueRows(valueForm(place), groups.place, QStringLiteral("propertiesPlace"));
+  layout->addWidget(place);
+  // More: rarely needed values, behind a toggle.
+  auto* toggle = new QToolButton;
+  toggle->setObjectName(QStringLiteral("propertiesMoreToggle"));
+  toggle->setText(QObject::tr("More"));
+  toggle->setCheckable(true);
+  toggle->setChecked(g_propertiesMoreOpen);
+  toggle->setAutoRaise(true);
+  toggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  toggle->setArrowType(g_propertiesMoreOpen ? Qt::DownArrow : Qt::RightArrow);
+  QFont bold = toggle->font();
+  bold.setBold(true);
+  toggle->setFont(bold);
+  layout->addWidget(toggle);
+  auto* more = new QWidget;
+  more->setObjectName(QStringLiteral("propertiesMore"));
+  addValueRows(valueForm(more), groups.more, QStringLiteral("propertiesMore"));
+  more->setVisible(g_propertiesMoreOpen);
+  layout->addWidget(more);
+  QObject::connect(toggle, &QToolButton::toggled, more, [toggle, more](bool open) {
+    g_propertiesMoreOpen = open;
+    toggle->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+    more->setVisible(open);
+    qDebug().noquote() << QStringLiteral("Properties More: %1").arg(open ? QStringLiteral("open")
+                                                                         : QStringLiteral("collapsed"));
+  });
+  logged = QStringLiteral("%1: Physical: %2; Place and size: %3; More (%4): %5")
+               .arg(body.name, valuesLog(groups.physical), valuesLog(groups.place),
+                    g_propertiesMoreOpen ? QStringLiteral("open") : QStringLiteral("collapsed"), valuesLog(groups.more));
+  return widget;
+}
+
+// Where a row's bodies are, for the view's highlight (mitcad#1816): each
+// placed body as a `body` place.
+QJsonArray rowPlaces(const PropertiesReport& report, int row) {
+  QJsonArray places;
+  if (row < 0 || row >= static_cast<int>(report.rows.size())) {
+    return places;
+  }
+  for (const int i : report.rows[static_cast<std::size_t>(row)]) {
+    const PropertiesBody& body = report.bodies[static_cast<std::size_t>(i)];
+    QJsonObject place{{QStringLiteral("kind"), QStringLiteral("body")}, {QStringLiteral("body"), body.uid}};
+    if (!body.path.isEmpty()) {
+      place.insert(QStringLiteral("occurrence"), body.path);
+    }
+    places.append(place);
+  }
+  return places;
+}
+
+void presentProperties(const Inspection& result, QWidget* window, CommandHost* host, const QString& unit) {
+  qDebug().noquote() << QStringLiteral("Physical properties: %1").arg(result.log);
+  const QString title = result.report.value(QStringLiteral("title")).toString(QObject::tr("Properties"));
+  // What the window shows of the boxes and counts, as before (UI tests,
+  // mitcad#1095): "Body1: Bounding Box 10 x 20 x 20 mm, ...; Total: ...".
   qDebug().noquote() << QStringLiteral("Physical properties window \"%1\": %2")
-                            .arg(title, shownGroups.join(QStringLiteral("; ")));
-  auto* scroll = new QScrollArea;
-  scroll->setObjectName(QStringLiteral("physicalPropertiesScroll"));
-  scroll->setWidget(report);
-  scroll->setWidgetResizable(true);
-  layout->addWidget(scroll);
+                            .arg(title, result.report.value(QStringLiteral("boxes")).toString());
+  QHash<QString, QString> materialNames;
+  for (const auto& [id, shown] : physicalMaterials()) {
+    materialNames.insert(id, shown);
+  }
+  const auto report = std::make_shared<PropertiesReport>(
+      propertiesReport(result.report.value(QStringLiteral("answer")).toObject(), materialNames));
+
+  QDialog dialog(window);
+  dialog.setObjectName(QStringLiteral("physicalPropertiesDialog"));
+  dialog.setWindowTitle(title);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* content = new QWidget;
+  content->setObjectName(QStringLiteral("physicalPropertiesReport"));
+  auto* contentLayout = new QVBoxLayout(content);
+  contentLayout->setContentsMargins(4, 4, 4, 4);
+  if (report->bodies.size() == 1) {
+    QString logged;
+    contentLayout->addWidget(groupHeading(report->bodies.front().name, QStringLiteral("propertiesBodyName")));
+    contentLayout->addWidget(bodyGroups(report->bodies.front(), unit, logged));
+    contentLayout->addStretch(1);
+    qDebug().noquote() << QStringLiteral("Properties body: %1").arg(logged);
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName(QStringLiteral("physicalPropertiesScroll"));
+    scroll->setWidget(content);
+    scroll->setWidgetResizable(true);
+    layout->addWidget(scroll);
+    dialog.resize(420, 420);
+  } else {
+    // The summary of all the bodies.
+    auto* summary = new QWidget;
+    summary->setObjectName(QStringLiteral("propertiesSummary"));
+    const PropertyValues summaryValues = propertiesSummaryValues(report->summary, unit);
+    addValueRows(valueForm(summary), summaryValues, QStringLiteral("propertiesSummary"));
+    contentLayout->addWidget(summary);
+    qDebug().noquote() << QStringLiteral("Properties summary: %1").arg(valuesLog(summaryValues));
+    // The table, one row per part.
+    auto* table = new QTreeWidget;
+    table->setObjectName(QStringLiteral("propertiesTable"));
+    table->setRootIsDecorated(false);
+    panel::setCompactIndentation(table, panel::Indent::Flat);
+    table->setUniformRowHeights(true);
+    table->setAlternatingRowColors(true);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setHeaderLabels(propertiesHeadings());
+    table->setAccessibleName(QObject::tr("Bodies"));
+    for (int row = 0; row < static_cast<int>(report->rows.size()); ++row) {
+      const QStringList cells = propertiesRowCells(*report, row, unit);
+      auto* item = new QTreeWidgetItem(cells);
+      item->setData(0, Qt::UserRole, row);
+      for (const int column : {0, 3, 4}) {
+        item->setTextAlignment(column, Qt::AlignRight | Qt::AlignVCenter);
+      }
+      table->addTopLevelItem(item);
+      qDebug().noquote() << QStringLiteral("Properties row %1: %2")
+                                .arg(row + 1)
+                                .arg(propertiesLogText(cells.join(QStringLiteral(" | "))));
+    }
+    for (int column = 0; column < table->columnCount(); ++column) {
+      table->resizeColumnToContents(column);
+    }
+    contentLayout->addWidget(table, 1);
+    // A row clicked: its (first) body's values below the table.
+    auto* details = new QWidget;
+    details->setObjectName(QStringLiteral("propertiesDetails"));
+    auto* detailsLayout = new QVBoxLayout(details);
+    detailsLayout->setContentsMargins(0, 4, 0, 0);
+    details->hide();
+    auto* scroll = new QScrollArea;
+    scroll->setObjectName(QStringLiteral("physicalPropertiesScroll"));
+    scroll->setWidget(details);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    contentLayout->addWidget(scroll, 1);
+    QObject::connect(table, &QTreeWidget::itemSelectionChanged, details, [table, details, detailsLayout, report, unit] {
+      while (QLayoutItem* old = detailsLayout->takeAt(0)) {
+        delete old->widget();
+        delete old;
+      }
+      const QList<QTreeWidgetItem*> chosen = table->selectedItems();
+      if (chosen.isEmpty()) {
+        details->hide();
+        return;
+      }
+      const int row = chosen.front()->data(0, Qt::UserRole).toInt();
+      const PropertiesBody& body =
+          report->bodies[static_cast<std::size_t>(report->rows[static_cast<std::size_t>(row)].front())];
+      QString logged;
+      detailsLayout->addWidget(groupHeading(body.name, QStringLiteral("propertiesBodyName")));
+      detailsLayout->addWidget(bodyGroups(body, unit, logged));
+      detailsLayout->addStretch(1);
+      details->show();
+      qDebug().noquote() << QStringLiteral("Properties details of row %1: %2").arg(row + 1).arg(logged);
+    });
+    if (host != nullptr) {
+      new PropertiesRowHover(table, [host, report](int row) {
+        host->hoverNoticePlaces(QStringLiteral("properties"), rowPlaces(*report, row), std::vector<BodyDisplay>());
+      });
+    }
+    layout->addWidget(content);
+    dialog.resize(680, 520);
+  }
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+  auto* copy = buttons->addButton(QObject::tr("Copy"), QDialogButtonBox::ActionRole);
+  copy->setObjectName(QStringLiteral("propertiesCopy"));
+  copy->setAutoDefault(false);
+  copy->setToolTip(QObject::tr("Copy the values as tab-separated text"));
+  QObject::connect(copy, &QPushButton::clicked, &dialog, [report, unit] {
+    const QString text = propertiesCopyText(*report, unit);
+    if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+      clipboard->setText(text);
+    }
+    qDebug().noquote() << QStringLiteral("Properties copied: %1 line(s)").arg(text.count(QLatin1Char('\n')) + 1);
+  });
   QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
   layout->addWidget(buttons);
-  dialog.resize(420, 380);
   prepareModal(&dialog);
   execDialog(&dialog);
+  if (host != nullptr) {
+    host->hoverNoticePlaces(QStringLiteral("properties"), QJsonArray(), std::vector<BodyDisplay>());
+  }
 }
 
 void showProperties(const CommandContext& context, QWidget* window, const Selection& selection) {
@@ -1793,14 +1970,16 @@ void showProperties(const CommandContext& context, QWidget* window, const Select
   if (!components.isEmpty()) {
     request.insert(QStringLiteral("components"), components);
   }
+  // Lengths in the design's unit (mitcad#1816).
+  const QString unit = context.lengthUnit();
   auto* host = dynamic_cast<CommandHost*>(const_cast<CommandContext*>(&context));
   if (host && host->asynchronousCommands()) {
     host->modelInspectionAsync(QObject::tr("Physical Properties"), window,
         [request](const Document& document) {
           return propertiesInspection(parseObject(document.query(rustStr(compactJson(request)))));
-        }, [window](const Inspection& result, const CommandHost::AsyncResult& outcome) {
+        }, [window, host, unit](const Inspection& result, const CommandHost::AsyncResult& outcome) {
           if (outcome.succeeded()) {
-            presentProperties(result, window);
+            presentProperties(result, window, host, unit);
           } else if (!outcome.cancelled) {
             qWarning().noquote() << "Physical properties:" << outcome.error;
           }
@@ -1808,7 +1987,7 @@ void showProperties(const CommandContext& context, QWidget* window, const Select
     return;
   }
   try {
-    presentProperties(propertiesInspection(context.queryObject(request)), window);
+    presentProperties(propertiesInspection(context.queryObject(request)), window, host, unit);
   } catch (const std::exception& e) {
     qWarning().noquote() << "Physical properties:" << e.what();
   }

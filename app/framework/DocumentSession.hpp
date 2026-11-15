@@ -31,17 +31,19 @@ class CommandSession;
 // units for new designs (Preferences > General, GeneralSettings, mitcad#1036):
 // the untitled design at the start, and New and Close
 // (MainWindow::installEmptyDocument). Its unit is its initial state: no undo
-// step, not modified. Its origin is shown when newDesignAtTop() (mitcad#1683).
+// step, not modified. Its origin is shown when newDesignWithOrigin()
+// (mitcad#1683).
 rust::Box<Document> newDesignDocument();
 
-// Whether a new design opens looking at Top with its origin shown, the
-// origin in the middle of the view (mitcad#1683): yes, unless
-// MITCAD_NEW_DESIGN_VIEW=0, the start the UI tests were written for (the
-// isometric view, the origin hidden; the UI test libraries set it). A design
-// read from a file keeps the origin it saved either way.
-bool newDesignAtTop();
+// Whether a new design opens with its origin shown (mitcad#1683), seen from
+// the default view, a few degrees off the isometric one (mitcad#1698,
+// mitcad#1809): yes, unless MITCAD_NEW_DESIGN_VIEW=0, the start the UI tests
+// were written for (the exact isometric view, the origin hidden; the UI test
+// libraries set it). A design read from a file keeps the origin it saved
+// either way.
+bool newDesignWithOrigin();
 
-// Shows a new design's origin as it opens, when newDesignAtTop(): the
+// Shows a new design's origin as it opens, when newDesignWithOrigin(): the
 // Origin folder's light bulb on, with no undo step and no new revision, so
 // the design stays unmodified (set_origin_visible with `opening`).
 void showNewDesignOrigin(Document& document);

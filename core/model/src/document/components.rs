@@ -222,6 +222,49 @@ impl DocState {
         self.drop_gone_exclusions();
         order
     }
+
+    /// Puts the occurrences that are still there and not grounded where
+    /// `held` keeps them ([`Document::held_placements`], mitcad#1811): the
+    /// joints that placed them went. Returns those it put.
+    pub fn hold_placements(
+        &mut self,
+        occurrences: impl IntoIterator<Item = OccurrenceUid>,
+        held: &BTreeMap<OccurrenceUid, Transform>,
+    ) -> Vec<OccurrenceUid> {
+        let mut put = Vec::new();
+        for uid in occurrences {
+            let Some(at) = held.get(&uid) else {
+                continue;
+            };
+            if let Some(o) = self.assembly.occurrence_mut(uid)
+                && !o.grounded
+                && !put.contains(&uid)
+            {
+                o.transform = *at;
+                put.push(uid);
+            }
+        }
+        put
+    }
+}
+
+/// The occurrences a joint moves, in its own component: the first of
+/// each of its paths (mitcad#1811). None for other features.
+pub(crate) fn joint_sides(def: &FeatureDef) -> Vec<OccurrenceUid> {
+    let paths: Vec<&[OccurrenceUid]> = match def {
+        FeatureDef::Joint(j) => vec![j.a.occurrence.0.as_slice(), j.b.occurrence.0.as_slice()],
+        FeatureDef::AsBuiltJoint(j) => vec![j.a.0.as_slice(), j.b.0.as_slice()],
+        _ => Vec::new(),
+    };
+    let mut sides = Vec::new();
+    for path in paths {
+        if let Some(first) = path.first()
+            && !sides.contains(first)
+        {
+            sides.push(*first);
+        }
+    }
+    sides
 }
 
 impl<K: Kernel> Document<K> {
@@ -246,11 +289,18 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The transform of a path's last component into the design's
-    /// coordinates.
+    /// coordinates; an occurrence inside a flexible one where it is for
+    /// that one (mitcad#1793).
     pub fn path_transform(&self, path: &[OccurrenceUid]) -> Transform {
-        path.iter().fold(Transform::IDENTITY, |t, o| {
-            t.after(&self.placement(*o).unwrap_or(Transform::IDENTITY))
-        })
+        let flexed = &self.result.joints.flexed;
+        let mut t = Transform::IDENTITY;
+        for (k, o) in path.iter().enumerate() {
+            let placed = crate::joints::flexed_step(flexed, &path[..k], *o)
+                .or_else(|| self.placement(*o))
+                .unwrap_or(Transform::IDENTITY);
+            t = t.after(&placed);
+        }
+        t
     }
 
     /// The bodies at the marker of a component.
@@ -272,7 +322,7 @@ impl<K: Kernel> Document<K> {
         // The bodies' names at once: a name per instance would be
         // quadratic in the bodies (mitcad#413: an imported building).
         let names = super::display_names(&self.state, &self.result);
-        a.instances(&placement, &bodies)
+        a.instances_flexed(&placement, &self.result.joints.flexed, &bodies)
             .into_iter()
             .map(|i| {
                 let attributes = self.state.body_attributes.get(&i.body);
@@ -913,6 +963,13 @@ impl<K: Kernel> Document<K> {
         let parent = self.paste_target(&source)?;
         self.apply(|state| {
             let copy = state.assembly.place(source.component, parent, transform);
+            // A flexible one's copy is flexible with its own joint values
+            // (mitcad#1805): the same component, the same joints.
+            state
+                .assembly
+                .occurrence_mut(copy)
+                .expect("placed")
+                .flexible = source.flexible.clone();
             let label = format!("Paste {}", state.assembly.occurrence_name(copy));
             Ok((label, copy))
         })
@@ -1007,34 +1064,35 @@ impl<K: Kernel> Document<K> {
                         o.grounded = child.grounded;
                         o.visible = child.visible;
                         o.transparent = child.transparent;
+                        // Of the same component: its own joint values as
+                        // they are (mitcad#1805).
+                        o.flexible = child.flexible.clone();
                     }
                     let occurrence = state.assembly.place(made, parent, transform);
                     (made, occurrence)
                 }
-                (None, Some((feature, _))) => {
+                (None, maker) => {
                     // The feature that made it is copied too, in its own
                     // component, and makes the copy.
                     let made = state.assembly.create(Some(&name), None);
                     let occurrence = state.assembly.place(made, parent, transform);
-                    state.copy_component(
+                    let (_, copied) = state.copy_component_mapped(
                         &source_state,
                         &source_path,
                         made,
-                        Some(feature),
+                        maker.map(|(feature, _)| feature),
                         CopySource::SameDocument,
                     )?;
-                    (made, occurrence)
-                }
-                (None, None) => {
-                    let made = state.assembly.create(Some(&name), None);
-                    let occurrence = state.assembly.place(made, parent, transform);
-                    state.copy_component(
-                        &source_state,
-                        &source_path,
-                        made,
-                        None,
-                        CopySource::SameDocument,
-                    )?;
+                    // A flexible one stays flexible, its own joint values
+                    // those of the copied joints (mitcad#1805).
+                    if let Some(flex) = &source.flexible {
+                        state
+                            .assembly
+                            .occurrence_mut(occurrence)
+                            .expect("placed")
+                            .flexible =
+                            Some(flex.remapped(&|uid| copied.features.get(&uid).copied()));
+                    }
                     (made, occurrence)
                 }
             };
@@ -1150,6 +1208,17 @@ impl<K: Kernel> Document<K> {
             ));
         }
         self.state.editable(occurrence.parent)?;
+        // What a joint placed on it stays where it is when the joint goes
+        // with it (mitcad#1811): the sides of every joint, where they are
+        // now.
+        let sides: BTreeMap<FeatureUid, Vec<OccurrenceUid>> = self
+            .state
+            .features
+            .iter()
+            .map(|f| (f.uid, joint_sides(&f.def)))
+            .filter(|(_, s)| !s.is_empty())
+            .collect();
+        let held = self.held_placements(sides.values().flatten().copied());
         self.apply(|state| {
             let name = state.assembly.occurrence_name(uid);
             state.assembly.occurrences.retain(|o| o.uid != uid);
@@ -1170,10 +1239,93 @@ impl<K: Kernel> Document<K> {
                 orphans.extend(state.dependents(&orphans));
                 deleted.extend(state.remove_features(&orphans));
             }
+            let freed = deleted
+                .iter()
+                .filter_map(|f| sides.get(f))
+                .flatten()
+                .copied();
+            state.hold_placements(freed, &held);
             // Cut scopes no longer leave the occurrence alone (mitcad#1236).
             state.drop_gone_exclusions();
             Ok((format!("Delete {name}"), deleted))
         })
+    }
+
+    /// Where occurrences stay when the joints that place them go
+    /// (mitcad#1811): for each, the transform of its own that keeps it
+    /// where it is now (at the timeline marker) once no joint places it.
+    /// The timeline's moves of it (a Move of occurrences, a move of one a
+    /// rigid group joins it to) still apply after that transform, so they
+    /// are taken back from where it is. Left out: a patterned occurrence,
+    /// and one a captured position puts at a place of its own (its
+    /// transform decides nothing then).
+    pub fn held_placements(
+        &self,
+        occurrences: impl IntoIterator<Item = OccurrenceUid>,
+    ) -> BTreeMap<OccurrenceUid, Transform> {
+        let mut moves: BTreeMap<OccurrenceUid, Option<Transform>> = occurrences
+            .into_iter()
+            .filter(|o| {
+                self.state
+                    .assembly
+                    .occurrence(*o)
+                    .is_some_and(|o| o.pattern.is_none())
+            })
+            .map(|o| (o, Some(Transform::IDENTITY)))
+            .collect();
+        if moves.is_empty() {
+            return BTreeMap::new();
+        }
+        let groups = &self.result.joints.groups;
+        let mut seen = BTreeSet::new();
+        for result in &self.result.results {
+            seen.insert(result.uid);
+            let Some(output) = &result.output else {
+                continue;
+            };
+            let Some(entry) = self.state.entry(result.uid) else {
+                continue;
+            };
+            // A joint's placements are what goes; a failed feature placed
+            // nothing.
+            if !result.status.is_ok()
+                || output.placements.is_empty()
+                || crate::joints::applies(&entry.def)
+            {
+                continue;
+            }
+            let before: Vec<_> = groups
+                .iter()
+                .filter(|(f, _, _)| seen.contains(f))
+                .cloned()
+                .collect();
+            let changes = if before.is_empty() {
+                output.placements.clone()
+            } else {
+                crate::joints::with_groups(&before, entry.component, &output.placements)
+            };
+            for change in &changes {
+                match change {
+                    crate::features::PlacementChange::Move(o, by) => {
+                        if let Some(Some(moved)) = moves.get_mut(o) {
+                            *moved = by.after(moved);
+                        }
+                    }
+                    crate::features::PlacementChange::Set(o, _) => {
+                        if let Some(moved) = moves.get_mut(o) {
+                            *moved = None;
+                        }
+                    }
+                }
+            }
+        }
+        moves
+            .into_iter()
+            .filter_map(|(o, moved)| {
+                let now = self.placement(o)?;
+                Some((o, crate::assembly::inverse(&moved?).after(&now)))
+            })
+            .collect()
     }
 
     /// Inserts another design file as a component placed in the active

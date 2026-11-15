@@ -6,7 +6,8 @@
 # mitcad-cli makes (tools/ui-scripts/sketch3d-relations.json): Parallel and
 # Perpendicular of lines in space, Angle of two lines (a driving angle
 # listed in degrees), Symmetric of two points about the sketch's YZ plane
-# picked in the palette; each one edit, listed in words.
+# picked in the palette; each one edit, listed in words; Remove on a row
+# while a value field has the keyboard removes the row (mitcad#1836).
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-sketch3d-relations-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -37,6 +38,7 @@ Ui-ExpectLog '3D sketch edit angle_relation: done' 'the two lines were held at t
 Ui-ExpectLog '| shown: Angle 1 on Line 2, Line 4: ' 'the angle is listed in words, in degrees'
 Ui-ExpectLog '3D sketch edit symmetric about {"frame":"x"}: done' 'Symmetric of two points about the YZ plane'
 Ui-ExpectLog '| shown: Symmetric 1 on Point 9, Point 10' 'the symmetry is listed in words'
+Ui-ExpectLog ': Esc took the typed value back' 'a row was removed while a value field kept the keyboard and the value typed'
 Ui-ExpectLog 'TestDriver: done' 'the relations were applied from the palette'
 Ui-StopApp
 Write-Host 'PASS: 3D relations are applied from the 3D Sketch Palette'

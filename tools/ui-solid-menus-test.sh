@@ -23,7 +23,7 @@
 source "$(dirname "$0")/ui-test-lib.sh"
 
 MODIFY="Press Pull | Fillet | Chamfer | Shell | Draft"
-MODIFY="$MODIFY | - | Offset Face | Move Face | Replace Face | Split Face | Delete Face"
+MODIFY="$MODIFY | - | Offset Face | Move Face | Replace Face | Fill Cavity | Split Face | Delete Face"
 MODIFY="$MODIFY | - | Combine | Split Body | Scale | Convert Mesh"
 MODIFY="$MODIFY | - | Move/Copy | Align"
 MODIFY="$MODIFY | - | Dogbone | Mortise and Tenon"

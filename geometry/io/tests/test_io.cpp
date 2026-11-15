@@ -2457,6 +2457,42 @@ void test_face_meshes(const std::string& dir) {
   CHECK(faceted.face_triangles == std::vector<std::uint32_t>{12});
   CHECK(faceted.vertices.size() == 36);
   CHECK(consistent(faceted));
+  // Without texture coordinates, none (the box and the STL mesh).
+  CHECK(boxed.uvs.empty() && faceted.uvs.empty());
+  // A mesh body with texture coordinates as its UV nodes (mitcad#1862, a
+  // glTF file's): each faceted vertex with its node's (mitcad#1874, for
+  // USDZ export). A square of two triangles, u along x, v along y.
+  occ::handle<Poly_Triangulation> square = new Poly_Triangulation(4, 2, true);
+  for (int i = 0; i < 4; ++i) {
+    const double u = (i & 1) ? 1.0 : 0.0;
+    const double v = (i & 2) ? 1.0 : 0.0;
+    square->SetNode(i + 1, gp_Pnt(20.0 * u, 10.0 * v, 0.0));
+    square->SetUVNode(i + 1, gp_Pnt2d(u, v));
+  }
+  square->SetTriangle(1, Poly_Triangle(1, 2, 4));
+  square->SetTriangle(2, Poly_Triangle(1, 4, 3));
+  const FaceMeshes textured = mitcad::io::face_meshes(mitcad::io::mesh_body(square), options);
+  CHECK(textured.vertices.size() == 6);
+  CHECK(textured.uvs.size() == textured.vertices.size());
+  for (std::size_t i = 0; i < textured.uvs.size() && i < textured.vertices.size(); ++i) {
+    const auto& p = textured.vertices[i];
+    CHECK(std::abs(textured.uvs[i][0] - p[0] / 20.0) < 1e-12 && std::abs(textured.uvs[i][1] - p[1] / 10.0) < 1e-12);
+  }
+  // Beside a face with a surface in one compound: one pair per vertex,
+  // zeros on the box's. A shape with a mesh body is not meshed again, so
+  // the box comes meshed (by triangulate on its own).
+  const TopoDS_Shape meshed_box = mitcad::io::triangulate(box, options);
+  TopoDS_Compound both;
+  BRep_Builder builder;
+  builder.MakeCompound(both);
+  builder.Add(both, meshed_box);
+  builder.Add(both, mitcad::io::mesh_body(square));
+  const FaceMeshes mixed = mitcad::io::face_meshes(both, options);
+  CHECK(mixed.uvs.size() == mixed.vertices.size());
+  CHECK(mixed.vertices.size() == 24 + 6);
+  for (std::size_t i = 0; i < 24 && i < mixed.uvs.size(); ++i) {
+    CHECK(mixed.uvs[i][0] == 0.0 && mixed.uvs[i][1] == 0.0);
+  }
 }
 
 // A helmet with a pin (mitcad#1567, mitcad#1568): a sphere of 6.9 mm about

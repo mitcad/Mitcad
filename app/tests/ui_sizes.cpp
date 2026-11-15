@@ -96,6 +96,24 @@ void sizeTests() {
   // Text at 200 %: rooms double.
   detail::textPercent = 200;
   CHECK(mitcad::uiRoomSize(26) == 52);
+  // The Docked Command panel (mitcad#1825): 300 px at the default sizes and
+  // at 80 %, twice that at 200 %; a remembered width below it is raised.
+  detail::textPercent = 100;
+  detail::iconPercent = 100;
+  CHECK(mitcad::commandPanelMinimumWidth() == 300);
+  CHECK(mitcad::commandPanelWidth(0) == 300);
+  CHECK(mitcad::commandPanelWidth(420) == 420);
+  detail::textPercent = 80;
+  detail::iconPercent = 80;
+  CHECK(mitcad::commandPanelMinimumWidth() == 300);
+  detail::textPercent = 200;
+  detail::iconPercent = 200;
+  CHECK(mitcad::commandPanelMinimumWidth() == 600);
+  CHECK(mitcad::commandPanelWidth(420) == 600);
+  CHECK(mitcad::commandPanelWidth(700) == 700);
+  detail::textPercent = 120;
+  detail::iconPercent = 150;
+  CHECK(mitcad::commandPanelMinimumWidth() == 450);
   detail::textPercent = text;
   detail::iconPercent = icon;
 }

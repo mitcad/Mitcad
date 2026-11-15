@@ -1810,6 +1810,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-fillet-boss-tangent-crash"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-fillet-boss-tangent-crash PROPERTIES TIMEOUT 600)
+    # Fill Cavity (mitcad#1818): the shared steps of
+    # tools/ui-scripts/fill-cavity.mitcad-ui, a blind slit filled up to a
+    # plane (its volume added) and an open groove as the seed refused in
+    # words (tools/ui-fill-cavity-test.sh).
+    add_test(NAME app.ui-windows-fill-cavity
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-fill-cavity-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-fill-cavity"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-fill-cavity PROPERTIES TIMEOUT 600)
     # The render worker while a section analysis is shown and hidden in the
     # rendered view (mitcad#1432): twelve times while Cycles traces on the
     # CPU, the worker never stopping. The Linux test's shared input script
@@ -2048,6 +2059,17 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-navigation-gesture-state"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-navigation-gesture-state PROPERTIES TIMEOUT 420)
+    # Reverse vertical pan (mitcad#1873, GitHub mitcad/Mitcad#340): off by
+    # default, a two-finger scroll reversed with it on, saved and read back
+    # by a new process. The Linux test's shared input scripts
+    # (tools/ui-navigation-reverse-pan-test.sh).
+    add_test(NAME app.ui-windows-navigation-reverse-pan
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-navigation-reverse-pan-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-navigation-reverse-pan"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-navigation-reverse-pan PROPERTIES TIMEOUT 420)
     # A new sphere's see-through preview without a pattern of triangles
     # (mitcad#1575, GitHub mitcad/Mitcad#219) on Mesa's software renderer:
     # the shared steps of tools/ui-preview-transparency-test.sh.
@@ -2553,6 +2575,38 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-gone-pick-edit"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-gone-pick-edit PROPERTIES TIMEOUT 300)
+    # Form and Edit Form (mitcad#1757): a box cage's face picked in the
+    # view, moved and extruded, an edge creased and symmetry set, each one
+    # undo step whose body is a solid. The Linux test's shared input
+    # script (tools/ui-form-test.sh).
+    add_test(NAME app.ui-windows-form
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-form-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-form"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-form PROPERTIES TIMEOUT 480)
+    # A value typed while a slow preview computes drops that preview
+    # (mitcad#1788): Pipe's default size held by the test's worker gate,
+    # the size 2 typed, the 2 mm pipe previewed and made. The Linux test's
+    # shared input script (tools/ui-pipe-preview-drop-test.sh).
+    add_test(NAME app.ui-windows-pipe-preview-drop
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-pipe-preview-drop-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-pipe-preview-drop"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-pipe-preview-drop PROPERTIES TIMEOUT 240)
+    # A flexible subassembly: Hinge:1 made Flexible from its row's menu and
+    # its inner Arm dragged along the Hinge's own joint, for Hinge:1 alone
+    # (mitcad#1793). The Linux test's shared input script
+    # (tools/ui-flexible-subassembly-test.sh).
+    add_test(NAME app.ui-windows-flexible-subassembly
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-flexible-subassembly-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-flexible-subassembly"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-flexible-subassembly PROPERTIES TIMEOUT 300)
     # Send to Slicer's Process row shows the process set on the body
     # (mitcad#1799): Per body for two bodies of different processes, a
     # choice set on both bodies in one undo step, the 3MF read back. The
@@ -2586,6 +2640,324 @@ if(MITCAD_MESA_DIR)
               -Out "${CMAKE_BINARY_DIR}/ui-windows-project-again-successor"
               -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(app.ui-windows-project-again-successor PROPERTIES TIMEOUT 300)
+    # The selection's look (mitcad#1803): a selected edge's highlight
+    # Selected line width's pixels times the device pixel ratio wide, at
+    # ratio 1 and 1.25 (2 leaves the 1024 x 768 screen's Docked window no
+    # view), in Preferences › Display › Selection color; a change of
+    # either draws the selection anew, in the view and in sketch mode. The
+    # Linux test's shared input script (tools/ui-selection-look-test.sh).
+    add_test(NAME app.ui-windows-selection-look
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-selection-look-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-selection-look"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-selection-look PROPERTIES TIMEOUT 600)
+    # Timber's Along an edge (mitcad#1814): a member along a plate's edge,
+    # flush, moved by its four offsets, following the plate when it gets
+    # shorter; a round edge refused in words. The timber library of
+    # tools/ui-windows-timber-lib.ps1; the Linux test's shared input script
+    # (tools/ui-timber-edge-test.sh).
+    add_test(NAME app.ui-windows-timber-edge
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-timber-edge-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Out "${CMAKE_BINARY_DIR}/ui-windows-timber-edge"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-timber-edge PROPERTIES TIMEOUT 300)
+    # The edit panel of a derived part: a BUILD profile of a synthetic
+    # library (git) opened from its timeline cell, its length and row
+    # changed in one undo step, Undo; a feature without a panel says so in
+    # plain words (mitcad#1812). The Linux test's shared input script
+    # (tools/ui-derived-part-edit-test.sh).
+    add_test(NAME app.ui-windows-derived-part-edit
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-derived-part-edit-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-derived-part-edit"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-derived-part-edit PROPERTIES TIMEOUT 300)
+    # Assembly Constraint's preview with more than one row (mitcad#1813):
+    # an incomplete row left out of the preview, which still places the
+    # part by the complete rows; the part drawn once where the preview puts
+    # it. The Linux test's shared input script
+    # (tools/ui-constraint-rows-preview-test.sh).
+    add_test(NAME app.ui-windows-constraint-rows-preview
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-constraint-rows-preview-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-constraint-rows-preview"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-constraint-rows-preview PROPERTIES TIMEOUT 300)
+    # The Properties window (mitcad#1816): several bodies' summary and
+    # merged rows, a row's bodies painted under the pointer, a row's
+    # details, Copy's tab-separated text and one body's groups with More
+    # collapsed. The Linux test's shared input script
+    # (tools/ui-properties-window-test.sh).
+    add_test(NAME app.ui-windows-properties-window
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-properties-window-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-properties-window"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-properties-window PROPERTIES TIMEOUT 300 RESOURCE_LOCK system_clipboard)
+    # A member placed with Timber is made of its library's wood: Physical
+    # Properties shows Spruce and the mass its density gives, never Steel
+    # (mitcad#1817). The Linux test's shared input script
+    # (tools/ui-timber-material-test.sh).
+    add_test(NAME app.ui-windows-timber-material
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-timber-material-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-timber-material"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-timber-material PROPERTIES TIMEOUT 300)
+    # Convert to Features (mitcad#1815): a timber member from a library
+    # made in the test, joined to a plate, converted from its row's menu;
+    # its sketch and extrusion in the timeline, the section's width
+    # changed, the joint holding. The Linux test's shared input script
+    # (tools/ui-convert-features-test.sh).
+    add_test(NAME app.ui-windows-convert-features
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-convert-features-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-convert-features"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-convert-features PROPERTIES TIMEOUT 300)
+    # Open Cage as Form (mitcad#1757, mitcad#1810): an imported body that
+    # keeps a control cage (a synthetic cube net given to a design made by
+    # mitcad-cli) opened from its Browser row as a Form in Edit Form, a face
+    # moved, Close keeping it. The Linux test's shared input script
+    # (tools/ui-form-kept-cage-test.sh).
+    add_test(NAME app.ui-windows-form-kept-cage
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-form-kept-cage-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-form-kept-cage"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-form-kept-cage PROPERTIES TIMEOUT 300)
+    # A sketch on a cylinder's side (mitcad#1768): Create Sketch picks the
+    # side, a rectangle typed 30 by 20 lies 30 mm around the face and 20 mm
+    # along it, its profile is drawn on the face, Finish Sketch. The Linux
+    # test's shared input script (tools/ui-sketch-cylinder-face-test.sh).
+    add_test(NAME app.ui-windows-sketch-cylinder-face
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-cylinder-face-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-cylinder-face"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-cylinder-face PROPERTIES TIMEOUT 180)
+
+    # The Docked Command panel at Text size and Icon size 200 % (mitcad#1825,
+    # GitHub mitcad/Mitcad#336): at least 600 px wide, the Sketch Palette's
+    # rows whole within it, its edge dragged wider remembered and restored
+    # after a restart. The Linux test's shared input scripts
+    # (tools/ui-docked-command-width-test.sh).
+    add_test(NAME app.ui-windows-docked-command-width
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-docked-command-width-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-docked-command-width"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-docked-command-width PROPERTIES TIMEOUT 300)
+    # glTF export and import (mitcad#1826): File > Export to .glb and .gltf,
+    # read back by MitCad's own reader; File > Import and Open of both. The
+    # Linux test's shared input scripts (tools/ui-gltf-test.sh).
+    add_test(NAME app.ui-windows-gltf
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-gltf-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-gltf"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-gltf PROPERTIES TIMEOUT 300)
+
+    # Construction planes drawn at the size and shape of what they come
+    # from (mitcad#1827): a plane saved with a size opens unchanged, one off
+    # a long narrow face is a rectangle over it, one over a small face is
+    # small, a handle's drag stores a size and Reset Size clears it. The
+    # Linux test's shared input script (tools/ui-construction-size-test.sh).
+    add_test(NAME app.ui-windows-construction-size
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-construction-size-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-construction-size"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-construction-size PROPERTIES TIMEOUT 300)
+
+    # Repeat runs a value's reaction with the repeated value (mitcad#1844)
+    # and keeps typed only what was typed (mitcad#1845): a Hole with a
+    # custom thread repeated, its sizes filled for the repeated Major
+    # Diameter and its countersink following a new one; a typed countersink
+    # kept after Repeat. The Linux test's shared input script
+    # (tools/ui-hole-repeat-test.sh).
+    add_test(NAME app.ui-windows-hole-repeat
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-hole-repeat-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-hole-repeat"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-hole-repeat PROPERTIES TIMEOUT 300)
+    # A command panel set aside hides its handles (mitcad#1844): Joint's
+    # Animate, a drag where a hidden handle was moving nothing, the handles
+    # back after Esc. The Linux test's shared input script
+    # (tools/ui-joint-suspended-handles-test.sh).
+    add_test(NAME app.ui-windows-joint-suspended-handles
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-joint-suspended-handles-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-joint-suspended-handles"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-joint-suspended-handles PROPERTIES TIMEOUT 240)
+
+    # The Floating Command card at Text size and Icon size 200 % (mitcad#1846,
+    # follow-up of mitcad#1825): at least 600 px wide, the Sketch Palette's
+    # rows whole within it and no button clipped. The Linux test's shared
+    # input script (tools/ui-floating-command-width-test.sh).
+    add_test(NAME app.ui-windows-floating-command-width
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-floating-command-width-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-floating-command-width"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-floating-command-width PROPERTIES TIMEOUT 300)
+
+    # Move to Component on a rigid group joined to a shaft (mitcad#1847,
+    # GitHub mitcad/Mitcad#334): every unavailable parent's reasons under
+    # it, the rest of a rigid group offered, several selected occurrences
+    # moved in one step. The Linux test's shared input script
+    # (tools/ui-move-occurrence-group-test.sh).
+    add_test(NAME app.ui-windows-move-occurrence-group
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-move-occurrence-group-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-move-occurrence-group"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-move-occurrence-group PROPERTIES TIMEOUT 300)
+
+    # Joint's picks under another component than the active one
+    # (mitcad#1856, GitHub mitcad/Mitcad#344): the question offers the
+    # component that holds both, Make it there mounts the sub-assembly
+    # whole, Don't ask again sets the preference, and Preferences > Assembly
+    # sets it back to Ask. The Linux test's shared input script
+    # (tools/ui-joint-holder-test.sh).
+    add_test(NAME app.ui-windows-joint-holder
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-joint-holder-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-joint-holder"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-joint-holder PROPERTIES TIMEOUT 420)
+    # Delete Sheet while the title block is edited (mitcad#1841): another
+    # sheet deleted, Done writes the block onto the sheet edited; the sheet
+    # edited deleted ends the editor. The Linux test's shared input script
+    # (tools/ui-drawing-title-block-sheets-test.sh).
+    add_test(NAME app.ui-windows-drawing-title-block-sheets
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-drawing-title-block-sheets-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-drawing-title-block-sheets"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-drawing-title-block-sheets PROPERTIES TIMEOUT 180)
+
+    # A widening taper that closes a slot (mitcad#1851): Extrude succeeds,
+    # the slot filled where its walls meet, and Properties shows the body's
+    # volume. The Linux test's shared input script
+    # (tools/ui-taper-closes-slot-test.sh).
+    add_test(NAME app.ui-windows-taper-closes-slot
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-taper-closes-slot-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-taper-closes-slot"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-taper-closes-slot PROPERTIES TIMEOUT 300)
+
+    # A joint edited with its Offset emptied while typing (mitcad#1860,
+    # GitHub mitcad/Mitcad#347): the joint and the rigid group after it
+    # held in the edit's preview, nothing moved while the Offset is empty,
+    # OK refused, a new value committed. The Linux test's shared input
+    # script (tools/ui-joint-edit-empty-offset-test.sh).
+    add_test(NAME app.ui-windows-joint-edit-empty-offset
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-joint-edit-empty-offset-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-joint-edit-empty-offset"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-joint-edit-empty-offset PROPERTIES TIMEOUT 300)
+
+    # Edit Parameters sorted by a column (mitcad#1866, GitHub
+    # mitcad/Mitcad#338): Name's and Value's headers sort the rows within
+    # their groups, both ways and back to the creation order; the choice is
+    # kept; an edited and an added row stay selected in their place. The
+    # Linux test's shared input script (tools/ui-parameters-sort-test.sh).
+    add_test(NAME app.ui-windows-parameters-sort
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-parameters-sort-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-parameters-sort"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-parameters-sort PROPERTIES TIMEOUT 300)
+
+    # A drag zoom follows the pointer's vertical motion (mitcad#1867, GitHub
+    # mitcad/Mitcad#330): Shift + middle in the middle-orbit scheme, up
+    # closer, down away, sideways alone not at all, in the Floating and the
+    # Docked layout. The Linux test's shared input script
+    # (tools/ui-navigation-drag-zoom-test.sh).
+    add_test(NAME app.ui-windows-navigation-drag-zoom
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-navigation-drag-zoom-test.ps1"
+              -App "$<TARGET_FILE:mitcad>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-navigation-drag-zoom"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-navigation-drag-zoom PROPERTIES TIMEOUT 300)
+
+    # Flange's remembered choices (mitcad#1868, GitHub mitcad/Mitcad#348):
+    # a new Flange starts with the last OK's Measured and Position, an edit
+    # loads the flange's own. The Linux test's shared input script
+    # (tools/ui-sheet-flange-remembered-test.sh).
+    add_test(NAME app.ui-windows-sheet-flange-remembered
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sheet-flange-remembered-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sheet-flange-remembered"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sheet-flange-remembered PROPERTIES TIMEOUT 240)
+
+    # Press Pull on a face continued (mitcad#1850): a bent tube's end opens
+    # Revolve1's edit, then goes Along the Walls with its ring dragged past
+    # the walls' inner radius; a T-slot bar's end Straight with a Scale
+    # taper. The Linux test's shared input script
+    # (tools/ui-press-pull-continued-test.sh).
+    add_test(NAME app.ui-windows-press-pull-continued
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-press-pull-continued-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-press-pull-continued"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-press-pull-continued PROPERTIES TIMEOUT 300)
+    # A sketch on a cone's side (mitcad#1853): Create Sketch picks the
+    # side, no layout grid on it, a rectangle typed 20 by 12 keeps its
+    # lengths on the face, its profile and its dimensions' lines are drawn
+    # on the face, Finish Sketch draws the grid again; the picture stays in
+    # files\. The Linux test's shared input script
+    # (tools/ui-sketch-cone-face-test.sh).
+    add_test(NAME app.ui-windows-sketch-cone-face
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-sketch-cone-face-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-sketch-cone-face"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-sketch-cone-face PROPERTIES TIMEOUT 180)
+
+    # The Browser's component color bars (mitcad#1876): every component,
+    # occurrence and body row in its component's timeline color, the root's
+    # orange, following a rename, a move and a new component. The Linux
+    # test's shared input script (tools/ui-browser-component-colors-test.sh).
+    add_test(NAME app.ui-windows-browser-component-colors
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+              -File "${CMAKE_SOURCE_DIR}/tools/ui-windows-browser-component-colors-test.ps1"
+              -App "$<TARGET_FILE:mitcad>" -Cli "$<TARGET_FILE:mitcad-cli>"
+              -Out "${CMAKE_BINARY_DIR}/ui-windows-browser-component-colors"
+              -QtBin "$<TARGET_FILE_DIR:Qt6::Core>")
+    set_tests_properties(app.ui-windows-browser-component-colors PROPERTIES TIMEOUT 240)
   endif()
 elseif(WIN32 AND CMAKE_RUNTIME_OUTPUT_DIRECTORY)
   # Turned off again: remove earlier copies, or they would stay in use.

@@ -36,7 +36,7 @@ reports and tests last. The [index](#index) below lists every patch.
 
 | File | Patches | Tickets | What they change |
 |---|---|---|---|
-| [repeated-work.md](docs/repeated-work.md) | 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284 | mitcad#39, mitcad#60, mitcad#72, mitcad#77, mitcad#79, mitcad#119, mitcad#642, mitcad#1273, mitcad#1279 | no result: repeated work that made booleans, the checker and ShapeFix quadratic or worse |
+| [repeated-work.md](docs/repeated-work.md) | 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284, 1680, 1690, 1691 | mitcad#39, mitcad#60, mitcad#72, mitcad#77, mitcad#79, mitcad#119, mitcad#642, mitcad#1273, mitcad#1279, mitcad#1806, mitcad#1823 | no result: repeated work that made booleans, the checker and ShapeFix quadratic or worse, the fillet's corner join classify each point with a new classifier, a blend's approximation walk its line at every evaluation and edge/face intersections sample the face again for every edge |
 | [memory-and-threads.md](docs/memory-and-threads.md) | 0030–0034, 0090, 0091 | mitcad#132, mitcad#160, mitcad#203 | failed allocations, the checker's parallel mode, the Windows signal handler, a heap overflow |
 | [fillet-edge-overflow.md](docs/fillet-edge-overflow.md) | 0010–0019, 0050–0077 | mitcad#121 | the rolling ball fillet where a contact leaves its face |
 | [fillet-crashes.md](docs/fillet-crashes.md) | 0020–0026 | mitcad#122, mitcad#133 | crashes, exceptions and wrong shapes of the fillet |
@@ -46,7 +46,7 @@ reports and tests last. The [index](#index) below lists every patch.
 | [fillet-walks-and-contours.md](docs/fillet-walks-and-contours.md) | 0160, 0180, 0190, 0250, 0260, 0840, 0860, 0861, 0920 | mitcad#238, mitcad#241, mitcad#261, mitcad#307, mitcad#308, mitcad#434, mitcad#441, mitcad#464 | walks over a rounded rim; which edges a contour takes, with what radius |
 | [fillet-rolling-ball.md](docs/fillet-rolling-ball.md) | 0170–0172, 0390, 0391, 0500–0503, 1230, 1370 | mitcad#237, mitcad#378, mitcad#1215, mitcad#1370 | the blend rolling on an edge as a true rolling ball; rolling on a face's far edges before an earlier blend, past a seam |
 | [fillet-census.md](docs/fillet-census.md) | 0320–0331, 0350–0352, 0420, 0440 | mitcad#300, mitcad#322, mitcad#323, mitcad#331, mitcad#334, mitcad#337 | fillets the `.f3d` census found failing; consumed faces |
-| [booleans-and-face-merge.md](docs/booleans-and-face-merge.md) | 0110, 0220, 0360, 0590, 0680, 1040, 1285 | mitcad#235, mitcad#284, mitcad#400, mitcad#642, mitcad#1280 | the face merge after booleans and the wire splitter; the solid classifier where its segments run out |
+| [booleans-and-face-merge.md](docs/booleans-and-face-merge.md) | 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695 | mitcad#235, mitcad#284, mitcad#400, mitcad#642, mitcad#1280, mitcad#1819 | the face merge after booleans and the wire splitter; the solid classifier where its segments run out; a walking intersection line read past its ends |
 | [multi-turn-faces.md](docs/multi-turn-faces.md) | 0510–0512, 0560, 0591–0593 | mitcad#235, mitcad#349, mitcad#380 | booleans on faces and edges that run many turns |
 | [offset-projection-and-pipes.md](docs/offset-projection-and-pipes.md) | 0100, 0960, 1030, 1130, 1160, 1180, 1190, 1200 | mitcad#172, mitcad#504, mitcad#539, mitcad#1184, mitcad#1199, mitcad#1201, mitcad#1193, mitcad#1202 | the offset, the projection's boundary search, the pipe's guide trihedron, offsets tangent past or inside the solid's end, images meeting along a tangential edge, an extended edge's curves, enlarging across a tangential side |
 | [fillet-replay-0550-0692.md](docs/fillet-replay-0550-0692.md) | 0550, 0580, 0581, 0600, 0620, 0650, 0651, 0670, 0671, 0690–0692 | mitcad#235, mitcad#343 | fillets and chamfers of stored designs: pockets, ribs, teeth, threads, recesses |
@@ -125,6 +125,9 @@ made; update the port from vcpkg's and apply the remaining patches again
 (`git apply` in OCCT's source tree, in order), and compare the corpus
 results as for any change to the geometry. Building OCCT from the port is
 described in [development.md](../../docs/development.md#faster-builds).
+[occt-master-comparison.md](docs/occt-master-comparison.md) classifies
+every patch against OCCT master (fixed upstream, partly, still needed,
+ours only; mitcad#1875).
 
 ## Index
 
@@ -441,3 +444,7 @@ mitcad#77 and mitcad#79; their column names each one's report.
 | [1665](docs/pipe-corners-1661.md#1665-bopds-paves-of-an-edge-whose-blocks-do-not-chain) | mitcad#1559 | booleans: the paves of an edge whose pave blocks do not chain collected without writing past the array (a heap corruption) |
 | [1666](docs/pipe-corners-1661.md#1666-brepfill-trim-shell-corner-round-along-the-bisector-plane-where-the-sides-intersection-breaks-up) | mitcad#1564 | pipes: where the intersection of a rounded corner's sides breaks up, each side cut where it reaches past the bisector plane and the two cuts joined along edges in their middle, each bound kept where it does not reach the plane for the round to turn, refused beyond 5e-4 of the section's extent |
 | [1670](docs/fillet-end-split-boundary-1670.md#1670-chfi3d-end-crossing-on-the-next-edge-of-the-faces-common-boundary) | mitcad#1615 | fillets: an end cut by the faces round the vertex whose crossing with two faces' common boundary lies past the edge reached, where the boundary goes on in another edge of both faces: the crossing taken on that edge and the edges passed removed with the corner, instead of a prolongation of the first edge's curve that left the next edge whole and a free edge |
+| [1680](docs/repeated-work.md#1680-chfi3d-corner-join-face-classifier-set-up-once-per-face) | mitcad#1806 | fillets: the join of two stripes across a corner (0772, 0820) sets up each side face's classifier (bounds, projection, explorer of edges) once for all the points it classifies, with the same answers |
+| [1690](docs/repeated-work.md#1690-brepblend-line-points-read-by-index-in-constant-time) | mitcad#1823 | fillets: a blend's line holds its points in a deque of their own allocations, read by index in constant time (was a sequence walked from the place read last at every evaluation of the blend's approximation), the same order, contents and addresses |
+| [1691](docs/repeated-work.md#1691-intcurvesurface-surface-polyhedra-made-once-per-face) | mitcad#1823 | booleans and offsets: the polyhedra of a face's surface for curve/surface intersections kept in the boolean's context and used for every edge intersected with the face, instead of made for each, the same intersections |
+| [1695](docs/booleans-and-face-merge.md#1695-inttools-wline-decomposition-reads-no-point-past-the-line-ends) | mitcad#1819 | booleans: the decomposition of a walking face/face intersection line at the faces' boundaries stops before reading a point past the line's ends (Point(0) or Point(NbPnts + 1), a null node and a crash in a release build) |

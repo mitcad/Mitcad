@@ -2318,6 +2318,9 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
                                        QStringLiteral("bearing"), QStringLiteral("nema"), QStringLiteral("build")};
   def.okLabel = QObject::tr("Place");
   def.repeats = true;
+  // Repeat keeps a side's offset typed only when it was typed at the OK
+  // (mitcad#1845): one a click filled is filled by the next click.
+  def.repeatState = {kOffsetTyped};
   // A slot profile or a rail is of no timber member's system: on a member's
   // face the view's context menu offers it under More (mitcad#494).
   def.completes = [&host](const Selection& selection) {
@@ -2412,6 +2415,10 @@ CommandDef placeCommand(const SharedPtr& shared, DocumentHost& host, const QStri
 //               points give its length; nothing follows the mouse); snapped
 //               to the ends, the sides and the centre lines of the other
 //               members; flat or on edge.
+//   Along an edge  a member along a straight edge, lying on the face
+//               beside it, flush with the edge (mitcad#1814): Inset, Start,
+//               End and Lift move it; it follows the body the edge is on
+//               (build_place with `along`).
 
 const QString kTimberRole = QStringLiteral("timber");
 // The TIMBER group's commands (mitcad#520).
@@ -2423,13 +2430,24 @@ const QString kHow = QStringLiteral("how");
 const QString kPoints = QStringLiteral("points");
 const QString kOnMember = QStringLiteral("member");
 const QString kSpacing = QStringLiteral("spacing");
-// The buttons' order (mitcad#485): On a member first, Two points last.
+// Along an edge (mitcad#1814): the edge, the face it lies on, the offsets.
+const QString kAlong = QStringLiteral("along");
+const QString kAlongEdge = QStringLiteral("along_edge");
+const QString kAlongFace = QStringLiteral("along_face");
+const QString kAlongInset = QStringLiteral("along_inset");
+const QString kAlongStart = QStringLiteral("along_start");
+const QString kAlongEnd = QStringLiteral("along_end");
+const QString kAlongLift = QStringLiteral("along_lift");
+// The buttons' order (mitcad#485): On a member first, Two points, then
+// Along an edge (mitcad#1814).
 const Choices kHows = {{kOnMember, QStringLiteral("On a member's side or end, or on a plane")},
                        {kSpacing, QStringLiteral("Spacing: repeated at a center distance, or a board row with a gap")},
-                       {kPoints, QStringLiteral("Two points: from a click to a second click")}};
+                       {kPoints, QStringLiteral("Two points: from a click to a second click")},
+                       {kAlong, QStringLiteral("Along an edge: on a face, flush with its edge")}};
 const QHash<QString, QString> kHowIcons = {{kPoints, QStringLiteral("build-timber-points")},
                                            {kOnMember, QStringLiteral("build-place-auto")},
-                                           {kSpacing, QStringLiteral("build-timber-spacing")}};
+                                           {kSpacing, QStringLiteral("build-timber-spacing")},
+                                           {kAlong, QStringLiteral("build-timber-edge")}};
 const QString kStart = QStringLiteral("start");
 const QString kEndPoint = QStringLiteral("end");
 const QString kLie = QStringLiteral("lie");
@@ -2599,7 +2617,7 @@ int setCount(const QString& mode, double distance, const QString& fit, double sp
 
 QString howOf(const CommandState& state) {
   const QString how = state.choice(kHow);
-  return how == kSpacing || how == kPoints ? how : kOnMember;
+  return how == kSpacing || how == kPoints || how == kAlong ? how : kOnMember;
 }
 
 // Whether the panel places as Profile does: on a member, or a set between
@@ -3020,6 +3038,138 @@ Inspection inspectSetOnSide(const SharedPtr& shared, const CommandState& state, 
                  QObject::tr("A set along the member: %n member(s), %1", nullptr, count)
                      .arg(spacingText(state).toHtmlEscaped());
   result.log += QStringLiteral("; set of %1, %2").arg(count).arg(spacingText(state));
+  return result;
+}
+
+// --- Timber: a member along an edge (mitcad#1814)
+
+// The face picked for a member along an edge (in the Edge field, picked
+// first, or in Face): kept in Face, and the Edge field given the face's
+// straight edge nearest to the click when it has none (mitcad#1814).
+void takeAlongFace(const SelectionItem& face, CommandState& state, const CommandContext& context) {
+  state.setItems(kAlongFace, {face});
+  build::recordPick(kAlongFace, face, state, context);
+  const Selection edges = state.items(kAlongEdge);
+  if (!edges.isEmpty() && edges.first().kind == SelectKind::Edge) {
+    return;
+  }
+  const std::optional<SelectionItem> edge = build::nearestStraightEdge(face, kAlongFace, state, context);
+  state.setItems(kAlongEdge, edge ? Selection{*edge} : Selection{});
+  qInfo().noquote() << QStringLiteral("BUILD timber along an edge: %1 picked first, %2")
+                           .arg(face.logDescription(),
+                                edge ? QStringLiteral("its nearest straight edge %1").arg(edge->logDescription())
+                                     : QStringLiteral("it has no straight edge"));
+}
+
+// A member along an edge: build_place's fields (`along`: the edge, the face
+// and the offsets as typed; `lie`), or why there are none yet.
+struct AlongPlacement {
+  QJsonObject fields;
+  QString problem;
+};
+
+AlongPlacement alongPlacement(const CommandState& state, const CommandContext& context, const Part& part) {
+  AlongPlacement result;
+  const Selection& edges = state.items(kAlongEdge);
+  const Selection& faces = state.items(kAlongFace);
+  if (edges.isEmpty() && faces.isEmpty()) {
+    result.problem = QObject::tr("Click the straight edge the member runs along, or the face it lies on.");
+    return result;
+  }
+  if (faces.isEmpty()) {
+    result.problem = QObject::tr("Click the face beside the edge that the member lies on.");
+    return result;
+  }
+  if (edges.isEmpty()) {
+    result.problem = QObject::tr("The face has no straight edge: click the edge the member runs along.");
+    return result;
+  }
+  const SelectionItem& edge = edges.first();
+  const SelectionItem& face = faces.first();
+  if (edge.occurrence != face.occurrence) {
+    result.problem = QObject::tr("Pick the edge and the face of the same part.");
+    return result;
+  }
+  const std::optional<QString> path = build::pathFromHost(face, context);
+  if (!path) {
+    result.problem = QObject::tr("The face is not in the component the member goes into.");
+    return result;
+  }
+  QJsonObject along{{QStringLiteral("edge"), edge.reference()},
+                    {QStringLiteral("face"), face.reference()},
+                    {QStringLiteral("inset"), state.expression(kAlongInset)},
+                    {QStringLiteral("start"), state.expression(kAlongStart)},
+                    {QStringLiteral("end"), state.expression(kAlongEnd)},
+                    {QStringLiteral("lift"), state.expression(kAlongLift)}};
+  if (!path->isEmpty()) {
+    along.insert(QStringLiteral("occurrence"), *path);
+  }
+  result.fields = {{QStringLiteral("part"), part.ref()},
+                   {QStringLiteral("along"), along},
+                   {kLie, state.choice(kLie).isEmpty() ? QStringLiteral("flat") : state.choice(kLie)}};
+  return result;
+}
+
+// The inspection of a member along an edge: its length and where its end A
+// goes, as the model previews it; the model's refusal (a curved edge,
+// offsets that leave nothing) in its words.
+Inspection inspectAlong(const SharedPtr& shared, const CommandState& state, const CommandContext& context) {
+  Inspection result;
+  Part part;
+  if (!chosenPart(*shared, state, part)) {
+    result.error = noPartsText(*shared, kTimberRole);
+    return result;
+  }
+  const build::Host host = build::buildHost(context);
+  QStringList lines{QStringLiteral("<b>%1</b>").arg(part.name.toHtmlEscaped()),
+                    QObject::tr("Adds to: %1").arg(host.name).toHtmlEscaped()};
+  const AlongPlacement placed = alongPlacement(state, context, part);
+  if (!placed.problem.isEmpty()) {
+    result.viewHint = state.items(kAlongFace).isEmpty()
+                          ? QObject::tr("Click the straight edge the member runs along, or the face beside it")
+                          : QObject::tr("Click the straight edge the member runs along");
+    result.text = lines.join(QStringLiteral("<br>"));
+    result.error = placed.problem;
+    result.log = QStringLiteral("waiting: %1; adds to %2; part %3").arg(placed.problem, host.name, part.name);
+    return result;
+  }
+  const Previewed preview = previewOf(placed.fields, context);
+  const QString refused = userText(preview.error);
+  if (!refused.isEmpty()) {
+    result.text = lines.join(QStringLiteral("<br>"));
+    result.error = refused;
+    result.log = QStringLiteral("along an edge refused: %1; adds to %2; part %3").arg(refused, host.name, part.name);
+    return result;
+  }
+  result.shape = preview.shape;
+  const build::Frame frame = build::frameOf(preview.answer.value(QStringLiteral("frame")));
+  const double length = build::lengthOf(preview.answer.value(QStringLiteral("length")));
+  const QString lie = state.choice(kLie).isEmpty() ? QStringLiteral("flat") : state.choice(kLie);
+  lines << (std::isfinite(length) ? QObject::tr("Length %1 mm (along the edge)").arg(length, 0, 'f', 1)
+                                  : QObject::tr("Length"));
+  lines << QObject::tr("%1 (Tab: flat or on edge)").arg(cmd::label(kLies, lie));
+  lines << QObject::tr("On the face, its side flush with the edge; it follows the part when the part changes");
+  const gp_Pnt endA = frame.origin;
+  result.log = QStringLiteral("along an edge, length %1 mm, %2; end A at %3, %4, %5; inset %6, start %7, end %8, "
+                              "lift %9; adds to %10; part %11")
+                   .arg(length, 0, 'f', 2)
+                   .arg(lie)
+                   .arg(endA.X(), 0, 'f', 2)
+                   .arg(endA.Y(), 0, 'f', 2)
+                   .arg(endA.Z(), 0, 'f', 2)
+                   .arg(state.text(kAlongInset), state.text(kAlongStart), state.text(kAlongEnd),
+                        state.text(kAlongLift), host.name, part.name);
+  QJsonArray markers;
+  if (frame.valid && std::isfinite(length)) {
+    markers.append(marker(QStringLiteral("%1 mm").arg(length, 0, 'f', 1),
+                          endA.Translated(gp_Vec(frame.z) * (length / 2.0))));
+  }
+  result.report = {{QStringLiteral("markers"), markers}};
+  shared->setPreview(frame, length, false);
+  if (result.shape.IsNull() && part.sectionWidth() > 0.0 && std::isfinite(length)) {
+    result.shape = build::boxAlong(frame, part.sectionWidth(), part.sectionHeight(), length);
+  }
+  result.text = lines.join(QStringLiteral("<br>"));
   return result;
 }
 
@@ -4437,6 +4587,9 @@ CommandDef wallCommand(const SharedPtr& shared, DocumentHost& host) {
                   QStringLiteral("timber"), QStringLiteral("wood"),   QStringLiteral("build")};
   def.okLabel = QObject::tr("Place");
   def.repeats = true;
+  // Repeat keeps the offset along the wall typed only when it was typed at
+  // the OK (mitcad#1845): one a click filled is filled by the next click.
+  def.repeatState = {kFrameOffsetTyped};
   // Without an End clicked; started on another wall (mitcad#514, mitcad#515).
   const auto noEnd = [](const CommandState& state) { return state.items(kEndPoint).isEmpty(); };
   // Or on another body's face (mitcad#524): the same From, Offset and Length.
@@ -4709,7 +4862,7 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
   def.id = kTimberCommand;
   def.name = QObject::tr("Timber");
   def.icon = QStringLiteral("build-timber");
-  def.tooltip = QObject::tr("Places loose timber: on a member, at a spacing or by two points");
+  def.tooltip = QObject::tr("Places loose timber: on a member, at a spacing, by two points or along an edge");
   def.tab = kTab;
   def.group = kTimberGroup;
   def.pinned = true;
@@ -4736,8 +4889,8 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
                             startFasteners(*shared, state, context);
                           }
                         })
-                        .withTooltip(QObject::tr("How the member is placed: on a member, at a spacing or by two "
-                                                 "points")));
+                        .withTooltip(QObject::tr("How the member is placed: on a member, at a spacing, by two "
+                                                 "points or along an edge")));
   // Start and End of a member by two points.
   def.inputs.append(selectionInput(kStart, QObject::tr("Start"),
                                    SelectKind::Face | SelectKind::Plane | SelectKind::Point | SelectKind::Vertex, 0, 1)
@@ -4758,6 +4911,45 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
                         .withShiftClickApplies()
                         .withTooltip(QObject::tr("Where the member ends, moved onto the start's plane (Shift+click "
                                                  "places)")));
+  // Along an edge (mitcad#1814): the edge, the face beside it (a face
+  // clicked first goes to Face and offers its edge nearest to the click),
+  // and the four offsets.
+  def.inputs.append(selectionInput(kAlongEdge, QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 0, 1)
+                        .withVisible(how(kAlong))
+                        .withOnPick([](const SelectionItem& item, CommandState& state, const CommandContext& context) {
+                          if (item.kind == SelectKind::Face) {
+                            state.setItems(kAlongEdge, {});
+                            takeAlongFace(item, state, context);
+                          } else {
+                            build::recordPick(kAlongEdge, item, state, context);
+                          }
+                        },
+                                    false)
+                        .withTooltip(
+                            QObject::tr("The straight edge the member runs along; a clicked face offers its nearest edge")));
+  def.inputs.append(selectionInput(kAlongFace, QObject::tr("Face"), SelectKind::Face, 0, 1)
+                        .withVisible(how(kAlong))
+                        .withOnPick([](const SelectionItem& item, CommandState& state, const CommandContext& context) {
+                          takeAlongFace(item, state, context);
+                        },
+                                    false)
+                        .withTooltip(QObject::tr("The face the member lies on, beside the edge: it decides which side "
+                                                 "of the edge the member is on")));
+  def.inputs.append(valueInput(kAlongInset, QObject::tr("Inset"), ValueKind::Length, QStringLiteral("0 mm"))
+                        .withVisible(how(kAlong))
+                        .withTooltip(QObject::tr("Across the face, away from the edge: 0 is flush, negative out over "
+                                                 "the edge")));
+  def.inputs.append(valueInput(kAlongStart, QObject::tr("Start"), ValueKind::Length, QStringLiteral("0 mm"))
+                        .withVisible(how(kAlong))
+                        .withTooltip(QObject::tr("Along the edge at its start: positive shortens the member, negative "
+                                                 "runs past the edge's end")));
+  def.inputs.append(valueInput(kAlongEnd, QObject::tr("End"), ValueKind::Length, QStringLiteral("0 mm"))
+                        .withVisible(how(kAlong))
+                        .withTooltip(QObject::tr("Along the edge at its end: positive shortens the member, negative "
+                                                 "runs past the edge's end")));
+  def.inputs.append(valueInput(kAlongLift, QObject::tr("Lift"), ValueKind::Length, QStringLiteral("0 mm"))
+                        .withVisible(how(kAlong))
+                        .withTooltip(QObject::tr("Off the face along its normal: 0 rests on it")));
   def.inputs.append(choiceInput(kOver, QObject::tr("Spacing On"), kOvers, kBetween)
                         .withVisible(how(kSpacing))
                         .withTooltip(QObject::tr("Between two members, or over the faces the members lie on")));
@@ -4773,7 +4965,7 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
   // not shown.
   def.inputs.append(choiceInput(kLie, QObject::tr("Lie"), kLies, QStringLiteral("flat"))
                         .withVisible([shared, overFaces](const CommandState& state) {
-                          return howOf(state) == kPoints || overFaces(state) ||
+                          return howOf(state) == kPoints || howOf(state) == kAlong || overFaces(state) ||
                                  (howOf(state) == kOnMember && against(*shared, kTimberRole, state) == Against::Ground);
                         })
                         .withTabCycle({QStringLiteral("flat"), QStringLiteral("edge")})
@@ -4859,6 +5051,10 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
   def.inspect = [shared, role](const CommandState& state, const CommandContext& context) {
     if (howOf(state) == kOnMember) {
       return inspectPlacement(shared, role, state, context, true);
+    }
+    // Along an edge (mitcad#1814).
+    if (howOf(state) == kAlong) {
+      return inspectAlong(shared, state, context);
     }
     Inspection result =
         placesOnMember(state) ? inspectSetOnSide(shared, state, context) : inspectTimber(shared, state, context);
@@ -4946,6 +5142,40 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
         return false;
       }
       state.setItems(kFaces, {});
+      return true;
+    }
+    // Along an edge (mitcad#1814): its length and end A as the model
+    // previews them, logged with the placement; the edge and the face
+    // picked again for the next one.
+    if (howOf(state) == kAlong) {
+      const AlongPlacement along = alongPlacement(state, context, part);
+      if (!along.problem.isEmpty()) {
+        host.showStatus(along.problem, NoticeLevel::Error);
+        return false;
+      }
+      double length = kNaN;
+      build::Frame frame;
+      try {
+        QJsonObject request = along.fields;
+        request.insert(QStringLiteral("query"), QStringLiteral("build_preview"));
+        const QJsonObject answer = context.queryObject(request);
+        length = build::lengthOf(answer.value(QStringLiteral("length")));
+        frame = build::frameOf(answer.value(QStringLiteral("frame")));
+      } catch (const std::exception&) {
+        // build_place says why.
+      }
+      const QString note = QStringLiteral("along an edge, %1 mm; end A at %2, %3, %4")
+                               .arg(length, 0, 'f', 2)
+                               .arg(frame.origin.X(), 0, 'f', 2)
+                               .arg(frame.origin.Y(), 0, 'f', 2)
+                               .arg(frame.origin.Z(), 0, 'f', 2);
+      if (!placeNow(*shared, host, role, part, along.fields, note, state, context)) {
+        return false;
+      }
+      state.setItems(kAlongEdge, {});
+      state.setItems(kAlongFace, {});
+      state.setObject(kAlongEdge + QStringLiteral("_pick"), {});
+      state.setObject(kAlongFace + QStringLiteral("_pick"), {});
       return true;
     }
     // Two points: from the start to the end clicked.

@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Construction planes drawn at the size of what they come from (mitcad#1827), tools/ui-construction-size-test.sh: a plate 200 x 150 x 10 on XY from the origin (F1), a boss 10 x 10 x 15 on it at (20, 20) (F2), Plane1 (F3) 10 mm off the plate's long narrow side face at y = 0, Plane2 (F4) 5 mm above the boss's small top face, Plane3 (F5) 40 mm above XY with a size of its own, 60 mm."},
+  {"cmd": "add_feature", "name": "Plate", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 200, "width": 150, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Boss", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [20, 20], "length": 10, "width": 10, "height": 15, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane",
+    "definition": {"type": "offset", "plane": {"body": "F1.b0", "face": "F1:side0"}, "distance": 10}}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane",
+    "definition": {"type": "offset", "plane": {"body": "F2.b0", "face": "F2:top"}, "distance": 5}}},
+  {"cmd": "add_feature", "def": {"type": "construction_plane",
+    "definition": {"type": "offset", "plane": "xy", "distance": 40}}},
+  {"cmd": "set_datum_display_size", "uid": "F5", "size": 60},
+  {"expect": {"bodies": 2}}
+]

@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointF>
 #include <QSettings>
 #include <QVector>
 #include <Qt>
@@ -62,7 +63,32 @@ struct NavigationSettings {
   double turnStep = 15.0;
   // What an orbit turns about (mitcad#1791).
   OrbitCenter orbitCenter = OrbitCenter::Model;
+  // The two-finger trackpad scroll's pan, each axis on its own, and its
+  // orbit the other way (mitcad#1873, GitHub mitcad/Mitcad#340;
+  // `view/reversePanHorizontal`, `view/reversePanVertical`,
+  // `view/reverseScrollOrbit`): mouse drags keep their direction.
+  bool reversePanHorizontal = false;
+  bool reversePanVertical = false;
+  bool reverseScrollOrbit = false;
 };
+
+// How far a two-finger scroll moves the view's pan or orbit drag, from the
+// scroll's delta in pixels (mitcad#1873): a pan's horizontal and vertical
+// parts reversed on their own, an orbit reversed as a whole, as the
+// settings say. Zoom and other actions keep the delta.
+inline QPointF scrollDragDelta(const NavigationSettings& settings, NavigationAction action, QPointF delta) {
+  if (action == NavigationAction::Pan) {
+    if (settings.reversePanHorizontal) {
+      delta.setX(-delta.x());
+    }
+    if (settings.reversePanVertical) {
+      delta.setY(-delta.y());
+    }
+  } else if (action == NavigationAction::Orbit && settings.reverseScrollOrbit) {
+    delta = -delta;
+  }
+  return delta;
+}
 
 // The arrow keys' step: 1 to 90 degrees, 15 when it is no number.
 inline double sanitizeTurnStep(double degrees) {
@@ -213,6 +239,10 @@ inline void loadNavigationDetails(const QSettings& store, NavigationSettings& se
   const double step = store.value(prefix + QStringLiteral("turnStep"), 15.0).toDouble(&stepOk);
   settings.turnStep = stepOk ? sanitizeTurnStep(step) : 15.0;
   settings.orbitCenter = orbitCenterFromId(store.value(prefix + QStringLiteral("orbitCenter")).toString());
+  // The trackpad scroll's directions (mitcad#1873), off unless saved on.
+  settings.reversePanHorizontal = store.value(prefix + QStringLiteral("reversePanHorizontal"), false).toBool();
+  settings.reversePanVertical = store.value(prefix + QStringLiteral("reversePanVertical"), false).toBool();
+  settings.reverseScrollOrbit = store.value(prefix + QStringLiteral("reverseScrollOrbit"), false).toBool();
   loadSpaceMouseSettings(store, settings.spaceMouse);
   QVector<NavigationBinding> bindings;
   const QJsonDocument document = QJsonDocument::fromJson(
@@ -256,6 +286,9 @@ inline void saveNavigationDetails(QSettings& store, const NavigationSettings& se
   store.setValue(prefix + QStringLiteral("trackpadSpeed"), sanitizeNavigationSpeed(settings.trackpadSpeed));
   store.setValue(prefix + QStringLiteral("turnStep"), sanitizeTurnStep(settings.turnStep));
   store.setValue(prefix + QStringLiteral("orbitCenter"), QLatin1String(orbitCenterId(settings.orbitCenter)));
+  store.setValue(prefix + QStringLiteral("reversePanHorizontal"), settings.reversePanHorizontal);
+  store.setValue(prefix + QStringLiteral("reversePanVertical"), settings.reversePanVertical);
+  store.setValue(prefix + QStringLiteral("reverseScrollOrbit"), settings.reverseScrollOrbit);
   saveSpaceMouseSettings(store, settings.spaceMouse);
   if (settings.customBindings.isEmpty()) {
     store.remove(prefix + QStringLiteral("navigationBindings"));

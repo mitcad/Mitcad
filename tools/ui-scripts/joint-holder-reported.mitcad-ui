@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# The reported design of GitHub mitcad/Mitcad#344 (mitcad#1856; from
+# MITCAD_MITCAD_REPORTED/github-344, never committed), run by
+# tools/ui-joint-holder-test.sh when the private test files have it: the
+# roller sub-assembly (C10, placed as O14, with its own joints and rigid
+# group) active, as the reporter had it. A Joint from the roller's tube
+# (O14/O8) to a shaft of the frame (O5 or O6, in the root) asks whether to
+# make it in the root, which holds both picks; Make it in mounts the
+# roller whole, and OK adds the joint there. Undone, the tube and the
+# shaft selected before Joint starts get the same question before the
+# panel opens (mitcad#1864).
+expect-ever 'View area'
+wait-idle 120
+set-setting assembly/jointComponent ask
+model-command '{"cmd": "activate_component", "component": "C10"}'
+wait-idle 60
+command view.fit
+wait-idle 60
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 60
+wait-idle 60
+click-pick 'face F23[.]b0/[^ ]+ in O14/O8 at '
+wait-log '^Joint Origin A: 1 face' 60
+wait-idle 60
+click-pick 'face F16[.]b0/[^ ]+ in O[56] at '
+wait-log '^Joint component asked: The two picks are in .+ A joint made in .+ can move only .+ own parts[.] Make it in .+, which holds both, so that .+ moves as a whole[?]' 60
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in '
+wait-log '^Joint component answer: make it in .+$'
+focus-main
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Joint Origin B: 1 face' 60
+wait-log '^Preview Joint: ok' 120
+wait-idle 60
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*moved O14.*; made in .+, which holds the picks$' 120
+wait-idle 60
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle 60
+
+# The tube and the frame's shaft selected before Joint starts
+# (mitcad#1864): the same question before the panel opens; Make it in,
+# and the first preview mounts the roller.
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 60
+wait-idle 60
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle 60
+mark
+click-pick 'face F23[.]b0/[^ ]+ in O14/O8 at '
+wait-log '^Selected: 1 face' 60
+wait-idle 60
+click-pick 'face F16[.]b0/[^ ]+ in O[56] at ' ctrl
+wait-log '^Selected: 2 faces' 60
+wait-idle 60
+mark
+command assemble.joint
+wait-log '^Joint component of the selection made before it: 2 pick[(]s[)]$' 60
+wait-log '^Joint component asked: The two picks are in .+ A joint made in .+ can move only .+ own parts[.] Make it in .+, which holds both, so that .+ moves as a whole[?]' 60
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in '
+wait-log '^Joint component answer: make it in .+$'
+focus-main
+wait-log '^Command Joint started' 60
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Preview Joint: ok' 120
+wait-idle 60
+expect-no-log '^Panel Joint error: '
+mark
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle 60
+expect-never 'TestDriver: FAIL'

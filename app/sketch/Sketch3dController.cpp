@@ -632,6 +632,7 @@ void Sketch3dController::enter(const QString& uid) {
 
 void Sketch3dController::leave() {
   stopTool();
+  m_pickingNormal = false; // never carried into the next sketch (mitcad#1835)
   cancelDrag();
   cancelSourcePick();
   m_pendingDelete.clear();

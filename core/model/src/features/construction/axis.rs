@@ -193,10 +193,37 @@ impl<K: Kernel> Evaluate<K> for ConstructionAxisDef {
         } else {
             axis
         };
+        let datum = finite(Datum::Axis(axis))?;
+        let drawn = self.drawn(ctx, &axis);
         Ok(FeatureOutput {
-            datum: Some(finite(Datum::Axis(axis))?),
+            datum: Some(datum),
+            drawn,
             ..FeatureOutput::default()
         })
+    }
+}
+
+impl ConstructionAxisDef {
+    /// Where the axis is drawn without a size of its own (mitcad#1827,
+    /// [`super::drawn`]): along its edge, faces, planes or points, else
+    /// through the bodies they are on; none for a fixed axis.
+    fn drawn<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        axis: &DatumAxis,
+    ) -> Option<super::DrawnExtent> {
+        use AxisDefinition as D;
+        let (geometry, bodies): (Vec<&GeomRef>, Vec<&GeomRef>) = match &self.definition {
+            D::CircularFace { face } => (vec![face], vec![face]),
+            D::PerpendicularAtPoint { face, point } | D::NormalToFaceAtPoint { face, point } => {
+                (vec![point], vec![face, point])
+            }
+            D::TwoPlanes { plane1, plane2 } => (vec![plane1, plane2], vec![plane1, plane2]),
+            D::TwoPoints { point1, point2 } => (vec![point1, point2], vec![point1, point2]),
+            D::Edge { edge } => (vec![edge], vec![edge]),
+            D::Fixed { .. } => return None,
+        };
+        super::drawn::axis_extent(ctx, axis, &geometry, &bodies)
     }
 }
 

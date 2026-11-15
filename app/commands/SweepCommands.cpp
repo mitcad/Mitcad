@@ -6,6 +6,7 @@
 #include <cmath>
 #include <exception>
 #include <initializer_list>
+#include <iterator>
 #include <optional>
 
 #include <QDebug>
@@ -1309,61 +1310,72 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> helixRise(const CommandState& state, co
   return std::make_pair(*center, state.checked(QStringLiteral("flip")) ? axis->second.Reversed() : axis->second);
 }
 
-// Whether the helix has a growth: anything but a plain zero.
-bool helixGrows(const CommandState& state) {
-  const QString growth = state.expression(QStringLiteral("growth")).trimmed();
-  if (growth.isEmpty()) {
-    return false;
+// Whether a value's text is empty or a plain zero ("0", "0 mm", "0 deg",
+// "0°").
+bool plainZero(const QString& expression) {
+  QString text = expression.trimmed();
+  if (text.endsWith(QChar(0x00B0))) {
+    text.chop(1);
+  }
+  if (text.isEmpty()) {
+    return true;
   }
   bool number = false;
-  const double value = growth.section(QLatin1Char(' '), 0, 0).toDouble(&number);
-  return !(number && value == 0.0 && growth.count(QLatin1Char(' ')) <= 1);
+  const double value = text.section(QLatin1Char(' '), 0, 0).toDouble(&number);
+  return number && value == 0.0 && text.count(QLatin1Char(' ')) <= 1;
+}
+
+// Whether the helix has a growth: anything but a plain zero.
+bool helixGrows(const CommandState& state) { return !plainZero(state.expression(QStringLiteral("growth"))); }
+
+// A helix's flat ends (mitcad#1798): the definition's `start` and `end`,
+// each of a flat part and a transition, and the inputs that give them.
+struct HelixEndKeys {
+  const char* side;
+  const char* flat;
+  const char* transition;
+};
+constexpr HelixEndKeys kHelixEnds[] = {
+    {"start", "flat_start", "start_transition"},
+    {"end", "flat_end", "end_transition"},
+};
+
+// Whether one end has a flat part or a transition.
+bool helixEndGiven(const CommandState& state, const HelixEndKeys& end) {
+  return !plainZero(state.expression(QString::fromLatin1(end.flat))) ||
+         !plainZero(state.expression(QString::fromLatin1(end.transition)));
 }
 
 } // namespace
 
-CommandDef helixCommand(const CommandContext& context) {
-  CommandDef def;
-  def.id = QStringLiteral("solid.helix");
-  def.name = QObject::tr("Helix");
-  def.icon = QStringLiteral("helix");
-  def.tooltip = QObject::tr("Turns sketch profiles about an axis while they rise along it, as a screw moves");
-  def.group = QStringLiteral("CREATE");
-  def.section = QStringLiteral("primitives");
-  def.keywords = {QStringLiteral("screw"), QStringLiteral("thread"), QStringLiteral("spiral"),
-                  QStringLiteral("twist")};
-  def.featureType = QStringLiteral("helix");
+// Helix's sizes, shared by Surface Helix (mitcad#1797; CommandFactories.hpp).
+
+QVector<InputDef> helixSizeInputs(const HelixSizeTexts& texts) {
   const auto typeHas = [](const char* field) {
     return [field = QString::fromLatin1(field)](const CommandState& state) {
       return state.choice(QStringLiteral("type")).contains(field);
     };
   };
-  def.inputs = {
-      selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"), SelectKind::Profile, 1, 0),
-      selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
-                     SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge | SelectKind::Face, 1, 1)
-          .withTooltip(QObject::tr("A sketch line, an origin or construction axis, a straight "
-                                   "edge, or a cylindrical face"))
-          .withAccepts([](const SelectionItem& item) {
-            return item.kind == SelectKind::Axis || isLine(item) ||
-                   (item.kind == SelectKind::Face && isAxial(item));
-          }),
+  return {
       choiceInput(QStringLiteral("type"), QObject::tr("Type"),
                   {{kRevolutionsAndHeight, QStringLiteral("Revolution and Height")},
                    {kRevolutionsAndPitch, QStringLiteral("Revolution and Pitch")},
                    {kHeightAndPitch, QStringLiteral("Height and Pitch")}},
                   kRevolutionsAndPitch),
-      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("3")).withStepMinimum(0.0, true)
+      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, texts.revolutions)
+          .withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The turns; need not be whole"))
           .withVisible(typeHas("revolutions")),
-      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("30 mm")).withStepMinimum(0.0, true)
-          .withTooltip(QObject::tr("How far the profiles rise along the axis"))
+      valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, texts.height)
+          .withStepMinimum(0.0, true)
+          .withTooltip(texts.heightTooltip)
           .withVisible(typeHas("height"))
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
             const auto rise = helixRise(state, model);
             return rise ? std::optional<Manipulator>(arrow(rise->first, rise->second)) : std::nullopt;
           }),
-      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("10 mm")).withStepMinimum(0.0, true)
+      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, texts.pitch)
+          .withStepMinimum(0.0, true)
           .withTooltip(QObject::tr("The rise per turn"))
           .withVisible(typeHas("pitch"))
           .withManipulator([](const CommandState& state, const CommandContext& model) -> std::optional<Manipulator> {
@@ -1378,8 +1390,144 @@ CommandDef helixCommand(const CommandContext& context) {
             return handle;
           }),
       valueInput(QStringLiteral("growth"), QObject::tr("Growth"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(QObject::tr("How far the profiles move out from the axis per turn; negative narrows "
-                                   "the helix")),
+          .withTooltip(texts.growthTooltip),
+  };
+}
+
+void addHelixSizes(QJsonObject& definition, const CommandState& state) {
+  const QString type = state.choice(QStringLiteral("type"));
+  QString pitch = state.expression(QStringLiteral("pitch"));
+  QString revolutions = state.expression(QStringLiteral("revolutions"));
+  if (type == kHeightAndPitch) {
+    revolutions = ratio(state.expression(QStringLiteral("height")), pitch);
+  } else if (type == kRevolutionsAndHeight) {
+    pitch = ratio(state.expression(QStringLiteral("height")), revolutions);
+  }
+  definition.insert(QStringLiteral("pitch"), pitch);
+  definition.insert(QStringLiteral("revolutions"), revolutions);
+}
+
+// A height comes back from the ratio it went in as (also the FreeCAD
+// import's): revolutions "<height> / <pitch>" or a pitch
+// "<height> / <revolutions>".
+void loadHelixSizes(const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+  const QString uid = feature.value(QStringLiteral("uid")).toString();
+  const QString pitch = context.valueText(feature.value(QStringLiteral("pitch")), uid);
+  const QString revolutions = context.valueText(feature.value(QStringLiteral("revolutions")), uid);
+  if (const QString height = dividendOf(revolutions, pitch); !height.isEmpty()) {
+    state.setChoice(QStringLiteral("type"), kHeightAndPitch);
+    state.setText(QStringLiteral("height"), height);
+    state.setText(QStringLiteral("pitch"), pitch);
+  } else if (const QString rise = dividendOf(pitch, revolutions); !rise.isEmpty()) {
+    state.setChoice(QStringLiteral("type"), kRevolutionsAndHeight);
+    state.setText(QStringLiteral("height"), rise);
+    state.setText(QStringLiteral("revolutions"), revolutions);
+  } else {
+    state.setChoice(QStringLiteral("type"), kRevolutionsAndPitch);
+    state.setText(QStringLiteral("pitch"), pitch);
+    state.setText(QStringLiteral("revolutions"), revolutions);
+  }
+  if (feature.contains(QStringLiteral("growth"))) {
+    state.setText(QStringLiteral("growth"), context.valueText(feature.value(QStringLiteral("growth")), uid));
+  }
+}
+
+std::pair<double, double> helixTurnsAndPitch(const CommandState& state) {
+  const QString type = state.choice(QStringLiteral("type"));
+  const double height = state.value(QStringLiteral("height"));
+  double pitch = state.value(QStringLiteral("pitch"));
+  double turns = state.value(QStringLiteral("revolutions"));
+  if (type == kHeightAndPitch) {
+    turns = height / pitch;
+  } else if (type == kRevolutionsAndHeight) {
+    pitch = height / turns;
+  }
+  return {turns, pitch};
+}
+
+bool helixHasGrowth(const CommandState& state) { return helixGrows(state); }
+
+// Helix's flat ends, shared by Surface Helix (mitcad#1798; CommandFactories.hpp).
+
+QVector<InputDef> helixEndInputs() {
+  const QString zero = QStringLiteral("0 deg");
+  return {
+      valueInput(QStringLiteral("flat_start"), QObject::tr("Flat Start"), ValueKind::Angle, zero)
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the helix turns without rising at its start, before the start "
+                                   "transition")),
+      valueInput(QStringLiteral("start_transition"), QObject::tr("Start Transition"), ValueKind::Angle, zero)
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the helix turns while its pitch grows from zero to the pitch")),
+      valueInput(QStringLiteral("end_transition"), QObject::tr("End Transition"), ValueKind::Angle, zero)
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the helix turns while its pitch falls from the pitch to zero")),
+      valueInput(QStringLiteral("flat_end"), QObject::tr("Flat End"), ValueKind::Angle, zero)
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("How far the helix turns without rising at its end, after the end "
+                                   "transition")),
+  };
+}
+
+void addHelixEnds(QJsonObject& definition, const CommandState& state) {
+  for (const HelixEndKeys& end : kHelixEnds) {
+    if (!helixEndGiven(state, end)) {
+      continue;
+    }
+    definition.insert(QString::fromLatin1(end.side),
+                      QJsonObject{
+                          {QStringLiteral("transition_angle"), state.expression(QString::fromLatin1(end.transition))},
+                          {QStringLiteral("flat_angle"), state.expression(QString::fromLatin1(end.flat))},
+                      });
+  }
+}
+
+void loadHelixEnds(const QJsonObject& feature, CommandState& state, const CommandContext& context) {
+  const QString uid = feature.value(QStringLiteral("uid")).toString();
+  for (const HelixEndKeys& end : kHelixEnds) {
+    const QJsonObject angles = feature.value(QString::fromLatin1(end.side)).toObject();
+    if (angles.isEmpty()) {
+      continue;
+    }
+    state.setText(QString::fromLatin1(end.flat), context.valueText(angles.value(QStringLiteral("flat_angle")), uid));
+    state.setText(QString::fromLatin1(end.transition),
+                  context.valueText(angles.value(QStringLiteral("transition_angle")), uid));
+  }
+}
+
+bool helixHasEnds(const CommandState& state) {
+  return std::any_of(std::begin(kHelixEnds), std::end(kHelixEnds),
+                     [&state](const HelixEndKeys& end) { return helixEndGiven(state, end); });
+}
+
+CommandDef helixCommand(const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("solid.helix");
+  def.name = QObject::tr("Helix");
+  def.icon = QStringLiteral("helix");
+  def.tooltip = QObject::tr("Turns sketch profiles about an axis while they rise along it, as a screw moves");
+  def.group = QStringLiteral("CREATE");
+  def.section = QStringLiteral("primitives");
+  def.keywords = {QStringLiteral("screw"), QStringLiteral("thread"), QStringLiteral("spiral"),
+                  QStringLiteral("twist")};
+  def.featureType = QStringLiteral("helix");
+  def.inputs = {
+      selectionInput(QStringLiteral("profiles"), QObject::tr("Profiles"), SelectKind::Profile, 1, 0),
+      selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
+                     SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge | SelectKind::Face, 1, 1)
+          .withTooltip(QObject::tr("A sketch line, an origin or construction axis, a straight "
+                                   "edge, or a cylindrical face"))
+          .withAccepts([](const SelectionItem& item) {
+            return item.kind == SelectKind::Axis || isLine(item) ||
+                   (item.kind == SelectKind::Face && isAxial(item));
+          }),
+  };
+  def.inputs += helixSizeInputs({QStringLiteral("3"), QStringLiteral("30 mm"), QStringLiteral("10 mm"),
+                                 QObject::tr("How far the profiles rise along the axis"),
+                                 QObject::tr("How far the profiles move out from the axis per turn; negative narrows "
+                                             "the helix")});
+  def.inputs += helixEndInputs();
+  def.inputs += {
       choiceInput(QStringLiteral("hand"), QObject::tr("Handedness"),
                   {{QStringLiteral("right"), QStringLiteral("Right Hand")},
                    {QStringLiteral("left"), QStringLiteral("Left Hand")}},
@@ -1398,25 +1546,22 @@ CommandDef helixCommand(const CommandContext& context) {
     if (oneSketch(profiles, result, QStringLiteral("profiles")).isEmpty()) {
       return result;
     }
-    const QString type = state.choice(QStringLiteral("type"));
-    QString pitch = state.expression(QStringLiteral("pitch"));
-    QString revolutions = state.expression(QStringLiteral("revolutions"));
-    if (type == kHeightAndPitch) {
-      revolutions = ratio(state.expression(QStringLiteral("height")), pitch);
-    } else if (type == kRevolutionsAndHeight) {
-      pitch = ratio(state.expression(QStringLiteral("height")), revolutions);
-    }
     result.def = {{QStringLiteral("type"), QStringLiteral("helix")},
                   {QStringLiteral("profiles"), refsOf(profiles)},
-                  {QStringLiteral("axis"), state.items(QStringLiteral("axis")).first().reference()},
-                  {QStringLiteral("pitch"), pitch},
-                  {QStringLiteral("revolutions"), revolutions}};
+                  {QStringLiteral("axis"), state.items(QStringLiteral("axis")).first().reference()}};
+    addHelixSizes(result.def, state);
+    addHelixEnds(result.def, state);
+    if (helixHasEnds(state)) {
+      // Only Mitcad's construction builds flat ends (mitcad#1798); said
+      // outright, since an edit would keep FreeCAD's otherwise.
+      result.def.insert(QStringLiteral("construction"), QStringLiteral("mitcad"));
+    }
     if (helixGrows(state)) {
       result.def.insert(QStringLiteral("growth"), state.expression(QStringLiteral("growth")));
       // An edited helix keeps its construction (FreeCAD's for the FreeCAD
       // import's); a new one is Mitcad's.
       const QString construction = state.choice(QStringLiteral("construction"));
-      if (!construction.isEmpty()) {
+      if (!construction.isEmpty() && !result.def.contains(QStringLiteral("construction"))) {
         result.def.insert(QStringLiteral("construction"), construction);
       }
     }
@@ -1430,34 +1575,16 @@ CommandDef helixCommand(const CommandContext& context) {
     return result;
   };
 
-  // A height comes back from the ratio it went in as (also the FreeCAD
-  // import's): revolutions "<height> / <pitch>" or a pitch
-  // "<height> / <revolutions>".
+  // The sizes as they went in (loadHelixSizes: a height from its ratio),
+  // and the flat ends (loadHelixEnds), so that an edit keeps them.
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& context) {
     state.setItems(QStringLiteral("profiles"), profilesOf(feature.value(QStringLiteral("profiles")).toArray()));
     const SelectionItem axis = itemOf(feature.value(QStringLiteral("axis")), context);
     if (axis.isValid()) {
       state.setItems(QStringLiteral("axis"), {axis});
     }
-    const QString uid = feature.value(QStringLiteral("uid")).toString();
-    const QString pitch = context.valueText(feature.value(QStringLiteral("pitch")), uid);
-    const QString revolutions = context.valueText(feature.value(QStringLiteral("revolutions")), uid);
-    if (const QString height = dividendOf(revolutions, pitch); !height.isEmpty()) {
-      state.setChoice(QStringLiteral("type"), kHeightAndPitch);
-      state.setText(QStringLiteral("height"), height);
-      state.setText(QStringLiteral("pitch"), pitch);
-    } else if (const QString rise = dividendOf(pitch, revolutions); !rise.isEmpty()) {
-      state.setChoice(QStringLiteral("type"), kRevolutionsAndHeight);
-      state.setText(QStringLiteral("height"), rise);
-      state.setText(QStringLiteral("revolutions"), revolutions);
-    } else {
-      state.setChoice(QStringLiteral("type"), kRevolutionsAndPitch);
-      state.setText(QStringLiteral("pitch"), pitch);
-      state.setText(QStringLiteral("revolutions"), revolutions);
-    }
-    if (feature.contains(QStringLiteral("growth"))) {
-      state.setText(QStringLiteral("growth"), context.valueText(feature.value(QStringLiteral("growth")), uid));
-    }
+    loadHelixSizes(feature, state, context);
+    loadHelixEnds(feature, state, context);
     state.setChoice(QStringLiteral("construction"), feature.value(QStringLiteral("construction")).toString());
     state.setChoice(QStringLiteral("hand"), feature.value(QStringLiteral("left_handed")).toBool()
                                                 ? QStringLiteral("left")
@@ -1474,15 +1601,7 @@ CommandDef helixCommand(const CommandContext& context) {
   };
 
   def.describe = [](const CommandState& state, const CommandContext&) {
-    const QString type = state.choice(QStringLiteral("type"));
-    const double height = state.value(QStringLiteral("height"));
-    double pitch = state.value(QStringLiteral("pitch"));
-    double turns = state.value(QStringLiteral("revolutions"));
-    if (type == kHeightAndPitch) {
-      turns = height / pitch;
-    } else if (type == kRevolutionsAndHeight) {
-      pitch = height / turns;
-    }
+    const auto [turns, pitch] = helixTurnsAndPitch(state);
     QString text = QStringLiteral("Added helix (%1), %2 turns of %3, %4")
                        .arg(label(kOperations, state.choice(QStringLiteral("operation"))), number(turns),
                             number(pitch),
@@ -1491,6 +1610,9 @@ CommandDef helixCommand(const CommandContext& context) {
                                 : QStringLiteral("right-handed"));
     if (helixGrows(state)) {
       text += QStringLiteral(", growing %1 per turn").arg(number(state.value(QStringLiteral("growth"))));
+    }
+    if (helixHasEnds(state)) {
+      text += QStringLiteral(", with flat ends");
     }
     return text;
   };
@@ -1611,24 +1733,6 @@ CommandDef intersectionCurveCommand(const CommandContext& context) {
 // do (a height as their ratio).
 
 namespace {
-
-// Whether a value's expression is a plain zero (left out of the model's
-// definition): empty, "0" or a zero with its unit.
-bool plainZero(const QString& expression) {
-  const QString text = expression.trimmed();
-  if (text.isEmpty()) {
-    return true;
-  }
-  bool number = false;
-  const double value = text.section(QLatin1Char(' '), 0, 0).toDouble(&number);
-  if (!number) {
-    // "0°" and the like.
-    QString digits = text;
-    digits.remove(QChar(0x00B0));
-    return digits.trimmed().toDouble(&number) == 0.0 && number;
-  }
-  return value == 0.0 && text.count(QLatin1Char(' ')) <= 1;
-}
 
 // Whether the axis picked is a face (its radius can come from it).
 bool helixCurveOnFace(const CommandState& state) {

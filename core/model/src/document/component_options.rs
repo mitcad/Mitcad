@@ -754,7 +754,7 @@ impl<K: Kernel> Document<K> {
             .assembly
             .component(component)
             .is_some_and(|c| c.build.is_some());
-        part_options::configure_json(
+        let mut answer = part_options::configure_json(
             &design,
             &label,
             def.config.as_deref(),
@@ -763,7 +763,23 @@ impl<K: Kernel> Document<K> {
             &expressions,
             Some(&naming(source, build)),
         )
-        .map_err(invalid)
+        .map_err(invalid)?;
+        // The source's rows, which a part's edit panel offers (mitcad#1812):
+        // their names in the table's order, the part's own row (null for the
+        // source's default) and that default.
+        let table = &design.configurations;
+        answer["rows"] = Value::from(
+            table
+                .rows
+                .iter()
+                .map(|row| row.name.clone())
+                .collect::<Vec<_>>(),
+        );
+        answer["config"] = def.config.clone().map_or(Value::Null, Value::from);
+        answer["default_row"] = table
+            .default_row()
+            .map_or(Value::Null, |row| Value::from(row.name.clone()));
+        Ok(answer)
     }
 
     /// A component with options in the parts list (not a BUILD part's,

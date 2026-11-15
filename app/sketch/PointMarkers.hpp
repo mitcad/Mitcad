@@ -94,9 +94,12 @@ struct HighlightBall {
   QColor color;
 };
 struct HighlightLayers {
-  // Curves, lines and axes highlighted (4 px), in the order given: a later
-  // one (the hover) over an earlier one (the selection).
+  // Curves, lines and axes highlighted, in the order given: a later one
+  // (the hover) over an earlier one (the selection).
   std::vector<HighlightStroke> strokes;
+  // Their width in view pixels: Preferences › Display › Selected line
+  // width's (selectedEdgeWidth, mitcad#1803), 4 at Normal.
+  double strokeWidth = 4.0;
   // The plain markers of the highlighted curves' points that are not
   // highlighted themselves, as the view draws them.
   std::vector<HighlightMarker> markers;

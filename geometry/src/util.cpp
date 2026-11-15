@@ -42,6 +42,8 @@
 #include <TopoDS_Vertex.hxx>
 #include <gp_Pnt2d.hxx>
 
+#include "content_cache.hpp"
+
 namespace mitcad::geometry::detail {
 namespace {
 
@@ -89,7 +91,7 @@ struct Measure {
   double xmin = 0.0, ymin = 0.0, zmin = 0.0, xmax = 0.0, ymax = 0.0, zmax = 0.0;
 };
 
-Measure measure(const TopoDS_Shape& shape) {
+Measure measured(const TopoDS_Shape& shape) {
   GProp_GProps props;
   switch (shape.ShapeType()) {
   case TopAbs_SOLID:
@@ -120,6 +122,26 @@ Measure measure(const TopoDS_Shape& shape) {
   if (!box.IsVoid()) {
     box.Get(m.xmin, m.ymin, m.zmin, m.xmax, m.ymax, m.zmax);
   }
+  return m;
+}
+
+// The measure of a shape; a face's kept by its bytes (mitcad#1801): the
+// pieces of a modelled thread's faces are ordered by their measures after
+// every dressup and boolean, and each works on a copy of its input, so the
+// same faces come again as new shapes. A face's surface integral takes
+// longer than writing it.
+Measure measure(const TopoDS_Shape& shape) {
+  if (shape.ShapeType() != TopAbs_FACE) {
+    return measured(shape);
+  }
+  static ContentCache<Measure> kept(20000, std::size_t(256) << 20);
+  std::string key = shape_bytes(shape);
+  Measure m;
+  if (!key.empty() && kept.find(key, m)) {
+    return m;
+  }
+  m = measured(shape);
+  kept.keep(std::move(key), m);
   return m;
 }
 
@@ -351,7 +373,10 @@ void require_valid(const TopoDS_Shape& shape, const char* operation) {
   const BRepCheck_Analyzer analyzer(shape, true, true);
   throw_if_allocation_failed(failed);
   if (!analyzer.IsValid()) {
-    throw std::runtime_error(std::string(operation) + " produced an invalid shape" + first_problem(analyzer, shape));
+    // The checker's findings (BRepCheck_… names) go to the detail and the
+    // log only; a person reads the words (mitcad#1851).
+    const std::string said = std::string(operation) + " produced an invalid shape";
+    throw std::runtime_error(placed_error(said, said + first_problem(analyzer, shape)));
   }
 }
 

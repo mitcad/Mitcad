@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::ApiError;
 use super::dispatch::named_enum;
@@ -167,6 +167,10 @@ named_enum! {
             /// The path of the new parent's occurrence; empty: the root.
             #[serde(default)]
             parent: String,
+            /// Other occurrences of the same parent that go with it in the
+            /// same step (mitcad#1847), by their paths from the root.
+            #[serde(default)]
+            with: Vec<String>,
         },
         // Options of an inserted component (mitcad#801).
         "set_component_parameters" => SetComponentParameters {
@@ -235,6 +239,13 @@ named_enum! {
             /// file's.
             #[serde(default)]
             base: Option<String>,
+        },
+        // An occurrence whose component's joints move in its parent
+        // (mitcad#1793).
+        "set_occurrence_flexible" => SetOccurrenceFlexible {
+            occurrence: String,
+            #[serde(default = "yes")]
+            flexible: bool,
         },
     }
 }
@@ -338,6 +349,9 @@ pub(crate) struct ReparentQuery {
     occurrence: String,
     #[serde(default)]
     parent: Option<String>,
+    /// Other occurrences of the same parent that go with it (mitcad#1847).
+    #[serde(default)]
+    with: Vec<String>,
 }
 
 /// The `save_component_as_design` query (mitcad#1057): what saving a
@@ -664,17 +678,37 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let messages = self.update_links(base.as_deref())?;
                 json!({"messages": messages})
             }
-            ComponentCommand::ReparentOccurrence { occurrence, parent } => {
-                let source = self.path_ref(&occurrence)?;
+            ComponentCommand::ReparentOccurrence {
+                occurrence,
+                parent,
+                with,
+            } => {
+                let mut sources = vec![self.path_ref(&occurrence)?];
+                for other in &with {
+                    sources.push(self.path_ref(other)?);
+                }
                 let destination = self.path_ref(&parent)?;
-                let plan = self.reparent_occurrence(&source, &destination)?;
+                let plan = self.reparent_occurrences(&sources, &destination)?;
                 let a = self.assembly();
                 let path = plan.path();
                 let features = self.carried_json(&plan);
-                json!({"occurrence": plan.occurrence, "component": plan.component,
+                // Every occurrence that moved, the first one first
+                // (mitcad#1847).
+                let moved: Vec<Value> = plan
+                    .moved
+                    .iter()
+                    .map(|m| {
+                        let path = plan.path_of(m);
+                        json!({"occurrence": m.occurrence, "component": m.component,
+                               "path": OccurrencePath(path.clone()),
+                               "path_name": a.path_name(&path)})
+                    })
+                    .collect();
+                json!({"occurrence": plan.first().occurrence,
+                       "component": plan.first().component,
                        "path": OccurrencePath(path.clone()), "path_name": a.path_name(&path),
                        "parent": plan.destination, "updated": plan.updates,
-                       "features": features})
+                       "features": features, "moved": moved})
             }
             ComponentCommand::SetOccurrenceTransparent {
                 occurrence,
@@ -715,12 +749,28 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 let done = self.update_link(uid, base.as_deref())?;
                 json!({"updated": done.updated, "messages": done.messages})
             }
+            ComponentCommand::SetOccurrenceFlexible {
+                occurrence,
+                flexible,
+            } => {
+                let uid = self.occurrence_ref(&occurrence)?;
+                self.set_occurrence_flexible(uid, flexible)?;
+                json!({"flexible": flexible})
+            }
         })
     }
 
     fn reparent_json(&self, query: &ReparentQuery) -> Result<Value, ApiError> {
         let a = self.assembly();
         let source = self.path_ref(&query.occurrence)?;
+        // The occurrences that go with it (mitcad#1847).
+        let mut sources = vec![source.clone()];
+        for other in &query.with {
+            let path = self.path_ref(other)?;
+            if !sources.contains(&path) {
+                sources.push(path);
+            }
+        }
         let label = |path: &[OccurrenceUid]| {
             if path.is_empty() {
                 a.root_name.clone()
@@ -728,12 +778,18 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                 format!("{}/{}", a.root_name, a.path_name(path))
             }
         };
-        let problems: Vec<String> = self
-            .reparent_source(&source)
-            .err()
-            .map(|e| e.to_string())
-            .into_iter()
-            .collect();
+        // An occurrence by its uid, name and path.
+        let row = |path: &[OccurrenceUid]| {
+            let uid = *path.last()?;
+            Some(json!({"occurrence": uid, "name": a.occurrence_name(uid),
+                        "path": OccurrencePath(path.to_vec()), "path_name": label(path)}))
+        };
+        let mut problems: Vec<String> = Vec::new();
+        for path in &sources {
+            if let Err(e) = self.reparent_source(path) {
+                problems.push(e.to_string());
+            }
+        }
         let Some((&uid, parents)) = source.split_last() else {
             let root = json!({"occurrence": null, "path": "", "path_name": a.root_name,
                               "problems": problems, "destinations": []});
@@ -742,21 +798,38 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
         let occurrence = a
             .occurrence(uid)
             .ok_or_else(|| ApiError(format!("occurrence {uid} does not exist")))?;
-        // What moves with it: its component and everything placed in it.
+        // What moves with them: their components and everything placed in
+        // them (named from the occurrence when several move).
+        let several = sources.len() > 1;
         let mut inside = Vec::new();
-        let mut components = vec![occurrence.component];
-        let mut todo = vec![(occurrence.component, String::new())];
-        while let Some((component, prefix)) = todo.pop() {
-            if inside.len() > 4096 {
-                break; // a guard against cycles in loaded data
+        let mut components = Vec::new();
+        let mut listed = Vec::new();
+        for path in &sources {
+            let Some(moved) = path.last().and_then(|o| a.occurrence(*o)) else {
+                continue;
+            };
+            let top = if several {
+                format!("{}/", a.occurrence_name(moved.uid))
+            } else {
+                String::new()
+            };
+            listed.extend(row(path.as_slice()));
+            if !components.contains(&moved.component) {
+                components.push(moved.component);
             }
-            for child in a.children(component) {
-                let name = format!("{prefix}{}", a.occurrence_name(child.uid));
-                inside.push(name.clone());
-                if !components.contains(&child.component) {
-                    components.push(child.component);
+            let mut todo = vec![(moved.component, top)];
+            while let Some((component, prefix)) = todo.pop() {
+                if inside.len() > 4096 {
+                    break; // a guard against cycles in loaded data
                 }
-                todo.push((child.component, format!("{name}/")));
+                for child in a.children(component) {
+                    let name = format!("{prefix}{}", a.occurrence_name(child.uid));
+                    inside.push(name.clone());
+                    if !components.contains(&child.component) {
+                        components.push(child.component);
+                    }
+                    todo.push((child.component, format!("{name}/")));
+                }
             }
         }
         inside.sort();
@@ -768,15 +841,22 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             .features()
             .filter(|f| components.contains(&f.component))
             .count();
+        // The rest of the rigid groups that hold them, which Move to
+        // Component offers to move with them (mitcad#1847).
+        let group: Vec<Value> = self
+            .rigid_group_of(&sources)
+            .iter()
+            .filter_map(|path| row(path.as_slice()))
+            .collect();
         let mut destinations = Vec::new();
         for component in
             std::iter::once(ComponentUid::ROOT).chain(a.components.iter().map(|c| c.uid))
         {
             for path in a.paths_to(component) {
-                let reason = self
-                    .plan_reparent(&source, &path)
-                    .err()
-                    .map(|blockers| blockers.join("; "));
+                // Each blocker on its own (mitcad#1847: the picker shows
+                // them under the row), and joined.
+                let reasons = self.plan_reparent_all(&sources, &path).err();
+                let reason = reasons.as_ref().map(|blockers| blockers.join("; "));
                 let parent_occurrence =
                     OccurrencePath(path[..path.len().saturating_sub(1)].to_vec());
                 destinations.push(json!({
@@ -785,6 +865,7 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
                     "parent_occurrence": parent_occurrence,
                     "current": path == parents,
                     "eligible": reason.is_none(), "reason": reason.unwrap_or_default(),
+                    "reasons": reasons.unwrap_or_default(),
                 }));
             }
         }
@@ -798,6 +879,8 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
             "parent": occurrence.parent,
             "parent_path": label(parents),
             "grounded": occurrence.grounded,
+            "occurrences": listed,
+            "rigid_group": group,
             "contents": {"occurrences": inside, "components": components.len(),
                          "bodies": bodies, "features": features},
             "problems": problems,
@@ -805,16 +888,23 @@ impl<K: Kernel> ComponentsCrateOps<K> for Document<K> {
         });
         if let Some(parent) = &query.parent {
             let destination = self.path_ref(parent)?;
-            value["plan"] = match self.plan_reparent(&source, &destination) {
-                Ok(plan) => json!({
-                    "eligible": true, "parent": plan.destination,
-                    "parent_path": label(&plan.destination_path),
-                    "from": plan.parent, "from_path": label(&plan.source[..plan.source.len() - 1]),
-                    "path": OccurrencePath(plan.path()),
-                    "transform": matrix_rows(&plan.transform),
-                    "updates": plan.updates, "features": self.carried_json(&plan),
-                    "problems": [],
-                }),
+            value["plan"] = match self.plan_reparent_all(&sources, &destination) {
+                Ok(plan) => {
+                    let moved: Vec<Value> = plan
+                        .moved
+                        .iter()
+                        .map(|m| json!(OccurrencePath(plan.path_of(m))))
+                        .collect();
+                    json!({
+                        "eligible": true, "parent": plan.destination,
+                        "parent_path": label(&plan.destination_path),
+                        "from": plan.parent, "from_path": label(plan.from_path()),
+                        "path": OccurrencePath(plan.path()), "moved": moved,
+                        "transform": matrix_rows(&plan.first().transform),
+                        "updates": plan.updates, "features": self.carried_json(&plan),
+                        "problems": [],
+                    })
+                }
                 Err(blockers) => json!({"eligible": false, "problems": blockers, "updates": [],
                                         "features": []}),
             };
@@ -976,7 +1066,11 @@ impl<K: Kernel> ComponentsLocal<K> for Document<K> {
             .map(|o| {
                 let mut path = path.to_vec();
                 path.push(o.uid);
-                let placement = self.placement(o.uid).unwrap_or(o.transform);
+                // Inside flexible occurrences where it is for them (mitcad#1793,
+                // nested mitcad#1805).
+                let placement = self
+                    .placement_after(&path[..path.len() - 1], o.uid)
+                    .unwrap_or(o.transform);
                 let world = at.after(&placement);
                 let mut value = json!({
                     "uid": o.uid,
@@ -992,6 +1086,23 @@ impl<K: Kernel> ComponentsLocal<K> for Document<K> {
                 // Drawn see-through with its contents (mitcad#1093).
                 if o.transparent {
                     value["transparent"] = json!(true);
+                }
+                // Flexible in its parent (mitcad#1793), with the values of
+                // its component's joints for it.
+                if o.flexible.is_some() {
+                    value["flexible"] = json!(true);
+                    let values: Map<String, Value> = self
+                        .flexible_joint_values(o.uid)
+                        .iter()
+                        .map(|(uid, motions)| {
+                            let motions: Map<String, Value> = motions
+                                .iter()
+                                .map(|(m, v)| (m.as_str().to_owned(), json!(v)))
+                                .collect();
+                            (uid.to_string(), Value::Object(motions))
+                        })
+                        .collect();
+                    value["joint_values"] = Value::Object(values);
                 }
                 // The condition it is shown under (mitcad#800), the
                 // parameters it uses, and why it does not hold.

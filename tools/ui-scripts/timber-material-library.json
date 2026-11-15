@@ -1,0 +1,19 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-timber-material", "name": "Test timber material",
+  "description": "A synthetic planed timber member of the timber material UI test (mitcad#1817).",
+  "library_version": "1.0.0", "license": "MIT", "authors": ["MitCad UI test"], "units": "mm",
+  "categories": [{"id": "planed-timber", "name": "Planed timber"}],
+  "components": [
+    {"id": "planed-28x45-test", "path": "planed-timber/planed-28x45-test.mitcad", "name": "Planed 28x45 test",
+     "category": "planed-timber", "designation": "Planed 28x45 test L={L}",
+     "build": {"role": "profile", "kind": "timber",
+       "material": {"species": "spruce", "finish": "planed", "grade": "", "density": 450, "moisture": 20},
+       "availability": "standard",
+       "section": {"width": "45 mm", "height": "28 mm"}, "nominal": {"width": "45 mm", "height": "28 mm"},
+       "length": {"parameter": "L", "min": "100 mm", "max": "6000 mm", "default": "1800 mm",
+                  "stock": ["3000 mm", "3600 mm", "4200 mm"]},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"},
+                  {"name": "face_xp", "kind": "face"}, {"name": "face_xn", "kind": "face"},
+                  {"name": "face_yp", "kind": "face"}, {"name": "face_yn", "kind": "face"}]}}
+  ]
+}

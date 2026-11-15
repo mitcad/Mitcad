@@ -8,6 +8,23 @@
 use crate::geom::{NurbsCurve, NurbsSurface, P3, Plane};
 use mitcad_asm::brep::{BSplineCurve, BSplineSurface};
 
+/// The most spans [`Spline::arc`] makes: two full turns of quarter turns
+/// (an arc the reader takes has at most four, five with its rounding).
+pub const MAX_ARC_SPANS: usize = 8;
+
+/// The most poles a surface built here (a sum surface, a whole surface of
+/// revolution) may have, shared with the other importers: its curves are
+/// bounded by the file's bytes, but their product is not, so a crafted
+/// file could ask for billions of poles. A surface over the limit is
+/// refused in words.
+pub use mitcad_asm::brep::MAX_SURFACE_POLES;
+
+/// The poles of an `nu` by `nv` surface, or why it is not built.
+fn surface_poles(nu: usize, nv: usize) -> Result<usize, String> {
+    mitcad_asm::brep::product_poles(nu, nv)
+        .ok_or_else(|| "a surface with more control points than MitCad builds".to_owned())
+}
+
 /// A B-spline with its full knot vector (`poles + degree + 1` knots) and
 /// homogeneous control points (`x w, y w, z w, w`).
 #[derive(Clone, Debug, PartialEq)]
@@ -150,12 +167,15 @@ impl Spline {
 
     /// A circular arc as a rational quadratic B-spline over `domain`, in
     /// spans of at most a quarter turn. Its parameter is not the arc's
-    /// angle; the shape is exact.
+    /// angle; the shape is exact. The reader takes arcs of at most a full
+    /// turn; the spans are capped all the same ([`MAX_ARC_SPANS`]), so that
+    /// angles that slipped past it cannot ask for billions of them.
     pub fn arc(plane: &Plane, radius: f64, angles: [f64; 2], domain: [f64; 2]) -> Spline {
         let sweep = angles[1] - angles[0];
-        let spans = ((sweep.abs() / std::f64::consts::FRAC_PI_2) - 1e-9)
+        let spans = (((sweep.abs() / std::f64::consts::FRAC_PI_2) - 1e-9)
             .ceil()
-            .max(1.0) as usize;
+            .max(1.0) as usize)
+            .min(MAX_ARC_SPANS);
         let d = sweep / spans as f64;
         let w = (d / 2.0).cos();
         let at = |angle: f64, r: f64| -> P3 {
@@ -420,9 +440,9 @@ pub fn surface_to_brep(s: &NurbsSurface, scale: f64) -> BSplineSurface {
 
 /// The surface `a(s) + b(t) + base` as a B-spline (exact: the sum of two
 /// rational curves is the tensor product with the products of their
-/// weights).
-pub fn sum_surface(a: &Spline, b: &Spline, base: P3, scale: f64) -> BSplineSurface {
-    let mut cvs = Vec::with_capacity(a.cvs.len() * b.cvs.len());
+/// weights). Refused over [`MAX_SURFACE_POLES`].
+pub fn sum_surface(a: &Spline, b: &Spline, base: P3, scale: f64) -> Result<BSplineSurface, String> {
+    let mut cvs = Vec::with_capacity(surface_poles(a.cvs.len(), b.cvs.len())?);
     for ca in &a.cvs {
         for cb in &b.cvs {
             let (wa, wb) = (ca[3], cb[3]);
@@ -438,7 +458,7 @@ pub fn sum_surface(a: &Spline, b: &Spline, base: P3, scale: f64) -> BSplineSurfa
     let rational = cvs.iter().any(|c| (c[3] - 1.0).abs() > 1e-12);
     let (u_knots, u_mults) = distinct(&a.knots);
     let (v_knots, v_mults) = distinct(&b.knots);
-    BSplineSurface {
+    Ok(BSplineSurface {
         u_degree: a.degree,
         v_degree: b.degree,
         u_knots,
@@ -462,7 +482,7 @@ pub fn sum_surface(a: &Spline, b: &Spline, base: P3, scale: f64) -> BSplineSurfa
         v_periodic: false,
         u_closed: false,
         v_closed: false,
-    }
+    })
 }
 
 /// The surface of `profile` turned about the axis through `origin` along
@@ -473,13 +493,14 @@ pub fn sum_surface(a: &Spline, b: &Spline, base: P3, scale: f64) -> BSplineSurfa
 /// parameter; so its normal is the same. Used for a face that covers its
 /// whole surface of revolution (a sphere whose loop is only its seam and
 /// its poles), which the builder then takes with its natural bounds.
+/// Refused over [`MAX_SURFACE_POLES`].
 pub fn revolution_surface(
     profile: &Spline,
     origin: P3,
     axis: P3,
     angles: [f64; 2],
     scale: f64,
-) -> BSplineSurface {
+) -> Result<BSplineSurface, String> {
     let unit = Plane {
         origin: [0.0; 3],
         x: [1.0, 0.0, 0.0],
@@ -487,7 +508,7 @@ pub fn revolution_surface(
         z: [0.0, 0.0, 1.0],
     };
     let circle = Spline::arc(&unit, 1.0, angles, angles);
-    let mut cvs = Vec::with_capacity(circle.cvs.len() * profile.cvs.len());
+    let mut cvs = Vec::with_capacity(surface_poles(circle.cvs.len(), profile.cvs.len())?);
     for c in &circle.cvs {
         let (cx, cy, wc) = (c[0] / c[3], c[1] / c[3], c[3]);
         for p in &profile.cvs {
@@ -527,7 +548,7 @@ pub fn revolution_surface(
     let rational = cvs.iter().any(|c| (c[3] - 1.0).abs() > 1e-12);
     let (u_knots, u_mults) = distinct(&circle.knots);
     let (v_knots, v_mults) = distinct(&profile.knots);
-    BSplineSurface {
+    Ok(BSplineSurface {
         u_degree: circle.degree,
         v_degree: profile.degree,
         u_knots,
@@ -551,5 +572,5 @@ pub fn revolution_surface(
         v_periodic: false,
         u_closed: false,
         v_closed: false,
-    }
+    })
 }

@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MIT
+# The Docked layout's Command panel after a restart (mitcad#1825, GitHub
+# mitcad/Mitcad#336): MitCad started again at Text size and Icon size 200 %
+# after docked-command-width.mitcad-ui dragged the panel wider, with
+#   MITCAD_TEST_COMMAND_WIDTH  the width it remembered.
+#   1. The panel gets that width back: "Command panel: dock width <w>
+#      restored", and its width is logged at it (the runner allows a few
+#      pixels for the window's own layout).
+#   2. A sketch: the Sketch Palette's rows whole within the panel again, no
+#      button clipped.
+# Run by tools/ui-docked-command-width-test.sh (Linux) and
+# tools/ui-windows-docked-command-width-test.ps1 (Windows), both Docked.
+expect-ever '^Text and icon size: Text size 200%, Icon size 200%, ' 30
+expect-ever 'View area' 30
+expect-ever '^Command panel: dock width ${MITCAD_TEST_COMMAND_WIDTH} restored$' 20
+wait-idle
+window-resize 1500 950
+wait-idle
+expect-setting commandPanel/dockWidth ${MITCAD_TEST_COMMAND_WIDTH}
+expect-ever '^Command panel width [0-9]+ [(]at least 600[)]$' 10
+
+# 2. A sketch: the palette whole within the restored panel. The plane is
+#    picked by the browser's XY row, as floating-command-width.mitcad-ui
+#    does: where the screen keeps the window smaller (Windows' 1024 x 768,
+#    the window 1028 x 749), the restored panel leaves the view a few
+#    pixels wide and the XY plane has no place in it to click.
+mark
+command sketch.create
+expect-log '^Create Sketch: select a plane' 10
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+wheel-logged '^Browser Root/Origin at ' -10
+wait-idle 60
+expect-log '^Browser Root/Origin/XY at ' 10
+click-logged '^Browser Root/Origin/XY at '
+expect-log 'Sketch started on xy' 10
+wait-idle
+expect-log '^Palette rows cut: none [(]' 10
+expect-log '^Palette buttons clipped: none ' 10
+expect-never 'TestDriver: FAIL'

@@ -26,6 +26,11 @@
 #      OK gives the plate a schedule of its own: the design's events and
 #      the change at the face. The design saved keeps both schedules and
 #      the references.
+#   9. (mitcad#1842) Filament Change open on the design's second event
+#      while the panel removes the first: the window follows its event,
+#      now row 1, and OK replaces that event, none lost or doubled; Remove
+#      of the event the window edits closes it. (After the save of 8: the
+#      design saved is not changed by it.)
 # Run by tools/ui-filament-changes-test.sh (Linux) and
 # tools/ui-windows-filament-changes-test.ps1 (Windows).
 wait-idle
@@ -198,4 +203,45 @@ wait-log '^Filament change overlay: none$' 30
 mark
 key ctrl+s
 wait-log '^Saved ' 30
+
+# 9. Filament Change on the second event, Remove of the first in the
+# panel, then OK: the edit replaces the same event (the plane's change
+# becomes a pause), the first one is gone, nothing is doubled.
+mark
+command make.print3d
+expect-log '^Command Send to Slicer started'
+wait-log '^Panel Send to Slicer action change_2[.]0 at ' 30
+click-logged '^Panel Send to Slicer action change_2[.]0 at '
+focus-dialog '^Filament Change$' 30
+wait-log '^Filament change dialog: row 2, to object Plane1: 15 mm above the bed, change to PLA Two \(Blue\)$' 10
+focus-main
+mark
+click-logged '^Panel Send to Slicer action change_1[.]1 at '
+wait-log '^Filament changes: removed 14 mm$' 30
+wait-log '^Send to Slicer filament changes: Plane1 \(15 mm\): Change to PLA Two \(Blue\)$' 30
+wait-log '^Filament change dialog: now row 1$' 10
+focus-dialog '^Filament Change$' 10
+qt-choice filamentChangeTo 'Pause'
+button '^OK$'
+focus-main
+wait-log '^Send to Slicer filament changes: Plane1 \(15 mm\): Pause$' 30
+wait-log '^Panel Send to Slicer note change_1: Pause \[Edit\] \[Remove\]$' 30
+expect-no-log '^Filament change dialog refused'
+expect-no-log '^Filament changes refused'
+# Remove of the event the window edits closes the window.
+mark
+click-logged '^Panel Send to Slicer action change_1[.]0 at '
+focus-dialog '^Filament Change$' 30
+wait-log '^Filament change dialog: row 1, to object Plane1: 15 mm above the bed, change to Pause$' 10
+focus-main
+mark
+click-logged '^Panel Send to Slicer action change_1[.]1 at '
+wait-log '^Filament changes: removed Plane1 \(15 mm\)$' 30
+wait-log '^Filament change dialog closed: its event was removed$' 10
+wait-log '^Filament change dialog picks: off$' 10
+wait-log '^Send to Slicer filament changes: none$' 30
+expect-no-log '^Filament changes refused'
+key Escape
+key Escape
+wait-log '^Command Send to Slicer cancelled' 30
 expect-never 'TestDriver: FAIL'

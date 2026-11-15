@@ -1093,6 +1093,9 @@ CommandDef holeCommand(const CommandContext& context) {
                   QStringLiteral("clearance"), QStringLiteral("press fit"), QStringLiteral("hex"),
                   QStringLiteral("crush ribs"), QStringLiteral("teardrop"), QStringLiteral("flat roof")};
   def.featureType = QStringLiteral("hole");
+  // Repeat keeps the size fields typed at the OK typed, and only those
+  // (mitcad#1845); the others follow the size, the thread, again.
+  def.repeatState = typedState();
   const auto tapped = choiceIs(QStringLiteral("tap"), QStringLiteral("tapped"));
   // (A press-fit hole is a simple one, mitcad#1517.)
   const auto type = [](const char* kind) {
@@ -1647,6 +1650,9 @@ CommandDef threadCommand(const CommandContext& context) {
   def.section = QStringLiteral("faces");
   def.keywords = {QStringLiteral("tap"), QStringLiteral("screw"), QStringLiteral("bolt")};
   def.featureType = QStringLiteral("thread");
+  // Repeat keeps the size chosen only when it was chosen at the OK
+  // (mitcad#1845): one a face suggested is suggested by a face again.
+  def.repeatState = {kSizeChosen};
   // The faces are what it threads, not where it goes: the view's context
   // menu offers it first for them (mitcad#494).
   def.completes = [](const Selection&) { return true; };

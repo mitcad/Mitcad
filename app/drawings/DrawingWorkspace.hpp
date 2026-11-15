@@ -396,6 +396,7 @@ private:
   // The active tool's hint over the sheet.
   void showHint();
   void logButtons();
+  void fitBarRow();
   // A cut sheet's panel (mitcad#853): its material, parts and warnings,
   // or the selected part's face, rotation and copies.
   void fillCutSheetPanel();

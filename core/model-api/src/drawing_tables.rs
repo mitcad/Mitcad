@@ -644,9 +644,16 @@ impl<K: Kernel> DrawingTablesLocal<K> for Document<K> {
             RowKey::Body(body) => match column {
                 "quantity" => quantity.to_string(),
                 "name" => self.body_name(body),
-                "material" => self.body_material(body, None).0.name.clone(),
+                // None for a body without a material (mitcad#1817), never steel.
+                "material" => self
+                    .body_material_named(body, None)
+                    .map(|m| m.name.clone())
+                    .unwrap_or_default(),
                 // A property of its material (mitcad#1213).
-                other => self.material_cell(self.body_material(body, None).0, other),
+                other => self
+                    .body_material_named(body, None)
+                    .map(|m| self.material_cell(m, other))
+                    .unwrap_or_default(),
             },
             RowKey::Component(component) => {
                 let row = list.iter().find(|r| r.component == component);

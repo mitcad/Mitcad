@@ -22,7 +22,7 @@ use std::str::FromStr;
 
 use super::{Document, ModelError, invalid};
 use crate::features::renamed::faces_found;
-use crate::ids::BodyUid;
+use crate::ids::{BodyUid, ComponentUid};
 use crate::kernel::{Kernel, KernelError};
 use crate::topo::FaceName;
 
@@ -58,6 +58,10 @@ pub struct BodyAttributes {
     /// Drawn see-through (mitcad#1093): a display state like `visible`,
     /// independent of it; the appearance and material stay as they are.
     pub transparent: bool,
+    /// The folder of its component's Bodies folder the browser lists it in
+    /// (mitcad#1802: kept from an imported design), by name; None: in the
+    /// Bodies folder itself. Organisation only, like the name.
+    pub folder: Option<String>,
 }
 
 impl Default for BodyAttributes {
@@ -73,6 +77,7 @@ impl Default for BodyAttributes {
             visible_when: None,
             face_appearance_exprs: BTreeMap::new(),
             transparent: false,
+            folder: None,
         }
     }
 }
@@ -114,6 +119,120 @@ impl<K: Kernel> Document<K> {
             a.visible_when = None;
             Ok(())
         })
+    }
+
+    /// Puts a body into a folder of its component's Bodies folder in the
+    /// browser (mitcad#1802), or back into the Bodies folder itself with
+    /// None: one undo step (`Move Body1 to Folder`) that recomputes
+    /// nothing, none when nothing changes. The folder is a name: bodies
+    /// with the same one share it; a folder no body names any more is
+    /// gone.
+    pub fn set_body_folder(
+        &mut self,
+        uid: BodyUid,
+        folder: Option<&str>,
+    ) -> Result<(), ModelError> {
+        let folder = match folder.map(str::trim) {
+            Some("") => return Err(invalid("the folder name is empty")),
+            other => other.map(str::to_owned),
+        };
+        let mut attributes = self.body_attributes(uid);
+        if self.body_shape(uid).is_none() {
+            return Err(invalid(format!(
+                "body {uid} does not exist at the timeline marker"
+            )));
+        }
+        if attributes.folder == folder {
+            return Ok(());
+        }
+        let label = match &folder {
+            Some(name) => format!("Move {} to {name}", self.body_name(uid)),
+            None => format!("Take {} out of its Folder", self.body_name(uid)),
+        };
+        attributes.folder = folder;
+        self.apply_with(|state| {
+            if attributes.is_default() {
+                state.body_attributes.remove(&uid);
+            } else {
+                state.body_attributes.insert(uid, attributes);
+            }
+            Ok((label, (), false))
+        })
+    }
+
+    /// Names bodies and puts them into folders of their components' Bodies
+    /// folders at once (an import's names and folders, mitcad#1802): one
+    /// undo step (`Name Bodies`) that recomputes nothing, none when nothing
+    /// changes. Each entry is a body with the name it gets (None: it keeps
+    /// its own) and the folder it goes into (None: it stays where it is).
+    /// A name another body of its component has, or one given twice in a
+    /// component, gets ` (2)`, ` (3)`, … (bodies of different components
+    /// may share a name, as the file's do);
+    /// bodies that are not at the marker are left out. Returns the names
+    /// given, by body.
+    pub fn name_bodies(
+        &mut self,
+        bodies: &[(BodyUid, Option<String>, Option<String>)],
+    ) -> Result<Vec<(BodyUid, String)>, ModelError> {
+        let names = super::display_names(&self.state, &self.result);
+        let bodies: Vec<&(BodyUid, Option<String>, Option<String>)> = bodies
+            .iter()
+            .filter(|(uid, _, _)| self.body_shape(*uid).is_some())
+            .collect();
+        let renamed: std::collections::BTreeSet<BodyUid> = bodies
+            .iter()
+            .filter(|(_, name, _)| name.as_deref().is_some_and(|n| !n.trim().is_empty()))
+            .map(|(uid, _, _)| *uid)
+            .collect();
+        // Unique within each component, as rename_body keeps them.
+        let mut taken: std::collections::BTreeSet<(Option<ComponentUid>, String)> = names
+            .iter()
+            .filter(|(uid, _)| !renamed.contains(uid))
+            .map(|(uid, name)| (self.body_component(*uid), name.clone()))
+            .collect();
+        let mut given = Vec::new();
+        let mut attributes = Vec::new();
+        for (uid, name, folder) in bodies {
+            if let Some(name) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                let component = self.body_component(*uid);
+                let mut free = name.to_owned();
+                let mut k = 2;
+                while taken.contains(&(component, free.clone())) {
+                    free = format!("{name} ({k})");
+                    k += 1;
+                }
+                taken.insert((component, free.clone()));
+                given.push((*uid, free));
+            }
+            if let Some(folder) = folder.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+                let mut a = self.body_attributes(*uid);
+                a.folder = Some(folder.to_owned());
+                attributes.push((*uid, a));
+            }
+        }
+        let changed = given.iter().any(|(uid, name)| {
+            names.get(uid) != Some(name) || !self.state.body_names.contains_key(uid)
+        }) || attributes
+            .iter()
+            .any(|(uid, a)| *a != self.body_attributes(*uid));
+        if !changed {
+            return Ok(given);
+        }
+        let named = given.clone();
+        self.apply_with(|state| {
+            for (uid, name) in named {
+                state.body_names.insert(uid, name);
+            }
+            for (uid, a) in attributes {
+                if a.is_default() {
+                    state.body_attributes.remove(&uid);
+                } else {
+                    state.body_attributes.insert(uid, a);
+                }
+            }
+            Ok(("Name Bodies".to_owned(), (), false))
+        })?;
+        Ok(given)
     }
 
     /// Makes a body transparent or opaque again at the timeline marker

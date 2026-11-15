@@ -41,7 +41,7 @@ std::optional<CenterOfMassShown> centerOfMassOf(const QJsonObject& answer) {
   shown.error = userText(answer.value(QStringLiteral("error")).toString());
   shown.mass = answer.value(QStringLiteral("mass")).toDouble();
   shown.bodies = answer.value(QStringLiteral("bodies")).toInt();
-  shown.defaultMaterial = answer.value(QStringLiteral("default_material")).toInt();
+  shown.withoutMaterial = answer.value(QStringLiteral("without_material")).toInt();
   const QJsonArray point = answer.value(QStringLiteral("center_of_mass")).toArray();
   if (shown.error.isEmpty() && point.size() == 3) {
     const std::array<double, 3> at{point.at(0).toDouble(), point.at(1).toDouble(), point.at(2).toDouble()};
@@ -56,17 +56,20 @@ QString centerOfMassTip(const CenterOfMassShown& shown) {
   if (!shown.error.isEmpty()) {
     return QObject::tr("Could not compute the center of mass: %1").arg(shown.error);
   }
+  // A body without a material has no mass: it is left out, never counted
+  // as a default's (mitcad#1817).
   if (!shown.point) {
-    return QObject::tr("No bodies to compute the center of mass of");
+    return shown.withoutMaterial > 0 ? QObject::tr("No body has a material, so none has a mass")
+                                     : QObject::tr("No bodies to compute the center of mass of");
   }
   const std::array<double, 3>& at = *shown.point;
   QString tip = QObject::tr("(%1, %2, %3) mm, %4 kg")
                     .arg(shortNumber(at[0], 3), shortNumber(at[1], 3), shortNumber(at[2], 3),
                          shortNumber(shown.mass, 6));
-  if (shown.defaultMaterial == 1) {
-    tip += QObject::tr("; 1 body without a material counted as steel");
-  } else if (shown.defaultMaterial > 1) {
-    tip += QObject::tr("; %1 bodies without a material counted as steel").arg(shown.defaultMaterial);
+  if (shown.withoutMaterial == 1) {
+    tip += QObject::tr("; 1 body without a material left out");
+  } else if (shown.withoutMaterial > 1) {
+    tip += QObject::tr("; %1 bodies without a material left out").arg(shown.withoutMaterial);
   }
   return tip;
 }
@@ -89,7 +92,7 @@ QString centerOfMassLog(const std::optional<CenterOfMassShown>& shown) {
       .arg(at[2], 0, 'f', 9)
       .arg(shown->mass, 0, 'f', 12)
       .arg(shown->bodies)
-      .arg(shown->defaultMaterial)
+      .arg(shown->withoutMaterial)
       .arg(state);
 }
 

@@ -61,6 +61,7 @@
 #include "view/FirstBodiesFit.hpp"
 #include "view/ImageReferences.hpp"
 #include "view/MeasurementDrawing.hpp"
+#include "view/SelectionLook.hpp"
 #include "view/ViewMatch.hpp"
 #include "view/ViewNavigation.hpp"
 #include "view/SpaceMouseTiming.hpp"
@@ -330,6 +331,10 @@ public:
   VisualStyle visualStyle() const { return m_visualStyle; }
   void setNavigation(const NavigationSettings& settings);
   bool UpdateZoom(const Aspect_ScrollDelta& delta) override;
+  // A drag bound to Zoom follows the pointer's vertical motion: up zooms
+  // in, down out, sideways not at all (mitcad#1867).
+  bool UpdateMousePosition(const NCollection_Vec2<int>& point, Aspect_VKeyMouse buttons,
+                           Aspect_VKeyFlags modifiers, bool emulated) override;
   const NavigationSettings& navigation() const { return m_navigation; }
   // A 3D mouse's motion (mitcad#951, view/SpaceMouseView.cpp): the camera
   // moves by these rates at each frame (the time between the frames)
@@ -348,6 +353,12 @@ public:
   // unit the grid's spacing is logged in.
   void setGridUnit(const QString& unit);
   void setGridPlane(const gp_Ax3& plane);
+  // The sketch being edited lies on a cylindrical or conical face
+  // (mitcad#1853): the grid is not drawn then. Its layer lies under the
+  // bodies, so lines on the face would be covered by the face itself and
+  // show only where they leave it, round the surface through the body.
+  // The grid's setting and its spacing (what sketch points snap to) stay.
+  void setGridOnCurvedFace(bool curved);
   // The grid's minor step now (mm), shown or not: what sketch points snap to.
   double gridStep() const;
   // The faces where Section Analysis or Hide Above Sketch cuts the bodies
@@ -913,6 +924,22 @@ public:
   // the face's boundary, edges and vertices opaque, hidden by nearer
   // geometry (mitcad#149; as the selections of setHighlights()).
   void setHoverColor(const QColor& color);
+  // Preferences › Display's Selection color and Selected line width
+  // (mitcad#1803): OCCT's own selection drawn in the colour, the hover's and
+  // the highlights' lines (edges, curves, wires, face boundaries) at the
+  // width times the device pixel ratio; the highlights shown are drawn
+  // again. The highlights' colours are the caller's (HighlightDisplay).
+  // Logs "View selection look: color #1f7aff, line width normal; edges 4 px
+  // (4 x ratio 1), face boundaries 3 px, plain edges 1 px" when it changed,
+  // and, after each drawing of highlights with an edge's or a curve's,
+  // "View highlight line: edge 4 px (4 x ratio 1), color #1f7aff; plain
+  // edges 1 px" from what OCCT draws it with.
+  void setSelectionLook(const SelectionLook& look);
+  const SelectionLook& selectionLook() const { return m_selectionLook; }
+  // The highlights' line widths in device pixels: Selected line width's
+  // (selectedEdgeWidth, selectedBoundaryWidth) times the ratio.
+  double highlightEdgeWidth() const;
+  double highlightBoundaryWidth() const;
   // More of the hover (mitcad#290): the rest of the tangent chain of the
   // edge or face under the mouse, drawn as the hover draws that one (edges
   // in a compound) and not pickable; null takes it away.
@@ -957,10 +984,6 @@ public:
   // area centre at x,y" ("on the view's middle", "on the sketch's face"),
   // in window coordinates.
   void lookAtSketchPlane(bool saveCamera = true, const TopoDS_Shape& face = TopoDS_Shape());
-  // The first sketch of a new design whose saved view still looks at the
-  // new design's Top (frameNewDesign) returns to the default view
-  // instead (mitcad#1698), fitted (mitcad#1683), logged "View: after the
-  // first sketch, the default view instead of the new design's Top".
   void restoreCamera();
   // Drops the view lookAtSketchPlane saved: the camera stays where it is,
   // an animation ended at its end (mitcad#1592: a 3D sketch, also one
@@ -977,24 +1000,14 @@ public:
   // A new, empty design (mitcad#1000): on the next frame, the view of the
   // origin planes' box at the same share of the view's height whatever the
   // view's size, logged "View: new design framed, scale <mm> mm per view
-  // height at <w>x<h>". A resize keeps the visible height. `top`: looking
-  // at Top (along -Z, Y up) with the origin in the middle of the free area
-  // (mitcad#1683), logged "View: new design looks along <x>,<y>,<z>, up
-  // <x>,<y>,<z>; the origin at <x>,<y>, the free area's centre at <x>,<y>"
-  // (window coordinates); otherwise the isometric view from the front right.
-  void frameNewDesign(bool top);
-  // A design read from a file into a view that still looks at a new
-  // design's Top (frameNewDesign): to the default view from the front
-  // right and above (mitcad#1683, mitcad#1698), at once; a view the user
-  // turned keeps its direction. The fit that follows frames it. The first
-  // sketch or design read decides: after it a view at Top stays.
-  void leaveNewDesignTop();
-  // Create Sketch's plane pick in a new design that still looks at its Top
-  // (mitcad#1698): turned to the default view at once and fitted on the
-  // next frame, so that XZ and YZ, edge-on from Top, can be picked too;
-  // logged "View: Create Sketch turns a new design's Top to the default
-  // view". A view the user turned, or any later pick, stays as it is.
-  void turnForPlanePick();
+  // height at <w>x<h>". A resize keeps the visible height. It looks from
+  // the front right and above, Z up, whatever the view looked at before:
+  // `defaultView`, the default view a few degrees off the isometric one
+  // (view/DefaultView.hpp, mitcad#1698), logged "View: new design looks
+  // along <x>,<y>,<z>, up <x>,<y>,<z>; the origin at <x>,<y>, the free
+  // area's centre at <x>,<y>" (window coordinates, mitcad#1809); otherwise
+  // the exact isometric view (MITCAD_NEW_DESIGN_VIEW=0).
+  void frameNewDesign(bool defaultView);
   // The box the origin planes take when shown: what a fit frames when the
   // view shows nothing to fit (mitcad#1000).
   void setOriginBox(const Bnd_Box& box) { m_originBox = box; }
@@ -1391,12 +1404,7 @@ private:
   // (mitcad#1000), moved to the middle of the free area.
   void frameOrigin(const occ::handle<Graphic3d_Camera>& camera) const;
   // "View: new design looks along …" (frameNewDesign, mitcad#1683).
-  void logNewDesignTop() const;
-  // Once after frameNewDesign(true) (mitcad#1683): the view turned to the
-  // default view (mitcad#1698), at once, when it still looks at the new
-  // design's Top;
-  // true when it turned. Later calls do nothing.
-  bool turnFromNewDesignTop();
+  void logNewDesignLook() const;
   // The pending fit (m_fitPending) on a camera: a new design's framing or
   // fitCamera; and made on the view's camera, as the next frame does.
   void fitPending(const occ::handle<Graphic3d_Camera>& camera) const;
@@ -1494,6 +1502,15 @@ private:
   // The orientation cube and the pick tolerance are in device pixels; this
   // scales them by the widget's device pixel ratio (no change at 1).
   void applyDevicePixelRatio();
+  // OCCT's own selection style in the selection look (mitcad#1803).
+  void setOwnSelectionStyle();
+  // The selection look or the ratio changed: OCCT's selection, the hover
+  // and the highlights shown restyled, the look logged.
+  void restyleHighlights();
+  void logSelectionLook();
+  // The line an edge's or a curve's highlight is drawn with, for the log
+  // (setSelectionLook).
+  void noteHighlightLine(SelectKind kind, const occ::handle<AIS_Shape>& object);
   // Sets the cube's size and place (device pixel ratio, insets) and shows it
   // again.
   void applyCubePlacement();
@@ -1761,10 +1778,8 @@ private:
   // a fit was made (the start-up size then keeps it); the origin planes'
   // box (setOriginBox); a resize to log once the view rests.
   bool m_framingNewDesign = false;
-  // mitcad#1683: the new design's framing looks at Top; the view was turned
-  // to Top for a new design (leaveNewDesignTop).
-  bool m_framingNewDesignTop = false;
-  bool m_newDesignTop = false;
+  // The new design's framing logs where it looks (frameNewDesign).
+  bool m_logNewDesignLook = false;
   bool m_fitMade = false;
   Bnd_Box m_originBox;
   // setOriginLook (mitcad#1748); the last "View origin planes: ..." line.
@@ -1830,6 +1845,7 @@ private:
   bool m_componentColors = false;
   NavigationSettings m_navigation;
   QPointF m_panRemainder;
+  bool m_pointerMoving = false; // in UpdateMousePosition: a drag zoom's step
   bool m_f4Press = false;
   // An orbit goes on past the edge of the screen, on the screen it began.
   OrbitWrap m_orbitWrap;
@@ -1909,6 +1925,7 @@ private:
   QString m_loggedAnnotationPlaces; // their labels' and lines' places as last logged
   QColor m_paper = QColor(0xd8, 0xdc, 0xe2); // the hidden-line style's faces
   bool m_gridShown = true;
+  bool m_gridOnCurvedFace = false; // the sketch edited lies on a curved face: no grid drawn (mitcad#1853)
   double m_gridStep = 0.0; // mm; 0: follows the zoom
   QString m_gridUnit = QStringLiteral("mm"); // the design's length unit (mitcad#1210)
   occ::handle<LayoutGrid> m_grid;
@@ -1964,6 +1981,15 @@ private:
   std::vector<QRect> m_topCards; // setTopCards
   int m_topCardsBottom = 0;
   qreal m_cubeRatio = 1.0;       // the device pixel ratio applied to the cube
+  // The selection look (Preferences › Display, mitcad#1803) and the device
+  // pixel ratio its line widths are drawn at; as last logged.
+  SelectionLook m_selectionLook;
+  qreal m_highlightRatio = 0.0;
+  QString m_loggedSelectionLook;
+  // The last edge or curve highlight drawn ("View highlight line:"), and as
+  // last logged.
+  QString m_drawnHighlightLine;
+  QString m_loggedHighlightLine;
   double m_cubeBaseSize = 0.0;   // the cube's size and font height at ratio 1
   double m_cubeBaseFont = 0.0;
   CubeProjection m_cubeProjection = CubeProjection::FollowView; // mitcad#774

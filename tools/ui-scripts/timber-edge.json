@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Timber's Along an edge (mitcad#1814), tools/ui-timber-edge-test.sh: a plate 1800 x 750 x 9 on XY from the origin, its length the parameter plate_length (12150000 mm3), and a cylinder 200 across and 30 high beside it (942477.796 mm3), whose top edge is curved."},
+  {"cmd": "add_parameter", "name": "plate_length", "expression": "1800 mm"},
+  {"cmd": "add_feature", "name": "Plate", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": "plate_length", "width": 750, "height": 9, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Round", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [900, 1200], "diameter": 200, "height": 30, "operation": "new_body"}},
+  {"expect": {"bodies": 2}}
+]

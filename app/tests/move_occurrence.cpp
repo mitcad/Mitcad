@@ -9,14 +9,17 @@
 #include <functional>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QKeyEvent>
 #include <QList>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QStringList>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -242,6 +245,75 @@ int moveOccurrenceTests() {
         }).isEmpty(),
         "a refused move can be cancelled");
   runSucceeds = true;
+
+  // Every unavailable parent lists its reasons under it, each in a row of
+  // its own that the arrow keys pass over (mitcad#1847).
+  const QJsonObject plain = info;
+  QJsonArray destinations = info.value(QStringLiteral("destinations")).toArray();
+  QJsonObject bracket = destinations.at(3).toObject();
+  bracket.insert(QStringLiteral("eligible"), false);
+  bracket.insert(QStringLiteral("reason"), QStringLiteral("Joint1: it joins Part:1 to Shaft:1; RigidGroup1: it holds"));
+  bracket.insert(QStringLiteral("reasons"),
+                 QJsonArray{QStringLiteral("Joint1: it joins Part:1 to Shaft:1, which is not in Bracket"),
+                            QStringLiteral("RigidGroup1: it holds Part:1 rigidly to Roller:1")});
+  destinations.replace(3, bracket);
+  info.insert(QStringLiteral("destinations"), destinations);
+  const auto reasonsUnder = [](QTreeWidgetItem* item) {
+    QStringList out;
+    for (int i = 0; item != nullptr && i < item->childCount(); ++i) {
+      if (item->child(i)->data(0, Qt::UserRole + 1).toBool()) {
+        out << item->child(i)->text(1);
+      }
+    }
+    return out;
+  };
+  check(exercise([&](QDialog* dialog, QTreeWidget* tree, QPushButton*) {
+          const QStringList shown = reasonsUnder(parentItem(tree, QStringLiteral("O4")));
+          check(shown.size() == 2 && shown.first().contains(QStringLiteral("not in Bracket")) &&
+                    shown.last().contains(QStringLiteral("rigidly")),
+                "each reason of an unavailable parent is shown under it");
+          check(reasonsUnder(parentItem(tree, QStringLiteral("O1"))) ==
+                    QStringList{QStringLiteral("Part:1 is already in Assembly")},
+                "the current parent says why under it, from its joined reason");
+          check(reasonsUnder(parentItem(tree, QString())).isEmpty(), "an available parent has no reason row");
+          // Assembly:1's reason row lies between it and Part:1.
+          tree->setCurrentItem(parentItem(tree, QStringLiteral("O1")));
+          QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+          QApplication::sendEvent(tree, &down);
+          check(tree->currentItem() == parentItem(tree, QStringLiteral("O1/O2")), "Down passes over the reason row");
+          dialog->reject();
+        }).isEmpty(),
+        "reasons under the parents move nothing");
+
+  // One occurrence of a rigid group: the rest of the group is offered,
+  // checked, and goes with it in the queries and the one command.
+  info.insert(QStringLiteral("rigid_group"),
+              QJsonArray{QJsonObject{{QStringLiteral("occurrence"), QStringLiteral("O5")},
+                                     {QStringLiteral("name"), QStringLiteral("Roller:1")},
+                                     {QStringLiteral("path"), QStringLiteral("O1/O5")},
+                                     {QStringLiteral("path_name"), QStringLiteral("Root/Assembly:1/Roller:1")}}});
+  check(exercise([&](QDialog* dialog, QTreeWidget* tree, QPushButton* move) {
+          auto* group = dialog->findChild<QCheckBox*>(QStringLiteral("moveOccurrenceRigidGroup"));
+          check(group != nullptr && group->isVisibleTo(dialog) && group->isChecked() &&
+                    group->text().contains(QStringLiteral("Roller:1")),
+                "the rest of the rigid group is offered, checked");
+          check(queries.last().value(QStringLiteral("with")).toArray() == QJsonArray{QStringLiteral("O1/O5")},
+                "the parents are asked for with the group");
+          if (group != nullptr) {
+            group->setChecked(false);
+            check(!queries.last().contains(QStringLiteral("with")), "unchecked, the occurrence is asked for alone");
+            group->setChecked(true);
+          }
+          tree->setCurrentItem(parentItem(tree, QString()));
+          check(queries.last().value(QStringLiteral("with")).toArray() == QJsonArray{QStringLiteral("O1/O5")},
+                "the plan is asked for with the group");
+          move->click();
+        }) == QStringLiteral("O2"),
+        "a rigid group moves as one");
+  check(commands.size() == 1 &&
+            commands.first().value(QStringLiteral("with")).toArray() == QJsonArray{QStringLiteral("O1/O5")},
+        "one command moves the occurrence with the rest of its group");
+  info = plain;
 
   info.insert(QStringLiteral("problems"), QJsonArray{QStringLiteral("Part:1 is placed by the joints")});
   check(exercise([&](QDialog* dialog, QTreeWidget* tree, QPushButton* move) {

@@ -1304,7 +1304,9 @@ impl<K: Kernel> SketchOps<K> for Document<K> {
                     .map_err(|e| ApiError(format!("plane: {e}")))?,
                     None => None,
                 };
-                let upright = upright && frame.is_none();
+                // A sketch on a curved face lies in its developed
+                // coordinates, upright on the face already (mitcad#1768).
+                let upright = upright && frame.is_none() && !plane.is_developed();
                 let def = SketchDef {
                     plane_link,
                     frame: frame.map(Box::new),
@@ -1941,6 +1943,9 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
             "plane": def.plane,
             "plane_link": def.plane_link,
             "frame": frame,
+            // The face of a sketch on a cylindrical or conical face
+            // (mitcad#1768); null on a plane.
+            "surface": super::sketch_surface::sketch_surface_summary(output),
             "solved": solved.is_some(),
             "error": error.map(|e| e.message),
             "warnings": warnings,

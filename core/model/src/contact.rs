@@ -98,8 +98,9 @@ impl<S: Clone> ContactPairs<S> {
                 .map(|(b, _)| *b)
                 .collect()
         };
+        // Inside flexible occurrences where they are for them (mitcad#1793).
         let instances: Vec<_> = assembly
-            .instances(&placement, &bodies)
+            .instances_flexed(&placement, &result.joints.flexed, &bodies)
             .into_iter()
             .filter(|i| i.visible && state.body_attributes.get(&i.body).is_none_or(|a| a.visible))
             .collect();
@@ -167,18 +168,20 @@ impl<S: Clone> ContactPairs<S> {
     }
 
     /// The pairs (by index) that pass through each other with these
-    /// placements of the occurrences, and their common volumes; the pairs
+    /// placements of the occurrences (inside flexible ones where `flexed`
+    /// has them, mitcad#1793), and their common volumes; the pairs
     /// in `skip` are left out.
     pub fn overlapping<K: Kernel<Shape = S>>(
         &self,
         kernel: &K,
         placements: &BTreeMap<OccurrenceUid, Transform>,
+        flexed: &crate::joints::Flexed,
         skip: &BTreeSet<usize>,
     ) -> Result<Vec<(usize, f64)>, KernelError> {
         let transforms: Vec<Transform> = self
             .bodies
             .iter()
-            .map(|(body, _, _)| path_placement(placements, &body.path))
+            .map(|(body, _, _)| path_placement(placements, flexed, &body.path))
             .collect();
         let boxes: Vec<Option<BoundingBox>> = self
             .bodies

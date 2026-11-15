@@ -27,6 +27,7 @@ void registerModifyCommands(CommandRegistry& registry, const CommandContext& con
   add(offsetFaceCommand(context), "faces");
   add(moveFaceCommand(context), "faces"); // mitcad#531
   add(replaceFaceCommand(context), "faces");
+  add(fillCavityCommand(context), "faces"); // mitcad#1818
   add(splitFaceCommand(context), "faces");
   add(deleteFaceCommand(context), "faces");
   // Whole bodies.

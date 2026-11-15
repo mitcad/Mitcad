@@ -43,6 +43,12 @@ FaceMeshes face_meshes(const geometry::Shape& shape, double deviation, double an
   for (const std::uint32_t count : mesh.face_triangles) {
     out.face_triangles.push_back(count);
   }
+  // A mesh body's texture coordinates (mitcad#1874).
+  out.uvs.reserve(mesh.uvs.size() * 2);
+  for (const auto& uv : mesh.uvs) {
+    out.uvs.push_back(uv[0]);
+    out.uvs.push_back(uv[1]);
+  }
   return out;
 }
 

@@ -202,6 +202,9 @@ bool SketchModel::load(const QJsonObject& sketch) {
     }
   }
   const bool framed = sketchFrame(sketch, frame);
+  // A sketch on a cylindrical or conical face (mitcad#1768): the face, in
+  // the component's coordinates as the frame is.
+  surface = SketchSurface::fromJson(sketch.value(QStringLiteral("surface")));
 
   for (const QJsonValue& value : sketch.value(QStringLiteral("entities")).toArray()) {
     const QJsonObject e = value.toObject();
@@ -556,6 +559,10 @@ V2 toSketch(const geometry::Frame& frame, const gp_Pnt& point) {
 gp_Pnt toModel(const geometry::Frame& frame, const V2& point) {
   return frame.point(gp_Pnt2d(point.x, point.y));
 }
+
+gp_Pnt SketchModel::place(const V2& p) const { return surface ? surface->point(p) : toModel(frame, p); }
+
+gp_Dir SketchModel::normalAt(const V2& p) const { return surface ? surface->outward(p) : frame.normal(); }
 
 Curve2 curveFromJson(const QString& type, const QJsonObject& geometry) {
   return curveOf(type, geometry);

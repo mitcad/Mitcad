@@ -43,6 +43,7 @@
 
 #include "history.hpp"
 #include "spine.hpp"
+#include "sweep.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -381,14 +382,49 @@ ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& section
 }
 
 ShapePtr helix_sheet(const std::string& feature, const std::vector<Path>& chains, const gp_Ax1& axis, double pitch,
-                     double revolutions, bool left_handed) {
+                     double revolutions, bool left_handed, const HelixSheetOptions& options) {
   detail::require_positive("helix pitch", pitch);
   detail::require_positive("helix revolutions", revolutions);
+  detail::require_finite("helix growth", options.growth);
+  bool ends = false;
+  for (const double end : {options.start_flat, options.start_transition, options.end_transition, options.end_flat}) {
+    detail::require_finite("helix end angle", end);
+    if (end < 0.0) {
+      throw std::invalid_argument("the helix's end angles must not be negative");
+    }
+    ends = ends || end > 0.0;
+  }
   return detail::run("surface helix", [&] {
     SheetParts parts;
     const gp_Dir up = axis.Direction();
     for (const Path& chain : chains) {
       const ChainWire wire = chain_wire(chain);
+      if (options.growth != 0.0 || ends) {
+        // A growth or ends: the solid helix's motion (mitcad#1797).
+        HelixSweepSpec spec;
+        spec.feature = feature;
+        spec.axis = axis;
+        spec.pitch = pitch;
+        spec.revolutions = revolutions;
+        spec.left_handed = left_handed;
+        spec.growth = options.growth;
+        spec.start_flat = options.start_flat;
+        spec.start_transition = options.start_transition;
+        spec.end_transition = options.end_transition;
+        spec.end_flat = options.end_flat;
+        const detail::ScrewedWire swept = detail::screwed_wire(wire.wire, spec);
+        parts.add(swept.shape);
+        for (const auto& [edge, faces] : swept.faces) {
+          for (const auto& [own, curve] : wire.edges) {
+            if (own.IsSame(edge)) {
+              for (const TopoDS_Shape& face : faces) {
+                parts.name(face, face_name(feature, "side", curve));
+              }
+            }
+          }
+        }
+        continue;
+      }
       // A helix through the curves' middle: with the axis as the fixed
       // binormal every helix of the axis and pitch moves the curves alike,
       // by the screw motion (as the solid helix's profiles move).

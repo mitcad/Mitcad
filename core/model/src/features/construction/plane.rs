@@ -440,10 +440,46 @@ impl<K: Kernel> Evaluate<K> for ConstructionPlaneDef {
         } else {
             plane
         };
+        let datum = finite(Datum::Plane(plane))?;
+        let drawn = self.drawn(ctx, &plane);
         Ok(FeatureOutput {
-            datum: Some(finite(Datum::Plane(plane))?),
+            datum: Some(datum),
+            drawn,
             ..FeatureOutput::default()
         })
+    }
+}
+
+impl ConstructionPlaneDef {
+    /// Where the plane is drawn without a size of its own (mitcad#1827,
+    /// [`super::drawn`]): over the faces it is made on or from (offset,
+    /// at an angle, tangent, midplane), else over the bodies and geometry
+    /// it goes through; none for a fixed plane.
+    fn drawn<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        plane: &DatumPlane,
+    ) -> Option<super::DrawnExtent> {
+        use PlaneDefinition as D;
+        let (faces, nearby): (Vec<&GeomRef>, Vec<&GeomRef>) = match &self.definition {
+            D::Offset { plane, .. } => (vec![plane], Vec::new()),
+            D::OffsetThroughPoint { plane, point } => (vec![plane], vec![point]),
+            D::Angle { line, plane, .. } => (vec![plane], vec![line]),
+            D::Tangent { face, .. } => (vec![face], Vec::new()),
+            D::TangentAtPoint { face, point, .. } => (vec![face], vec![point]),
+            D::Midplane { plane1, plane2 } => (vec![plane1, plane2], Vec::new()),
+            D::TwoEdges { line1, line2 } => (Vec::new(), vec![line1, line2]),
+            D::ThreePoints {
+                point1,
+                point2,
+                point3,
+            } => (Vec::new(), vec![point1, point2, point3]),
+            D::EdgeAndPoint { line, point } => (Vec::new(), vec![line, point]),
+            D::NormalAtPoint { point, .. } => (Vec::new(), vec![point]),
+            D::AlongPath { .. } => (Vec::new(), Vec::new()),
+            D::Fixed { .. } | D::FlangeWall { .. } => return None,
+        };
+        super::drawn::plane_extent(ctx, plane, &faces, &nearby, self.path())
     }
 }
 

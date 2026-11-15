@@ -719,11 +719,62 @@ if(BUILD_TESTING)
   set_tests_properties(cli.import_3dm_block_in_itself PROPERTIES FIXTURES_REQUIRED cli_3dm_block_in_itself
     PASS_REGULAR_EXPRESSION
     "Imported block-in-itself\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 1 components.*Component Loop: 1 bodies, 1 occurrences.*Left out: 1 block instance \\(a block placed inside itself\\).*Checks: 2 of 3 pass")
+  # A SubD object (mitcad#1757): the test writer's cube net of archive
+  # version 80 (a creased edge, a semi-sharp edge, a corner, a vertex on no
+  # face) comes in as an editable Form feature named after its object, its
+  # cage closed with both creases and the corner, built as a solid by the
+  # kernel; the vertex left out and the averaged sharpness are warnings.
+  add_test(NAME cli.3dm_file_subd
+    COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/subd.3dm" --case subd)
+  set_tests_properties(cli.3dm_file_subd PROPERTIES FIXTURES_SETUP cli_3dm_subd)
+  add_test(NAME cli.import_3dm_subd
+    COMMAND mitcad-cli import-3dm "${dir_3dm}/subd.3dm" --save "${dir_3dm}/subd.mitcad" --check)
+  set_tests_properties(cli.import_3dm_subd PROPERTIES FIXTURES_REQUIRED cli_3dm_subd
+    FIXTURES_SETUP cli_3dm_subd_saved PASS_REGULAR_EXPRESSION
+    "Imported subd\\.3dm \\(\\.3dm version 80, MitCad test file\\): 0 bodies.*Form blob: 8 vertices, 6 faces, 2 creased edges, 1 corners, closed.*Objects taken: SubD 1.*Warning: the SubD \"blob\" on the layer Solids: a vertex of the SubD on no face was left out.*Checks: 3 of 3 pass")
+  # The imported Form is an editable Form: its cage as the file's, a vertex
+  # moved with form.move, the body rebuilt.
+  add_test(NAME cli.import_3dm_subd_edit
+    COMMAND mitcad-cli run "${scripts}/import_3dm_subd_form.json" --open "${dir_3dm}/subd.mitcad")
+  set_tests_properties(cli.import_3dm_subd_edit PROPERTIES FIXTURES_REQUIRED cli_3dm_subd_saved)
+  # Blocks of the review mitcad#1838: a block member on a switched-off
+  # layer is left out (once, though the block is placed twice), so the
+  # file's two B-reps are one taken and one left out; a block placed once
+  # at scale 2 is copied in place, its 1000 mm3 box 8000 mm3 in the report.
+  add_test(NAME cli.3dm_file_block_hidden_layer
+    COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/block-hidden-layer.3dm" --case block-hidden-layer)
+  set_tests_properties(cli.3dm_file_block_hidden_layer PROPERTIES FIXTURES_SETUP cli_3dm_block_hidden_layer)
+  add_test(NAME cli.import_3dm_block_hidden_layer
+    COMMAND mitcad-cli import-3dm "${dir_3dm}/block-hidden-layer.3dm" --check)
+  set_tests_properties(cli.import_3dm_block_hidden_layer PROPERTIES FIXTURES_REQUIRED cli_3dm_block_hidden_layer
+    PASS_REGULAR_EXPRESSION
+    "Imported block-hidden-layer\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 1 components.*Component Bracket: 1 bodies, 2 occurrences.*Objects taken: B-rep 1, block instance 2\n.*Left out: 1 B-rep \\(hidden in the file\\).*Volume of the solids: 1000\\.0 mm3.*Checks: 3 of 3 pass")
+  add_test(NAME cli.3dm_file_block_scaled
+    COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/block-scaled.3dm" --case block-scaled)
+  set_tests_properties(cli.3dm_file_block_scaled PROPERTIES FIXTURES_SETUP cli_3dm_block_scaled)
+  add_test(NAME cli.import_3dm_block_scaled
+    COMMAND mitcad-cli import-3dm "${dir_3dm}/block-scaled.3dm" --check)
+  set_tests_properties(cli.import_3dm_block_scaled PROPERTIES FIXTURES_REQUIRED cli_3dm_block_scaled
+    PASS_REGULAR_EXPRESSION
+    "Imported block-scaled\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 0 components.*Objects taken: B-rep 1, block instance 1\n.*Volume of the solids: 8000\\.0 mm3.*Checks: 3 of 3 pass")
   add_test(NAME 3dm.corpus
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/3dm-corpus"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/3dm-corpus.cmake")
   set_tests_properties(3dm.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "3dm corpus: skipped")
+  # The public-domain glTF sample (mitcad#1826, core/gltf/samples, CC0)
+  # through OCCT: a stand of two mesh bodies as a component turned Z up and
+  # a marker of the design, metres as millimetres.
+  add_test(NAME cli.import_gltf COMMAND mitcad-cli run "${scripts}/gltf_sample.json")
+  set_tests_properties(cli.import_gltf PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/core/gltf/samples")
+  # Real, openly licensed glTF files listed under MITCAD_GLTF_CORPUS
+  # (gltf-corpus.cmake), each checked by its script of facts read from the
+  # file: skipped without it.
+  add_test(NAME gltf.corpus
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/gltf-corpus"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/gltf-corpus.cmake")
+  set_tests_properties(gltf.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "gltf corpus: skipped")
   # Plane surfaces in the ground's plane (mitcad#1738): the test writer's
   # three plane surfaces drawn facing up at z 0, each in another of the
   # file's forms, come in facing up and render lit from above, not black
@@ -2202,5 +2253,112 @@ if(BUILD_TESTING)
   if(WIN32)
     set_property(TEST cli.annotations_rolled_back_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Form (mitcad#1757): a box cage edited into a smooth solid and written to
+# STEP; a creased one rounded along its crease and drilled; a symmetric one
+# extruded with its mirror image, through the OCCT kernel. Files go to the
+# test's working directory.
+if(BUILD_TESTING)
+  set(form_work "${CMAKE_CURRENT_BINARY_DIR}/form")
+  file(MAKE_DIRECTORY "${form_work}")
+  add_test(NAME cli.form COMMAND mitcad-cli run "${scripts}/form.json")
+  set_tests_properties(cli.form PROPERTIES WORKING_DIRECTORY "${form_work}")
+  if(WIN32)
+    set_property(TEST cli.form APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+# A pipe along a helix whose turns lie closer than its section is wide
+# (mitcad#1788): the default 8 mm along four turns rising 5 a turn refused
+# at once, before the geometry; 2 mm built with the volume of its length.
+if(BUILD_TESTING)
+  add_test(NAME cli.pipe_helix_turns COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/pipe_helix_turns.json")
+  set_tests_properties(cli.pipe_helix_turns PROPERTIES TIMEOUT 120)
+  if(WIN32)
+    set_property(TEST cli.pipe_helix_turns APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+endif()
+# A large reported .f3d design imported whole (mitcad#1802), from the
+# archive of github-329/ under MITCAD_MITCAD_REPORTED with the private
+# expectations beside it (unpacked into the build folder): every stored
+# body placed, named, in its body folder and shown as the file has it,
+# nothing suppressed in the file unsuppressed, every sketch hidden from its
+# light bulb (skipped without the report's folder).
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME cli.f3d_reported_house
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/f3d-reported-house-test.py"
+              --cli "$<TARGET_FILE:mitcad-cli>"
+              --work "${CMAKE_CURRENT_BINARY_DIR}/f3d-reported-house")
+    set_tests_properties(cli.f3d_reported_house PROPERTIES TIMEOUT 3000
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "f3d reported house: skipped")
+    if(WIN32)
+      set_property(TEST cli.f3d_reported_house APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+  endif()
+endif()
+
+# Fill Cavity (mitcad#1818) on the geometry kernel: a block with a blind V
+# slit along a wall's foot and a pocket, filled up to a construction plane
+# with analytic volumes; seeds that pick one, the cap moved and offset, and
+# a tunnel open below the cap refused in words.
+if(BUILD_TESTING)
+  add_test(NAME cli.fill_cavity COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/fill_cavity.json")
+  if(WIN32)
+    set_property(TEST cli.fill_cavity APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Sketches on cylindrical and conical faces (mitcad#1768): a dimensioned
+# rectangle raised and a text sunk on a rod's side in its developed
+# coordinates, the sketch following the rod's diameter, the side split by a
+# line around it, the curves' lengths on the face; a rectangle raised on a
+# cone's development and the cone's face split by a square.
+if(BUILD_TESTING)
+  add_test(NAME cli.face_sketch COMMAND mitcad-cli run "${scripts}/face_sketch.json")
+  if(WIN32)
+    set_property(TEST cli.face_sketch APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Round faces whatever their stored surface (mitcad#1855): Axis Through
+# Cylinder, Point at Center and Cylindrical joints on the wall of a hole cut
+# from a sketch circle, in a plate and in a sheet body's flange, whose walls
+# are B-spline cylinders.
+if(BUILD_TESTING)
+  add_test(NAME cli.round_faces_recognised
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/round_faces_recognised.json")
+  if(WIN32)
+    set_property(TEST cli.round_faces_recognised APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Rib Extend Ends from a boss's top edge (mitcad#1857, GitHub #345): an end
+# whose continuation passes over the boss's top fills up to the wall below
+# the edge, with no warning (f3_rib_extend_rim: two cylinders on a base,
+# analytic volumes); the reported rib on its design (skipped without the
+# report's archive under MITCAD_MITCAD_REPORTED).
+if(BUILD_TESTING)
+  add_test(NAME cli.f3_rib_extend_rim COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/f3_rib_extend_rim.json")
+  add_test(NAME cli.rib_extend_rim_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/rib-extend-rim-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/rib-extend-rim-reported-test.cmake")
+  set_tests_properties(cli.rib_extend_rim_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "rib extend rim reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    foreach(test cli.f3_rib_extend_rim cli.rib_extend_rim_reported)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
   endif()
 endif()

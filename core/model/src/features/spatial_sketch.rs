@@ -92,7 +92,7 @@ impl FeatureInfo for SpatialSketchDef {
     fn references(&self) -> References {
         let mut references = References::default();
         match &self.support {
-            SketchPlane::Face { face, body } => {
+            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
                 references.features.extend(face.features());
                 if let Some(body) = body {
                     references.body(*body);
@@ -171,6 +171,10 @@ impl FeatureInfo for SpatialSketchDef {
                         ),
                     ));
                 }
+            }
+            // A plane, not a curved face's development (mitcad#1768).
+            SketchPlane::Developed { .. } => {
+                return Err("a 3D sketch's support is a plane or a planar face".to_owned());
             }
             SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {}
         }
@@ -335,7 +339,7 @@ impl LinkedReferences for SpatialSketchDef {
         // (mitcad#1550), as a planar sketch's.
         if let Some(link) = &self.planar.plane_link {
             match &self.support {
-                SketchPlane::Face { face, body } => {
+                SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
                     out.extend(face.features().into_iter().map(|uid| (uid, link)));
                     if let Some(body) = body {
                         out.push((body.feature, link));
@@ -726,6 +730,7 @@ fn planar_output<K: Kernel>(
         follow: Arc::new(Vec::new()),
         own: Arc::new(own),
         retrimmed: None,
+        developed: None,
     })
 }
 
@@ -1193,6 +1198,27 @@ fn face_surface<K: Kernel>(
 const FACE_TOLERANCE: f64 = 1e-6;
 const FACE_ROUNDS: usize = 16;
 
+#[cfg(test)]
+thread_local! {
+    /// Another [`FACE_ROUNDS`] for the evaluations of a test's thread
+    /// (mitcad#1832).
+    pub(crate) static TEST_FACE_ROUNDS: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// How many touching planes are tried ([`FACE_ROUNDS`]).
+#[cfg(not(test))]
+fn face_rounds() -> usize {
+    FACE_ROUNDS
+}
+
+#[cfg(test)]
+fn face_rounds() -> usize {
+    TEST_FACE_ROUNDS
+        .with(std::cell::Cell::get)
+        .unwrap_or(FACE_ROUNDS)
+}
+
 /// A face solved through the kernel's projection: its relation, its point
 /// and the face.
 struct ProjectedFace<S> {
@@ -1204,7 +1230,9 @@ struct ProjectedFace<S> {
 /// Solves `model`, and while a point on a face of another kind is not on
 /// it, puts it on the plane touching the face at the kernel's projection
 /// of the solved point and solves again from there (mitcad#1549). The
-/// planes the last solve used are kept in `surfaces`.
+/// planes the last solve used are kept in `surfaces`. The last solve is
+/// measured too: a sketch that reaches its faces on it is solved
+/// (mitcad#1832).
 fn solve_on_faces<K: Kernel>(
     model: &mut SpatialModel,
     projected: &[ProjectedFace<K::Shape>],
@@ -1212,8 +1240,11 @@ fn solve_on_faces<K: Kernel>(
     surfaces: &mut BTreeMap<ConstraintUid, SpatialSurface>,
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<SpatialSolved, SpatialFailure> {
+    let rounds = face_rounds();
     let mut solved = model.solve()?;
-    for _ in 0..FACE_ROUNDS {
+    for round in 0..=rounds {
+        // After the last solve the points are only measured.
+        let last = round == rounds;
         let mut moved = false;
         for face in projected {
             let local = solved.points.get(&face.point).copied().unwrap_or([0.0; 3]);
@@ -1225,13 +1256,19 @@ fn solve_on_faces<K: Kernel>(
                     entities: vec![face.point],
                 })?;
             if gap > FACE_TOLERANCE {
+                moved = true;
+                if last {
+                    break;
+                }
                 model.set_face_surface(face.id, plane)?;
                 surfaces.insert(face.id, plane);
-                moved = true;
             }
         }
         if !moved {
             return Ok(solved);
+        }
+        if last {
+            break;
         }
         solved = model.solve()?;
     }

@@ -14,7 +14,7 @@ use super::prelude::*;
 use mitcad_model::Document;
 use mitcad_model::datum::{CurveGeometry, SurfaceGeometry, Vec3};
 use mitcad_model::ids::BodyUid;
-use mitcad_model::kernel::{BoundingBox, Kernel, KernelError};
+use mitcad_model::kernel::{BoundingBox, EdgeInfo, FaceInfo, Kernel, KernelError};
 
 /// A face's normal within this angle of a `normal` filter's (radians) when
 /// the query gives no `normal_tolerance`.
@@ -226,6 +226,95 @@ fn add_curve_json(value: &mut Value, curve: &CurveGeometry) {
     }
 }
 
+/// Stored surface types whose faces may lie on a plane, cylinder, cone,
+/// sphere or torus all the same (mitcad#1863: the walls of a sheet body are
+/// B-spline planes, the walls of holes in it B-spline cylinders).
+const STORED_SURFACES: [&str; 4] = ["bspline", "bezier", "revolution", "extrusion"];
+/// Stored curve types whose edges may run on a line or a circle.
+const STORED_CURVES: [&str; 2] = ["bspline", "bezier"];
+
+/// The faces of `among` (every face where None) stored as one of
+/// [`STORED_SURFACES`] read as [`Kernel::face_geometry`] reads one face
+/// (mitcad#1863): the type in `faces` and, where `surfaces` has them, the
+/// geometry of each one found on a plane, cylinder, cone, sphere or torus.
+/// Only those faces are asked about, so that bodies of many faces stay
+/// quick; a kernel that cannot read them leaves them as stored.
+fn recognise_faces<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    faces: &mut [FaceInfo],
+    surfaces: &mut [SurfaceGeometry],
+    among: Option<&[usize]>,
+) {
+    let stored = |i: &usize| {
+        faces
+            .get(*i)
+            .is_some_and(|face| STORED_SURFACES.contains(&face.surface.as_str()))
+    };
+    let candidates: Vec<usize> = match among {
+        Some(chosen) => chosen.iter().copied().filter(stored).collect(),
+        None => (0..faces.len()).filter(stored).collect(),
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    let Ok(found) = kernel.recognised_face_geometries(shape, &candidates) else {
+        return;
+    };
+    if found.len() != candidates.len() {
+        return;
+    }
+    for (i, surface) in candidates.into_iter().zip(found) {
+        if matches!(surface, SurfaceGeometry::Other { .. }) {
+            continue;
+        }
+        faces[i].surface = surface.kind().to_owned();
+        if let Some(own) = surfaces.get_mut(i) {
+            *own = surface;
+        }
+    }
+}
+
+/// The edges of `among` (every edge where None) stored as one of
+/// [`STORED_CURVES`] read as [`Kernel::edge_geometry`] reads one edge
+/// (mitcad#1863): the type in `edges` and, where `curves` has them, the
+/// curve of each one found on a line or a circle.
+fn recognise_edges<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    edges: &mut [EdgeInfo],
+    curves: &mut [(Option<String>, CurveGeometry)],
+    among: Option<&[usize]>,
+) {
+    let stored = |i: &usize| {
+        edges
+            .get(*i)
+            .is_some_and(|edge| STORED_CURVES.contains(&edge.curve.as_str()))
+    };
+    let candidates: Vec<usize> = match among {
+        Some(chosen) => chosen.iter().copied().filter(stored).collect(),
+        None => (0..edges.len()).filter(stored).collect(),
+    };
+    if candidates.is_empty() {
+        return;
+    }
+    let Ok(found) = kernel.recognised_edge_geometries(shape, &candidates) else {
+        return;
+    };
+    if found.len() != candidates.len() {
+        return;
+    }
+    for (i, curve) in candidates.into_iter().zip(found) {
+        if matches!(curve, CurveGeometry::Other { .. }) {
+            continue;
+        }
+        edges[i].curve = curve.kind().to_owned();
+        if let Some(own) = curves.get_mut(i) {
+            own.1 = curve;
+        }
+    }
+}
+
 /// The document's methods of this module used across the api, as an
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.
@@ -254,8 +343,8 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
         }
         let shape = self.require_body(query.body)?;
         let kernel = self.kernel();
-        let faces = kernel.faces(shape).map_err(kernel_error)?;
-        let surfaces: Vec<SurfaceGeometry> = if query.geometry || normal.is_some() {
+        let mut faces = kernel.faces(shape).map_err(kernel_error)?;
+        let mut surfaces: Vec<SurfaceGeometry> = if query.geometry || normal.is_some() {
             let surfaces = kernel.face_geometries(shape).map_err(kernel_error)?;
             if surfaces.len() != faces.len() {
                 return Err(ApiError(format!(
@@ -268,6 +357,13 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
         } else {
             Vec::new()
         };
+        // Faces stored as splines, revolutions or extrusions as what they
+        // are (mitcad#1863): every one where a filter asks for the type or
+        // a plane's normal, else only the page's.
+        let filtered = query.surface.is_some() || normal.is_some();
+        if filtered {
+            recognise_faces(kernel, shape, &mut faces, &mut surfaces, None);
+        }
         let least = tolerance.cos();
         let matched: Vec<usize> = (0..faces.len())
             .filter(|&i| {
@@ -283,6 +379,9 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
             })
             .collect();
         let chosen = page(&matched, query.offset, query.limit);
+        if !filtered {
+            recognise_faces(kernel, shape, &mut faces, &mut surfaces, Some(chosen));
+        }
         let boxes = if query.geometry {
             let boxes = kernel
                 .face_bounding_boxes(shape, chosen)
@@ -316,7 +415,7 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
         check_range("length", query.min_length, query.max_length)?;
         let shape = self.require_body(query.body)?;
         let kernel = self.kernel();
-        let edges = kernel.edges(shape).map_err(kernel_error)?;
+        let mut edges = kernel.edges(shape).map_err(kernel_error)?;
         if let Some(radius) = query.radius
             && !(radius.is_finite() && radius > 0.0)
         {
@@ -330,7 +429,7 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
                     .to_owned(),
             ));
         }
-        let curves = if query.geometry || query.radius.is_some() {
+        let mut curves = if query.geometry || query.radius.is_some() {
             let curves = kernel.edge_geometries(shape).map_err(kernel_error)?;
             if curves.len() != edges.len() {
                 return Err(ApiError(format!(
@@ -343,11 +442,18 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
         } else {
             Vec::new()
         };
-        // Each face name's surface type, for `between` (mitcad#1587).
+        // Edges stored as splines as what they are (mitcad#1863): every one
+        // where a filter asks for the type or a radius, else only the page's.
+        let filtered = query.curve.is_some() || query.radius.is_some();
+        if filtered {
+            recognise_edges(kernel, shape, &mut edges, &mut curves, None);
+        }
+        // Each face name's surface type, for `between` (mitcad#1587), the
+        // faces stored as other types as what they are (mitcad#1863).
         let surfaces: std::collections::HashMap<String, String> = if query.between.is_some() {
-            kernel
-                .faces(shape)
-                .map_err(kernel_error)?
+            let mut faces = kernel.faces(shape).map_err(kernel_error)?;
+            recognise_faces(kernel, shape, &mut faces, &mut [], None);
+            faces
                 .into_iter()
                 .flat_map(|face| {
                     let surface = face.surface;
@@ -403,6 +509,9 @@ impl<K: Kernel> FaceListsOps<K> for Document<K> {
             })
             .collect();
         let chosen = page(&matched, query.offset, query.limit);
+        if !filtered {
+            recognise_edges(kernel, shape, &mut edges, &mut curves, Some(chosen));
+        }
         let geometry = if query.geometry {
             let boxes = kernel
                 .edge_bounding_boxes(shape, chosen)

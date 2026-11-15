@@ -244,17 +244,12 @@ impl FeatureInfo for HelixDef {
             self.curves.as_ref(),
             "helix",
         )?;
-        if self.surface {
-            if self.growth.is_some() || self.start.is_some() || self.end.is_some() {
-                return Err(
-                    "a surface helix keeps its radius and pitch: it has no growth and no flat \
-                     ends"
-                        .to_owned(),
-                );
-            }
-            if self.construction == Some(HelixConstruction::Freecad) || self.piece_shift != 0.0 {
-                return Err("a surface helix is built by MitCad's construction".to_owned());
-            }
+        // A surface helix grows and has flat ends as a solid one does
+        // (mitcad#1797), by MitCad's construction only.
+        if self.surface
+            && (self.construction == Some(HelixConstruction::Freecad) || self.piece_shift != 0.0)
+        {
+            return Err("a surface helix is built by MitCad's construction".to_owned());
         }
         check_participants(ctx, self.operation, &self.participants)?;
         self.axis.check(ctx, Want::Line)
@@ -328,15 +323,7 @@ impl<K: Kernel> Evaluate<K> for HelixDef {
             None => 0.0,
         };
         let bodies: Vec<K::Shape> = participants.iter().map(|(_, s)| s.clone()).collect();
-        let mut ends = [0.0; 4];
-        if let Some(e) = &self.start {
-            ends[0] = end_angle(ctx.param(e.flat_angle)?, "start flat")?;
-            ends[1] = end_angle(ctx.param(e.transition_angle)?, "start transition")?;
-        }
-        if let Some(e) = &self.end {
-            ends[2] = end_angle(ctx.param(e.transition_angle)?, "end transition")?;
-            ends[3] = end_angle(ctx.param(e.flat_angle)?, "end flat")?;
-        }
+        let ends = self.end_angles(ctx)?;
         let mut spec = HelixSpec {
             feature: ctx.uid,
             frame: sketch.frame,
@@ -403,9 +390,26 @@ impl<K: Kernel> Evaluate<K> for HelixDef {
 }
 
 impl HelixDef {
+    /// The angles of the ends as [`HelixSpec::ends`] takes them: the
+    /// start's flat and transition, the end's transition and flat (zero
+    /// where there is none).
+    fn end_angles<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<[f64; 4], String> {
+        let mut ends = [0.0; 4];
+        if let Some(e) = &self.start {
+            ends[0] = end_angle(ctx.param(e.flat_angle)?, "start flat")?;
+            ends[1] = end_angle(ctx.param(e.transition_angle)?, "start transition")?;
+        }
+        if let Some(e) = &self.end {
+            ends[2] = end_angle(ctx.param(e.transition_angle)?, "end transition")?;
+            ends[3] = end_angle(ctx.param(e.flat_angle)?, "end flat")?;
+        }
+        Ok(ends)
+    }
+
     /// A surface helix's bodies (mitcad#1777, as a surface revolution's):
     /// the profiles' walls (the solid helix without its caps), then the
-    /// curves' surfaces moved by the screw motion.
+    /// curves' surfaces moved by the screw motion; both with the growth and
+    /// the ends a solid helix has (mitcad#1797, MitCad's construction).
     fn surface_output<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
@@ -425,6 +429,11 @@ impl HelixDef {
             return Err("the helix's axis has no direction".to_owned());
         }
         let sign = if self.flip { -1.0 } else { 1.0 };
+        let growth = match self.growth {
+            Some(g) => finite_growth(ctx.param(g)?)?,
+            None => 0.0,
+        };
+        let ends = self.end_angles(ctx)?;
         let mut spec = HelixSpec {
             feature: ctx.uid,
             frame,
@@ -434,11 +443,11 @@ impl HelixDef {
             pitch: positive(ctx.param(self.pitch)?, "pitch")?,
             revolutions: positive(ctx.param(self.revolutions)?, "revolutions")?,
             left_handed: self.left_handed,
-            growth: 0.0,
+            growth,
             flip: self.flip,
             freecad: false,
             bodies: &[],
-            ends: [0.0; 4],
+            ends,
             piece_shift: 0.0,
         };
         let mut sheets = Vec::new();

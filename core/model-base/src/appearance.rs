@@ -189,6 +189,29 @@ pub struct TextureMap {
     /// Design files only, as the base colour's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
+    /// The colour channel that holds the map's values, in an image that
+    /// packs several maps (mitcad#1862: glTF's metalness in blue and
+    /// roughness in green of one image, its occlusion in red); none: the
+    /// image's grey value. Written only when set, which older versions
+    /// refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<Channel>,
+    /// The map's values multiplied by it, 0 to 1 (mitcad#1874: glTF's
+    /// `roughnessFactor` and `metallicFactor`, which scale its image's
+    /// channels); none: the values as they are. The roughness and
+    /// metalness maps only. Written only when set, which older versions
+    /// refuse; the glTF import sets it only when it is not 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factor: Option<f64>,
+}
+
+/// A colour channel of an image (a map's [`TextureMap::channel`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Channel {
+    Red,
+    Green,
+    Blue,
 }
 
 /// Where a texture set came from (mitcad#313): the texture source, the
@@ -355,6 +378,29 @@ impl Texture {
             }
             if let Some(data) = data {
                 data.bytes().map_err(|e| format!("{what}: {e}"))?;
+            }
+        }
+        // The maps' factors (mitcad#1874): grey values scaled, roughness
+        // and metalness only.
+        for (map, texture) in [
+            ("normal", &self.normal),
+            ("roughness", &self.roughness),
+            ("metalness", &self.metalness),
+            ("occlusion", &self.occlusion),
+        ] {
+            let Some(factor) = texture.as_ref().and_then(|t| t.factor) else {
+                continue;
+            };
+            let what = slot_name(map);
+            if map != "roughness" && map != "metalness" {
+                return Err(format!(
+                    "{what}: only the roughness and metalness maps take a factor"
+                ));
+            }
+            if !(0.0..=1.0).contains(&factor) {
+                return Err(format!(
+                    "{what}: the factor must be from 0 to 1, got {factor}"
+                ));
             }
         }
         if let Some(source) = &self.source {
@@ -535,6 +581,12 @@ pub enum Projection {
     Box,
     /// Along the Z axis of the body's coordinates.
     Planar,
+    /// By the body's own texture coordinates (mitcad#1862: a mesh body
+    /// imported with them, as a glTF file's): the image once over 0 to 1
+    /// of each, its `size` and `rotation` not used. A body without them
+    /// is projected as by `Box`. Written as `uv`, which older versions
+    /// refuse.
+    Uv,
 }
 
 impl Default for Appearance {

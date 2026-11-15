@@ -129,7 +129,7 @@ fn between(from: &JointValues, to: &JointValues, t: f64) -> JointValues {
 }
 
 /// Samples enough for the motions' changes from `from` to `to`.
-fn samples_for(from: &JointValues, to: &JointValues) -> usize {
+pub(super) fn samples_for(from: &JointValues, to: &JointValues) -> usize {
     let mut most = 1.0_f64;
     for (uid, motions) in to {
         for (m, v) in motions {
@@ -570,7 +570,12 @@ impl<K: Kernel> Document<K> {
         let start = driven(base, &path(0.0))?;
         let at_start = self.compute(&start)?;
         let skip: BTreeSet<usize> = pairs
-            .overlapping(&self.kernel, &at_start.placements, &BTreeSet::new())
+            .overlapping(
+                &self.kernel,
+                &at_start.placements,
+                &at_start.joints.flexed,
+                &BTreeSet::new(),
+            )
             .map_err(failed)?
             .into_iter()
             .map(|(p, _)| p)
@@ -581,7 +586,12 @@ impl<K: Kernel> Document<K> {
                 let state = driven(base, &path(t))?;
                 let result = self.compute(&state)?;
                 let deepest = pairs
-                    .overlapping(&self.kernel, &result.placements, &skip)
+                    .overlapping(
+                        &self.kernel,
+                        &result.placements,
+                        &result.joints.flexed,
+                        &skip,
+                    )
                     .map_err(failed)?
                     .into_iter()
                     .max_by(|a, b| a.1.total_cmp(&b.1));

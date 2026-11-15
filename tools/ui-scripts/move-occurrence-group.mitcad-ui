@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# Move to Component on a rigid group joined to a shaft (mitcad#1847,
+# GitHub mitcad/Mitcad#334), on the design of
+# tools/ui-scripts/move-occurrence-group.json: Bearing:1 and Tube:1 in a
+# rigid group, Bearing:1 joined onto Shaft:1, Holder:1 empty, all in the
+# root.
+wait-idle
+key F6
+capture-undo-depth baseline
+
+# Two selected occurrences: every parent they cannot go into says why in a
+# row under it, the joint to the shaft with what to do; the two are the
+# whole group, so no group is offered. Cancel changes nothing.
+click-logged '^Browser Root/Tube:1 at '
+click-logged '^Browser Root/Bearing:1 at ' ctrl
+mark
+context-menu-logged '^Browser Root/Tube:1 at ' 'Move to Component…'
+wait-log '^Move to Component on 2 selected occurrences$'
+focus-dialog '^Move to Component$'
+expect-log '^Move Component parents of Tube:1, Bearing:1: Root \(unavailable\) \| '
+expect-log '^Move Component reason shown under Root: Tube:1, Bearing:1 are already in Root$'
+expect-log '^Move Component reason shown under Root/Bearing:1: Bearing:1 cannot go into Bearing, which is its own component$'
+expect-log '^Move Component reason shown under Root/Tube:1: Tube:1 cannot go into Tube, which is its own component$'
+expect-log '^Move Component reason shown under Root/Holder:1: Joint1: it joins Bearing:1 to Shaft:1, which is not in Holder; .*Move Shaft:1 into Holder as well, or delete it and join Bearing:1 again inside Holder$'
+expect-no-log '^Move Component reason shown under Root/Holder:1: RigidGroup1'
+expect-no-log '^Move Component rigid group offered'
+screenshot-dialog '${MITCAD_TEST_WORK}/move-occurrence-group-reasons.png'
+key Escape
+expect-dialog-gone '^Move to Component$'
+focus-main
+wait-log '^Move of Tube:1 cancelled$'
+expect-undo-depth ${baseline} 0
+
+# One occurrence of the group: the rest of the group is offered, on, and
+# the parents are those of the whole group. Bearing:1 is still the current
+# row, selected: a click on its name now would be the slow second click
+# that renames it once the double-click time has passed (BrowserPanel),
+# whose editor then covers the row. Another row first.
+click-logged '^Browser Root/Shaft:1 at '
+wait-log '^Browser selected: Root/Shaft:1$'
+click-logged '^Browser Root/Bearing:1 at '
+wait-log '^Browser selected: Root/Bearing:1$'
+mark
+context-menu-logged '^Browser Root/Bearing:1 at ' 'Move to Component…'
+focus-dialog '^Move to Component$'
+expect-log '^Move Component rigid group offered: Tube:1$'
+expect-widget-property moveOccurrenceRigidGroup checked true
+expect-log '^Move Component parents of Bearing:1, Tube:1: Root \(unavailable\) \| '
+expect-log '^Move Component reason shown under Root/Holder:1: Joint1: it joins Bearing:1 to Shaft:1'
+expect-no-log '^Move to Component on '
+key Escape
+expect-dialog-gone '^Move to Component$'
+focus-main
+expect-undo-depth ${baseline} 0
+
+# With the shaft selected too, Holder:1 takes all three in one step, the
+# rigid group and the joint with them; one Undo puts everything back.
+click-logged '^Browser Root/Tube:1 at '
+click-logged '^Browser Root/Bearing:1 at ' ctrl
+click-logged '^Browser Root/Shaft:1 at ' ctrl
+mark
+context-menu-logged '^Browser Root/Bearing:1 at ' 'Move to Component…'
+wait-log '^Move to Component on 3 selected occurrences$'
+focus-dialog '^Move to Component$'
+focus-widget moveOccurrenceDestinations
+key Home Down Down Down Down
+wait-log '^Move Component parent: Root/Holder:1, ok$'
+expect-log '^Move Component features: RigidGroup1 -> Holder, Joint1 -> Holder$'
+button '^Move$'
+expect-dialog-gone '^Move to Component$'
+focus-main
+wait-log '^Moved Bearing:1, .* to Root/Holder:1$'
+expect-undo-depth ${baseline} 1
+mark
+command edit.undo
+wait-log '^Undo: Move Bearing:1, '
+expect-undo-depth ${baseline} 0
+expect-never 'Recompute failed|TestDriver: FAIL'

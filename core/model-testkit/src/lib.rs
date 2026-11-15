@@ -391,6 +391,28 @@ pub struct MockKernel {
     /// shape that has faces (mitcad#1784: the pieces of an edge a model
     /// change split, which a projection's lost source may have become).
     pub extra_edges: RefCell<Vec<String>>,
+    /// With `box_faces`, a box's edges lie on its bounds (mitcad#1814):
+    /// `edge_geometry` of an edge between two box sides square to each
+    /// other is the line where they meet, along the third axis from the
+    /// bounds' least to their most; other edges as without this.
+    pub box_edges: Cell<bool>,
+    /// The closed or open pockets of every body for Fill Cavity
+    /// (mitcad#1818): what `cavity_pieces` gives below the cap besides the
+    /// space round the body.
+    pub cavities: RefCell<Vec<MockCavity>>,
+    /// Conical faces by name, which `face_cone` gives (mitcad#1768: a
+    /// sketch on a cone's side); other faces are not conical.
+    pub face_cones: RefCell<BTreeMap<String, mitcad_model_base::kernel::ConeFace>>,
+}
+
+/// A pocket of a body for [`MockKernel::cavities`] (mitcad#1818): the
+/// body's faces round it, its bounds, and whether it opens out of the body
+/// (it then reaches the bottom of the box below the cap).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MockCavity {
+    pub walls: Vec<FaceName>,
+    pub bounds: BoundingBox,
+    pub open: bool,
 }
 
 /// A whole round face of a mock body ([`MockKernel::round_faces`],
@@ -3301,6 +3323,33 @@ impl Kernel for MockKernel {
         if let Some(curve) = self.edge_curves.borrow().get(&edge.to_string()) {
             return Ok(curve.clone());
         }
+        // A box's edge on its bounds (mitcad#1814).
+        if self.box_faces.get()
+            && self.box_edges.get()
+            && let Some(bounds) = shape.bounds
+        {
+            let [a, b] = edge.faces();
+            if let (Some((axis_a, high_a)), Some((axis_b, high_b))) =
+                (box_side(plain_role(a)), box_side(plain_role(b)))
+                && axis_a != axis_b
+            {
+                let along = 3 - axis_a - axis_b;
+                let at = |axis: usize, high: bool| {
+                    if high {
+                        bounds.max[axis]
+                    } else {
+                        bounds.min[axis]
+                    }
+                };
+                let mut start = [0.0; 3];
+                start[axis_a] = at(axis_a, high_a);
+                start[axis_b] = at(axis_b, high_b);
+                let mut end = start;
+                start[along] = bounds.min[along];
+                end[along] = bounds.max[along];
+                return Ok(CurveGeometry::Line { start, end });
+            }
+        }
         let start = shape.bounds.map_or([0.0; 3], |b| b.min);
         Ok(CurveGeometry::Line {
             start,
@@ -3520,7 +3569,9 @@ impl Kernel for MockKernel {
     /// The shape's bounding box, each face of [`MockShape::faces`] (six
     /// without any) a side of the box (the sides in turn: -Z, +Z, -Y, +Y,
     /// -X, +X) of two triangles with its own four vertices and the side's
-    /// normal; the tolerances go to `mesh_tolerances`.
+    /// normal; the tolerances go to `mesh_tolerances`. A textured mesh
+    /// body's (`textured_triangle_body`) vertices have texture coordinates
+    /// (mitcad#1874): x and y across the box, 0 to 1.
     fn face_meshes(
         &self,
         shape: &MockShape,
@@ -3564,6 +3615,21 @@ impl Kernel for MockKernel {
             mesh.triangles
                 .extend([[first, first + 1, first + 2], [first, first + 2, first + 3]]);
             mesh.face_triangles.push(2);
+        }
+        if shape.history.contains("mesh textured") {
+            let across = |p: [f64; 3], axis: usize| {
+                let size = bounds.max[axis] - bounds.min[axis];
+                if size > 0.0 {
+                    (p[axis] - bounds.min[axis]) / size
+                } else {
+                    0.0
+                }
+            };
+            mesh.uvs = mesh
+                .vertices
+                .iter()
+                .map(|&p| [across(p, 0), across(p, 1)])
+                .collect();
         }
         Ok(mesh)
     }
@@ -3694,6 +3760,8 @@ impl Kernel for MockKernel {
             copies_by_bounds: self.copies_by_bounds.clone(),
             face_gaps: self.face_gaps.clone(),
             cuts_by_bounds: self.cuts_by_bounds.clone(),
+            box_edges: self.box_edges.clone(),
+            cavities: self.cavities.clone(),
             ..MockKernel::default()
         })
     }
@@ -3843,6 +3911,26 @@ impl Kernel for MockKernel {
         }
         let mut shape = MockShape::imported("mesh", 1);
         shape.bounds = points_box(points);
+        Ok(shape)
+    }
+
+    /// As `triangle_body` (counted as that too), and counted as
+    /// "textured_triangle_body"; refused
+    /// when `uvs` is not one per point (mitcad#1862). Its history is
+    /// "mesh textured", so that `face_meshes` gives it texture coordinates
+    /// (mitcad#1874).
+    fn textured_triangle_body(
+        &self,
+        points: &[[f64; 3]],
+        triangles: &[[u32; 3]],
+        uvs: &[[f64; 2]],
+    ) -> Result<MockShape, KernelError> {
+        self.call("textured_triangle_body")?;
+        if uvs.len() != points.len() || uvs.iter().flatten().any(|v| !v.is_finite()) {
+            return Err(KernelError::failed("texture coordinates not one per point"));
+        }
+        let mut shape = self.triangle_body(points, triangles)?;
+        shape.history = "mesh textured".to_owned();
         Ok(shape)
     }
 
@@ -6162,20 +6250,351 @@ impl Kernel for MockKernel {
     ) -> Result<MockShape, KernelError> {
         self.call("helix_sheet")?;
         self.specs.borrow_mut().push(format!(
-            "helix_sheet({}: {} axis {:?} {:?} pitch {} revolutions {} left {})",
+            "helix_sheet({}: {} axis {:?} {:?} pitch {} revolutions {} left {} growth {} ends {:?})",
             spec.feature,
             describe_chains(chains),
             spec.origin,
             spec.direction,
             number(spec.pitch),
             number(spec.revolutions),
-            spec.left_handed
+            spec.left_handed,
+            number(spec.growth),
+            spec.ends
         ));
         Ok(sheet_of_chains(
             format!("helix_sheet({},sheet)", spec.feature),
             spec.feature,
             chains,
         ))
+    }
+
+    // Subdivision surfaces (mitcad#1757).
+
+    /// Records the patches in `specs` (how many, whether they close); a
+    /// shape with a face for each patch, an edge between two patches that
+    /// share two corners, and the box of the poles.
+    fn patch_body(
+        &self,
+        spec: &mitcad_model_base::kernel::PatchBodySpec<'_>,
+    ) -> Result<MockShape, KernelError> {
+        use mitcad_model_base::kernel::SurfacePatch;
+        self.call("patch_body")?;
+        self.specs.borrow_mut().push(format!(
+            "patch_body({} patches, closed {})",
+            spec.patches.len(),
+            spec.closed
+        ));
+        let corners = |p: &SurfacePatch| -> [[f64; 3]; 4] {
+            let (u, v) = (p.nu - 1, p.nv - 1);
+            [
+                p.poles[0],
+                p.poles[u * p.nv],
+                p.poles[u * p.nv + v],
+                p.poles[v],
+            ]
+        };
+        let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9);
+        let mut edges = Vec::new();
+        for (i, a) in spec.patches.iter().enumerate() {
+            let ca = corners(a);
+            for b in &spec.patches[i + 1..] {
+                let cb = corners(b);
+                let shared = ca
+                    .iter()
+                    .filter(|p| cb.iter().any(|q| near(**p, *q)))
+                    .count();
+                if shared >= 2 {
+                    edges.push((a.face.clone(), b.face.clone()));
+                }
+            }
+        }
+        let mut bounds: Option<BoundingBox> = None;
+        for p in spec.patches.iter().flat_map(|patch| &patch.poles) {
+            let point = BoundingBox { min: *p, max: *p };
+            bounds = Some(match bounds {
+                Some(b) => b.union(&point),
+                None => point,
+            });
+        }
+        let feature = spec
+            .patches
+            .first()
+            .map_or_else(String::new, |p| p.face.feature.to_string());
+        Ok(MockShape {
+            history: format!("patches({feature}:{})", spec.patches.len()),
+            faces: spec.patches.iter().map(|p| p.face.clone()).collect(),
+            edges,
+            bounds,
+            parts: Vec::new(),
+        })
+    }
+
+    // Fill Cavity (mitcad#1818).
+
+    /// The empty spaces below the cap: first the space round the body (it
+    /// touches the cap, a side and the bottom of the box), then each of
+    /// `cavities` that reaches below the cap, with its walls (those the
+    /// body has), the top when it reaches the cap and the box's bottom
+    /// when it is open, its bounds clipped at the cap. The call is in
+    /// `specs` (`cavity F5 top F5:fill at 0 0 20 normal 0 0 1 box -1 -1 -21
+    /// .. 61 41 0`); "cavity_pieces" in `fail` fails it.
+    fn cavity_pieces(
+        &self,
+        spec: &mitcad_model_base::kernel::CavitySpec<'_, MockShape>,
+    ) -> Result<Vec<MockShape>, KernelError> {
+        self.call("cavity_pieces")?;
+        let text = |p: [f64; 3]| p.map(|x| number(round(x))).join(" ");
+        self.specs.borrow_mut().push(format!(
+            "cavity {} top {} at {} normal {} box {} .. {}",
+            spec.feature,
+            spec.top,
+            text(spec.origin),
+            text(spec.normal),
+            text(spec.min),
+            text(spec.max)
+        ));
+        let side = FaceName::new(spec.feature, "fill_side", Some(RoleKey::Index(0)));
+        let bottom = FaceName::new(spec.feature, "fill_bottom", None);
+        let mut pieces = vec![MockShape {
+            history: format!("cavity({}:outside)", spec.body.history),
+            faces: vec![spec.top.clone(), side.clone(), bottom.clone()],
+            edges: vec![(spec.top.clone(), side)],
+            bounds: spec.body.bounds,
+            parts: Vec::new(),
+        }];
+        let height = |p: [f64; 3]| {
+            (0..3)
+                .map(|k| (p[k] - spec.origin[k]) * spec.normal[k])
+                .sum::<f64>()
+        };
+        for (k, cavity) in self.cavities.borrow().iter().enumerate() {
+            let low = cavity
+                .bounds
+                .corners()
+                .map(height)
+                .fold(f64::INFINITY, f64::min);
+            let high = cavity
+                .bounds
+                .corners()
+                .map(height)
+                .fold(f64::NEG_INFINITY, f64::max);
+            if low >= -1e-9 {
+                continue;
+            }
+            let mut faces: Vec<FaceName> = cavity
+                .walls
+                .iter()
+                .filter(|wall| spec.body.has_face(wall))
+                .cloned()
+                .collect();
+            if high >= -1e-9 {
+                faces.push(spec.top.clone());
+            }
+            if cavity.open {
+                faces.push(bottom.clone());
+            }
+            pieces.push(MockShape {
+                history: format!("cavity({}:{})#{k}", spec.body.history, spec.top),
+                faces,
+                edges: Vec::new(),
+                bounds: clipped(&cavity.bounds, spec.origin, spec.normal),
+                parts: Vec::new(),
+            });
+        }
+        Ok(pieces)
+    }
+
+    // Sketches on cylindrical and conical faces (mitcad#1768).
+
+    /// The cone `face_cones` holds for the face, if the shape has it.
+    fn face_cone(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+    ) -> Result<mitcad_model_base::kernel::ConeFace, KernelError> {
+        match self.face_cones.borrow().get(&face.to_string()) {
+            Some(cone) if shape.has_face(face) => Ok(*cone),
+            _ => Err(KernelError::failed(format!("face {face} is not conical"))),
+        }
+    }
+
+    /// A surface body of the bands `<feature>:band(<curve>)`, with the
+    /// history `bands(<feature>:<curves>)`; the spec described in `specs`
+    /// (`bands F5 c1 c2 about 0 0 0 along 0 0 1 radius 10 cone 0 from -1
+    /// to 1`).
+    fn wrapped_curves(
+        &self,
+        spec: &mitcad_model_base::kernel::WrappedCurvesSpec<'_>,
+    ) -> Result<MockShape, KernelError> {
+        self.call("wrapped_curves")?;
+        let axis = |v: [f64; 3]| v.map(number).join(" ");
+        let names: Vec<&str> = spec.curves.iter().map(|c| c.name.as_str()).collect();
+        self.specs.borrow_mut().push(format!(
+            "bands {} {} about {} along {} radius {} cone {} from {} to {}",
+            spec.feature,
+            names.join(" "),
+            axis(spec.axis.origin),
+            axis(spec.axis.direction),
+            number(spec.radius),
+            number(spec.half_angle),
+            number(spec.inner),
+            number(spec.outer)
+        ));
+        let faces = spec
+            .curves
+            .iter()
+            .map(|c| {
+                let curve = mitcad_model_base::ids::EntityUid::parse_curve(&c.name)
+                    .unwrap_or(mitcad_model_base::ids::EntityUid(0));
+                FaceName::new(
+                    spec.feature,
+                    "band",
+                    Some(RoleKey::Segment(SegmentKey::closed(curve))),
+                )
+            })
+            .collect();
+        Ok(MockShape {
+            history: format!("bands({}:{})", spec.feature, names.join(",")),
+            faces,
+            edges: Vec::new(),
+            bounds: None,
+            parts: Vec::new(),
+        })
+    }
+
+    // Press Pull continued Straight or Along the walls (mitcad#1850).
+
+    /// Records the call in `specs` (`press_pull <feature> <faces> <run>
+    /// <distance>[ draft <angle>| scale <end>]`); the body with, for each
+    /// face, a wall `side(E{…})` from each of its edges and the end
+    /// `end(<face>)` beside the face, which keeps its name. A face with a
+    /// surface other than a plane in `surfaces` is not flat; with
+    /// `press_pull_along` in `fail`, Along is refused as walls that do not
+    /// continue.
+    fn press_pull(
+        &self,
+        feature: FeatureUid,
+        body: &MockShape,
+        faces: &[FaceName],
+        spec: &mitcad_model_base::kernel::PressPullSpec,
+    ) -> Result<MockShape, KernelError> {
+        use mitcad_model_base::kernel::{PressPullRun, PressPullTaper};
+        self.call("press_pull")?;
+        let mut picked: Vec<FaceName> = Vec::new();
+        for reference in faces {
+            let found: Vec<FaceName> = body
+                .faces
+                .iter()
+                .filter(|f| f.matches(reference))
+                .cloned()
+                .collect();
+            if found.is_empty() {
+                return Err(KernelError::failed("the body has no such face"));
+            }
+            picked.extend(found);
+        }
+        for face in &picked {
+            if let Some(surface) = self.surfaces.borrow().get(&face.to_string())
+                && !matches!(surface, SurfaceGeometry::Plane { .. })
+            {
+                return Err(KernelError::failed(
+                    "the face is not flat: Straight and Along the walls take a flat face; use Offset",
+                ));
+            }
+        }
+        if spec.run == PressPullRun::Along && self.fail.borrow().contains(&"press_pull_along") {
+            return Err(KernelError::failed(
+                "the walls do not continue as a turn or a straight run; use Offset or Straight",
+            ));
+        }
+        let run = match spec.run {
+            PressPullRun::Straight => "straight",
+            PressPullRun::Along => "along",
+        };
+        let taper = match spec.taper {
+            PressPullTaper::None => String::new(),
+            PressPullTaper::Draft { angle } => format!(" draft {}", number(round(angle))),
+            PressPullTaper::Scale { end } => format!(" scale {}", number(round(end))),
+        };
+        let names: Vec<String> = picked.iter().map(ToString::to_string).collect();
+        self.specs.borrow_mut().push(format!(
+            "press_pull {feature} {} {run} {}{taper}",
+            names.join(","),
+            number(spec.distance)
+        ));
+        let mut shape = body.clone();
+        for face in &picked {
+            let end = FaceName::new(feature, "end", Some(RoleKey::Face(Box::new(face.clone()))));
+            let walls: Vec<FaceName> = body
+                .edges
+                .iter()
+                .filter(|(a, b)| a.matches(face) || b.matches(face))
+                .map(|(a, b)| {
+                    let edge = EdgeName::new(a.clone(), b.clone());
+                    FaceName::new(feature, "side", Some(RoleKey::Edge(Box::new(edge))))
+                })
+                .collect();
+            for wall in &walls {
+                shape.edges.push((wall.clone(), face.clone()));
+                shape.edges.push((wall.clone(), end.clone()));
+            }
+            shape.faces.extend(walls);
+            shape.faces.push(end);
+        }
+        shape.history = format!(
+            "press_pull({},{run},{}{taper})",
+            body.history,
+            number(spec.distance)
+        );
+        Ok(shape)
+    }
+
+    /// The face's plane as `face_plane` gives it (an end cap's on the
+    /// bounds; without bounds at the origin facing +z), its walls running
+    /// straight along the normal, the reach half the bounds' diagonal
+    /// across it; with `press_pull_along` in `fail`, the walls continue
+    /// neither way.
+    fn face_run(
+        &self,
+        body: &MockShape,
+        face: &FaceName,
+    ) -> Result<mitcad_model_base::kernel::FaceRun, KernelError> {
+        use mitcad_model_base::kernel::{FaceAlong, FaceRun};
+        self.call("face_run")?;
+        // A body without bounds (a revolution's): its face at the origin,
+        // facing +z.
+        let plane = match self.face_plane(body, face) {
+            Err(_) if body.bounds.is_none() && body.has_face(face) => Plane {
+                origin: [0.0; 3],
+                normal: [0.0, 0.0, 1.0],
+            },
+            found => found?,
+        };
+        let reach = body.bounds.map_or(0.0, |b| {
+            (0..3)
+                .filter(|&k| plane.normal[k].abs() < 0.5)
+                .map(|k| (b.max[k] - b.min[k]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+                / 2.0
+        });
+        let along = if self.fail.borrow().contains(&"press_pull_along") {
+            FaceAlong::Refused {
+                error:
+                    "the walls do not continue as a turn or a straight run; use Offset or Straight"
+                        .to_owned(),
+            }
+        } else {
+            FaceAlong::Straight {
+                direction: plane.normal,
+            }
+        };
+        Ok(FaceRun {
+            centre: plane.origin,
+            normal: plane.normal,
+            reach,
+            along,
+        })
     }
 }
 

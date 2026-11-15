@@ -650,7 +650,9 @@ fn turn_sketch_plane(sketch: &mut SketchDef, turn: Turn) {
         SketchPlane::Xy => OriginDatum::Xy,
         SketchPlane::Xz => OriginDatum::Xz,
         SketchPlane::Yz => OriginDatum::Yz,
-        SketchPlane::Construction(_) | SketchPlane::Face { .. } => return,
+        SketchPlane::Construction(_) | SketchPlane::Face { .. } | SketchPlane::Developed { .. } => {
+            return;
+        }
     };
     let Datum::Plane(plane) = origin.datum() else {
         return;

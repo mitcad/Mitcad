@@ -32,7 +32,11 @@
 #     at pitch 5, left-handed, narrowing 2 a turn (mitcad#83: Mitcad's
 #     construction, so the square's mean distance from the axis counts),
 #     opens again as that; a helix that the FreeCAD import made widening
-#     keeps FreeCAD's construction when it is edited.
+#     keeps FreeCAD's construction when it is edited; a helix with flat
+#     ends (mitcad#1798: 2 turns, a flat start of 180 deg, transitions of
+#     90 deg, no flat end) opens with them, keeps them when its pitch is
+#     edited, and takes a flat end of 90 deg in the panel: 3.25 turns'
+#     volume, saved in its `end`.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sweep-test.sh [screenshot.png]
@@ -156,7 +160,21 @@ cat > "$WORK/freecad.json" << EOF
     "operation": "new_body"}}
 ]
 EOF
-for model in sweeps bracket helix freecad; do
+# The first square of helix.json turned about Z 2 turns of 10 with flat ends
+# (mitcad#1798): a flat start of half a turn, a quarter turn of transition
+# at each end, no flat end; the pitch keeps the 2 mm square's turns apart
+# over the flat start.
+cat > "$WORK/ends.json" << EOF
+[
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [10, 0], "width": 2, "height": 2},
+  {"cmd": "add_feature", "def": {"type": "helix", "profiles": [{"sketch": "F1", "region": "$RECT"}],
+    "axis": "z", "pitch": 10, "revolutions": 2,
+    "start": {"transition_angle": "90 deg", "flat_angle": "180 deg"},
+    "end": {"transition_angle": "90 deg", "flat_angle": "0 deg"}, "operation": "new_body"}}
+]
+EOF
+for model in sweeps bracket helix freecad ends; do
   "$CLI" run "$WORK/$model.json" --save "$WORK/$model.mitcad" > "$WORK/cli.log" 2>&1 ||
     { cat "$WORK/cli.log"; ui_fail "mitcad-cli $model"; }
 done
@@ -482,5 +500,55 @@ ui_expect_new "Saved $WORK/freecad.mitcad" "saved"
 expect_file "$WORK/freecad.mitcad" \
   '[([p["value"] for p in doc["parameters"] if p["name"] == f["revolutions"]], f.get("construction")) for f in doc["features"] if f["type"] == "helix"]' \
   "[([2.0], 'freecad')]" "still FreeCAD's construction, 2 turns"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "--- A helix with flat ends (mitcad#1798): its pitch edited, the ends kept"
+# The ends' angles of the saved helix, in the order flat start, start
+# transition, end transition, flat end (the numbers of their expressions).
+ENDS='[next(p["expression"].split()[0] for p in doc["parameters"] if p["name"] == f[s][k]) for f in doc["features"] if f["type"] == "helix" for (s, k) in (("start", "flat_angle"), ("start", "transition_angle"), ("end", "transition_angle"), ("end", "flat_angle"))]'
+ui_start_app --open "$WORK/ends.mitcad"
+ui_step "fit (F6)"                         ui_key F6
+ui_expect_log "Timeline Helix1 at" "the helix on the timeline"
+ui_mark
+ui_step "double-click Helix1"              ui_double_click_logged "Timeline Helix1"
+ui_expect_new "Editing F2 with Helix" "editing Helix1"
+ui_expect_new "Helix Flat Start: 180 deg" "its flat start"
+ui_expect_new "Helix Start Transition: 90 deg" "its start's transition"
+ui_expect_new "Helix End Transition: 90 deg" "its end's transition"
+ui_expect_new "Helix Flat End: 0 deg" "no flat end"
+ui_step "pitch 12"                         ui_type_in "Panel Helix input pitch" "12"
+ui_expect_new "Helix Pitch: 12 = 12 mm" "the pitch typed"
+ui_expect_new "Preview Helix: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F2" "Helix1 edited"
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $WORK/ends.mitcad" "saved"
+expect_file "$WORK/ends.mitcad" "$ENDS" "['180', '90', '90', '0']" "the flat ends kept"
+expect_file "$WORK/ends.mitcad" \
+  '[[p["value"] for p in doc["parameters"] if p["name"] == f["pitch"]] for f in doc["features"] if f["type"] == "helix"]' \
+  "[[12.0]]" "the pitch of 12"
+
+echo "--- A flat end of 90 deg set in the panel"
+ui_mark
+ui_step "double-click Helix1"              ui_double_click_logged "Timeline Helix1"
+ui_expect_new "Editing F2 with Helix" "editing Helix1"
+ui_expect_new "Helix Pitch: 12 mm" "the pitch of 12"
+ui_expect_new "Helix Flat Start: 180 deg" "its flat start still"
+ui_step "flat end 90"                      ui_type_in "Panel Helix input flat_end" "90"
+ui_expect_new "Helix Flat End: 90 = 90 deg" "the flat end typed"
+ui_expect_new "Preview Helix: ok" "previewed"
+ui_step "OK (Enter)"                       ui_key Return
+ui_expect_new "Edited F2" "Helix1 edited"
+ui_expect_new "Body Body1 (F2.b0): volume" "the helix measured"
+# 2 turns and 180 + 90 + 90 + 90 deg of ends: 3.25 turns, whatever the
+# pitch (the square stays in a plane through the axis).
+ui_expect_volume "Body Body1 (F2.b0): volume [0-9.]* -> \([0-9.]*\) mm3" "$(helix 3.25 11)" \
+  "3.25 turns with the ends" 1e-4
+ui_mark
+ui_key ctrl+s
+ui_expect_new "Saved $WORK/ends.mitcad" "saved"
+expect_file "$WORK/ends.mitcad" "$ENDS" "['180', '90', '90', '90']" "the flat end in the feature"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI sweep test"

@@ -340,11 +340,40 @@ target_sources(mitcad_geometry PRIVATE
   src/smooth_seams.cpp
   include/mitcad/geometry/smooth_seams.hpp)
 
+# Form bodies: the patches of a control cage's limit surface made faces and
+# sewn into a solid or a sheet (mitcad#1757).
+target_sources(mitcad_geometry PRIVATE
+  src/form.cpp
+  include/mitcad/geometry/form.hpp)
 # Nearness of shapes and points on surfaces, told without measuring more
 # than the answer needs (mitcad#1785).
 target_sources(mitcad_geometry PRIVATE
   src/proximity.cpp
   src/proximity.hpp)
+# Fill Cavity: the empty spaces of a body below a cap plane (mitcad#1818).
+target_sources(mitcad_geometry PRIVATE
+  src/fill_cavity.cpp
+  include/mitcad/geometry/fill_cavity.hpp)
+# What is computed of a shape again and again, kept by the shape's content
+# (mitcad#1801).
+target_sources(mitcad_geometry PRIVATE
+  src/content_cache.cpp
+  src/content_cache.hpp)
+# A taper whose walls meet or vanish within the extrusion, its topology
+# events resolved (mitcad#1851; sweep.cpp's tapered()).
+target_sources(mitcad_geometry PRIVATE
+  src/taper_events.cpp
+  src/taper_events.hpp)
+# A solid carried through a smooth map of space: those tapers bent onto a
+# cylinder or a cone, or along a curved path (mitcad#1854).
+target_sources(mitcad_geometry PRIVATE
+  src/space_map.cpp
+  src/space_map.hpp)
+# Press Pull on a face continued Straight or Along the walls, tapered by a
+# draft or a scale (mitcad#1850).
+target_sources(mitcad_geometry PRIVATE
+  src/press_pull.cpp
+  include/mitcad/geometry/press_pull.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -453,6 +482,11 @@ if(BUILD_TESTING)
   # Outlines of faces seen along a direction: Project of a curved face
   # (mitcad#1265).
   target_sources(test_geometry PRIVATE tests/test_face_outline.cpp)
+  # Tapers whose walls meet or vanish within the extrusion (mitcad#1851).
+  target_sources(test_geometry PRIVATE tests/test_taper_events.cpp)
+  # Press Pull on a face continued Straight or Along the walls, tapered
+  # (mitcad#1850).
+  target_sources(test_geometry PRIVATE tests/test_press_pull.cpp)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry_analysis)
   target_link_libraries(test_geometry PRIVATE mitcad_geometry mitcad_warnings)
   # The suite in parts, a ctest each (geometry.suite.<part>, label
@@ -519,7 +553,9 @@ if(BUILD_TESTING)
     dressup_takes_face
     section_clip
     shell_thin_parts
-    face_outline)
+    face_outline
+    taper_events
+    press_pull)
   foreach(part IN LISTS geometry_suite_parts)
     add_test(NAME geometry.suite.${part} COMMAND test_geometry --part ${part})
     set_tests_properties(geometry.suite.${part} PROPERTIES LABELS geometry_suite)
@@ -1247,6 +1283,13 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  # Form bodies (mitcad#1757): six bulged bicubic patches of a cube sewn into
+  # a valid solid with its faces named, a fillet on one of its edges and a
+  # hole through it; five of them a sheet; a missing one and a broken patch
+  # refused.
+  add_executable(test_form tests/test_form.cpp)
+  target_link_libraries(test_form PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.form COMMAND test_form)
   # Nearness told without measuring the whole distance (mitcad#1785):
   # within_distance agrees with BRepExtrema's distance at limits around it
   # for solids, faces (a B-spline one too), edges and vertices apart,
@@ -1255,4 +1298,42 @@ if(BUILD_TESTING)
   add_executable(test_proximity tests/test_proximity.cpp)
   target_link_libraries(test_proximity PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.proximity COMMAND test_proximity)
+endif()
+
+if(BUILD_TESTING)
+  # A fillet or chamfer wider than a face beside its edge takes that face
+  # away (mitcad#1819), one table, one row per case, over the narrow face
+  # (planar between parallel or other faces, a cylinder, a cone, a
+  # B-spline strip), the chain (one edge, a tangent chain over rounded
+  # corners, an octagon over sharp corners, an edge ending on a third face),
+  # convex and concave, the dressup (chamfers: equal, two distances each
+  # way, distance and angle; fillets) and the size (0.5w to 3w, and one past
+  # the next face, which fails in words): the equal chamfer and the fillet
+  # at every size on every narrow face, every dressup at the exact width,
+  # 1.01w and past, and pairwise rows that put every two columns' values
+  # together; each one valid closed solid whose volume is the reference's
+  # built in the owner's order (the dressup on the picked edge with the
+  # narrow face continued, then the face beyond grown out), exactly where
+  # the face is planar along a straight chain. Three parts, one ctest each.
+  add_executable(test_dressup_consumes_face tests/test_dressup_consumes_face.cpp)
+  target_link_libraries(test_dressup_consumes_face PRIVATE mitcad_geometry mitcad_geometry_analysis mitcad_warnings)
+  foreach(part IN ITEMS core kinds chains)
+    add_test(NAME geometry.dressup_consumes_face.${part} COMMAND test_dressup_consumes_face --part ${part})
+    set_tests_properties(geometry.dressup_consumes_face.${part} PROPERTIES TIMEOUT 300)
+  endforeach()
+  # Repeated work taken out of OCCT with the same results (mitcad#1823): a
+  # blend's line read by index in constant time keeps its points' order and
+  # addresses (port patch 1690), and a curve/surface intersection with the
+  # surface's kept polyhedra gives the intersections made without them
+  # (patch 1691).
+  add_executable(test_kernel_repeated_work tests/test_kernel_repeated_work.cpp)
+  target_link_libraries(test_kernel_repeated_work PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.kernel_repeated_work COMMAND test_kernel_repeated_work)
+  # Fill Cavity (mitcad#1818): a block with a blind V slit beside a taller
+  # wall, its empty spaces below the cap: the slit closed by the cap with
+  # its volume and its walls' names, the space round the block open; a box
+  # the body does not reach whole; the body unchanged.
+  add_executable(test_fill_cavity tests/test_fill_cavity.cpp)
+  target_link_libraries(test_fill_cavity PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fill_cavity COMMAND test_fill_cavity)
 endif()

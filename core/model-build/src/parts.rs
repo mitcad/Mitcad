@@ -359,11 +359,14 @@ impl<K: Kernel> LibraryPartsBuild<K> for Document<K> {
 }
 
 /// Gives a derived part's bodies their source's appearance and material
-/// (mitcad#478: a timber member shows its wood), for a part whose library
-/// block names a `material`: when the source's bodies
-/// that set one all set the same, every body the part makes takes it (the
-/// first `count`, at least one), and a document appearance of the source
-/// is copied into the design when it has none of that id.
+/// (mitcad#478: a timber member shows its wood; mitcad#1817: and is made
+/// of it), for a part whose library block names a `material`: when the
+/// source's bodies that set an appearance all set the same, every body the
+/// part makes takes it (the first `count`, at least one), and a document
+/// appearance of the source is copied into the design when it has none of
+/// that id. The material is the library's
+/// (`DocState::library_part_material`): the one the source's bodies all
+/// name, else the block's species or product with its density.
 pub(crate) fn inherit_appearance(
     state: &mut DocState,
     part: FeatureUid,
@@ -394,7 +397,6 @@ pub(crate) fn inherit_appearance(
         }
     };
     let appearance = same(&|a| a.appearance.clone());
-    let material = same(&|a| a.material.clone());
     // The ends' look (mitcad#484: a timber member's end grain): the
     // appearance the source's bodies give the caps of their extrusion
     // (`<F>:start(...)`, `<F>:end(...)`, the faces at z = 0 and L), when
@@ -412,9 +414,6 @@ pub(crate) fn inherit_appearance(
         (1, Some(build)) if build.get("length").is_some() => caps.first().map(|id| (*id).clone()),
         _ => None,
     };
-    if appearance.is_none() && material.is_none() && ends.is_none() {
-        return;
-    }
     for id in appearance.iter().chain(ends.iter()) {
         if mitcad_model::appearance::library_appearance(id).is_none()
             && !state.appearances.iter().any(|a| &a.id == id)
@@ -423,14 +422,12 @@ pub(crate) fn inherit_appearance(
             state.appearances.push(own.clone());
         }
     }
-    // A material of the library design's own comes with it (mitcad#640).
-    let material = match material {
-        Some(id) if design.materials.iter().any(|m| m.id == id) => {
-            let mapped = state.copy_materials(&design, &BTreeSet::from([id.clone()]));
-            Some(mapped.get(&id).cloned().unwrap_or(id))
-        }
-        other => other,
-    };
+    // After the appearances: a material the block makes offers the
+    // part's look (mitcad#1817).
+    let material = state.library_part_material(part, source);
+    if appearance.is_none() && material.is_none() && ends.is_none() {
+        return;
+    }
     let count = shown.len().max(1);
     for i in 0..count {
         let entry = state
@@ -440,7 +437,7 @@ pub(crate) fn inherit_appearance(
         if entry.appearance.is_none() {
             entry.appearance = appearance.clone();
         }
-        if entry.material.is_none() {
+        if entry.material.is_none() && entry.material_expr.is_none() {
             entry.material = material.clone();
         }
         if let Some(id) = &ends {

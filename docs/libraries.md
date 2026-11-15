@@ -752,6 +752,17 @@ profile ([Build components](#build-components)):
   frames follow the width and the thickness of the row.
 - A member has no `system`, no `slot`, no slot frames and no
   `mass_per_metre`. Its mass is the density times the volume.
+- A placed member is made of its `material` (mitcad#1817), as it shows
+  its design's appearance: the species with the row's density becomes a
+  material of the design (`Spruce`, 450 kg/m³ as 0.45 g/cm³, of the
+  class Wood; `Pine`, 520 kg/m³, for a pine row), which Physical
+  Properties, the computed properties, the cut list and the parts list
+  all use. A sheet's or a connector's `material` names its `product`
+  (`Plywood - spruce`, `Steel, galvanised`); a block with a density only
+  is the built-in material of that density, if one has it. A material the
+  component's design gives its bodies itself comes first. A design that
+  placed members before gets their material when it opens; a member
+  without one is never steel.
 
 **A profiled board** is a member as above whose section is shaped. It
 has a `board` block. Each row has its own, through `build.rows`:

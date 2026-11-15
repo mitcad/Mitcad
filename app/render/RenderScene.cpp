@@ -109,10 +109,18 @@ bool writeGlb(const std::vector<const MeshData*>& meshList, const QJsonObject& e
                                  {QStringLiteral("componentType"), kUnsignedInt},
                                  {QStringLiteral("count"), static_cast<qint64>(mesh.indices.size())},
                                  {QStringLiteral("type"), QStringLiteral("SCALAR")}});
-    QJsonObject primitive{
-        {QStringLiteral("attributes"),
-         QJsonObject{{QStringLiteral("POSITION"), accessor}, {QStringLiteral("NORMAL"), accessor + 1}}},
-        {QStringLiteral("indices"), accessor + 2}};
+    QJsonObject attributes{{QStringLiteral("POSITION"), accessor}, {QStringLiteral("NORMAL"), accessor + 1}};
+    if (mesh.uvs.size() == mesh.positions.size() / 3 * 2) {
+      // The texture coordinates (mitcad#1862), as MeshData keeps them:
+      // the worker reads them back as they are.
+      const int uvs = addView(mesh.uvs.data(), mesh.uvs.size() * sizeof(float), kArrayBuffer);
+      attributes.insert(QStringLiteral("TEXCOORD_0"), static_cast<int>(accessors.size()));
+      accessors.append(QJsonObject{{QStringLiteral("bufferView"), uvs},
+                                   {QStringLiteral("componentType"), kFloat},
+                                   {QStringLiteral("count"), vertices},
+                                   {QStringLiteral("type"), QStringLiteral("VEC2")}});
+    }
+    QJsonObject primitive{{QStringLiteral("attributes"), attributes}, {QStringLiteral("indices"), accessor + 2}};
     if (!mesh.faceTriangles.empty()) {
       // The faces' triangles (mitcad#53), for materials of faces.
       QJsonArray faces;
@@ -211,11 +219,14 @@ bool readGlb(const std::string& path, std::vector<MeshData>& meshes, QJsonObject
       }
       const cgltf_accessor* positions = nullptr;
       const cgltf_accessor* normals = nullptr;
+      const cgltf_accessor* texcoords = nullptr;
       for (cgltf_size a = 0; a < primitive.attributes_count; ++a) {
         if (primitive.attributes[a].type == cgltf_attribute_type_position) {
           positions = primitive.attributes[a].data;
         } else if (primitive.attributes[a].type == cgltf_attribute_type_normal) {
           normals = primitive.attributes[a].data;
+        } else if (primitive.attributes[a].type == cgltf_attribute_type_texcoord && primitive.attributes[a].index == 0) {
+          texcoords = primitive.attributes[a].data;
         }
       }
       if (positions == nullptr) {
@@ -228,6 +239,10 @@ bool readGlb(const std::string& path, std::vector<MeshData>& meshes, QJsonObject
       if (normals != nullptr && normals->count == positions->count) {
         mesh.normals.resize(normals->count * 3);
         cgltf_accessor_unpack_floats(normals, mesh.normals.data(), mesh.normals.size());
+      }
+      if (texcoords != nullptr && texcoords->count == positions->count && texcoords->type == cgltf_type_vec2) {
+        mesh.uvs.resize(texcoords->count * 2);
+        cgltf_accessor_unpack_floats(texcoords, mesh.uvs.data(), mesh.uvs.size());
       }
       if (primitive.indices != nullptr) {
         mesh.indices.resize(primitive.indices->count);
@@ -303,13 +318,14 @@ std::string meshKey(const MeshData& mesh) {
   const auto add = [&hash](const void* data, std::size_t bytes) {
     hash.addData(QByteArrayView(static_cast<const char*>(data), static_cast<qsizetype>(bytes)));
   };
-  const std::uint64_t sizes[4] = {mesh.positions.size(), mesh.normals.size(), mesh.indices.size(),
-                                  mesh.faceTriangles.size()};
+  const std::uint64_t sizes[5] = {mesh.positions.size(), mesh.normals.size(), mesh.indices.size(),
+                                  mesh.faceTriangles.size(), mesh.uvs.size()};
   add(sizes, sizeof sizes);
   add(mesh.positions.data(), mesh.positions.size() * sizeof(float));
   add(mesh.normals.data(), mesh.normals.size() * sizeof(float));
   add(mesh.indices.data(), mesh.indices.size() * sizeof(std::uint32_t));
   add(mesh.faceTriangles.data(), mesh.faceTriangles.size() * sizeof(std::uint32_t));
+  add(mesh.uvs.data(), mesh.uvs.size() * sizeof(float));
   return hash.result().toHex().toStdString();
 }
 
@@ -327,9 +343,28 @@ QJsonObject materialJson(const MaterialData& m) {
           {QStringLiteral("emission"), double(m.emission)},
           {QStringLiteral("opacity"), double(m.opacity)}};
   if (!m.texture.empty() || m.hasMaps()) {
+    const QString projection = m.textureUv       ? QStringLiteral("uv")
+                               : m.texturePlanar ? QStringLiteral("planar")
+                                                 : QStringLiteral("box");
     QJsonObject texture{{QStringLiteral("size"), QJsonArray{double(m.textureSize[0]), double(m.textureSize[1])}},
                         {QStringLiteral("rotation"), double(m.textureRotation)},
-                        {QStringLiteral("projection"), m.texturePlanar ? QStringLiteral("planar") : QStringLiteral("box")}};
+                        {QStringLiteral("projection"), projection}};
+    // The channels of maps packed into one image (mitcad#1862), each when
+    // it is not the grey value.
+    for (const auto& [name, channel] : {std::pair<const char*, int>{"roughness_channel", m.roughnessChannel},
+                                        {"metalness_channel", m.metalnessChannel},
+                                        {"occlusion_channel", m.occlusionChannel}}) {
+      if (channel >= 0) {
+        texture.insert(QLatin1String(name), channel);
+      }
+    }
+    // The maps' factors (mitcad#1874), each when it is not 1.
+    for (const auto& [name, factor] : {std::pair<const char*, float>{"roughness_factor", m.roughnessFactor},
+                                       {"metalness_factor", m.metalnessFactor}}) {
+      if (factor != 1.0f) {
+        texture.insert(QLatin1String(name), double(factor));
+      }
+    }
     // The base colour's image and the other maps' (mitcad#314), each when
     // there is one.
     for (const auto& [name, file] : {std::pair<const char*, const std::string*>{"path", &m.texture},
@@ -377,11 +412,26 @@ MaterialData materialOf(const QJsonObject& json) {
     m.textureSize = {static_cast<float>(size.at(0).toDouble()), static_cast<float>(size.at(1).toDouble())};
   }
   m.textureRotation = static_cast<float>(texture.value(QStringLiteral("rotation")).toDouble());
-  m.texturePlanar = texture.value(QStringLiteral("projection")).toString() == QLatin1String("planar");
+  const QString projection = texture.value(QStringLiteral("projection")).toString();
+  m.texturePlanar = projection == QLatin1String("planar");
+  m.textureUv = projection == QLatin1String("uv");
   m.normalMap = texture.value(QStringLiteral("normal")).toString().toStdString();
   m.roughnessMap = texture.value(QStringLiteral("roughness")).toString().toStdString();
   m.metalnessMap = texture.value(QStringLiteral("metalness")).toString().toStdString();
   m.occlusionMap = texture.value(QStringLiteral("occlusion")).toString().toStdString();
+  const auto channel = [&texture](const char* name) {
+    const int value = texture.value(QLatin1String(name)).toInt(-1);
+    return value >= 0 && value <= 2 ? value : -1;
+  };
+  m.roughnessChannel = channel("roughness_channel");
+  m.metalnessChannel = channel("metalness_channel");
+  m.occlusionChannel = channel("occlusion_channel");
+  const auto factor = [&texture](const char* name) {
+    const double value = texture.value(QLatin1String(name)).toDouble(1.0);
+    return static_cast<float>(value >= 0.0 && value <= 1.0 ? value : 1.0);
+  };
+  m.roughnessFactor = factor("roughness_factor");
+  m.metalnessFactor = factor("metalness_factor");
   return m;
 }
 

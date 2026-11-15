@@ -103,3 +103,42 @@ wait-log '^Undo: Show All Origins$'
 wait-log '^View origin drawn: none$'
 wait-idle
 expect-view-origin hidden
+
+# 5. The Origin folder's context menu says what its click does in all four
+#    states of the light bulb and View › Show › Origins (mitcad#1844):
+#    Show All while the origin is not drawn, Hide All while it is.
+#    Both off: Show All shows it.
+mark
+context-menu-logged '^Browser Root/Origin at ' 'Show All'
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^Design origin shown in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-idle
+expect-view-origin shown
+#    Both on: Hide All hides it, the light bulb off and Origins kept on.
+mark
+context-menu-logged '^Browser Root/Origin at ' 'Hide All'
+wait-log '^Visibility Root/Origin: hidden$'
+wait-log '^View origin drawn: none$'
+wait-idle
+expect-view-origin hidden
+#    The light bulb off and Origins on: Show All shows it.
+mark
+context-menu-logged '^Browser Root/Origin at ' 'Show All'
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-idle
+expect-view-origin shown
+#    The light bulb on and Origins off: Show All (no longer Hide All) shows it.
+mark
+model-command '{"cmd":"set_view_show","origins":false}'
+wait-log '^Design origin hidden in the view; the Origin folder.s light bulb on$'
+wait-log '^View origin drawn: none$'
+wait-idle
+expect-view-origin hidden
+mark
+context-menu-logged '^Browser Root/Origin at ' 'Show All'
+wait-log '^Visibility Root/Origin: shown$'
+wait-log '^View origin drawn: planes xy, xz, yz; axes x, y, z; point origin$'
+wait-idle
+expect-view-origin shown

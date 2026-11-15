@@ -29,7 +29,7 @@ Ui-Init $App $Out $QtBin @{} -StepPause 0
 $e = [string][char]0x2026
 $menus = [ordered]@{
   'MODIFY' = ('Press Pull | Fillet | Chamfer | Shell | Draft' +
-    ' | - | Offset Face | Move Face | Replace Face | Split Face | Delete Face' +
+    ' | - | Offset Face | Move Face | Replace Face | Fill Cavity | Split Face | Delete Face' +
     ' | - | Combine | Split Body | Scale | Convert Mesh' +
     ' | - | Move/Copy | Align' +
     ' | - | Dogbone | Mortise and Tenon' +

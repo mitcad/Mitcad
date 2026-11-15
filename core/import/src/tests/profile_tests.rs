@@ -824,3 +824,78 @@ fn an_extrusion_up_to_a_vertex_comes_in_up_to_the_point() {
     assert_eq!(doc.status(FeatureUid(3)).and_then(|s| s.error()), None);
     assert!(doc.body_shape(BodyUid::new(FeatureUid(3), 0)).is_some());
 }
+
+/// An extrusion that starts from a curved face (mitcad#1848, GitHub #341):
+/// letters on a second sketch cut from a cylinder's side with Start From
+/// Object on the cylindrical face come in as a feature that starts from
+/// that face, not as the file's bodies.
+#[test]
+fn an_extrusion_from_a_cylindrical_face_comes_in_as_a_feature() {
+    let kernel = || TestKernel {
+        face_listing: true,
+        ..TestKernel::default()
+    };
+    let mut items = vec![
+        circle_sketch(0),
+        extrude(1, 0, "NewBodyFeatureOperation", "d2"),
+    ];
+    let mut reference = Document::new(kernel());
+    import_design(
+        &mut reference,
+        &timeline_dump(items.clone()),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    let side = reference.bodies()[0]
+        .shape
+        .faces
+        .iter()
+        .find(|f| f.role == "side")
+        .cloned()
+        .expect("the cylinder's side");
+    // Sketch3: the letters (a rectangle stands for them), without a
+    // dimension.
+    let mut letters = rectangle_sketch(2);
+    letters["detail"]
+        .as_object_mut()
+        .unwrap()
+        .remove("dimensions");
+    items.push(letters);
+    let mut cut = extrude(3, 2, "CutFeatureOperation", "d5");
+    cut["detail"]["profile"] =
+        json!([{"kind": "profile", "sketch": "Sketch3", "sketch_timeline_index": 2}]);
+    cut["detail"]["startExtent"] = json!({"_type": "FromEntityStartDefinition",
+        "entity": {"kind": "face", "objectType": "BRepFace", "geometry": {"type": "Cylinder"},
+                   "point_on_face": face_point(&side).map(|x| x / 10.0)}});
+    items.push(cut);
+    let mut doc = Document::new(kernel());
+    let report = import_design(
+        &mut doc,
+        &timeline_dump(items),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    assert_eq!(
+        report.items[3].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    let def: Value =
+        serde_json::from_str(&doc.query(r#"{"query": "feature", "uid": "F4"}"#).unwrap()).unwrap();
+    assert_eq!(def["def"]["operation"], "cut", "{def}");
+    assert_eq!(
+        def["def"]["start"],
+        json!({"type": "object",
+               "object": {"type": "face", "body": "F2.b0", "face": side.to_string()}}),
+        "{def}"
+    );
+    assert_eq!(doc.status(FeatureUid(4)).and_then(|s| s.error()), None);
+    let asked = doc.kernel().mock.specs.borrow().clone();
+    assert!(
+        asked
+            .iter()
+            .any(|s| s.contains(&format!("from object face {side} extend true"))),
+        "{asked:?}"
+    );
+}

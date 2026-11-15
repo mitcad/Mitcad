@@ -81,6 +81,22 @@ FaceMeshes face_meshes(const TopoDS_Shape& shape, const MeshOptions& options) {
     };
     TopLoc_Location surface_location;
     const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, surface_location);
+    // A mesh body's UV nodes are its texture coordinates (mitcad#1862; a
+    // face with a surface has its surface's parameters there instead).
+    // From the first face that has them on, every vertex has a pair:
+    // zeros before it and on faces without.
+    const bool texcoords = surface.IsNull() && triangulation->HasUVNodes();
+    if (texcoords && mesh.uvs.empty()) {
+      mesh.uvs.assign(mesh.vertices.size(), {0.0, 0.0});
+    }
+    const bool any_uvs = !mesh.uvs.empty() || texcoords;
+    const auto uv_of = [&](int node) -> std::array<double, 2> {
+      if (!texcoords) {
+        return {0.0, 0.0};
+      }
+      const gp_Pnt2d uv = triangulation->UVNode(node + 1);
+      return {uv.X(), uv.Y()};
+    };
     if (surface.IsNull()) {
       // A mesh body: faceted, each triangle with its own vertices.
       for (const std::array<int, 3>& t : corners) {
@@ -93,6 +109,9 @@ FaceMeshes face_meshes(const TopoDS_Shape& shape, const MeshOptions& options) {
         for (const int node : t) {
           mesh.vertices.push_back(xyz(points[static_cast<std::size_t>(node)].XYZ()));
           mesh.normals.push_back(xyz(normal.XYZ()));
+          if (any_uvs) {
+            mesh.uvs.push_back(uv_of(node));
+          }
         }
         mesh.triangles.push_back({first, first + 1, first + 2});
       }
@@ -131,6 +150,9 @@ FaceMeshes face_meshes(const TopoDS_Shape& shape, const MeshOptions& options) {
       }
       mesh.vertices.push_back(xyz(points[static_cast<std::size_t>(n - 1)].XYZ()));
       mesh.normals.push_back(xyz(normal.XYZ()));
+      if (any_uvs) {
+        mesh.uvs.push_back({0.0, 0.0});
+      }
     }
     for (const std::array<int, 3>& t : corners) {
       mesh.triangles.push_back({first + static_cast<std::uint32_t>(t[0]), first + static_cast<std::uint32_t>(t[1]),

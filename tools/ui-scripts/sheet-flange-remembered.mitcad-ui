@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+# Flange's remembered choices (mitcad#1868, GitHub mitcad/Mitcad#348;
+# app/COMMANDS.md "Remembered values"), with MITCAD_REMEMBER_PANEL_VALUES=1
+# and settings of the test's own, on sheet-flange-remembered.json (the
+# 35 x 20 sheet F3.b0 of Sketch1 F2, its Flange F4 = SheetFlange1 at
+# x = -30 with Tangent Length at Bend Line, its side face at x = 5 free):
+#   1. A new Flange starts with the defaults (nothing kept yet); on the side
+#      face at x = 5 with Measured Inner Length and Position Outside, OK
+#      (F5 = SheetFlange2).
+#   2. Flange again: both rows show Inner Length and Outside, as the last
+#      OK left them; Esc.
+#   3. SheetFlange1 edited: it loads its own Tangent Length and Bend Line,
+#      nothing remembered; Esc.
+#   4. SheetFlange2 edited to Outer Length, OK: an edit keeps nothing, so a
+#      new Flange still starts with Inner Length and Outside; Esc.
+# Run by tools/ui-sheet-flange-remembered-test.sh (Linux),
+# tools/ui-windows-sheet-flange-remembered-test.ps1 (Windows) and
+# tools/ui-macos-sheet-flange-remembered-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. A new Flange from the defaults: Inner Length at Outside, OK.
+mark
+command sheet.flange
+wait-log '^Panel Flange choices: length_mode=tangent, position=bend_line, ' 30
+wait-log '^Pick places:' 30
+wait-idle
+expect-no-log '^Panel Flange [a-z_]+: remembered '
+expect-choice-text length_mode '^Tangent Length$'
+expect-choice-text position '^Bend Line$'
+mark
+# Face the free x = 5 side directly: its thin strip is not an edge pick.
+command view.right
+wait-idle
+command view.fit
+wait-idle
+click-pick 'face F3[.]b0/[^ ]*sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)] at'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+mark
+qt-choice input_length_mode 'Inner Length'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+mark
+qt-choice input_position 'Outside'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+expect-choice-text length_mode '^Inner Length$'
+expect-choice-text position '^Outside$'
+mark
+button '^OK$'
+wait-log '^Added flange, length [^ ]+ mm [(]inner[)], ' 30
+wait-log '^Added Flange as F5$' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+
+# 2. Flange again: the last OK's choices.
+mark
+command sheet.flange
+wait-log '^Panel Flange length_mode: remembered inner$' 30
+wait-log '^Panel Flange position: remembered outside$' 30
+wait-log '^Panel Flange choices: length_mode=inner, position=outside, ' 30
+wait-idle
+expect-choice-text length_mode '^Inner Length$'
+expect-choice-text position '^Outside$'
+mark
+key Escape
+wait-log '^Command Flange cancelled$'
+wait-idle
+
+# 3. The earlier flange edited: its own choices, not the remembered ones.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F4 with Flange$'
+wait-log '^Panel Flange choices: length_mode=tangent, position=bend_line, ' 30
+wait-idle
+expect-no-log '^Panel Flange [a-z_]+: remembered '
+expect-choice-text length_mode '^Tangent Length$'
+expect-choice-text position '^Bend Line$'
+mark
+key Escape
+wait-log '^Command Flange cancelled$'
+wait-idle
+
+# 4. The new flange edited to Outer Length: an edit keeps nothing.
+mark
+dblclick-logged '^Timeline SheetFlange2 at '
+wait-log '^Editing F5 with Flange$'
+wait-log '^Panel Flange choices: length_mode=inner, position=outside, ' 30
+wait-idle
+expect-choice-text length_mode '^Inner Length$'
+expect-choice-text position '^Outside$'
+mark
+qt-choice input_length_mode 'Outer Length'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited F5' 30
+wait-idle
+expect-never 'Failed features: [^n]'
+mark
+command sheet.flange
+wait-log '^Panel Flange length_mode: remembered inner$' 30
+wait-log '^Panel Flange choices: length_mode=inner, position=outside, ' 30
+wait-idle
+expect-choice-text length_mode '^Inner Length$'
+expect-choice-text position '^Outside$'
+mark
+key Escape
+wait-log '^Command Flange cancelled$'
+wait-idle

@@ -157,7 +157,10 @@ public:
   // Shows a joint's first free motion back and forth through its range in
   // the view until stopped, then the design as it is (mitcad#55: previews,
   // nothing changes; mitcad#1790). Again on the joint that plays stops it.
-  virtual void animateJoint(const QString& uid) = 0;
+  // With `occurrence`, a flexible occurrence of the joint's component
+  // (mitcad#1805): the joint as it moves inside it, for it alone; empty:
+  // the joint's own.
+  virtual void animateJoint(const QString& uid, const QString& occurrence) = 0;
   // Animate in the Joint and Assembly Constraint panels (mitcad#1790): the
   // panel's feature previewed with `motion` at one value after another,
   // back and forth between `low` and `high` from `start`, without end and
@@ -285,6 +288,10 @@ public:
   // file again now as one undo step (Update Link), or every linked
   // design's when `component` is empty (Update All Links).
   virtual void openLinkedDesign(const QString& /*component*/) {}
+  // A library source of the design (`S1`, a derived part's `source`;
+  // mitcad#1812): its design as the design keeps it, opened read-only in a
+  // tab of its own (Derived Component's Open Source Design).
+  virtual void openLibrarySource(const QString& /*source*/) {}
   virtual void updateLink(const QString& /*component*/) {}
 
   // CAM (mitcad#1013, cam/MainWindowCam.cpp): a setup or an operation (by
@@ -296,6 +303,13 @@ public:
   virtual void editCamOperation(int /*operation*/) {}
   virtual void runCamAction(const QString& /*action*/, int /*setup*/) {}
   virtual void setCurrentCamOperation(int /*operation*/) {}
+
+  // Forms (mitcad#1757, MainWindowForm.cpp): whether a body carries a
+  // control cage kept from an import (an `.f3d` Form body's), and that cage
+  // opened as an editable Form (`form.create`'s `kept_cage`), then edited
+  // in Edit Form; a cage that does not map is refused in words.
+  virtual bool hasKeptCage(const QString& /*body*/) const { return false; }
+  virtual void openKeptCage(const QString& /*body*/) {}
 };
 
 } // namespace mitcad

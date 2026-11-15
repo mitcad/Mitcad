@@ -39,7 +39,7 @@ use super::contour::shape_loops;
 use super::entry::{Entry, EntrySpace, Helix, enter};
 use super::face::FaceOp;
 use super::path::{self, Area, Path, dist2};
-use super::pocket::{PocketOp, is_empty, pocket_fits, region_shape};
+use super::pocket::{PocketOp, Room, is_empty, pocket_fits, region_shape};
 use super::{Direction, Heights, check_mill};
 use crate::CamError;
 use crate::geom::{Contour, Region, Segment, Vertex};
@@ -422,6 +422,56 @@ fn ring_step(prev: f64, r: f64, e: f64) -> f64 {
         0.0
     };
     s.clamp(0.25 * e, e)
+}
+
+/// The points of a spiral at the floor that opens the middle `m` of a
+/// part from a plunge (or a ramp) there out to `radius`, then once round
+/// at it, counter-clockwise when `ccw`; for a tool of radius `r`, each
+/// stretch removing no more than a straight cut `e` deep.
+///
+/// The tool's sweep reaches `rho + r` from `m` when its center is `rho`
+/// out; moving on by `dl` it takes `2 pi (rho + r) d rho` of material, so
+/// the spiral grows by `d rho / dl = e / (2 pi (rho + r))`, a turn
+/// `e rho / (rho + r)` out from the one before. Straight round the hole
+/// instead, a ring would take at least the tool's radius per length.
+/// From `m` the tool first goes straight out by a hundredth of `e` and
+/// once round there: growing the plunge's hole that far takes
+/// `(2 + 2 pi) r e / 100` at most, within the margin a stretch of one
+/// radius has below the limit (a ninth of `e` deep, `e` being 90 % of the
+/// limit's depth).
+fn opening_spiral(m: [f64; 2], radius: f64, r: f64, e: f64, ccw: bool) -> Vec<[f64; 2]> {
+    // The chords keep this close to the curve.
+    const SAG: f64 = 0.005;
+    let sign = if ccw { 1.0 } else { -1.0 };
+    let at = |rho: f64, a: f64| [m[0] + rho * a.cos(), m[1] + sign * rho * a.sin()];
+    // The angle of a chord at `rho`: within the sag, at most an eighth
+    // of a turn.
+    let turn = |rho: f64| {
+        if rho > 2.0 * SAG {
+            (2.0 * (1.0 - SAG / rho).acos()).min(PI / 4.0)
+        } else {
+            PI / 4.0
+        }
+    };
+    let mut rho = (e / 100.0).min(radius);
+    let mut a = 0.0;
+    let mut pts = vec![m, at(rho, a)];
+    while rho < radius {
+        let da = turn(rho);
+        // The growth at the start of the chord, which is the slower, over
+        // the chord's shortest length.
+        let chord = 2.0 * rho * (da / 2.0).sin();
+        rho = (rho + e * chord / (2.0 * PI * (rho + r))).min(radius);
+        a += da;
+        pts.push(at(rho, a));
+    }
+    // Once round at the radius, so that the whole circle is cleared.
+    let end = a + 2.0 * PI;
+    while a < end - 1e-9 {
+        a = (a + turn(radius)).min(end);
+        pts.push(at(radius, a));
+    }
+    pts
 }
 
 /// A grid of nodes over an area, labelled by the parts of the area they
@@ -828,10 +878,13 @@ fn advance(body: &[[f64; 2]], k: usize, dist: f64) -> usize {
 /// Whether the straight way from `a` to `b` keeps inside the region and
 /// `clear` from its outlines, checked every `step` (between the checks a
 /// way passing a corner comes closer by less than `step^2 / (8 clear)`,
-/// which the checks inside the way allow for).
+/// which the checks inside the way allow for; with `clear` less than
+/// `step`, as in 3D roughing's room, the checks keep as far from a sharp
+/// corner as half a step past it reaches).
 fn way_clear(region: &Region, clear: f64, a: [f64; 2], b: [f64; 2], step: f64) -> bool {
     let n = ((dist2(a, b) / step).ceil() as usize).max(1);
-    let between = clear + step * step / (4.0 * clear.max(step));
+    let between = (clear + step * step / (4.0 * clear.max(step)))
+        .max((clear * clear + step * step / 4.0).sqrt());
     (0..=n).all(|k| {
         let t = k as f64 / n as f64;
         let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
@@ -1063,15 +1116,16 @@ fn schedule(
 fn plan_pocket(
     op: &PocketOp,
     tool: &Tool,
-    wall: f64,
+    room: Room,
     e: f64,
     floor: &Floor,
 ) -> Result<Vec<Run>, CamError> {
+    let wall = room.clear;
     let r = tool.radius();
     let mut sim = Sim::new(&op.region, r, floor.z, true);
     let mut pos: Option<[f64; 3]> = None;
     let options = ShapeOffsetOptions::default();
-    let shape = region_shape(&op.region);
+    let shape = region_shape(room.region);
     let walls = shape.parallel_offset(wall, &options);
     if is_empty(&walls) {
         return Err(CamError::new("The tool does not fit into the pocket."));
@@ -1110,13 +1164,24 @@ fn plan_pocket(
                 continue;
             };
             let m = grid.pos(seed);
-            let room = path::region_distance(&op.region, m) - wall;
+            let spare = path::region_distance(room.region, m) - wall;
             let (radius, angle) = match op.entry {
-                Entry::Helix { radius, angle } => (radius.min(room * 0.9), angle),
+                Entry::Helix { radius, angle } => (radius.min(spare * 0.9), angle),
                 _ => (0.0, 0.0),
             };
             let radius = if radius >= 0.05 * r { radius } else { 0.0 };
-            let reach = radius.max(1.5 * h);
+            // Without a helix, a spiral at the floor out from the plunge
+            // (or the ramp) opens the middle as far as a helix would: rings
+            // straight round the hole would each take far more than the
+            // limit's depth per length (mitcad#1859).
+            let spiral = if radius > 0.0 {
+                0.0
+            } else {
+                (0.5 * r).min(spare * 0.9)
+            };
+            let spiral = if spiral >= 0.05 * r { spiral } else { 0.0 };
+            let opened = radius.max(spiral);
+            let reach = opened.max(1.5 * h);
             let mut sources: Vec<(usize, f64)> = (0..grid.comp.len())
                 .filter(|&n| grid.comp[n] == c && dist2(grid.pos(n), m) <= reach)
                 .map(|n| (n, dist2(grid.pos(n), m)))
@@ -1154,6 +1219,29 @@ fn plan_pocket(
                 }
                 runs.push(helix);
                 cur = start;
+                first = false;
+            }
+            if spiral > 0.0 {
+                let pts = opening_spiral(m, spiral, r, e, climb);
+                let p = Path::polyline(&pts);
+                let end = p.end().unwrap_or(m);
+                let opening = Run {
+                    start: m,
+                    path: p,
+                    link: Link::Enter,
+                    via: Path::default(),
+                };
+                if let Some(sm) = &mut sim {
+                    pos = simulate(
+                        sm,
+                        std::slice::from_ref(&opening),
+                        pos,
+                        !runs.is_empty(),
+                        floor,
+                    );
+                }
+                runs.push(opening);
+                cur = end;
                 first = false;
             }
             // The runs of the ring at `rho` (the one before at `prev`), from
@@ -1204,7 +1292,7 @@ fn plan_pocket(
                     let link = if first {
                         Link::Enter
                     } else {
-                        let stays = way_clear(&op.region, wall, cur, start, h / 2.0) && {
+                        let stays = way_clear(room.region, wall, cur, start, h / 2.0) && {
                             let n = ((dist2(cur, start) / (h / 2.0)).ceil() as usize).max(1);
                             (0..=n).all(|k| {
                                 let t = k as f64 / n as f64;
@@ -1232,7 +1320,7 @@ fn plan_pocket(
             // The rings are planned in their order, then cut side by side.
             let fronts_from = runs.len();
             let before = sim.as_mut().map(|sm| (sm.checkpoint(), pos));
-            let mut prev = radius;
+            let mut prev = opened;
             let mut last_step: Option<f64> = None;
             for _ in 0..100_000 {
                 let mut step = ring_step(prev, r, e);
@@ -1269,7 +1357,7 @@ fn plan_pocket(
                 pos = pos_before;
                 let fronts = runs.split_off(fronts_from);
                 let sides = Sides {
-                    region: &op.region,
+                    region: room.region,
                     wall,
                     step: h / 2.0,
                     near: 2.0 * r,
@@ -1305,7 +1393,7 @@ fn plan_pocket(
             let start = l.vertices[0].pos();
             let link = if first {
                 Link::Enter
-            } else if way_clear(&op.region, wall, cur, start, h / 2.0) {
+            } else if way_clear(room.region, wall, cur, start, h / 2.0) {
                 Link::Feed
             } else {
                 Link::Lift
@@ -1348,18 +1436,30 @@ fn plan_pocket(
 
 /// The toolpath of a pocket cleared adaptively.
 pub fn adaptive_pocket(op: &PocketOp, tool: &Tool, a: &Adaptive) -> Result<Toolpath, CamError> {
+    adaptive_pocket_in(op, tool, a, Room::of(op, tool))
+}
+
+/// The toolpath of a pocket cleared adaptively with the tool's center
+/// inside `room`; the operation's region is the material it clears.
+pub(crate) fn adaptive_pocket_in(
+    op: &PocketOp,
+    tool: &Tool,
+    a: &Adaptive,
+    room: Room,
+) -> Result<Toolpath, CamError> {
     check_mill(tool, &op.cutting, &op.depths)?;
     op.heights.validate(op.depths.top)?;
     op.entry.validate()?;
     a.validate()?;
     op.region.validate().map_err(CamError::new)?;
+    room.region.validate().map_err(CamError::new)?;
     if !(op.stock_to_leave.is_finite() && op.stock_to_leave >= 0.0) {
         return Err(CamError::new("The stock to leave must be zero or more."));
     }
     let levels = op.depths.levels()?;
     let r = tool.radius();
-    let wall = r + op.stock_to_leave;
-    let fits = |c: [f64; 2], radius: f64| pocket_fits(&op.region, wall, c, radius);
+    let wall = room.clear;
+    let fits = |c: [f64; 2], radius: f64| pocket_fits(room.region, wall, c, radius);
     let space = EntrySpace {
         helix_fits: &fits,
         min_ramp: r,
@@ -1378,7 +1478,7 @@ pub fn adaptive_pocket(op: &PocketOp, tool: &Tool, a: &Adaptive) -> Result<Toolp
     };
     let mut e = a.radial_depth(r) * 0.9;
     for _ in 0..4 {
-        let runs = plan_pocket(op, tool, wall, e, &floor)?;
+        let runs = plan_pocket(op, tool, room, e, &floor)?;
         let path = emit(&runs, &levels, op.depths.top, &cuts);
         match engagement(&path, &op.region, r, levels[0]) {
             Some(max) if max > a.max_engagement => e *= 0.7,
@@ -1556,6 +1656,59 @@ mod tests {
             },
             adaptive: Some(Adaptive { max_engagement }),
         }
+    }
+
+    /// Entered by a plunge or a ramp, an adaptive pocket opens its middle
+    /// by a spiral at the floor and stays within the engagement there too
+    /// (mitcad#1859: rings straight round the plunge's hole went over it,
+    /// and the pocket was refused).
+    #[test]
+    fn an_adaptive_pocket_entered_by_a_plunge_or_a_ramp_stays_within_the_engagement() {
+        let tool = Tool::flat_end_mill(1, 6.0);
+        let island = Contour::circle([20.0, 12.0], 4.0);
+        for region in [
+            Region::new(Contour::rectangle([0.0, 0.0], [40.0, 25.0]), vec![]),
+            Region::new(Contour::rectangle([0.0, 0.0], [40.0, 25.0]), vec![island]),
+        ] {
+            for entry in [Entry::Plunge, Entry::Ramp { angle: 3.0 }] {
+                let mut o = pocket_op(region.clone(), 45.0);
+                o.entry = entry;
+                let p = adaptive_pocket(&o, &tool, o.adaptive.as_ref().unwrap())
+                    .unwrap_or_else(|e| panic!("{entry:?}: {}", e.message));
+                let e = engagement(&p, &region, 3.0, -4.0).unwrap();
+                assert!(e <= 45.0, "{entry:?}: engagement {e}");
+                assert_cleared(&region, &tool, &p, -4.0);
+                assert_no_gouge(&region, 3.0, &p, 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn an_opening_spiral_grows_by_the_depth_per_length() {
+        let (r, e) = (3.0, 0.8);
+        let pts = opening_spiral([5.0, 5.0], 1.5, r, e, true);
+        assert_eq!(pts[0], [5.0, 5.0]);
+        let mut prev = dist2(pts[1], [5.0, 5.0]);
+        let mut along = 0.0;
+        for w in pts[1..].windows(2) {
+            let rho = dist2(w[1], [5.0, 5.0]);
+            let l = dist2(w[0], w[1]);
+            along += l;
+            // Never faster than the material a cut e deep takes.
+            assert!(
+                rho - prev <= e * l / (2.0 * PI * (prev + r)) + 1e-12,
+                "{rho} after {prev} over {l}"
+            );
+            assert!(rho <= 1.5 + 1e-12);
+            prev = rho;
+        }
+        assert!((prev - 1.5).abs() < 1e-12);
+        // About the length the growth needs: pi ((R + r)^2 - (rho0 + r)^2) / e.
+        let need = PI * ((1.5 + r).powi(2) - (e / 100.0 + r).powi(2)) / e;
+        assert!(
+            along > need && along < 1.1 * need + 2.0 * PI * 1.5,
+            "{along} against {need}"
+        );
     }
 
     #[test]

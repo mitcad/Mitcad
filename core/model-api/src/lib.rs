@@ -165,9 +165,21 @@ mod cam;
 pub mod cam_spindle;
 // The design at a parameter's limits, tried on a copy (mitcad#1730).
 mod parameter_range;
+// Forms: the form.* commands and the form_cage and form_limit queries
+// (mitcad#1757).
+mod form;
 // The design and the files it refers to packed into a zip for a report
 // (mitcad#1795).
 mod design_package;
+// Convert to Features: a placed library part replaced by its source's
+// features (mitcad#1815).
+mod convert_derived;
+// Sketches on cylindrical and conical faces: their points on the face and
+// back, the pointer's rays and their curves on the face (mitcad#1768).
+mod sketch_surface;
+// Press Pull continued: how a face's walls continue, the face_run query
+// (mitcad#1850).
+mod press_pull;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -271,6 +283,10 @@ pub mod prelude {
     pub(crate) use super::drawing_lines::DrawingLinesOps;
     // 3D sketches (mitcad#1522).
     pub(crate) use super::sketch3d::Sketch3dOps;
+    // Convert to Features (mitcad#1815).
+    pub(crate) use super::convert_derived::ConvertDerivedOps;
+    // Press Pull continued (mitcad#1850).
+    pub(crate) use super::press_pull::PressPullOps;
 }
 
 use std::fmt;
@@ -704,6 +720,13 @@ named_enum! {
         "sheet_flange_profile" => SheetFlangeProfile {
             def: FeatureDef<ValueInput>,
         },
+        // A body's folder in its component's Bodies folder (mitcad#1802).
+        "set_body_folder" => SetBodyFolder {
+            uid: BodyUid,
+            /// The folder's name; null or left out: the Bodies folder itself.
+            #[serde(default)]
+            folder: Option<String>,
+        },
     }
 }
 
@@ -762,6 +785,11 @@ enum PreviewCommand {
         fit_faces: bool,
         #[serde(default)]
         shared: Option<mitcad_model::SharedChoice>,
+        /// The component it goes into, as `add_feature`'s (mitcad#1856: a
+        /// joint made in the component that holds its picks); the active
+        /// one when left out.
+        #[serde(default)]
+        component: Option<String>,
     },
     EditFeature {
         uid: FeatureUid,
@@ -769,6 +797,11 @@ enum PreviewCommand {
         /// Suggest an extrusion operation from the bodies before the edit.
         #[serde(default)]
         auto_operation: bool,
+        /// The marker an editor rolled back from (mitcad#1860): the
+        /// features right after the edited one that only place occurrences
+        /// are computed up to it.
+        #[serde(default)]
+        through: Option<usize>,
     },
 }
 
@@ -1223,9 +1256,31 @@ named_enum! {
             #[serde(default)]
             base: Option<String>,
         },
+        // Forms (mitcad#1757, `form.rs`): the whole cage for drawing and
+        // picking, the limit surface's preview mesh.
+        "form_cage" => FormCage(form::CageQuery),
+        "form_limit" => FormLimit(form::LimitQuery),
         // The design and the files it refers to written into a zip for a
         // report (mitcad#1795, `design_package.rs`).
         "design_package" => DesignPackage(design_package::DesignPackageQuery),
+        // A library source's design, for Open Source Design of a derived
+        // part (mitcad#1812, `libraries.rs`).
+        "library_source" => LibrarySource {
+            source: String,
+        },
+        // A sketch's points on its face and back, the pointer's rays and
+        // its curves on the face (mitcad#1768, `sketch_surface.rs`).
+        "sketch_surface" => SketchSurface(sketch_surface::SurfaceQuery),
+        // The lowest component that holds a joint's picks, and where the
+        // active one stands to it (mitcad#1856, `joints.rs`).
+        "joint_holder" => JointHolder(joints::JointHolderQuery),
+        // A glTF file as the import reads it: its nodes, placements,
+        // triangles and colours (mitcad#1826).
+        "gltf_file" => GltfFile {
+            path: String,
+        },
+        // How a face's walls continue, for Press Pull (mitcad#1850).
+        "face_run" => FaceRun(press_pull::FaceRunQuery),
     }
 }
 
@@ -1907,8 +1962,21 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::ParameterRange(query) => parameter_range::query(self, &query)?,
             // Whether a link to a file would be followed (mitcad#1719).
             Query::LinkCheck { path, base } => components::link_check_json(&path, base.as_deref())?,
+            // Forms (mitcad#1757).
+            Query::FormCage(query) => form::form_cage(self, &query)?,
+            Query::FormLimit(query) => form::form_limit(self, query)?,
             // The design packed into a zip for a report (mitcad#1795).
             Query::DesignPackage(query) => design_package::query(self, &query)?,
+            // A library source's design (mitcad#1812).
+            Query::LibrarySource { source } => libraries::library_source_json(self, &source)?,
+            // A sketch on a curved face's map (mitcad#1768).
+            Query::SketchSurface(query) => sketch_surface::sketch_surface_json(self, &query)?,
+            // The component that holds a joint's picks (mitcad#1856).
+            Query::JointHolder(query) => self.joint_holder_json(&query)?,
+            // A glTF file as the import reads it (mitcad#1826).
+            Query::GltfFile { path } => mitcad_model::exchange::gltf_file_json(&path)?,
+            // Press Pull continued (mitcad#1850).
+            Query::FaceRun(query) => self.face_run_json(&query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2753,6 +2821,11 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 self.set_sketch_dimensions_shown(sketch, shown)?;
                 json!({})
             }
+            // A body's folder in its component's Bodies folder (mitcad#1802).
+            Command::SetBodyFolder { uid, folder } => {
+                self.set_body_folder(uid, folder.as_deref())?;
+                json!({})
+            }
         })
     }
 
@@ -2798,6 +2871,16 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     fitted = Some((fits, left));
                     report
                 }
+                // In a component named (mitcad#1856), as add_feature adds it.
+                PreviewCommand::AddFeature {
+                    def,
+                    name,
+                    component: Some(component),
+                    ..
+                } => {
+                    let component = self.component_ref(&component)?;
+                    self.preview_add_to(&def, name.as_deref(), Some(component))?
+                }
                 PreviewCommand::AddFeature {
                     def,
                     name,
@@ -2813,9 +2896,12 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                     uid,
                     def,
                     auto_operation: false,
-                } => self.preview_edit(uid, &def)?,
-                PreviewCommand::EditFeature { uid, def, .. } => {
-                    let (report, choice) = self.preview_edit_auto(uid, &def)?;
+                    through,
+                } => self.preview_edit_through(uid, &def, through)?,
+                PreviewCommand::EditFeature {
+                    uid, def, through, ..
+                } => {
+                    let (report, choice) = self.preview_edit_auto_through(uid, &def, through)?;
                     auto = choice;
                     report
                 }
@@ -2824,6 +2910,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         let mut value = preview_json(&report);
         if let Some(datum) = self.preview_datum() {
             value["datum"] = analysis::datum_json(&datum);
+            // Where the view draws it, as the finished one (mitcad#1827).
+            if let Some((drawn, source)) = self.preview_drawn() {
+                value["datum"]["drawn"] = analysis::drawn_json(&drawn, source);
+            }
         }
         // An Intersection Curve's curve as the `feature_curves` query gives
         // the finished one (mitcad#1496): the view draws it as the preview.

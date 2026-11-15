@@ -276,6 +276,17 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       }
       continue;
     }
+    if (kind == QStringLiteral("body")) {
+      // A whole body where its occurrence (uids, "O1/O4"; none in the
+      // root) places it (mitcad#1816: a Properties row's bodies).
+      const QString uid = place.value(QStringLiteral("body")).toString();
+      if (!uid.isEmpty()) {
+        const SelectionItem item{SelectKind::Body, uid, QString(), QString(),
+                                 place.value(QStringLiteral("occurrence")).toString()};
+        add(item, itemShape(item));
+      }
+      continue;
+    }
     if (kind == QStringLiteral("joint")) {
       // A joint or constraint set (mitcad#1753: the joints of a loop that
       // cannot all hold), drawn as the pointer over its Browser row draws

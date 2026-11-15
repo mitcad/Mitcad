@@ -4,6 +4,7 @@
 #include <optional>
 #include <vector>
 
+#include <QPoint>
 #include <QPointF>
 #include <QString>
 #include <QWidget>
@@ -23,13 +24,18 @@ class OcctViewer;
 // square, a dot at each end of the axis's line, drawn over the 3D view in
 // the handles' colour (the selection's while hovered or dragged). A left
 // drag on one sets how large the plane or axis is drawn: the square stays
-// centred on the plane's origin with the dragged corner under the pointer
+// centred where it is drawn with the dragged corner under the pointer
 // (where the pointer's ray meets the plane), the line stays centred with
 // the dragged end nearest the pointer's ray; the new outline is drawn while
 // the drag lasts and the size, rounded to a step that fits the zoom, goes
 // to the model on the release (resized: the window's set_datum_display_size,
 // one undo step). Only the drawing changes, never the datum. The mouse goes
 // through to the view everywhere else; a press on a handle stays with it.
+// The handles sit where the plane or axis is drawn (mitcad#1827): at the
+// corners of its rectangle fitted to what it is made from, which a drag
+// turns into a square of its own size about the same middle; a handle's
+// context menu offers Reset Size while it has a size of its own
+// (resetRequested: the window clears it, one undo step).
 //
 // For UI tests: "Datum handle <uid> corner <n> at x,y" (an axis's "end
 // <n>"), window coordinates, whenever they move; "Datum handle <uid>
@@ -46,7 +52,9 @@ public:
     gp_Pnt centre;
     gp_Dir xAxis = gp_Dir(1, 0, 0);
     gp_Dir yAxis = gp_Dir(0, 1, 0);
-    double size = 100.0; // as drawn now, mm: the square's side, the line's length
+    double size = 100.0;   // as drawn now, mm: the rectangle's width, the line's length
+    double height = 100.0; // a plane's rectangle's height, mm
+    bool stored = false;   // drawn at a size of its own (display_size): Reset Size clears it
     bool operator==(const Target& other) const;
   };
 
@@ -60,14 +68,20 @@ public:
 
 signals:
   void resized(const QString& uid, double size);
+  // Reset Size in a handle's context menu (mitcad#1827).
+  void resetRequested(const QString& uid);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-  // Where the handles are: the corners (or ends) in the design for a size.
-  std::vector<gp_Pnt> handlePoints(double size) const;
+  // Where the handles are: the corners (or ends) in the design for a width
+  // and a height (a plane's; an axis's line is `width` long).
+  std::vector<gp_Pnt> handlePoints(double width, double height) const;
+  // A handle's context menu (mitcad#1827): Reset Size, while a size of its
+  // own is set.
+  void showMenu(const QPoint& globalPosition);
   int handleAt(const QPointF& position) const;
   // The size a drag of handle `index` gives with the pointer there; none
   // while the view looks along the plane.
@@ -81,6 +95,7 @@ private:
   int m_hover = -1;
   int m_pressed = -1;
   int m_drag = -1;
+  bool m_menuPress = false; // a right press on a handle: its release is the handles' too
   QPointF m_pressAt;
   double m_dragSize = 0.0;
   QString m_loggedPlaces;

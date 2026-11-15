@@ -57,6 +57,10 @@ pub enum ImportedFile {
         /// What the import left out (empty parts and bodies, placements
         /// that could not be made).
         warnings: Vec<String>,
+        /// The base feature of bodies the import put straight into the
+        /// component it imported into, beside the components (a glTF
+        /// file's meshes outside its components, mitcad#1826).
+        loose: Option<Imported>,
     },
 }
 
@@ -72,14 +76,14 @@ pub struct ImportWrapper {
 }
 
 /// Whether a file at `path` is of the formats an import wraps in a
-/// component by default (mitcad#1629): STEP, IGES and BRep, by the
-/// extension.
+/// component by default (mitcad#1629): STEP, IGES and BRep, and glTF
+/// (mitcad#1826), whose node trees are components too, by the extension.
 fn wrapped_format(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| {
-            ["step", "stp", "iges", "igs", "brep", "brp"]
+            ["step", "stp", "iges", "igs", "brep", "brp", "glb", "gltf"]
                 .iter()
                 .any(|known| e.eq_ignore_ascii_case(known))
         })
@@ -195,7 +199,7 @@ fn part_name<S>(part: &ImportPart<S>, index: usize) -> String {
 }
 
 impl<K: Kernel> Document<K> {
-    /// Imports a STEP, IGES, BRep, STL or OBJ file: with
+    /// Imports a STEP, IGES, BRep, STL, OBJ or glTF file: with
     /// [`ImportStructure::Components`] a STEP file whose assembly places
     /// parts comes in as components and occurrences (one component per
     /// distinct part with its bodies once, an occurrence per instance,
@@ -235,15 +239,17 @@ impl<K: Kernel> Document<K> {
     /// Whether `import_file` wraps the file at `path` in a new component
     /// unless told otherwise (mitcad#1629): a STEP, IGES or BRep file
     /// imported into a design that already has content (a feature or a
-    /// component). An empty design, such as one a file is opened as,
-    /// takes the file as it is.
+    /// component). An empty design, such as one a file is opened as or a
+    /// new design with its empty Component1, takes the file as it is.
     pub fn import_wraps_by_default(&self, path: &str) -> bool {
         wrapped_format(path) && self.has_content()
     }
 
-    /// Whether the design has a feature (a sketch too) or a component.
+    /// Whether the design has a feature (a sketch too) or a component; a
+    /// new design's empty Component1 is none ([`Document::new_design`]).
     pub fn has_content(&self) -> bool {
-        self.features().next().is_some() || !self.assembly().is_empty()
+        self.features().next().is_some()
+            || !(self.assembly().is_empty() || self.is_new_design_assembly())
     }
 
     /// Makes the component an import wraps the file in (mitcad#1629),
@@ -279,6 +285,11 @@ impl<K: Kernel> Document<K> {
         wrap: bool,
     ) -> Result<(ImportedFile, Option<ImportWrapper>), ModelError> {
         check_unit(options)?;
+        // glTF files (mitcad#1826): read by the model, their node trees as
+        // components whatever `structure` says (their unit is the metre).
+        if super::gltf_import::is_gltf_path(path) {
+            return self.import_gltf(path, name, wrap);
+        }
         let keep = structure == ImportStructure::Components;
         let read = match self.kernel().read_file_structure(path, options, keep) {
             Ok(read) => read,
@@ -378,6 +389,7 @@ impl<K: Kernel> Document<K> {
             ImportedFile::Components {
                 components: placing.made,
                 warnings: placing.warnings,
+                loose: None,
             },
             wrapper,
         ))

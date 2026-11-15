@@ -1266,8 +1266,18 @@ void TimelineWidget::rebuild(const DocumentSnapshot& snapshot) {
   m_snapshot = snapshot;
   m_guardTexts.clear();
   QHash<QString, int> colours;
+  QStringList bands;
   for (int i = 1; i < snapshot.components.size(); ++i) {
     colours.insert(snapshot.components[i].uid, i - 1);
+    bands << QStringLiteral("%1 %2").arg(snapshot.components[i].name, componentColor(i - 1).name());
+  }
+  // The components' band colours, which the Browser's bars take too
+  // (mitcad#1876), when they changed.
+  const QString bandLine = QStringLiteral("Timeline component colors: %1")
+                               .arg(bands.isEmpty() ? QStringLiteral("none") : bands.join(QStringLiteral(", ")));
+  if (bandLine != m_loggedComponentColors) {
+    m_loggedComponentColors = bandLine;
+    qDebug().noquote() << bandLine;
   }
   // A filter of a component that is gone shows everything again.
   if (!m_filter.isEmpty() && m_filter != kActiveFilter && snapshot.component(m_filter) == nullptr) {

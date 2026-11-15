@@ -215,9 +215,27 @@ impl<K: Kernel> Document<K> {
         grab: Option<Vec3>,
         target: Vec3,
     ) -> Result<Dragged, ModelError> {
+        self.joint_drag_at(&[occurrence], grab, target)
+    }
+
+    /// [`Document::joint_drag`] of the occurrence a path from the root
+    /// ends in: one inside a flexible occurrence that its joints move
+    /// (mitcad#1793) is dragged in the flexible occurrence's parent, for
+    /// that occurrence alone (`grab` and `target` still in its own
+    /// parent's coordinates).
+    pub fn joint_drag_at(
+        &self,
+        path: &[OccurrenceUid],
+        grab: Option<Vec3>,
+        target: Vec3,
+    ) -> Result<Dragged, ModelError> {
+        let occurrence = *path
+            .last()
+            .ok_or_else(|| invalid("no occurrence to drag"))?;
         self.state.require_occurrence(occurrence)?;
+        let prefix = &path[..path.len() - 1];
         let grab = grab.unwrap_or_else(|| {
-            self.placement(occurrence)
+            self.placement_after(prefix, occurrence)
                 .map_or([0.0; 3], |p| p.translation)
         });
         if !grab.iter().chain(&target).all(|v| v.is_finite()) {
@@ -229,7 +247,7 @@ impl<K: Kernel> Document<K> {
                 &self.state.assembly,
                 &self.result.joints,
                 &self.result.placements,
-                occurrence,
+                path,
                 grab,
                 at,
             )
@@ -242,7 +260,12 @@ impl<K: Kernel> Document<K> {
         }
         let failed = |e: crate::kernel::KernelError| invalid(format!("contact check: {e}"));
         let skip: BTreeSet<usize> = pairs
-            .overlapping(&self.kernel, &self.result.placements, &BTreeSet::new())
+            .overlapping(
+                &self.kernel,
+                &self.result.placements,
+                &self.result.joints.flexed,
+                &BTreeSet::new(),
+            )
             .map_err(failed)?
             .into_iter()
             .map(|(p, _)| p)
@@ -258,8 +281,10 @@ impl<K: Kernel> Document<K> {
                 let dragged = drag_to(t)?;
                 let mut placements = self.result.placements.clone();
                 placements.extend(dragged.placements.iter().copied());
+                let mut flexed = self.result.joints.flexed.clone();
+                flexed.extend(dragged.flexed.iter().cloned());
                 let deepest = pairs
-                    .overlapping(&self.kernel, &placements, &skip)
+                    .overlapping(&self.kernel, &placements, &flexed, &skip)
                     .map_err(failed)?
                     .into_iter()
                     .max_by(|a, b| a.1.total_cmp(&b.1));
@@ -269,6 +294,22 @@ impl<K: Kernel> Document<K> {
         let mut dragged = stop.pose;
         dragged.contact = stop.hit;
         Ok(dragged)
+    }
+
+    /// Where a drag ([`Document::joint_drag_at`]) shows the occurrences:
+    /// those it places elsewhere in the design than the document does, each
+    /// path from the root with its placement in the design (an occurrence
+    /// inside a moved one too; inside flexible ones where the drag puts
+    /// them, mitcad#1793).
+    pub fn dragged_in_design(
+        &self,
+        dragged: &Dragged,
+    ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
+        let mut placements = self.result.placements.clone();
+        placements.extend(dragged.placements.iter().copied());
+        let mut flexed = self.result.joints.flexed.clone();
+        flexed.extend(dragged.flexed.iter().cloned());
+        self.moved_placements(&self.state, &placements, &flexed)
     }
 
     /// Animate Joint's frames (mitcad#1701): where `motion` of `joint`
@@ -287,18 +328,51 @@ impl<K: Kernel> Document<K> {
         motion: Motion,
         values: &[f64],
     ) -> Result<Vec<JointPose>, ModelError> {
+        self.joint_poses_in(joint, None, motion, values)
+    }
+
+    /// [`Document::joint_poses`] of a joint inside a flexible `occurrence`
+    /// (mitcad#1805), for it alone: a joint of its component, or of a
+    /// flexible occurrence nested in it, driven as `drive_joint` with that
+    /// occurrence drives it, solved in the occurrence's parent with the
+    /// occurrence held; the values per frame are the occurrence's joints'.
+    /// Without an occurrence, the joint's own.
+    pub fn joint_poses_in(
+        &self,
+        joint: FeatureUid,
+        occurrence: Option<OccurrenceUid>,
+        motion: Motion,
+        values: &[f64],
+    ) -> Result<Vec<JointPose>, ModelError> {
         super::motion::joint_def(&self.state, joint)?;
         if self.has_contact_pairs() {
             return Err(invalid(
                 "contact sets apply: only a recompute checks where the bodies touch",
             ));
         }
+        let within = match occurrence {
+            None => Vec::new(),
+            Some(o) => {
+                let name = self.state.assembly.occurrence_name(o);
+                let joint_name = self
+                    .feature(joint)
+                    .map_or_else(String::new, |f| f.name.clone());
+                if !self.is_flexible(o) {
+                    return Err(invalid(format!(
+                        "{name} is not flexible: make it Flexible to animate {joint_name} in it \
+                         alone"
+                    )));
+                }
+                self.flexible_chain(o, joint)
+                    .ok_or_else(|| invalid(format!("{joint_name} does not move inside {name}")))?
+            }
+        };
         let component = self
             .result
             .joints
             .active
             .iter()
-            .find(|j| j.uid == joint && j.row.is_none())
+            .find(|j| j.uid == joint && j.row.is_none() && j.under == within)
             .map(|j| j.component)
             .ok_or_else(|| invalid("the joint is not in effect at the marker"))?;
         // Joints of other components that hold occurrences inside this
@@ -328,18 +402,25 @@ impl<K: Kernel> Document<K> {
             &self.result.joints,
             &self.result.placements,
             joint,
+            &within,
             motion,
             values,
         )
         .map_err(invalid)?;
         Ok(frames
             .into_iter()
-            .map(|frame| {
+            .map(|mut frame| {
                 let placements: BTreeMap<OccurrenceUid, crate::transform::Transform> =
                     frame.placements.into_iter().collect();
+                let flexed: crate::joints::Flexed = frame.flexed.into_iter().collect();
+                // Inside a flexible occurrence, its joints' values there.
+                let values = match within.first() {
+                    Some(o) => frame.flex_values.remove(o).unwrap_or_default(),
+                    None => frame.values,
+                };
                 JointPose {
-                    placements: self.moved_placements(&self.state, &placements),
-                    values: frame.values,
+                    placements: self.moved_placements(&self.state, &placements, &flexed),
+                    values,
                 }
             })
             .collect())
@@ -358,10 +439,31 @@ impl<K: Kernel> Document<K> {
         grab: Option<Vec3>,
         target: Vec3,
     ) -> Result<Dragged, ModelError> {
-        let mut dragged = self.joint_drag(occurrence, grab, target)?;
+        self.drag_occurrence_at(&[occurrence], grab, target)
+    }
+
+    /// [`Document::drag_occurrence`] of the occurrence a path from the root
+    /// ends in ([`Document::joint_drag_at`]): the joints of a flexible
+    /// occurrence's component that the drag moved keep their new values as
+    /// that occurrence's own (mitcad#1793), driven ones as its positions,
+    /// free ones as where they start; the component's design stays.
+    pub fn drag_occurrence_at(
+        &mut self,
+        path: &[OccurrenceUid],
+        grab: Option<Vec3>,
+        target: Vec3,
+    ) -> Result<Dragged, ModelError> {
+        let mut dragged = self.joint_drag_at(path, grab, target)?;
+        let occurrence = *path.last().expect("a path to drag");
         let mut edits = Vec::new();
         let changed = |v: f64, was: f64| (v - was).abs() > 1e-12 * (1.0 + v.abs());
-        for joint in &self.result.joints.active {
+        for joint in self
+            .result
+            .joints
+            .active
+            .iter()
+            .filter(|j| j.under.is_empty())
+        {
             let Some(values) = dragged.values.get(&joint.uid) else {
                 continue;
             };
@@ -419,6 +521,55 @@ impl<K: Kernel> Document<K> {
             }
             edits.push((joint.uid, def));
         }
+        // The joints of flexible occurrences that moved (mitcad#1793): their
+        // new values become the occurrences' own.
+        let mut flex_edits: Vec<(OccurrenceUid, crate::assembly::Flex)> = Vec::new();
+        for (f, by_joint) in &dragged.flex_values {
+            let Some(mut flex) = self
+                .state
+                .assembly
+                .occurrence(*f)
+                .and_then(|o| o.flexible.clone())
+            else {
+                continue;
+            };
+            let now = self.result.joints.flex_values.get(f);
+            let mut any = false;
+            for joint in self
+                .result
+                .joints
+                .active
+                .iter()
+                .filter(|j| j.under.first() == Some(f) && j.row.is_none())
+            {
+                let Some(values) = by_joint.get(&joint.uid) else {
+                    continue;
+                };
+                for spec in &joint.motions {
+                    let Some(v) = values.get(&spec.motion).copied() else {
+                        continue;
+                    };
+                    let kept = match spec.target {
+                        Some(target) => changed(v, target).then_some(&mut flex.position),
+                        None => {
+                            let was = spec.start.or_else(|| {
+                                now.and_then(|n| n.get(&joint.uid))
+                                    .and_then(|n| n.get(&spec.motion).copied())
+                            });
+                            was.is_none_or(|was| changed(v, was))
+                                .then_some(&mut flex.start)
+                        }
+                    };
+                    if let Some(kept) = kept {
+                        kept.entry(joint.uid).or_default().insert(spec.motion, v);
+                        any = true;
+                    }
+                }
+            }
+            if any {
+                flex_edits.push((*f, flex));
+            }
+        }
         let name = self.state.assembly.occurrence_name(occurrence);
         // Kept as rotations and translations to rounding (mitcad#1664,
         // mitcad#1666): rounding that piled up over many drags once made
@@ -464,6 +615,10 @@ impl<K: Kernel> Document<K> {
                 }
                 for (uid, def) in &edits {
                     state.edit_feature(*uid, def)?;
+                }
+                for (o, flex) in &flex_edits {
+                    state.assembly.occurrence_mut(*o).expect("exists").flexible =
+                        Some(flex.clone());
                 }
                 Ok((format!("Drag {name}"), ()))
             },

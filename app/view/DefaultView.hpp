@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The 3D view's default direction (mitcad#1698): Home without a design's own
-// home view, a design read into a view that still looked at a new design's
-// Top, and a new design's first sketch turn to it. It looks from the front
+// home view turns to it, and a new design opens in it (mitcad#1809). It
+// looks from the front
 // right and above as the isometric view does, but a few degrees off the
 // cube's diagonal: seen exactly along the diagonal, the origin planes'
 // edges lie on top of each other pairwise (the XY plane's edge at x = +s

@@ -104,6 +104,7 @@ class ViewController;
 class SpaceMouseController;
 class StartPage;
 class CamSimulateDialog;
+class FormCageOverlay; // a Form's cage over the view (mitcad#1757)
 #ifdef MITCAD_MACOS_NATIVE_UI
 namespace mac {
 class NativeMacWindow;
@@ -384,7 +385,7 @@ public:
   // opened, then turned back into 2D.
   void convertSketchTo2d(const QString& sketch) override;
   void editAnalysis(const QString& name) override;
-  void animateJoint(const QString& uid) override;
+  void animateJoint(const QString& uid, const QString& occurrence) override;
   void animatePanelMotion(const PanelMotion& motion) override; // mitcad#1790
   void previewJoint(const QString& uid, const QString& occurrence) override;
   void previewBodies(const QString& row, const QString& body, const QString& occurrence) override;
@@ -425,6 +426,9 @@ public:
   // Linked designs (mitcad#1416; files/MainWindowLinks.cpp): Open Linked
   // Design, Update Link and Update All Links.
   void openLinkedDesign(const QString& component) override;
+  // Open Source Design of a library part (mitcad#1812): the source's
+  // design written to the cache and opened read-only.
+  void openLibrarySource(const QString& source) override;
   void updateLink(const QString& component) override;
   // Drawings kept in the design (mitcad#707; drawings/MainWindowDrawings.cpp):
   // one opened over the 3D view, a new one in a component's Drawings folder
@@ -754,7 +758,7 @@ private:
   void animateSelectedJoint();
   // A joint's first motion, back and forth until stopped (mitcad#1790), or
   // `once` (scripts: an agent's ui_command).
-  void startJointAnimation(const QString& uid, bool once);
+  void startJointAnimation(const QString& uid, const QString& occurrence, bool once);
   // The animation's clock ticked: the frame due now shown (those behind it
   // skipped), from its joint solver placements or previewed.
   void animationFrame();
@@ -774,6 +778,10 @@ private:
   // and the card's text.
   void updateIdleHighlights();
   void updateIdleCard();
+  // Preferences › Display's Selection color and Selected line width changed
+  // (mitcad#1803, view/SelectionLook.hpp): the view's highlights, the idle
+  // selection in the new colour and sketch mode's overlay drawn anew.
+  void applySelectionLook();
   // The card's block for a selected profile, sketch curve, point,
   // constraint or dimension (mitcad#1741, sketchItemCard): its kind and
   // sketch in words and what it measures, from the sketch query (asked once
@@ -870,6 +878,26 @@ private:
   // new pick replaces it (mitcad#1743: a hole moved from one component's
   // face to another's goes into the other). True when it activated.
   bool activateForPick(const CommandDef& def, const InputDef& input, const SelectionItem& item);
+  // Joint, As-Built Joint, Rigid Group and Assembly Constraint
+  // (mitcad#1856, MainWindowJointHolder.cpp): a pick after which the picks
+  // lie under another component than the active one (the model's
+  // `joint_holder` query) asks, by the preference (browser/
+  // JointHolderQuestion.hpp), whether to make the feature in the lowest
+  // component that holds them all; the answer goes into the panel's
+  // hidden input "holder" (or "kept" when declined), the active component
+  // staying active. Not while an agent's request picks (MCP), unless the
+  // preference makes it without asking. True for those commands.
+  bool holderPickComing(const CommandDef& def, const InputDef& input, const SelectionItem& item);
+  // The same for the selection such a command opens with (mitcad#1864):
+  // called once its picks are in the inputs, before the panel is made, so
+  // that the first preview is computed in the component chosen. Returns
+  // the notice to show once the panel is there (empty for none).
+  QString holderForPreselection(CommandSession& session);
+  // Both: the `joint_holder` query for the picks' occurrence paths, then
+  // the preference or the question; the answer goes into the session's
+  // hidden inputs. True when the panel's notice changes to `notice`
+  // (empty: taken away).
+  bool decideJointHolder(CommandSession& session, const QJsonArray& paths, QString& notice);
   // The same for the selection made before such a command: all of its body
   // picks of one other component activate that component before the panel
   // opens (its own undo step); the notice to show once the panel is there,
@@ -1501,6 +1529,15 @@ private:
   void registerComponentWebCommand();
   void openComponentBrowser();
   bool importWebDownload(const QString& path, WebFileKind kind, QString* error);
+  // Move on the last download brought in (mitcad#1839): started once from
+  // the event loop, so that the files a zip's Import brings in one after
+  // another all come in first and Move starts once, on the last.
+  void startWebDownloadMove();
+  bool m_webImporting = false;
+  bool m_webMovePending = false;
+  QString m_webMoveComponent;
+  QString m_webMoveOccurrence;
+  QString m_webMoveName;
   QPointer<QDialog> m_componentBrowser;
   // The web browser component (CEF and the module, BrowserComponent.hpp):
   // the installed one's window, the first download (asked once, with its
@@ -2053,6 +2090,9 @@ private:
   bool m_constructionHidden = false; // an input hides it (mitcad#394)
   std::vector<SketchEntityDisplay> m_sketchDisplay;
   QString m_loggedSketches; // the sketches whose curves are shown (UI tests)
+  // A sketch on a curved face's curves and their lengths on the face, as
+  // last logged, by sketch (mitcad#1768, UI tests).
+  mutable QHash<QString, QString> m_loggedFaceCurves;
   // The sketches a command shows for its time (mitcad#546;
   // view/CommandSketches.hpp): an edited feature's, as if their light bulbs
   // were on; MainWindowVisibility.cpp.
@@ -2097,6 +2137,9 @@ private:
     QString uid;  // the joint's; empty for a panel's motion
     QString name; // the joint's name, or the panel's motion's label
     QString motion;
+    // A flexible occurrence the joint moves in, for it alone (mitcad#1805);
+    // empty: the joint's own.
+    QString occurrence;
     bool turn = false; // radians, else millimetres
     QJsonObject def;   // the joint's, or the panel's definition
     // Once: the frames in order. Back and forth: the sweep from the low end
@@ -2681,10 +2724,28 @@ private:
   static double datumDisplaySize(const QJsonObject& datum);
   // The resize handles of the one selected construction plane or axis,
   // while no command or sketch runs and the design may be changed; hidden
-  // otherwise (view/DatumHandles.hpp).
+  // otherwise (view/DatumHandles.hpp). They sit where it is drawn (its
+  // `drawn` extent, mitcad#1827); their menu's Reset Size clears its size.
   void updateDatumHandles();
+  // For UI tests (mitcad#1827): "Datum <uid> drawn <w> x <h> mm (<source>)"
+  // of a construction plane, "Datum <uid> drawn <l> mm long (<source>)" of
+  // an axis, when it changes.
+  void logDrawnDatum(const QString& uid, const QJsonObject& datum);
   OriginDisplay m_originDisplay;
   QPointer<DatumHandles> m_datumHandles;
+  // Forms (mitcad#1757; MainWindowForm.cpp): Edit Form registered with its
+  // hooks, opened for a Form feature (editFeature), its cage drawn and
+  // picked over the view while it is open, and where the Form's component
+  // is seen (none: the root's).
+  void registerFormCommands();
+  void editForm(const QString& uid);
+  void endFormEdit();
+  std::optional<gp_Trsf> formPlacement() const;
+  bool hasKeptCage(const QString& body) const override;
+  void openKeptCage(const QString& body) override;
+  QString m_formEditUid;
+  QPointer<FormCageOverlay> m_formOverlay;
+  QHash<QString, QString> m_loggedDrawn;
 };
 
 } // namespace mitcad

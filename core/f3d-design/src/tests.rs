@@ -5287,3 +5287,86 @@ fn draft_faces_neutral_plane_and_angles() {
     assert_eq!(tool.len(), 1);
     assert_eq!(tag(&tool[0]), "5");
 }
+
+/// A reference after a sibling's removal (mitcad#1808): an extrusion made
+/// two bodies (records 540 and 541, of the body objects 560 and 561), a
+/// removal took the first, and a cut names the second. Each body input
+/// names its body object through its record (`_f3d.body_entity`), by
+/// which the import finds the body in the history state; the producer and
+/// the index among its records stay as they were (the index is the
+/// record's place among the producer's own, whatever left the design).
+#[test]
+fn a_reference_after_a_siblings_removal_names_its_body_object() {
+    const REMOVE: &str = "4A782808-FBDD-4351-A10A-F7AE5693D330";
+    let mut d = sample();
+    for (g, v) in [(REMOVE, 0), (BODY_REF, 1), (BODY_RECORD, 2), (BODY, 1)] {
+        d.class(g, ROOT, v);
+    }
+    d.objects.retain(|o| o.0 != 3);
+    d.obj(
+        3,
+        TIMELINE,
+        cat(&[&[0, 0], &r(1), &u32b(4), &r(10), &r(20), &r(800), &r(700)]),
+    );
+    // The records name their body object, then their producer (the
+    // extrusion, item 20; listed in object order).
+    for (record, body) in [(540, 560), (541, 561)] {
+        d.obj(body, BODY, vec![0, 0]);
+        d.obj(record, BODY_RECORD, cat(&[&[0, 0], &r(body), &r(20)]));
+    }
+    // The removal of the first body: `u32 1 | ref input` before its tail.
+    d.obj(801, BODY_REF, cat(&[&[0, 0], &r(540)]));
+    d.obj(
+        800,
+        REMOVE,
+        cat(&[
+            &[0, 0],
+            &u32b(1),
+            &r(801),
+            &tail(5, "RemoveBody", 1, "", [0, 0, 0], 802),
+        ]),
+    );
+    d.obj(802, HEALTH, vec![0, 0]);
+    // A cut whose participant is the extrusion's second body.
+    d.obj(701, BODY_REF, cat(&[&[0, 0], &r(541)]));
+    d.obj(
+        700,
+        EXTRUDE,
+        cat(&[
+            &[0, 0],
+            &[0, 0, 0],
+            &u32b(2),
+            &u32b(1),
+            &u32b(2),
+            &[0, 1],
+            &u32b(0),
+            &f64s(&[0.0, 0.0, 1.0]),
+            &[0, 0],
+            &u32b(1),
+            &r(701),
+            &tail(6, "Extrude", 2, "", [0, 0, 0], 702),
+        ]),
+    );
+    d.obj(702, HEALTH, vec![0, 0]);
+    let (m, b) = d.streams();
+    let v = serde_json::to_value(Design::parse(&m, b).unwrap().dump("x", "Design1")).unwrap();
+    let items = v["timeline"]["items"].as_array().unwrap();
+    let removed = &items[2]["detail"]["itemToRemove"]["_f3d"];
+    assert_eq!(
+        (
+            &removed["producer"],
+            &removed["body_index"],
+            &removed["body_entity"]
+        ),
+        (&json!(1), &json!(0), &json!(560)),
+        "{removed}"
+    );
+    let x = &items[3]["detail"];
+    assert_eq!(x["operation"], "CutFeatureOperation");
+    let p = &x["participantBodies"][0]["_f3d"];
+    assert_eq!(
+        (&p["producer"], &p["body_index"], &p["body_entity"]),
+        (&json!(1), &json!(1), &json!(561)),
+        "{p}"
+    );
+}

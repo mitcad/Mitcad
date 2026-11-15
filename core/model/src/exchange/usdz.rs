@@ -17,7 +17,9 @@
 //!   else the default look) is its material; faces with appearances of
 //!   their own are subsets with theirs. A texture's image goes into the
 //!   package and the meshes get texture coordinates from its projection,
-//!   as the rendered view projects it.
+//!   as the rendered view projects it; with the projection `uv`, a mesh
+//!   body's own coordinates ([`FaceMeshes::uvs`], mitcad#1874; USD's `st`
+//!   runs up the image as MitCad's v does), a body without them as box.
 //! - With an animation (mitcad#1597, `usdz_animation`), the occurrences'
 //!   `Xform`s and the bodies' meshes it moves get time-sampled placements;
 //!   the meshes are written once.
@@ -169,9 +171,11 @@ fn project(texture: &Texture, p: [f64; 3], normal: [f64; 3]) -> [f32; 2] {
     let [x, y, z] = normal.map(f64::abs);
     let (a, b) = match texture.projection {
         Projection::Planar => (p[0], p[1]),
-        Projection::Box if x >= y.max(z) => (p[1], p[2]),
-        Projection::Box if y >= z => (p[0], p[2]),
-        Projection::Box => (p[0], p[1]),
+        // A body without texture coordinates of its own (mitcad#1862;
+        // `export_usdz` writes them where the mesh has them): as box.
+        Projection::Box | Projection::Uv if x >= y.max(z) => (p[1], p[2]),
+        Projection::Box | Projection::Uv if y >= z => (p[0], p[2]),
+        Projection::Box | Projection::Uv => (p[0], p[1]),
     };
     let (sin, cos) = texture.rotation.sin_cos();
     let u = (a * cos + b * sin) / texture.size[0];
@@ -375,7 +379,9 @@ impl<K: Kernel> Document<K> {
             }
             // Texture coordinates when a material of the mesh has an image:
             // per corner, each triangle by its own material's projection and
-            // its facet's normal.
+            // its facet's normal; by the mesh's own coordinates where the
+            // projection is `uv` and the mesh has them (mitcad#1874).
+            let own = faces.uvs.len() == faces.vertices.len();
             let tex_coords = triangle_material
                 .iter()
                 .any(|m| materials.textures.contains_key(m))
@@ -384,8 +390,11 @@ impl<K: Kernel> Document<K> {
                     for (t, m) in faces.triangles.iter().zip(&triangle_material) {
                         let [a, b, c] = t.map(|i| faces.vertices[i as usize]);
                         let normal = cross(sub(b, a), sub(c, a));
-                        for p in [a, b, c] {
+                        for (k, p) in [a, b, c].into_iter().enumerate() {
                             st.push(match materials.textures.get(m) {
+                                Some(texture) if own && texture.projection == Projection::Uv => {
+                                    faces.uvs[t[k] as usize].map(|v| v as f32)
+                                }
                                 Some(texture) => project(texture, p, normal),
                                 None => [0.0, 0.0],
                             });

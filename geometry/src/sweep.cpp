@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <exception>
 #include <limits>
 #include <map>
 #include <optional>
@@ -77,6 +78,7 @@
 #include "face_select.hpp"
 #include "history.hpp"
 #include "spine.hpp"
+#include "taper_events.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry::detail {
@@ -1309,8 +1311,11 @@ struct TaperClosure {
   bool meet = false;               // walls meet (else they vanish)
 };
 
+// (`beyond` > 1 looks a little past the far end, so that walls meeting
+// right at it count.)
 std::optional<TaperClosure> taper_closure(const Shape& solid, const std::vector<bool>& leaned,
-                                          const gp_Pln& neutral, const gp_Dir& pull, double angle) {
+                                          const gp_Pln& neutral, const gp_Dir& pull, double angle,
+                                          double beyond = 1.0) {
   const int near = near_cap_of(solid, leaned, neutral, pull);
   if (near < 0 || std::abs(angle) < 1.0e-9) {
     return std::nullopt;
@@ -1381,7 +1386,7 @@ std::optional<TaperClosure> taper_closure(const Shape& solid, const std::vector<
   };
   // The walls move out of the profile by t tan(angle) at height t.
   const double slope = std::tan(angle);
-  const double end = height * slope;
+  const double end = height * slope * beyond;
   if (!changed(end, nullptr)) {
     return std::nullopt;
   }
@@ -1525,9 +1530,55 @@ std::optional<TaperClosure> taper_closure(const Shape& solid, const std::vector<
   return closure;
 }
 
-// The error of a taper the draft could not build: where and how it closes
-// the profile when it does within the extrusion, else the kernel's own
-// failure with what was asked.
+// The places of a taper's error: the middles of the near cap's edges, of
+// the walls named (all of them where none is).
+std::vector<ErrorPlace> taper_places(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
+                                     const gp_Dir& pull, const std::vector<std::string>& walls) {
+  std::vector<ErrorPlace> places;
+  try {
+    OCC_CATCH_SIGNALS
+    const int near = near_cap_of(solid, leaned, neutral, pull);
+    if (near < 0) {
+      return places;
+    }
+    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces_of;
+    TopExp::MapShapesAndUniqueAncestors(solid.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of);
+    for (TopExp_Explorer e(solid.face(near), TopAbs_EDGE); e.More() && places.size() < 32; e.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(e.Current());
+      if (BRep_Tool::Degenerated(edge)) {
+        continue;
+      }
+      bool named = walls.empty();
+      const int index = faces_of.FindIndex(edge);
+      if (!named && index > 0) {
+        for (const TopoDS_Shape& face : faces_of.FindFromIndex(index)) {
+          const int f = solid.face_index(face);
+          if (f >= 0 && f != near) {
+            for (const std::string& name : solid.face_names(f)) {
+              named = named || std::find(walls.begin(), walls.end(), name) != walls.end();
+            }
+          }
+        }
+      }
+      if (named) {
+        const BRepAdaptor_Curve curve(edge);
+        places.push_back(point_place(curve.Value(0.5 * (curve.FirstParameter() + curve.LastParameter()))));
+      }
+    }
+  } catch (const Standard_Failure&) {
+    // (The places found so far: an error's places never fail it.)
+  }
+  return places;
+}
+
+// The error of a taper the draft could not build (placed_error: mitcad#1851,
+// no names in the words): where and how it closes the profile when it does
+// within the extrusion, else the kernel's own failure with what was asked;
+// the walls' names and the kernel's text in the detail only, the profile's
+// edges as places. Both messages start "the taper failed", by which the
+// .f3d import knows a kernel failure (core/import-replay kernel_failure),
+// and are listed in core/model-base (KernelError::taper_not_leaned,
+// taper_not_resolved) for the translations.
 std::string taper_failure(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral,
                           const gp_Dir& pull, double angle, const std::string& kernel) {
   double height = 0.0;
@@ -1546,8 +1597,9 @@ std::string taper_failure(const Shape& solid, const std::vector<bool>& leaned, c
     closure.reset();
   }
   if (!closure || closure->walls.empty()) {
-    return "the taper failed: the geometry kernel could not lean the profile's walls by " + degrees +
-           " degrees over " + number_text(height) + " mm (" + kernel + ")";
+    const std::string said = "the taper failed: the geometry kernel could not lean the profile's walls by " +
+                             degrees + " degrees over " + number_text(height) + " mm";
+    return placed_error(said, said + " (" + kernel + ")", taper_places(solid, leaned, neutral, pull, {}));
   }
   std::string walls;
   if (closure->meet) {
@@ -1571,13 +1623,20 @@ std::string taper_failure(const Shape& solid, const std::vector<bool>& leaned, c
                             number_text(height) + " mm from it";
   const std::string outcome =
       angle < 0.0 ? "the taper closes the profile there" : "the widening taper makes the profile overlap itself there";
+  const std::string said = "the taper failed: leaning by " + degrees +
+                           " degrees changes the profile's shape " + number_text(closure->at) +
+                           " mm from the sketch plane, before the extrusion's end " + number_text(height) +
+                           " mm from it, and the geometry kernel could not build that";
+  std::string detail;
   if (closure->meet) {
-    return "the taper failed: leaning by " + degrees + " degrees, the walls " + walls + ", " +
-           number_text(closure->gap) + " mm apart in the profile, meet " + where + ": " + outcome;
+    detail = "the taper failed: leaning by " + degrees + " degrees, the walls " + walls + ", " +
+             number_text(closure->gap) + " mm apart in the profile, meet " + where + ": " + outcome;
+  } else {
+    detail = "the taper failed: leaning by " + degrees + " degrees, " +
+             (closure->walls.size() == 1 ? "the wall " : "the walls ") + walls + " shrink" +
+             (closure->walls.size() == 1 ? "s" : "") + " to nothing " + where + ": " + outcome;
   }
-  return "the taper failed: leaning by " + degrees + " degrees, " +
-         (closure->walls.size() == 1 ? "the wall " : "the walls ") + walls + " shrink" +
-         (closure->walls.size() == 1 ? "s" : "") + " to nothing " + where + ": " + outcome;
+  return placed_error(said, detail + " (" + kernel + ")", taper_places(solid, leaned, neutral, pull, closure->walls));
 }
 
 // A point in the plane across the pull.
@@ -1858,6 +1917,23 @@ ShapePtr valid_planar_taper(const Shape& solid, const std::vector<bool>& leaned,
   return built && !built->occt().IsNull() && is_valid(built->occt()) ? built : nullptr;
 }
 
+// Whether the walls of a valid draft meet or vanish within the extrusion
+// (up to its far end included; mitcad#1851): the draft then leans them
+// through each other, which the checker does not see.
+bool event_inside(const Shape& solid, const std::vector<bool>& leaned, const gp_Pln& neutral, const gp_Dir& pull,
+                  double angle) {
+  std::optional<TaperClosure> closure;
+  try {
+    OCC_CATCH_SIGNALS
+    closure = taper_closure(solid, leaned, neutral, pull, angle, 1.0 + 1.0e-6);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    return false;
+  }
+  return closure && !closure->walls.empty();
+}
+
 } // namespace
 
 ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, double angle,
@@ -1870,6 +1946,14 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
           return std::find(names.begin(), names.end(), name) != names.end();
         });
   }
+  // A circle or a convex profile the taper closes ends where it closes,
+  // as before (tapered_draft takes them first too).
+  if (ShapePtr closed = closing_cone(solid, leaned, neutral, pull, angle)) {
+    return closed;
+  }
+  if (ShapePtr closed = closing_taper(solid, leaned, neutral, pull, angle)) {
+    return closed;
+  }
   // A profile with holes: the draft, else (where it fails, or its walls
   // cross) the outline's taper less the holes'.
   const int near = near_cap_of(solid, leaned, neutral, pull);
@@ -1879,16 +1963,94 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
       ++loops;
     }
   }
+  // Walls that meet or vanish within the extrusion (mitcad#1851): the
+  // taper with its topology events resolved where the draft cannot build
+  // it, or builds it only by leaning walls through each other. Null where
+  // that fails too; throws when the whole profile closes before the end.
+  // (Fails soft: any failure but the whole profile closing, which is the
+  // person's to fix, keeps today's result or failure.)
+  const auto resolved = [&]() -> ShapePtr {
+    if (near < 0) {
+      return nullptr;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      return resolved_taper(solid, leaned, near, neutral, pull, angle);
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::invalid_argument&) {
+      throw;
+    } catch (const std::exception& error) {
+      if (std::string(error.what()).find("out of memory") != std::string::npos) {
+        throw;
+      }
+      return nullptr;
+    }
+  };
+  // A valid draft, unless walls meet or vanish within it: then resolved.
+  // Only for walls OCCT's draft leans (planes, cylinders, cones): the
+  // walls ruled to a spline's or an ellipse's offset (ruled_taper) refuse
+  // offsets that cross or vanish themselves, and OCCT's offset of such a
+  // profile reports edges without history where nothing closes (a spline
+  // arch over three lines kept its six faces only so, cli.f1_taper_curves).
+  bool draftable = true;
+  for (int i = 0; i < solid.face_count() && draftable; ++i) {
+    if (leaned[static_cast<std::size_t>(i)]) {
+      const GeomAbs_SurfaceType type = BRepAdaptor_Surface(solid.face(i)).GetType();
+      draftable = type == GeomAbs_Plane || type == GeomAbs_Cylinder || type == GeomAbs_Cone;
+    }
+  }
+  // The loops and edges of a shape's caps: a draft whose caps keep the
+  // prism's has no wall that vanished at the far end, and walls that
+  // crossed there would have made its far cap invalid; only a draft whose
+  // caps differ is checked with the profile's offset (which costs an
+  // offset of the cap and, in OCCT, can fail hard on some profiles).
+  const auto cap_counts = [&caps](const Shape& shape) {
+    std::pair<int, int> counts{0, 0};
+    for (int i = 0; i < shape.face_count(); ++i) {
+      const NameList& names = shape.face_names(i);
+      if (std::none_of(caps.begin(), caps.end(), [&names](const std::string& name) {
+            return std::find(names.begin(), names.end(), name) != names.end();
+          })) {
+        continue;
+      }
+      for (TopExp_Explorer w(shape.face(i), TopAbs_WIRE); w.More(); w.Next()) {
+        ++counts.first;
+      }
+      for (TopExp_Explorer e(shape.face(i), TopAbs_EDGE); e.More(); e.Next()) {
+        ++counts.second;
+      }
+    }
+    return counts;
+  };
+  const auto checked = [&](const ShapePtr& drafted) -> ShapePtr {
+    if (!draftable || drafted->occt().IsNull() || cap_counts(*drafted) == cap_counts(solid)) {
+      return drafted;
+    }
+    if (event_inside(solid, leaned, neutral, pull, angle)) {
+      if (ShapePtr events = resolved()) {
+        return events;
+      }
+    }
+    return drafted;
+  };
   if (loops < 2) {
     // (A draft that fails, or whose walls cross into an invalid solid, is
-    // explained by where the taper closes the profile, when it does; a
-    // draft valid or not explained so is as before. A prism of lines that
-    // the taper neither closes nor folds is built from its leaned planes
-    // where the draft fails or comes out invalid, mitcad#1483.)
+    // resolved, or explained by where the taper closes the profile, when it
+    // does; a draft valid or not explained so is as before. A prism of
+    // lines that the taper neither closes nor folds is built from its
+    // leaned planes where the draft fails or comes out invalid,
+    // mitcad#1483.)
     ShapePtr drafted;
     try {
       drafted = tapered_draft(solid, leaned, neutral, pull, angle);
     } catch (const Cancelled&) {
+      throw;
+    } catch (const std::invalid_argument&) {
+      // (An arc the taper shrinks to nothing.)
+      if (ShapePtr events = resolved()) {
+        return events;
+      }
       throw;
     } catch (const std::runtime_error& error) {
       if (std::string(error.what()).find("out of memory") != std::string::npos) {
@@ -1897,11 +2059,17 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
       if (ShapePtr planar = valid_planar_taper(solid, leaned, neutral, pull, angle)) {
         return planar;
       }
+      if (ShapePtr events = resolved()) {
+        return events;
+      }
       throw std::runtime_error(taper_failure(solid, leaned, neutral, pull, angle, error.what()));
     }
     if (!drafted->occt().IsNull() && !is_valid(drafted->occt())) {
       if (ShapePtr planar = valid_planar_taper(solid, leaned, neutral, pull, angle)) {
         return planar;
+      }
+      if (ShapePtr events = resolved()) {
+        return events;
       }
       std::optional<TaperClosure> closure;
       try {
@@ -1915,21 +2083,38 @@ ShapePtr tapered(const Shape& solid, const gp_Pln& neutral, const gp_Dir& pull, 
         throw std::runtime_error(
             taper_failure(solid, leaned, neutral, pull, angle, "the taper produced an invalid shape"));
       }
+      return drafted;
     }
-    return drafted;
+    return checked(drafted);
   }
   try {
     ShapePtr drafted = tapered_draft(solid, leaned, neutral, pull, angle);
     if (!drafted->occt().IsNull() && is_valid(drafted->occt())) {
-      return drafted;
+      return checked(drafted);
     }
   } catch (const Cancelled&) {
     throw;
   } catch (const std::invalid_argument&) {
-  } catch (const std::runtime_error&) {
+  } catch (const std::runtime_error& error) {
+    if (std::string(error.what()).find("out of memory") != std::string::npos) {
+      throw;
+    }
   }
-  if (ShapePtr holed = holed_taper(solid, leaned, neutral, pull, angle, caps)) {
-    return holed;
+  std::exception_ptr failure;
+  try {
+    if (ShapePtr holed = holed_taper(solid, leaned, neutral, pull, angle, caps)) {
+      return holed;
+    }
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::exception&) {
+    failure = std::current_exception();
+  }
+  if (ShapePtr events = resolved()) {
+    return events;
+  }
+  if (failure) {
+    std::rethrow_exception(failure);
   }
   throw std::runtime_error(
       taper_failure(solid, leaned, neutral, pull, angle, "the taper failed; the angle may close the profile"));
@@ -2574,6 +2759,10 @@ gp_Pnt centre_of_named(const Shape& shape, const std::string& name) {
   return all.CentreOfMass();
 }
 
+// What trimmed() throws when the target leaves a part of the profile
+// unreached.
+constexpr const char* kNotAcross = "the target does not cut across the whole profile";
+
 } // namespace
 
 ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& tool,
@@ -2673,7 +2862,7 @@ ShapePtr trimmed(const Shape& sweep, const Target& target, const TopoDS_Shape& t
   }
   for (const ShapePtr& piece : kept) {
     if (count_named(*piece, unreached) > 0) {
-      throw std::invalid_argument("the target does not cut across the whole profile");
+      throw std::invalid_argument(kNotAcross);
     }
   }
   return fused(kept, "the sweep to its target");
@@ -2773,5 +2962,111 @@ Bnd_Box bounds_of(const TopoDS_Shape& shape) {
 }
 
 bool has_face_named(const Shape& shape, const std::string& name) { return count_named(shape, name) > 0; }
+
+// An extrusion from a curved face (mitcad#1848).
+
+bool is_curved_face(const Target& target) {
+  return target.kind == Target::Kind::Face && !reference_plane(target_faces(target).front()).has_value();
+}
+
+namespace {
+
+// The start face (all its pieces), or with `extend` its surface continued
+// past its edges, wide enough to cross everything within `around`; moved
+// by the start's offset along `normal`.
+TopoDS_Shape start_surface(const Target& start, const gp_Dir& normal, const Bnd_Box& around) {
+  const std::vector<TopoDS_Face> faces = target_faces(start);
+  const gp_Vec shift = gp_Vec(normal) * start.offset;
+  if (start.extend) {
+    Bnd_Box all = around;
+    for (const TopoDS_Face& face : faces) {
+      BRepBndLib::Add(face, all);
+    }
+    return translated(extended_face(faces.front(), 4.0 * diagonal(all) + 100.0), shift);
+  }
+  BRep_Builder builder;
+  TopoDS_Compound compound;
+  builder.MakeCompound(compound);
+  for (const TopoDS_Face& face : faces) {
+    builder.Add(compound, face);
+  }
+  return translated(compound, shift);
+}
+
+// The lowest and the highest place of the box's corners along `along`.
+std::pair<double, double> span_along(const Bnd_Box& box, const gp_Dir& along) {
+  double low = std::numeric_limits<double>::infinity();
+  double high = -std::numeric_limits<double>::infinity();
+  for (const gp_Pnt& corner : corners(box)) {
+    low = std::min(low, along_of(corner, along));
+    high = std::max(high, along_of(corner, along));
+  }
+  return {low, high};
+}
+
+} // namespace
+
+ShapePtr curved_start_side(const std::string& feature, const SweepFace& face, const Target& start,
+                           const gp_Dir& normal, const gp_Dir& scan, const ExtrudeSide& side,
+                           const gp_Dir& along, double from, const NameList& near, const NameList& far) {
+  // +1 when the side runs along `scan` (away from the profile's side of the
+  // face), -1 back towards it.
+  const double sense = along.Dot(scan) > 0.0 ? 1.0 : -1.0;
+  if (side.target && (sense < 0.0 || from != 0.0)) {
+    throw std::invalid_argument(
+        "unsupported: an extrusion from a curved face up to an object on the profile's side of the face");
+  }
+  const std::string behind = face_name(feature, "behind", face.regions.front());
+  const std::string unreached = face_name(feature, "unreached", face.regions.front());
+  const Bnd_Box profile = bounds_of(face.face);
+  const TopoDS_Shape surface = start_surface(start, normal, profile);
+  // The profile's prism along `scan` from behind the surface, moved back
+  // as far as the side reaches, to past it moved forward as far.
+  const double moved = (side.target ? 0.0 : std::abs(side.distance)) + std::abs(from) + 1.0;
+  const auto [low, high] = span_along(bounds_of(surface), scan);
+  const auto [profile_low, profile_high] = span_along(profile, scan);
+  const double back = low - moved;
+  gp_Trsf to_back;
+  to_back.SetTranslation(gp_Vec(scan) * (back - profile_high));
+  const SweepFace behind_face = transformed(face, to_back);
+  double length = (high + moved) - (back - (profile_high - profile_low));
+  if (side.target) {
+    length = std::max(length, reach(*side.target, scan, bounds_of(behind_face.face)));
+  }
+  const ShapePtr prism = named_prism(behind_face, gp_Vec(scan) * length, {behind}, {unreached});
+  // From behind up to the first crossing of the surface moved by `shift`
+  // along `scan`, its faces there named `names`; a part of the profile that
+  // the face does not lie under is not crossed.
+  const auto up_to = [&](double shift, const NameList& names) {
+    try {
+      return trimmed(*prism, start, translated(surface, gp_Vec(scan) * shift), scan, behind, names, unreached,
+                     true);
+    } catch (const std::invalid_argument& error) {
+      if (std::string(error.what()) != kNotAcross) {
+        throw;
+      }
+      throw std::invalid_argument(
+          face_error(start.face, "the start face does not lie under the whole profile along the extrusion direction",
+                     "start face " + start.face +
+                         " does not lie under the whole profile along the extrusion direction"));
+    }
+  };
+  const auto past_behind = [&behind](const Shape& piece) { return !has_face_named(piece, behind); };
+  if (side.target) {
+    // (The face under the whole profile, checked.)
+    up_to(0.0, near);
+    const ShapePtr head = trimmed(*prism, *side.target, target_tool(*side.target, scan, bounds_of(prism->occt())),
+                                  scan, behind, far, unreached, true);
+    return split_keep(*head, surface, near, past_behind, "the extrusion from its start face");
+  }
+  // The near and the far surface along `scan`: the solid is what lies past
+  // the nearer of them up to the farther one.
+  const double begin = sense * from;
+  const double end = sense * side.distance;
+  const bool forward = end > begin;
+  const ShapePtr head = up_to(std::max(begin, end), forward ? far : near);
+  return split_keep(*head, translated(surface, gp_Vec(scan) * std::min(begin, end)), forward ? near : far,
+                    past_behind, "the extrusion from its start face");
+}
 
 } // namespace mitcad::geometry::detail

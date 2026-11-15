@@ -3,9 +3,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 
+#include <Adaptor3d_TopolTool.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -13,14 +18,35 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <Contap_Contour.hxx>
+#include <Contap_Line.hxx>
+#include <GeomAPI_PointsToBSpline.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <GeomAbs_CurveType.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <GeomAdaptor_Surface.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_Surface.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <NCollection_Array1.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pln.hxx>
+#include <gp_Sphere.hxx>
 
 #include "history.hpp"
 #include "spine.hpp"
@@ -170,13 +196,418 @@ void stays(const RibEnd& end, const char* why, std::vector<std::pair<std::string
                      end.point);
 }
 
+constexpr double kPi = 3.14159265358979323846;
+
+using Ancestors = NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>;
+
+// The face a curve sweeps back against `along` by `length`, or a null
+// shape when the sweep fails.
+TopoDS_Shape swept_back(const TopoDS_Shape& curve, const gp_Dir& along, double length) {
+  BRepPrimAPI_MakePrism prism(curve, gp_Vec(along) * -length);
+  prism.Build();
+  return prism.IsDone() ? prism.Shape() : TopoDS_Shape();
+}
+
+// The parameter range [first, last] of a face widened by a quarter of its
+// span at each end: at most one period of a periodic surface, else within
+// the surface's own bounds [low, high].
+void widen(double& first, double& last, bool periodic, double period, double low, double high) {
+  const double margin = (last - first) / 4.0;
+  first -= margin;
+  last += margin;
+  if (periodic) {
+    if (last - first > period) {
+      const double middle = (first + last) / 2.0;
+      first = middle - period / 2.0;
+      last = middle + period / 2.0;
+    }
+    return;
+  }
+  first = std::max(first, low);
+  last = std::min(last, high);
+}
+
+// The edge along a contour line traced by points on the surface: a
+// B-spline through them, its tolerance raised to how far it strays from
+// the surface so that the cuts take it as lying on the face; null when the
+// points do not make a curve.
+TopoDS_Edge traced_edge(const std::vector<gp_Pnt>& points, const occ::handle<Geom_Surface>& surface) {
+  NCollection_Array1<gp_Pnt> array(1, static_cast<int>(points.size()));
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    array.SetValue(static_cast<int>(i) + 1, points[i]);
+  }
+  GeomAPI_PointsToBSpline fit(array, 3, 8, GeomAbs_C2, 1.0e-6);
+  if (!fit.IsDone() || fit.Curve().IsNull()) {
+    return TopoDS_Edge();
+  }
+  const occ::handle<Geom_BSplineCurve> curve = fit.Curve();
+  BRepBuilderAPI_MakeEdge maker(curve);
+  if (!maker.IsDone()) {
+    return TopoDS_Edge();
+  }
+  const TopoDS_Edge edge = maker.Edge();
+  double off = 0.0;
+  constexpr int samples = 100;
+  const double t0 = curve->FirstParameter();
+  const double t1 = curve->LastParameter();
+  for (int i = 0; i <= samples; ++i) {
+    GeomAPI_ProjectPointOnSurf projection(curve->Value(t0 + (t1 - t0) * i / samples), surface);
+    if (projection.NbPoints() > 0) {
+      off = std::max(off, projection.LowerDistance());
+    }
+  }
+  const double tolerance = 1.5 * off;
+  if (tolerance > BRep_Tool::Tolerance(edge)) {
+    BRep_Builder builder;
+    builder.UpdateEdge(edge, tolerance);
+    for (TopExp_Explorer v(edge, TopAbs_VERTEX); v.More(); v.Next()) {
+      if (BRep_Tool::Tolerance(TopoDS::Vertex(v.Current())) < tolerance) {
+        builder.UpdateVertex(TopoDS::Vertex(v.Current()), tolerance);
+      }
+    }
+  }
+  return edge;
+}
+
+// The outline of a curved face of any other kind (a torus, a freeform
+// face) seen along `along` (mitcad#1865): the contour lines on its surface
+// where the normal is at right angles to `along`, as OCCT's hidden-line
+// removal traces them, over the face's parameter range widened a quarter
+// each way. A line that does not close on itself is continued at both ends
+// by lines along its tangents, long enough to cross everything, as the
+// lines of cylinders and cones are. The curves are added as they are; the
+// caller sweeps them.
+std::vector<TopoDS_Edge> contours(const TopoDS_Face& face, const gp_Dir& along, double length) {
+  std::vector<TopoDS_Edge> edges;
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+  if (surface.IsNull()) {
+    return edges;
+  }
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  double low_u = 0.0;
+  double high_u = 0.0;
+  double low_v = 0.0;
+  double high_v = 0.0;
+  surface->Bounds(low_u, high_u, low_v, high_v);
+  widen(u0, u1, surface->IsUPeriodic(), surface->IsUPeriodic() ? surface->UPeriod() : 0.0, low_u, high_u);
+  widen(v0, v1, surface->IsVPeriodic(), surface->IsVPeriodic() ? surface->VPeriod() : 0.0, low_v, high_v);
+  if (u1 - u0 <= Precision::PConfusion() || v1 - v0 <= Precision::PConfusion()) {
+    return edges;
+  }
+  // A line along `direction` from `from`, long enough to cross everything.
+  const auto run_on = [&](const gp_Pnt& from, const gp_Vec& direction) {
+    if (direction.Magnitude() > Precision::Confusion()) {
+      edges.push_back(BRepBuilderAPI_MakeEdge(from, from.Translated(direction.Normalized() * length)).Edge());
+    }
+  };
+  try {
+    const occ::handle<Adaptor3d_Surface> adaptor = new GeomAdaptor_Surface(surface, u0, u1, v0, v1);
+    const occ::handle<Adaptor3d_TopolTool> domain = new Adaptor3d_TopolTool(adaptor);
+    Contap_Contour contour(adaptor, domain, gp_Vec(along));
+    if (!contour.IsDone()) {
+      return edges;
+    }
+    for (int i = 1; i <= contour.NbLines(); ++i) {
+      const Contap_Line& line = contour.Line(i);
+      switch (line.TypeContour()) {
+      case Contap_Lin: {
+        const gp_Lin straight = line.Line();
+        const gp_Vec reach_along = gp_Vec(straight.Direction()) * length;
+        edges.push_back(BRepBuilderAPI_MakeEdge(straight.Location().Translated(-reach_along),
+                                                straight.Location().Translated(reach_along))
+                            .Edge());
+        break;
+      }
+      case Contap_Circle:
+        edges.push_back(BRepBuilderAPI_MakeEdge(line.Circle()).Edge());
+        break;
+      case Contap_Walking: {
+        std::vector<gp_Pnt> points;
+        for (int k = 1; k <= line.NbPnts(); ++k) {
+          const gp_Pnt& point = line.Point(k).Value();
+          if (points.empty() || point.Distance(points.back()) > 1.0e-6) {
+            points.push_back(point);
+          }
+        }
+        if (points.size() < 2) {
+          break;
+        }
+        const bool closed = points.size() > 2 && points.front().Distance(points.back()) <= 1.0e-6;
+        if (points.size() == 2) {
+          edges.push_back(BRepBuilderAPI_MakeEdge(points.front(), points.back()).Edge());
+          run_on(points.front(), gp_Vec(points.back(), points.front()));
+          run_on(points.back(), gp_Vec(points.front(), points.back()));
+          break;
+        }
+        const TopoDS_Edge traced = traced_edge(points, surface);
+        if (!traced.IsNull()) {
+          edges.push_back(traced);
+          if (!closed) {
+            const BRepAdaptor_Curve curve(traced);
+            gp_Pnt point;
+            gp_Vec start;
+            gp_Vec end;
+            curve.D1(curve.FirstParameter(), point, start);
+            run_on(point, -start);
+            curve.D1(curve.LastParameter(), point, end);
+            run_on(point, end);
+          }
+          break;
+        }
+        // No curve through them: the segments between the points.
+        for (std::size_t k = 1; k < points.size(); ++k) {
+          edges.push_back(BRepBuilderAPI_MakeEdge(points[k - 1], points[k]).Edge());
+        }
+        if (!closed) {
+          run_on(points.front(), gp_Vec(points[1], points.front()));
+          run_on(points.back(), gp_Vec(points[points.size() - 2], points.back()));
+        }
+        break;
+      }
+      case Contap_Restriction:
+        // Along the face's boundary: its edges divide there.
+        break;
+      }
+    }
+  } catch (const Standard_Failure&) {
+    // Not traced: the face adds no outline, as a face that does not turn.
+  }
+  return edges;
+}
+
+// The lines along which a curved face turns from facing `along` to facing
+// away from it (its outline seen along it), swept back against `along`
+// (mitcad#1857): for cylinders and cones the lines on them where the
+// normal is at right angles to `along`, for spheres the circle, for other
+// curved faces (tori, freeform faces) the contour lines traced on them
+// (mitcad#1865). Each line is made long enough to cross everything; a cut
+// where the face does not turn divides nothing that matters. Planes add
+// nothing.
+void add_outlines(const TopoDS_Face& face, const gp_Dir& along, double length, std::vector<TopoDS_Shape>& tools) {
+  const BRepAdaptor_Surface surface(face);
+  const auto add = [&](const TopoDS_Shape& curve) {
+    const TopoDS_Shape swept = swept_back(curve, along, length);
+    if (!swept.IsNull()) {
+      tools.push_back(swept);
+    }
+  };
+  if (surface.GetType() == GeomAbs_Plane) {
+    return;
+  }
+  if (surface.GetType() == GeomAbs_Sphere) {
+    const gp_Sphere sphere = surface.Sphere();
+    add(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(sphere.Location(), along), sphere.Radius())).Edge());
+    return;
+  }
+  if (surface.GetType() != GeomAbs_Cylinder && surface.GetType() != GeomAbs_Cone) {
+    for (const TopoDS_Edge& edge : contours(face, along, length)) {
+      // A line along `along` sweeps no face.
+      const BRepAdaptor_Curve curve(edge);
+      if (curve.GetType() != GeomAbs_Line || !curve.Line().Direction().IsParallel(along, 1.0e-9)) {
+        add(edge);
+      }
+    }
+    return;
+  }
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  const double v = (v0 + v1) / 2.0;
+  // Along a line of a cylinder or a cone the normal stays the same, and
+  // round it the normal's part along `along` is a cos u + b sin u + c.
+  const auto facing = [&](double u) {
+    gp_Pnt point;
+    gp_Vec du;
+    gp_Vec dv;
+    surface.D1(u, v, point, du, dv);
+    const gp_Vec normal = du.Crossed(dv);
+    return normal.Magnitude() <= Precision::Confusion() ? 0.0 : normal.Normalized().Dot(gp_Vec(along));
+  };
+  const double at0 = facing(0.0);
+  const double at90 = facing(kPi / 2.0);
+  const double at180 = facing(kPi);
+  const double c = (at0 + at180) / 2.0;
+  const double a = (at0 - at180) / 2.0;
+  const double b = at90 - c;
+  const double amplitude = std::hypot(a, b);
+  if (amplitude <= 1.0e-9 || std::abs(c) >= amplitude) {
+    return;
+  }
+  const double phase = std::atan2(b, a);
+  const double turn = std::acos(std::clamp(-c / amplitude, -1.0, 1.0));
+  for (const double u : {phase - turn, phase + turn}) {
+    // Only where the face is.
+    for (int k = -2; k <= 2; ++k) {
+      const double w = u + 2.0 * kPi * k;
+      if (w < u0 - 1.0e-9 || w > u1 + 1.0e-9) {
+        continue;
+      }
+      gp_Pnt point;
+      gp_Vec du;
+      gp_Vec dv;
+      surface.D1(w, v, point, du, dv);
+      if (dv.Magnitude() > Precision::Confusion()) {
+        const gp_Vec line = dv.Normalized() * length;
+        add(BRepBuilderAPI_MakeEdge(point.Translated(-line), point.Translated(line)).Edge());
+      }
+      break;
+    }
+  }
+}
+
+// The faces that divide a piece of a continuation (mitcad#1857) into parts
+// whose points all reach the faces of the bodies along `along`, or all
+// pass them: swept back against `along` from the edges where two faces of
+// the bodies meet in the piece (a top face's rim) and from the outlines of
+// their curved faces. Edges on the band's own faces and seams divide
+// nothing.
+std::vector<TopoDS_Shape> reach_bounds(const Shape& piece, const gp_Dir& along, double length) {
+  ShapeMap band;
+  std::vector<TopoDS_Face> stops;
+  for (int i = 0; i < piece.face_count(); ++i) {
+    if (piece.face_names(i).empty()) {
+      stops.push_back(piece.face(i));
+    } else {
+      band.Add(piece.face(i));
+    }
+  }
+  std::vector<TopoDS_Shape> tools;
+  Ancestors faces_of_edge;
+  TopExp::MapShapesAndAncestors(piece.occt(), TopAbs_EDGE, TopAbs_FACE, faces_of_edge);
+  for (int i = 1; i <= faces_of_edge.Extent(); ++i) {
+    const TopoDS_Edge& edge = TopoDS::Edge(faces_of_edge.FindKey(i));
+    if (BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    bool between_stops = true;
+    for (const TopoDS_Shape& face : faces_of_edge.FindFromIndex(i)) {
+      if (band.Contains(face) || BRep_Tool::IsClosed(edge, TopoDS::Face(face))) {
+        between_stops = false;
+        break;
+      }
+    }
+    if (!between_stops) {
+      continue;
+    }
+    // A line along the tangent sweeps no face.
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() == GeomAbs_Line && curve.Line().Direction().IsParallel(along, 1.0e-9)) {
+      continue;
+    }
+    const TopoDS_Shape swept = swept_back(edge, along, length);
+    if (!swept.IsNull()) {
+      tools.push_back(swept);
+    }
+  }
+  for (const TopoDS_Face& face : stops) {
+    add_outlines(face, along, length, tools);
+  }
+  return tools;
+}
+
+// The piece divided by the faces (as reach_bounds gives them), one shape
+// per part; faces from the dividing faces are named `name`. The piece
+// itself when there is nothing to divide it by.
+std::vector<ShapePtr> divided(const ShapePtr& piece, const std::vector<TopoDS_Shape>& tools, const std::string& name) {
+  if (tools.empty()) {
+    return {piece};
+  }
+  BRepAlgoAPI_Splitter splitter;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(piece->occt());
+  NCollection_List<TopoDS_Shape> faces;
+  for (const TopoDS_Shape& tool : tools) {
+    faces.Append(tool);
+  }
+  splitter.SetArguments(arguments);
+  splitter.SetTools(faces);
+  splitter.SetNonDestructive(true);
+  detail::build(splitter);
+  if (!splitter.IsDone() || splitter.HasErrors()) {
+    throw std::runtime_error("the rib's ends could not be continued to the bodies");
+  }
+  detail::FaceNamer namer(splitter.Shape());
+  namer.carry(splitter, *piece);
+  for (const TopoDS_Shape& tool : tools) {
+    for (const TopoDS_Shape& image : splitter.Modified(tool)) {
+      if (image.ShapeType() == TopAbs_FACE && !namer.named(image)) {
+        namer.add(image, name);
+      }
+    }
+    if (namer.contains(tool) && !namer.named(tool)) {
+      namer.add(tool, name);
+    }
+  }
+  std::vector<ShapePtr> parts;
+  for (const detail::FaceNamer::Piece& part : namer.pieces()) {
+    parts.push_back(part.shape);
+  }
+  return parts;
+}
+
+// Whether the line from `from` along `along` meets a face of the shapes
+// within `length`.
+class Reach {
+public:
+  Reach(const std::vector<TopoDS_Shape>& shapes, double length) : m_length(length) {
+    for (const TopoDS_Shape& shape : shapes) {
+      auto hits = std::make_unique<IntCurvesFace_ShapeIntersector>();
+      hits->Load(shape, Precision::Confusion());
+      m_shapes.push_back(std::move(hits));
+    }
+  }
+
+  bool meets(const gp_Pnt& from, const gp_Dir& along) const {
+    const gp_Lin line(from, along);
+    for (const auto& hits : m_shapes) {
+      hits->Perform(line, Precision::Confusion(), m_length);
+      if (hits->IsDone() && hits->NbPnt() > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+private:
+  std::vector<std::unique_ptr<IntCurvesFace_ShapeIntersector>> m_shapes;
+  double m_length;
+};
+
+// The faces of the shapes whose bounds meet the piece's, added to `tools`.
+void add_faces_near(const std::vector<TopoDS_Shape>& shapes, const Shape& piece, std::vector<TopoDS_Shape>& tools) {
+  const Bnd_Box around = detail::bounds_of(piece.occt());
+  for (const TopoDS_Shape& shape : shapes) {
+    for (TopExp_Explorer face(shape, TopAbs_FACE); face.More(); face.Next()) {
+      if (!detail::bounds_of(face.Current()).IsOut(around)) {
+        tools.push_back(face.Current());
+      }
+    }
+  }
+}
+
+bool touching(const Shape& a, const Shape& b) {
+  BRepExtrema_DistShapeShape distance(a.occt(), b.occt());
+  return distance.IsDone() && distance.Value() <= 1.0e-5;
+}
+
 // The continuation of one end of a rib (mitcad#1746): the band beyond the
 // end's tip, along the end's tangent for `length` and as deep as the rib,
 // cut by the bodies (moved along the tangent by the end offset), and of it
 // the pieces that touch the rib: so it fills from the tip up to the faces
-// the end meets, whatever their shape. Null when there is nothing between
-// the tip and the faces, or with a note when the continuation meets no
-// face that closes it off.
+// the end meets, whatever their shape. A piece the faces do not close off
+// (it runs on to the far end of the band, or up to the next faces past
+// their depth: the continuation passes over or beside the bodies) keeps
+// only the parts whose points reach a face along the tangent and that join
+// the rib through such parts (mitcad#1857); with a positive offset, the
+// points must also reach the bodies where they are (mitcad#1865). Null when there is nothing
+// between the tip and the faces, or with a note when no part of the
+// continuation meets a face.
 ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, const gp_Vec& depth, double low,
                    double high, double length, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   if (spec.bodies.empty()) {
@@ -219,21 +650,85 @@ ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, c
       stop = stop.Moved(TopLoc_Location(move));
     }
   }
+  // Not closed off by the faces: it would run on to the far side of the
+  // bodies' bounds (or, up to the next faces, past their depth).
+  const auto unclosed = [&](const Shape& piece) {
+    return holds(piece, reach_name) || (!spec.depth && holds(piece, far_side));
+  };
+  // A positive offset moves the faces past the bodies' own: where they are
+  // moved over a top edge, the parts between the bodies and the moved
+  // faces above the top face would pass for reaching them and leave a lip.
+  // So the end's faces move, the cut line does not (mitcad#1865): the
+  // pieces are also divided by the faces of the bodies where they are, and
+  // a part must reach the bodies where they are too (from inside them it
+  // does).
+  const bool sunk = spec.end_offset > 0.0;
+  const std::vector<TopoDS_Shape> bodies = shapes_of(spec.bodies);
   std::vector<ShapePtr> kept;
+  // Of the pieces not closed off, the parts whose points reach a face.
+  std::vector<ShapePtr> reaching;
+  bool opened = false;
+  std::unique_ptr<Reach> rays;
+  std::unique_ptr<Reach> bare_rays;
   for (const ShapePtr& piece : cut_pieces(slab, stops, "rib")) {
-    BRepExtrema_DistShapeShape distance(piece->occt(), drawn.occt());
-    if (!distance.IsDone() || distance.Value() > 1.0e-5) {
+    if (!touching(*piece, drawn)) {
       continue;
     }
-    // Not closed off by the faces: it would run on to the far side of the
-    // bodies' bounds (or, up to the next faces, past their depth).
-    if (holds(*piece, reach_name) || (!spec.depth && holds(*piece, far_side))) {
-      stays(end, "meets no face of the bodies when continued along its curve", notes);
-      return nullptr;
+    if (!unclosed(*piece)) {
+      kept.push_back(piece);
+      continue;
     }
-    kept.push_back(piece);
+    opened = true;
+    if (!rays) {
+      rays = std::make_unique<Reach>(stops, length);
+    }
+    if (sunk && !bare_rays) {
+      bare_rays = std::make_unique<Reach>(bodies, length);
+    }
+    std::vector<TopoDS_Shape> bounds = reach_bounds(*piece, end.outward, length);
+    if (sunk) {
+      add_faces_near(bodies, *piece, bounds);
+    }
+    std::vector<ShapePtr> parts;
+    try {
+      parts = divided(piece, bounds, face_name(spec.feature, end.extend));
+    } catch (const std::runtime_error&) {
+      // Not divided: the piece adds nothing, as one that meets no face.
+      continue;
+    }
+    for (const ShapePtr& part : parts) {
+      if (unclosed(*part)) {
+        continue;
+      }
+      const gp_Pnt inside = detail::interior_point(part->occt());
+      if (rays->meets(inside, end.outward) && (!bare_rays || bare_rays->meets(inside, end.outward))) {
+        reaching.push_back(part);
+      }
+    }
+  }
+  // The reaching parts that join the rib, directly or through each other.
+  std::vector<const Shape*> joined{&drawn};
+  for (const ShapePtr& piece : kept) {
+    joined.push_back(piece.get());
+  }
+  std::vector<bool> taken(reaching.size(), false);
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (std::size_t i = 0; i < reaching.size(); ++i) {
+      if (taken[i] || std::none_of(joined.begin(), joined.end(),
+                                   [&](const Shape* other) { return touching(*reaching[i], *other); })) {
+        continue;
+      }
+      taken[i] = true;
+      joined.push_back(reaching[i].get());
+      kept.push_back(reaching[i]);
+      grew = true;
+    }
   }
   if (kept.empty()) {
+    if (opened) {
+      stays(end, "meets no face of the bodies when continued along its curve", notes);
+    }
     return nullptr;
   }
   return detail::fused(kept, "the rib");

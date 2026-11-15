@@ -6,6 +6,8 @@
 //! this crate (core/model-tests/README.md).
 #![cfg(test)]
 
+mod flexible_nested_tests;
+mod flexible_tests;
 mod joint_poses_tests;
 mod joint_solver_tests;
 mod joint_tests;
@@ -13,3 +15,10 @@ mod loop_drag_tests;
 mod motion_link_tests;
 mod motion_tests;
 mod mount_tests;
+// Deleting a feature another occurrence is joined to (mitcad#1820).
+mod delete_joined_feature_tests;
+// An edit's preview with the joints after the edited one (mitcad#1860).
+mod edit_preview_through_tests;
+
+// The component a joint's picks belong in (mitcad#1856).
+mod joint_holder_tests;

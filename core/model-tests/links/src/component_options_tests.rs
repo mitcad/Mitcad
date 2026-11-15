@@ -450,6 +450,26 @@ fn the_configure_query_of_a_component_tries_its_values() {
     assert_eq!(options[1]["name"], "Length");
     // The constant tried moves; nothing changed in the design.
     assert_eq!(answer["moves"][0]["option"], "Length");
+    // The source's rows for a part's edit panel (mitcad#1812): inserted
+    // without a row, the part's own is null and the source's default named.
+    assert_eq!(answer["rows"], json!(["Standard"]));
+    assert_eq!(answer["config"], Value::Null);
+    assert_eq!(answer["default_row"], "Standard");
+    // Its source's design for Open Source Design (mitcad#1812): the text
+    // the design keeps; an unknown source is refused.
+    let source = doc.component_options(board).unwrap().source;
+    let design = query(
+        &doc,
+        json!({"query": "library_source", "source": source.to_string()}),
+    );
+    assert_eq!(design["source"], json!(source.to_string()));
+    assert_eq!(design["library"], "test-shelves");
+    assert!(design["text"].as_str().is_some_and(|text| !text.is_empty()));
+    assert!(design["sha256"].as_str().is_some_and(|sha| !sha.is_empty()));
+    assert!(
+        doc.query(&json!({"query": "library_source", "source": "S99"}).to_string())
+            .is_err()
+    );
     let options = doc.component_options(board).unwrap();
     assert_eq!(options.parameters["Length"], "900 mm");
     // A component without options has none.

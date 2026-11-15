@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: MIT
+# Press Pull on a face continued (mitcad#1850), the shared input script of
+# tools/ui-press-pull-continued-test.sh (Linux),
+# tools/ui-windows-press-pull-continued-test.ps1 (Windows) and
+# tools/ui-macos-press-pull-continued-test.sh (macOS), on the design
+# tools/ui-scripts/press-pull-continued.json makes: a bent tube (Revolve1,
+# Body1, its centre's bend radius 30, the tube's radius 10, its end facing
+# -x at x = 0) and a T-slot bar (Body2, its end F3:top at z = 40). Volumes:
+# the tube 1500 pi^2, the bar 40 (340 - 6.25 pi).
+#   1. The tube's end is Revolve1's end: Continue offers Edit Revolve1
+#      Instead, which opens Revolve1 at its Angle; Esc leaves it.
+#   2. Along the Walls on the tube's end: its handle is a ring about the
+#      bend's axis; dragged, the distance goes past the walls' inner radius
+#      (20 mm, where Offset failed before) and the preview stays ok. Typed
+#      25 mm and OK: the tube is 2500 pi longer.
+#   3. Straight with a Scale taper of 1.1 over 10 mm on the T-slot bar's
+#      end: the piece adds 10 A0 (1 + 1.1 + 1.21) / 3.
+wait-idle
+window-resize 1400 990
+capture-model-number volume0 '{"query":"properties"}' total.volume
+expect-near ${volume0} 27619.008438 0 0.001
+
+# --- 1. The feature-end case: Revolve1's own edit.
+mark
+command view.left
+wait-idle
+command view.fit
+wait-idle
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:end'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+qt-choice input_continue 'Edit Revolve1 Instead'
+wait-log '^Press Pull opened Revolve1 for its angle$' 30
+wait-log '^Editing F2 with Revolve$' 30
+wait-idle
+mark
+key Escape
+wait-log '^Command Revolve cancelled' 30
+wait-idle
+capture-model-number volume1 '{"query":"properties"}' total.volume
+expect-near ${volume1} 27619.008438 0 0.001
+
+# --- 2. Along the Walls on the tube's end, the ring dragged past the
+# walls' inner radius.
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F2[.]b0/F2:end'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+qt-choice input_continue 'Along the Walls (Face Turns)'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+# Seen along the bend's axis (Y), the ring face-on: its knob below the
+# axis, the run going left.
+mark
+command view.front
+wait-log '^Camera direction 0 1 0 ' 30
+wait-idle
+command view.fit
+wait-idle
+wait-log '^Ring centre Press Pull distance at ' 30
+mark
+drag-from '^Manipulator Press Pull distance at ' -250 -250
+wait-log '^Manipulator Press Pull distance dragged to ' 30
+capture dragged '^Manipulator Press Pull distance dragged to (.+)$'
+# Past the walls' inner radius (20 mm), short of the turn into the tube
+# itself (141 mm).
+expect-near ${dragged} 60 0 39.9
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+expect-no-log '^Preview Press Pull: failed'
+mark
+type-in '^Panel Press Pull input distance at ' '25'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Press Pull made press pull along the walls, distance 25' 30
+wait-idle
+capture-model-number volume2 '{"query":"properties"}' total.volume
+expect-near ${volume2} 35472.990072 0 0.001
+
+# --- 3. Straight, Scale 1.1, on the T-slot bar's end.
+mark
+command view.top
+wait-idle
+command view.fit
+wait-idle
+mark
+command solid.press_pull
+expect-log '^Command Press Pull started'
+wait-log '^Pick places:' 20
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+qt-choice input_continue 'Straight'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+type-in '^Panel Press Pull input distance at ' '10'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+qt-choice input_taper_type 'Scale'
+wait-idle
+mark
+type-in '^Panel Press Pull input end_scale at ' '1.1'
+wait-log '^Preview Press Pull: ok' 30
+wait-idle
+mark
+button '^OK$'
+wait-log '^Press Pull made press pull straight, distance 10' 30
+wait-idle
+capture-model-number volume3 '{"query":"properties"}' total.volume
+expect-near ${volume3} 39007.684412 1e-6 0.05
+expect-never 'Recompute failed|TestDriver: FAIL'

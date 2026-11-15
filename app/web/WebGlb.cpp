@@ -22,6 +22,7 @@
 #include <QObject>
 #include <QSet>
 #include <QSize>
+#include <QUrl>
 
 namespace mitcad::web {
 
@@ -107,9 +108,11 @@ bool encodedImage(const QString& file, EncodedImage& out, QString& why) {
 }
 
 // glTF's one image of roughness (green) and metalness (blue) from the
-// texture set's grey maps; a missing one is white (its factor counts).
-bool metallicRoughnessImage(const QString& roughnessFile, const QString& metalnessFile, EncodedImage& out,
-                            QString& why) {
+// texture set's grey maps, each its grey value or, where it is packed into
+// a channel of its image (mitcad#1862; 0 red, 1 green, 2 blue), that
+// channel; a missing one is white (its factor counts).
+bool metallicRoughnessImage(const QString& roughnessFile, const QString& metalnessFile, int roughnessChannel,
+                            int metalnessChannel, EncodedImage& out, QString& why) {
   QImage roughness;
   QImage metalness;
   if (!roughnessFile.isEmpty() && !readImage(roughnessFile, roughness, why)) {
@@ -125,16 +128,29 @@ bool metallicRoughnessImage(const QString& roughnessFile, const QString& metalne
     why = QStringLiteral("empty image");
     return false;
   }
-  const auto grey = [&size](const QImage& image) {
+  const auto grey = [&size](const QImage& image, int channel) {
     if (image.isNull()) {
       return image;
     }
     const QImage scaled =
         image.size() == size ? image : image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    return scaled.convertToFormat(QImage::Format_Grayscale8);
+    if (channel < 0 || channel > 2) {
+      return scaled.convertToFormat(QImage::Format_Grayscale8);
+    }
+    // The channel as a grey image.
+    const QImage rgb = scaled.convertToFormat(QImage::Format_RGB32);
+    QImage one(size, QImage::Format_Grayscale8);
+    for (int y = 0; y < size.height(); ++y) {
+      const auto* in = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+      uchar* row = one.scanLine(y);
+      for (int x = 0; x < size.width(); ++x) {
+        row[x] = static_cast<uchar>(channel == 0 ? qRed(in[x]) : channel == 1 ? qGreen(in[x]) : qBlue(in[x]));
+      }
+    }
+    return one;
   };
-  const QImage g = grey(roughness);
-  const QImage b = grey(metalness);
+  const QImage g = grey(roughness, roughnessChannel);
+  const QImage b = grey(metalness, metalnessChannel);
   QImage combined(size, QImage::Format_RGB32);
   for (int y = 0; y < size.height(); ++y) {
     const uchar* green = g.isNull() ? nullptr : g.constScanLine(y);
@@ -150,9 +166,13 @@ bool metallicRoughnessImage(const QString& roughnessFile, const QString& metalne
 }
 
 // How a material's images lie on a body (render::MaterialData): planar
-// along Z, else box, turned and scaled; as the rendered view projects them.
+// along Z, else box, turned and scaled; as the rendered view projects them;
+// or by the mesh's own texture coordinates (mitcad#1862).
 struct Projection {
   bool planar = false;
+  // By the mesh's own texture coordinates (mitcad#1862) where it has them,
+  // else box.
+  bool uv = false;
   double width = 100.0;
   double height = 100.0;
   double rotation = 0.0;
@@ -189,6 +209,13 @@ class GlbWriter {
 public:
   explicit GlbWriter(double scale) : m_scale(scale) {}
 
+  // A .gltf file's (mitcad#1826): texture images as files beside it,
+  // <stem>_texture<n>.png or .jpg (in `files`), not in the buffer.
+  void external(const QString& stem) {
+    m_external = true;
+    m_stem = stem;
+  }
+
   // A material's index (equal materials share one).
   int material(const render::MaterialData& m);
   // The glTF mesh of a body's mesh with its body's material and its faces'.
@@ -198,9 +225,24 @@ public:
     m_sceneNodes.append(static_cast<int>(m_nodes.size()));
     m_nodes.append(entry);
   }
+  // A node that is not one of the scene's roots (a child of another);
+  // its index.
+  int addNode(const QJsonObject& entry) {
+    m_nodes.append(entry);
+    return static_cast<int>(m_nodes.size() - 1);
+  }
+  void sceneNode(int index) { m_sceneNodes.append(index); }
+  int nodeCount() const { return static_cast<int>(m_nodes.size()); }
+  // The .glb file.
   QByteArray finish();
+  // The file's JSON, its buffer at `bufferUri` (empty: the .glb file's
+  // binary chunk).
+  QJsonObject document(const QString& bufferUri) const;
+  const std::vector<char>& binary() const { return m_binary; }
 
   QStringList warnings;
+  // A .gltf file's images beside it (external).
+  std::vector<std::pair<QString, QByteArray>> files;
 
 private:
   int view(const void* data, std::size_t bytes, int target);
@@ -225,6 +267,8 @@ private:
   QHash<QString, int> m_textureIndex;
   std::vector<bool> m_textured;          // per material: it has an image
   std::vector<Projection> m_projections; // per material
+  bool m_external = false;
+  QString m_stem;
 };
 
 int GlbWriter::view(const void* data, std::size_t bytes, int target) {
@@ -293,8 +337,19 @@ int GlbWriter::texture(const QString& key, const QString& what,
   QString why;
   int index = -1;
   if (make(image, why) && !image.bytes.isEmpty()) {
-    const int at = view(image.bytes.constData(), static_cast<std::size_t>(image.bytes.size()), 0);
-    m_images.append(QJsonObject{{QStringLiteral("bufferView"), at}, {QStringLiteral("mimeType"), image.mime}});
+    if (m_external) {
+      const QString name = QStringLiteral("%1_texture%2.%3")
+                               .arg(m_stem)
+                               .arg(m_images.size() + 1)
+                               .arg(image.mime == QLatin1String("image/jpeg") ? QStringLiteral("jpg")
+                                                                              : QStringLiteral("png"));
+      files.emplace_back(name, image.bytes);
+      m_images.append(QJsonObject{{QStringLiteral("uri"), QString::fromLatin1(QUrl::toPercentEncoding(name))},
+                                  {QStringLiteral("mimeType"), image.mime}});
+    } else {
+      const int at = view(image.bytes.constData(), static_cast<std::size_t>(image.bytes.size()), 0);
+      m_images.append(QJsonObject{{QStringLiteral("bufferView"), at}, {QStringLiteral("mimeType"), image.mime}});
+    }
     m_textures.append(QJsonObject{{QStringLiteral("sampler"), 0},
                                   {QStringLiteral("source"), static_cast<int>(m_images.size() - 1)}});
     index = static_cast<int>(m_textures.size() - 1);
@@ -329,13 +384,22 @@ int GlbWriter::material(const render::MaterialData& m) {
   if (!m.roughnessMap.empty() || !m.metalnessMap.empty()) {
     const QString rough = text(m.roughnessMap);
     const QString metal = text(m.metalnessMap);
+    const int roughChannel = m.roughnessChannel;
+    const int metalChannel = m.metalnessChannel;
+    // One image with roughness in green and metalness in blue (an imported
+    // glTF file's, mitcad#1862) is glTF's own: written as it is.
+    const bool packed = rough == metal && roughChannel == 1 && metalChannel == 2;
     const int combined = texture(
-        QStringLiteral("metallic-roughness|%1|%2").arg(rough, metal), rough.isEmpty() ? metal : rough,
-        [&rough, &metal](EncodedImage& image, QString& why) { return metallicRoughnessImage(rough, metal, image, why); });
+        QStringLiteral("metallic-roughness|%1|%2|%3|%4").arg(rough, metal).arg(roughChannel).arg(metalChannel),
+        rough.isEmpty() ? metal : rough, [&](EncodedImage& image, QString& why) {
+          return packed ? encodedImage(rough, image, why)
+                        : metallicRoughnessImage(rough, metal, roughChannel, metalChannel, image, why);
+        });
     if (combined >= 0) {
-      // The maps replace the values.
-      roughness = rough.isEmpty() ? roughness : 1.0;
-      metallic = metal.isEmpty() ? metallic : 1.0;
+      // The maps replace the values, scaled by their factors (mitcad#1874),
+      // which glTF's factors are.
+      roughness = rough.isEmpty() ? roughness : static_cast<double>(m.roughnessFactor);
+      metallic = metal.isEmpty() ? metallic : static_cast<double>(m.metalnessFactor);
       pbr.insert(QStringLiteral("metallicRoughnessTexture"), QJsonObject{{QStringLiteral("index"), combined}});
       textured = true;
     }
@@ -343,6 +407,9 @@ int GlbWriter::material(const render::MaterialData& m) {
   pbr.insert(QStringLiteral("metallicFactor"), std::clamp(metallic, 0.0, 1.0));
   pbr.insert(QStringLiteral("roughnessFactor"), std::clamp(roughness, 0.0, 1.0));
   QJsonObject entry{{QStringLiteral("pbrMetallicRoughness"), pbr}, {QStringLiteral("doubleSided"), true}};
+  if (!m.name.empty()) {
+    entry.insert(QStringLiteral("name"), text(m.name));
+  }
   const auto map = [&](const std::string& path, const char* kind, const char* member) {
     if (path.empty()) {
       return;
@@ -370,13 +437,14 @@ int GlbWriter::material(const render::MaterialData& m) {
   Projection projection;
   if (textured) {
     projection.planar = m.texturePlanar;
+    projection.uv = m.textureUv;
     projection.width = m.textureSize[0] > 0.0f ? static_cast<double>(m.textureSize[0]) : 100.0;
     projection.height = m.textureSize[1] > 0.0f ? static_cast<double>(m.textureSize[1]) : 100.0;
     projection.rotation = m.textureRotation;
   }
   const QString key = QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact)) +
                       (textured ? QStringLiteral("|%1|%2|%3|%4")
-                                      .arg(projection.planar ? 1 : 0)
+                                      .arg(projection.uv ? 2 : projection.planar ? 1 : 0)
                                       .arg(projection.width)
                                       .arg(projection.height)
                                       .arg(projection.rotation)
@@ -455,6 +523,9 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
       // coordinates by the triangle's facing (a box projection changes
       // between neighbouring triangles).
       const Projection& projection = m_projections[static_cast<std::size_t>(material)];
+      // The mesh's own texture coordinates (mitcad#1862), glTF's v down
+      // the image from its top.
+      const bool ownUvs = projection.uv && data.uvs.size() == vertices * 2;
       std::vector<float> points;
       std::vector<float> directions;
       std::vector<float> uv;
@@ -481,7 +552,10 @@ int GlbWriter::mesh(const render::MeshData& data, int bodyMaterial,
           if (hasNormals) {
             directions.insert(directions.end(), {data.normals[at], data.normals[at + 1], data.normals[at + 2]});
           }
-          const std::array<float, 2> st = project(projection, p, facing);
+          const std::array<float, 2> st =
+              ownUvs ? std::array<float, 2>{data.uvs[static_cast<std::size_t>(corner[k]) * 2],
+                                            1.0f - data.uvs[static_cast<std::size_t>(corner[k]) * 2 + 1]}
+                     : project(projection, p, facing);
           uv.insert(uv.end(), {st[0], st[1]});
         }
       }
@@ -512,7 +586,7 @@ void appendUint32(QByteArray& out, std::uint32_t value) {
   out.append(bytes, 4);
 }
 
-QByteArray GlbWriter::finish() {
+QJsonObject GlbWriter::document(const QString& bufferUri) const {
   QJsonObject scene;
   if (!m_sceneNodes.isEmpty()) {
     scene.insert(QStringLiteral("nodes"), m_sceneNodes);
@@ -542,10 +616,17 @@ QByteArray GlbWriter::finish() {
                                                                     {QStringLiteral("wrapT"), kRepeat}}});
   }
   if (!m_binary.empty()) {
-    root.insert(QStringLiteral("buffers"),
-                QJsonArray{QJsonObject{{QStringLiteral("byteLength"), static_cast<qint64>(m_binary.size())}}});
+    QJsonObject buffer{{QStringLiteral("byteLength"), static_cast<qint64>(m_binary.size())}};
+    if (!bufferUri.isEmpty()) {
+      buffer.insert(QStringLiteral("uri"), bufferUri);
+    }
+    root.insert(QStringLiteral("buffers"), QJsonArray{buffer});
   }
-  QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
+  return root;
+}
+
+QByteArray GlbWriter::finish() {
+  QByteArray json = QJsonDocument(document(QString())).toJson(QJsonDocument::Compact);
   while (json.size() % 4 != 0) {
     json.append(' ');
   }
@@ -603,6 +684,38 @@ QJsonArray occurrenceItems(const QJsonArray& occurrences, const QString& prefix,
   return items;
 }
 
+// The glTF mesh of a body's mesh and looks, made once per mesh and looks
+// (`meshes`); -1 for a body without triangles.
+int bodyMesh(GlbWriter& writer, QHash<QString, int>& meshes, const PageBody& body) {
+  if (!body.mesh || body.mesh->indices.empty()) {
+    return -1;
+  }
+  const int material = writer.material(body.material);
+  std::vector<std::pair<int, const render::FaceMaterial*>> faces;
+  QString key = QStringLiteral("%1|%2").arg(reinterpret_cast<quintptr>(body.mesh.get())).arg(material);
+  for (const render::FaceMaterial& group : body.faces) {
+    const int own = writer.material(group.material);
+    faces.emplace_back(own, &group);
+    key += QStringLiteral("|%1:").arg(own);
+    for (const std::uint32_t face : group.faces) {
+      key += QString::number(face) + QLatin1Char(',');
+    }
+  }
+  int mesh = meshes.value(key, -2);
+  if (mesh == -2) {
+    mesh = writer.mesh(*body.mesh, material, faces);
+    meshes.insert(key, mesh);
+  }
+  return mesh;
+}
+
+// A row-major 3 x 4 placement as glTF's column-major matrix, the
+// translation scaled from mm.
+QJsonArray columnMajor(const std::array<double, 12>& m, double scale) {
+  return numbers({m[0], m[4], m[8], 0.0, m[1], m[5], m[9], 0.0, m[2], m[6], m[10], 0.0, m[3] * scale, m[7] * scale,
+                  m[11] * scale, 1.0});
+}
+
 } // namespace
 
 PageGlb pageGlb(const std::vector<PageBody>& bodies, double scale) {
@@ -611,26 +724,7 @@ PageGlb pageGlb(const std::vector<PageBody>& bodies, double scale) {
   QHash<QString, int> meshes; // by mesh and look
   int count = 0;
   for (const PageBody& body : bodies) {
-    if (!body.mesh || body.mesh->indices.empty()) {
-      result.nodes << QString();
-      continue;
-    }
-    const int material = writer.material(body.material);
-    std::vector<std::pair<int, const render::FaceMaterial*>> faces;
-    QString key = QStringLiteral("%1|%2").arg(reinterpret_cast<quintptr>(body.mesh.get())).arg(material);
-    for (const render::FaceMaterial& group : body.faces) {
-      const int own = writer.material(group.material);
-      faces.emplace_back(own, &group);
-      key += QStringLiteral("|%1:").arg(own);
-      for (const std::uint32_t face : group.faces) {
-        key += QString::number(face) + QLatin1Char(',');
-      }
-    }
-    int mesh = meshes.value(key, -2);
-    if (mesh == -2) {
-      mesh = writer.mesh(*body.mesh, material, faces);
-      meshes.insert(key, mesh);
-    }
+    const int mesh = bodyMesh(writer, meshes, body);
     if (mesh < 0) {
       result.nodes << QString();
       continue;
@@ -643,10 +737,7 @@ PageGlb pageGlb(const std::vector<PageBody>& bodies, double scale) {
                                                             {QStringLiteral("occurrence"), body.occurrence}}}};
     if (!isIdentity(body.transform)) {
       // Column-major, the translation in model units.
-      const std::array<double, 12>& m = body.transform;
-      node.insert(QStringLiteral("matrix"),
-                  numbers({m[0], m[4], m[8], 0.0, m[1], m[5], m[9], 0.0, m[2], m[6], m[10], 0.0, m[3] * scale,
-                           m[7] * scale, m[11] * scale, 1.0}));
+      node.insert(QStringLiteral("matrix"), columnMajor(body.transform, scale));
     }
     writer.node(node);
     result.nodes << name;
@@ -678,6 +769,127 @@ QJsonArray pageTree(const QString& rootName, const QJsonArray& occurrences, cons
                                 {QStringLiteral("name"), rootName},
                                 {QStringLiteral("nodes"), QJsonArray::fromStringList(own)},
                                 {QStringLiteral("children"), children}}};
+}
+
+GltfFile gltfFile(const QString& rootName, const std::vector<GltfOccurrence>& occurrences,
+                  const std::vector<PageBody>& bodies, bool binary, const QString& stem) {
+  // Metres per mm: glTF's unit is the metre.
+  constexpr double kScale = 0.001;
+  GltfFile result;
+  GlbWriter writer(kScale);
+  if (!binary) {
+    writer.external(stem);
+  }
+  QHash<QString, int> meshes;
+  // The bodies each occurrence places directly, by its path.
+  QHash<QString, std::vector<std::size_t>> placedBy;
+  for (std::size_t i = 0; i < bodies.size(); ++i) {
+    placedBy[bodies[i].occurrence].push_back(i);
+  }
+  QSet<QString> reached;
+  // A body's node (in the body's own coordinates unless `placed`, then by
+  // its own transform); -1 for a body without triangles.
+  const auto bodyNode = [&](const PageBody& body, bool placed) {
+    const int mesh = bodyMesh(writer, meshes, body);
+    if (mesh < 0) {
+      return -1;
+    }
+    QJsonObject node{{QStringLiteral("name"), body.name.isEmpty() ? body.uid : body.name},
+                     {QStringLiteral("mesh"), mesh},
+                     {QStringLiteral("extras"), QJsonObject{{QStringLiteral("body"), body.uid},
+                                                            {QStringLiteral("body_name"), body.name},
+                                                            {QStringLiteral("occurrence"), body.occurrence}}}};
+    if (placed && !isIdentity(body.transform)) {
+      node.insert(QStringLiteral("matrix"), columnMajor(body.transform, kScale));
+    }
+    ++result.bodies;
+    result.triangles += static_cast<qint64>(body.mesh->indices.size() / 3);
+    return writer.addNode(node);
+  };
+  // An occurrence's node with its bodies' and its occurrences' below it;
+  // -1 when it holds none.
+  std::function<int(const GltfOccurrence&, int)> occurrenceNode = [&](const GltfOccurrence& occurrence,
+                                                                        int depth) {
+    if (depth > 64) {
+      return -1; // a guard against cycles in loaded data
+    }
+    reached.insert(occurrence.path);
+    QJsonArray children;
+    for (const std::size_t i : placedBy.value(occurrence.path)) {
+      const int node = bodyNode(bodies[i], false);
+      if (node >= 0) {
+        children.append(node);
+      }
+    }
+    for (const GltfOccurrence& child : occurrence.children) {
+      const int node = occurrenceNode(child, depth + 1);
+      if (node >= 0) {
+        children.append(node);
+      }
+    }
+    if (children.isEmpty()) {
+      return -1;
+    }
+    QJsonObject node{{QStringLiteral("name"), occurrence.name},
+                     {QStringLiteral("children"), children},
+                     {QStringLiteral("extras"),
+                      QJsonObject{{QStringLiteral("occurrence"), occurrence.path},
+                                  {QStringLiteral("occurrence_name"), occurrence.occurrenceName},
+                                  {QStringLiteral("component"), occurrence.component}}}};
+    if (!isIdentity(occurrence.transform)) {
+      node.insert(QStringLiteral("matrix"), columnMajor(occurrence.transform, kScale));
+    }
+    return writer.addNode(node);
+  };
+  QJsonArray top;
+  reached.insert(QString());
+  for (const std::size_t i : placedBy.value(QString())) {
+    const int node = bodyNode(bodies[i], false);
+    if (node >= 0) {
+      top.append(node);
+    }
+  }
+  for (const GltfOccurrence& occurrence : occurrences) {
+    const int node = occurrenceNode(occurrence, 0);
+    if (node >= 0) {
+      top.append(node);
+    }
+  }
+  // Bodies of occurrences the tree does not have: where the design places
+  // them.
+  for (const PageBody& body : bodies) {
+    if (!reached.contains(body.occurrence)) {
+      const int node = bodyNode(body, true);
+      if (node >= 0) {
+        top.append(node);
+      }
+    }
+  }
+  // The root turns the design's Z up into glTF's Y up: (x, y, z) becomes
+  // (x, z, -y).
+  QJsonObject root{{QStringLiteral("name"), rootName},
+                   {QStringLiteral("matrix"), numbers({1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1})}};
+  if (!top.isEmpty()) {
+    root.insert(QStringLiteral("children"), top);
+  }
+  writer.sceneNode(writer.addNode(root));
+  result.nodes = writer.nodeCount();
+  result.warnings = writer.warnings;
+  if (binary) {
+    result.data = writer.finish();
+    return result;
+  }
+  const QString bin = stem + QStringLiteral(".bin");
+  const bool hasBuffer = !writer.binary().empty();
+  result.data = QJsonDocument(writer.document(hasBuffer ? QString::fromLatin1(QUrl::toPercentEncoding(bin)) : QString()))
+                    .toJson(QJsonDocument::Indented);
+  if (hasBuffer) {
+    result.files.emplace_back(bin, QByteArray(writer.binary().data(), static_cast<qsizetype>(writer.binary().size())));
+  }
+  for (auto& file : writer.files) {
+    result.files.push_back(std::move(file));
+  }
+  return result;
 }
 
 } // namespace mitcad::web

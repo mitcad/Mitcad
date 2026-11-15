@@ -51,7 +51,9 @@ pub enum Start<P = ParamId> {
     /// `flip`); the extent is measured from there.
     Offset { offset: P },
     /// The profile projected along the sketch normal onto a plane or a
-    /// planar face, moved `offset` along its normal.
+    /// planar face, moved `offset` along its normal; or onto a curved face
+    /// (mitcad#1848) moved `offset` along the sketch normal, each side then
+    /// running its distance from the projected outline.
     Object {
         object: Box<ExtentObject>,
         #[serde(default = "Default::default", skip_serializing_if = "Option::is_none")]
@@ -594,6 +596,28 @@ pub(crate) fn profile_regions<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     profiles: &[ProfileRef],
 ) -> Result<(Arc<SketchOutput>, Vec<ProfileRegion>), String> {
+    let found = profile_regions_on_faces(ctx, profiles)?;
+    // A sketch on a curved face's profiles lie on the face (mitcad#1768):
+    // Extrude and Emboss take them, along the face's normals.
+    if found.0.developed.is_some() {
+        let name = profiles
+            .first()
+            .map(|p| ctx.feature_name(p.sketch))
+            .unwrap_or_default();
+        return Err(format!(
+            "{name} lies on a curved face: only Extrude and Emboss take its profiles"
+        ));
+    }
+    Ok(found)
+}
+
+/// [`profile_regions`] of a sketch on a plane or on a cylindrical or
+/// conical face (mitcad#1768): Extrude and Emboss raise or sink the latter's
+/// along the face's normals (`SketchOutput::developed`).
+pub(crate) fn profile_regions_on_faces<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    profiles: &[ProfileRef],
+) -> Result<(Arc<SketchOutput>, Vec<ProfileRegion>), String> {
     let sketch_uid = profiles.first().ok_or("no profiles selected")?.sketch;
     let sketch = ctx.sketch(sketch_uid)?;
     let name = ctx.feature_name(sketch_uid);
@@ -743,7 +767,7 @@ impl FeatureInfo for ExtrudeDef {
         if let Start::Object { object, .. } = &self.start
             && !object.is_planar()
         {
-            return Err("an extrusion starts from a plane or a planar face, not a body".to_owned());
+            return Err("an extrusion starts from a plane or a face, not a body".to_owned());
         }
         if let Some(thin) = &self.thin
             && thin.side2.is_some()
@@ -920,6 +944,11 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
             return apply_operation(ctx, self.operation, participants, tool, "extrusion");
         }
         let (sketch, regions) = self.sketch_regions(ctx)?;
+        // A sketch on a cylindrical or conical face (mitcad#1768): its
+        // profiles raised or sunk along the face's normals.
+        if let Some(development) = sketch.developed.clone() {
+            return self.developed_output(ctx, &development, &regions);
+        }
         if let (Some(face), Extent::Distance { distance, .. }) = (&self.wrap, &self.extent) {
             // Wrapped onto a cylinder or a cone (mitcad#473), as an emboss.
             let d = ctx.param(*distance)?;
@@ -1134,6 +1163,48 @@ impl ExtrudeDef {
         scope.would_cut(ctx, &discovery, &tool)
     }
 
+    /// The profiles of a sketch on a cylindrical or conical face
+    /// (mitcad#1768) raised out of the material by the distance along the
+    /// face's normals, or sunk into it with `flip` or a negative distance,
+    /// as a wrap: a distance without a taper, from the face, along its
+    /// normals; no thin walls, wrap, direction or cut scope.
+    fn developed_output<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        development: &crate::developed::Development,
+        regions: &[ProfileRegion],
+    ) -> Result<FeatureOutput<K::Shape>, String> {
+        let Extent::Distance {
+            distance,
+            taper: None,
+        } = &self.extent
+        else {
+            return Err(
+                "an extrusion of a sketch on a curved face goes a distance along the face's \
+                 normals, without a taper"
+                    .to_owned(),
+            );
+        };
+        if self.thin.is_some()
+            || self.wrap.is_some()
+            || self.direction.is_some()
+            || self.cut_scope.is_some()
+            || !matches!(self.start, Start::ProfilePlane)
+        {
+            return Err(
+                "an extrusion of a sketch on a curved face starts on the face and goes along \
+                 its normals: no thin walls, wrap, direction, other start or cut scope"
+                    .to_owned(),
+            );
+        }
+        let d = ctx.param(*distance)?;
+        let raise = (d > 0.0) != self.flip;
+        let participants = participant_bodies(ctx, self.operation, &self.participants)?;
+        let tool =
+            super::developed::wrapped_regions(ctx, development, regions, d.abs(), raise, 0.0)?;
+        apply_operation(ctx, self.operation, participants, tool, "extrusion")
+    }
+
     /// The evaluated sketch and the regions the profiles select (none for
     /// walls along curves).
     fn sketch_regions<K: Kernel>(
@@ -1142,7 +1213,8 @@ impl ExtrudeDef {
     ) -> Result<(Arc<SketchOutput>, Vec<ProfileRegion>), String> {
         match self.wall_curves() {
             Some(curves) => Ok((ctx.sketch(curves.sketch)?, Vec::new())),
-            None => profile_regions(ctx, &self.profiles),
+            // A sketch on a curved face's too (mitcad#1768).
+            None => profile_regions_on_faces(ctx, &self.profiles),
         }
     }
 

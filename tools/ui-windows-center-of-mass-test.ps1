@@ -5,11 +5,12 @@
 # the build VM (tools/ui-windows-lib.ps1 says how the input is posted), as
 # tools/ui-center-of-mass-test.sh on Linux, on the same design: Body1
 # (F2.b0), a 30 x 20 x 10 block of aluminum in the root, and Body2 (F3.b0)
-# below it in Component1:1 (O1), steel for lack of a material.
+# below it in Component1:1 (O1), of the design's default material, steel
+# (a body without a material would be left out, mitcad#1817).
 #   1. Center of Mass (F8 here) draws the marker at the total center of
 #      mass of the `properties` query (mitcad-cli info --properties, within
 #      0.000001 mm); the browser's Center of Mass row under Origin, its
-#      tooltip with the coordinates, the mass and the steel note.
+#      tooltip with the coordinates and the mass, no note of bodies left out.
 #   2. Component1:1 moved 20 mm along X with Move/Copy from its row's menu:
 #      the marker moves by 20 mm times Body2's share of the mass.
 #   3. The row's light bulb hides and shows it; hidden, saved and opened
@@ -47,7 +48,8 @@ Set-Content -Encoding ascii $modelJson @'
   {"cmd": "add_feature", "def": {"type": "extrude",
     "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
     "extent": {"type": "distance", "distance": -4}, "operation": "new_component"}},
-  {"cmd": "set_body_material", "uid": "F2.b0", "material": "aluminum"}
+  {"cmd": "set_body_material", "uid": "F2.b0", "material": "aluminum"},
+  {"cmd": "set_component_material", "component": "C0", "material": "steel"}
 ]
 '@
 $output = & $Cli run $modelJson --save $design 2>&1
@@ -110,11 +112,10 @@ Ui-ExpectNew 'Center of Mass added' 'the marker added'
 Ui-ExpectNew 'Center of Mass: at ' 'its place worked out'
 Expect-Center $total[0] $total[1] $total[2] 'the marker at the properties query''s total'
 Ui-ExpectNew 'Center of Mass drawn: ' 'drawn in the view'
-Ui-ExpectNew ', 2 bodies, 1 without a material (shown)' 'two bodies, Body2 steel by default'
-Ui-ExpectNew '; 1 body without a material counted as steel' 'the tooltip names the steel body'
+Ui-ExpectNew ', 2 bodies, 0 without a material (shown)' 'two bodies, Body2 of the design''s default steel'
 $tip = "$(Ui-LastLineWith 'Center of Mass: at ' -Start)" -replace '^.*; tooltip: ', ''
-if ($tip -notmatch '^\(-?[0-9.]+, -?[0-9.]+, -?[0-9.]+\) mm, [0-9.]+ kg; 1 body') {
-  Ui-Fail "the tooltip is not the coordinates, the mass and the steel note: '$tip'"
+if ($tip -notmatch '^\(-?[0-9.]+, -?[0-9.]+, -?[0-9.]+\) mm, [0-9.]+ kg\s*$') {
+  Ui-Fail "the tooltip is not the coordinates and the mass alone: '$tip'"
 }
 Write-Host "ok   the tooltip: $tip"
 Ui-ExpectLog 'Browser Root/Center of Mass at' 'the Center of Mass row in the browser'

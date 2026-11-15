@@ -15,6 +15,7 @@
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
@@ -25,6 +26,10 @@
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
 #include "mitcad/geometry/target.hpp"
+
+namespace mitcad::geometry {
+struct HelixSweepSpec;
+}
 
 namespace mitcad::geometry::detail {
 
@@ -157,5 +162,38 @@ Bnd_Box bounds_of(const TopoDS_Shape& shape);
 
 // True when the shape has a face carrying exactly this name.
 bool has_face_named(const Shape& shape, const std::string& name);
+
+// A wire (open or closed) moved by Mitcad's helix motion (path_sweep.cpp,
+// mitcad#1797): the spec's axis, pitch, revolutions, hand, growth (out
+// along the direction from the axis towards the wire's middle) and ends;
+// its regions, bodies and seam shift are not used. The faces swept, without
+// caps, and the faces each of the wire's edges swept.
+struct ScrewedWire {
+  TopoDS_Shape shape;
+  std::vector<std::pair<TopoDS_Edge, std::vector<TopoDS_Shape>>> faces;
+};
+ScrewedWire screwed_wire(const TopoDS_Wire& wire, const HelixSweepSpec& spec);
+
+// True when the target is a face that is not planar: an extrusion's start
+// the profile is projected onto (mitcad#1848).
+bool is_curved_face(const Target& target);
+
+// One side of an extrusion that starts from the curved face `start`
+// (extrude.cpp, mitcad#1848). The profile is projected onto the face (all
+// its pieces; its surface continued past its edges with `extend`), moved by
+// the start's offset along the sketch `normal`, along `scan`: the
+// extrusion's direction or its reverse, whichever runs from the profile's
+// side of the face towards it, so that each part of the profile meets the
+// face where `scan` first reaches it. The side's solid lies between that
+// surface moved `from` along `along` (0, or where the other side of two
+// ends: mitcad#765) and the surface moved by the side's distance along it,
+// or up to the side's target (along `scan` only, from the face itself):
+// every line along the extrusion through the profile runs the same length
+// in it. Faces on the near surface are named `near`, on the far one `far`.
+// Throws, naming the face in its places, when the face does not lie under
+// the whole profile.
+ShapePtr curved_start_side(const std::string& feature, const SweepFace& face, const Target& start,
+                           const gp_Dir& normal, const gp_Dir& scan, const ExtrudeSide& side,
+                           const gp_Dir& along, double from, const NameList& near, const NameList& far);
 
 } // namespace mitcad::geometry::detail

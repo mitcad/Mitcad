@@ -1,0 +1,17 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Convert to Features (mitcad#1815), tools/ui-convert-features-test.sh and its Windows and macOS twins: Plate (C1, Plate:1 O1, Box1 F1: 400 x 400 x 20, grounded); Member (C2, Member:1 O2, its derived part F2) placed from the runner's library (LIBRARY_URL), 1000 long, then joined standing on the plate's top face by Joint1 (F3, rigid). 3 200 000 + 98 x 48 x 1000 = 7 904 000 mm3."},
+  {"cmd": "create_component", "name": "Plate"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [-200, -200], "length": 400, "width": 400, "height": 20, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "ground_occurrence", "occurrence": "Plate:1"},
+  {"cmd": "build_place", "part": {"library": "test-timber", "url": "LIBRARY_URL", "rev": "HEAD", "component": "timber-convert-test"},
+   "at": {"point": [0, 0, 300]}, "length": 1000, "name": "Member"},
+  {"cmd": "ground_occurrence", "occurrence": "Member:1", "grounded": false},
+  {"cmd": "add_joint", "kind": "rigid", "flip": true,
+    "a": {"occurrence": "Member:1", "geometry": {"mount": "F2:mount(end_a)"}},
+    "b": {"occurrence": "Plate:1", "geometry": {"body": "F1.b0", "face": "F1:top"}}},
+  {"expect": {"query": {"query": "joints"}, "result": {"joints": [{"name": "Joint1", "state": "placed"}]}}},
+  {"expect": {"bodies": 2}}
+]

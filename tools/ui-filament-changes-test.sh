@@ -15,7 +15,9 @@
 # Remove, Undo and Redo, the normal look after the panel, and Filament
 # Change Here… on the plane's and the face's context menu, which opens the
 # window with it picked. The design saved keeps the changes at the plane
-# and the face by their references.
+# and the face by their references. Then (mitcad#1842) Filament Change on
+# an event while the panel removes the one above it stays on its event,
+# and closes when its own is removed.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-filament-changes-test.sh

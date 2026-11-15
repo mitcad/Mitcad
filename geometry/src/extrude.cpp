@@ -321,13 +321,15 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
     throw std::invalid_argument("the extrusion direction lies in the sketch plane");
   }
   return detail::run("extrude", [&] {
-    // The start: a plane parallel to the sketch, or an oblique plane.
+    // The start: a plane parallel to the sketch, an oblique plane, or a
+    // curved face the profile is projected onto (mitcad#1848).
     double offset = spec.start_offset;
     std::optional<gp_Pln> oblique;
-    if (spec.start) {
-      if (spec.start->kind == Target::Kind::Body) {
-        throw std::invalid_argument("an extrusion cannot start from a body");
-      }
+    if (spec.start && spec.start->kind == Target::Kind::Body) {
+      throw std::invalid_argument("an extrusion cannot start from a body");
+    }
+    const bool curved = spec.start && detail::is_curved_face(*spec.start);
+    if (spec.start && !curved) {
       const gp_Pln plane = detail::target_plane(*spec.start, normal);
       if (plane.Axis().Direction().IsParallel(normal, 1.0e-9)) {
         offset = gp_Vec(spec.frame.origin, plane.Location()).Dot(gp_Vec(normal));
@@ -339,11 +341,35 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
     if (oblique && taper) {
       throw std::invalid_argument("a tapered extrusion needs a start plane parallel to the sketch");
     }
+    if (curved && taper) {
+      throw std::invalid_argument("a tapered extrusion cannot start from a curved face");
+    }
+    // A curved start is reached along the direction from the profile's
+    // side of the face: along the extrusion when the face's middle lies
+    // ahead of the sketch plane, else against it. Ahead is measured along
+    // the sketch normal, so that a direction off the normal does not mix in
+    // where the sketch's origin lies in its plane: a face the projection
+    // crosses twice (a whole cylinder) is met where it faces the profile
+    // (mitcad#1852).
+    gp_Dir scan = spec.direction;
+    if (curved) {
+      Bnd_Box box;
+      for (const TopoDS_Face& face : detail::target_faces(*spec.start)) {
+        box.Add(detail::bounds_of(face));
+      }
+      double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+      box.Get(x0, y0, z0, x1, y1, z1);
+      const gp_Pnt middle((x0 + x1) / 2.0, (y0 + y1) / 2.0, (z0 + z1) / 2.0);
+      const double ahead = gp_Vec(spec.frame.origin, middle).Dot(gp_Vec(normal));
+      if (ahead * spec.direction.Dot(normal) < 0.0) {
+        scan.Reverse();
+      }
+    }
     gp_Trsf to_start;
     to_start.SetTranslation(gp_Vec(normal) * offset);
 
     std::vector<ShapePtr> parts;
-    const bool one_prism = !oblique && !taper && !spec.side1.target &&
+    const bool one_prism = !oblique && !curved && !taper && !spec.side1.target &&
                            (!two || (!spec.side2->target && same_wall(spec.side1.thin, spec.side2->thin)));
     if (one_prism) {
       // Both sides in one prism; with two sides the far cap of side one is
@@ -380,6 +406,17 @@ ShapePtr extrude_feature(const ExtrudeFeatureSpec& spec) {
         for (const detail::SweepFace& face : profile_faces(spec, side, taper)) {
           const NameList near = detail::cap_names(spec.feature, two ? "mid" : "start", face);
           const NameList far = detail::cap_names(spec.feature, k == 0 && two ? "start" : "end", face);
+          if (curved) {
+            // From the face, or from where the short side ends, its cap
+            // there named as that side's far cap (mitcad#765).
+            const bool after_short = short_side >= 0;
+            const double from = after_short ? -(short_side == 0 ? spec.side1 : *spec.side2).distance : 0.0;
+            const NameList begin =
+                after_short ? detail::cap_names(spec.feature, short_side == 0 ? "start" : "end", face) : near;
+            parts.push_back(detail::curved_start_side(spec.feature, face, *spec.start, normal, scan, side, along,
+                                                      from, begin, far));
+            continue;
+          }
           ShapePtr part = oblique ? oblique_side(spec.feature, face, *oblique, side, along, near, far)
                                   : parallel_side(spec.feature, detail::transformed(face, to_start),
                                                   side, along, near, far);

@@ -54,6 +54,8 @@ const QVector<ActivatingCommand>& activatingCommands() {
       {QStringLiteral("solid.cylinder"), {QStringLiteral("at")}},
       {QStringLiteral("solid.sphere"), {QStringLiteral("at")}},
       {QStringLiteral("solid.torus"), {QStringLiteral("at")}},
+      // Fill Cavity (mitcad#1818): the body it fills and its seed face.
+      {QStringLiteral("solid.fill_cavity"), {QStringLiteral("body"), QStringLiteral("seed")}},
   };
   return table;
 }

@@ -114,9 +114,13 @@
 #include "../browser/ActivateQuestion.hpp"
 // Preferences › General › Show used sketches under their features (mitcad#1699).
 #include "../browser/BrowserPreferences.hpp"
+// Preferences › Assembly › When the picks are in another component than
+// the active one (mitcad#1856).
+#include "../browser/JointHolderQuestion.hpp"
 // General: show the version in the view (mitcad#1209).
 #include "VersionWatermark.hpp"
 #include "OriginPreference.hpp"
+#include "SelectionLook.hpp"
 #include "SmallCirclesPreference.hpp"
 
 namespace mitcad {
@@ -310,6 +314,10 @@ const PreferencePage kPreferencePages[] = {
     // the Supplier filters start with (mitcad#950).
     {"suppliers", QT_TRANSLATE_NOOP("View", "Suppliers"),
      "supplier suppliers shop shops region country product link links part number filter buy"},
+    // Joints whose picks lie under another component than the active one
+    // (mitcad#1856).
+    {"assembly", QT_TRANSLATE_NOOP("View", "Assembly"),
+     "assembly joint joints rigid_group constraint component active holds picks ask"},
 };
 
 // The pages whose list takes the page's height: the folder lists
@@ -1797,6 +1805,37 @@ void ViewController::showPreferences(const QString& page) {
     connect(dialog.get(), &QDialog::accepted, suppliersBox, &SupplierPreferencesBox::apply);
   }
   groups.insert(QStringLiteral("suppliers"), suppliersBox);
+  // Assembly (mitcad#1856): where Joint, As-Built Joint, Rigid Group and
+  // Assembly Constraint go when their picks lie under another component
+  // than the active one: Ask (the question after the pick), the component
+  // that holds the picks, or the active one. The question's Don't ask
+  // again sets it; Ask asks again. Saved when the dialog is accepted, at
+  // once in the Settings window.
+  QWidget* assemblyBox = section(tr("Assembly"));
+  auto* assemblyForm = new QFormLayout(assemblyBox);
+  auto* jointComponent = new QComboBox;
+  jointComponent->setObjectName(QStringLiteral("preferencesJointComponent"));
+  for (const JointHolderChoice choice : {JointHolderChoice::Ask, JointHolderChoice::Holder, JointHolderChoice::Active}) {
+    jointComponent->addItem(jointHolderChoiceText(choice), jointHolderChoiceId(choice));
+  }
+  jointComponent->setCurrentIndex(std::max(0, jointComponent->findData(jointHolderChoiceId(jointHolderPreference()))));
+  jointComponent->setToolTip(tr("Where a joint goes when its picks lie outside the active component"));
+  assemblyForm->addRow(tr("When the picks are in another component than the active one:"), jointComponent);
+  const auto applyJointComponent = [jointComponent] {
+    const JointHolderChoice chosen = jointHolderChoiceOf(jointComponent->currentData().toString());
+    if (chosen == jointHolderPreference()) {
+      return;
+    }
+    saveJointHolderPreference(chosen);
+    qDebug().noquote() << QStringLiteral("Preferences: when the picks are in another component %1")
+                              .arg(jointHolderChoiceId(chosen));
+  };
+  if (window != nullptr) {
+    connect(jointComponent, &QComboBox::currentIndexChanged, host, saving(applyJointComponent));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, jointComponent, applyJointComponent);
+  }
+  groups.insert(QStringLiteral("assembly"), assemblyBox);
 
   QWidget* navigationBox = section(tr("Navigation"));
   auto* navigationLayout = new QVBoxLayout(navigationBox);
@@ -2012,7 +2051,76 @@ void ViewController::showPreferences(const QString& page) {
     background->addItem(name);
   }
   background->setCurrentIndex(int(m_settings.background));
-  display->addRow(window != nullptr ? tr("View background:") : tr("Environment:"), background);
+  // Selection color and Selected line width (mitcad#1803, GitHub
+  // mitcad/Mitcad#309) beside the background, the view's other colour, in
+  // one row (Preferences fits a 1366 x 768 screen): the colour the view and
+  // sketch mode draw the selection in, and how wide the selection's and the
+  // hover's lines are. Saved when the dialog is accepted, at once in the
+  // Settings window; every open window draws anew (SelectionLookNotifier).
+  const SelectionLook savedLook = savedSelectionLook();
+  const auto chosenSelectionColor = std::make_shared<QColor>(savedLook.color);
+  auto* selectionColorButton = new QPushButton;
+  selectionColorButton->setObjectName(QStringLiteral("selectionColor"));
+  selectionColorButton->setAutoDefault(false); // Return takes the dialog's OK, not the color dialog
+  selectionColorButton->setToolTip(tr("The color of selected faces, edges and sketch curves in the view"));
+  const auto showSelectionColor = [selectionColorButton, chosenSelectionColor] {
+    selectionColorButton->setIcon(swatchIcon(*chosenSelectionColor));
+    selectionColorButton->setText(chosenSelectionColor->name());
+  };
+  showSelectionColor();
+  auto* lineWidth = new QComboBox;
+  lineWidth->setObjectName(QStringLiteral("selectedLineWidth"));
+  lineWidth->addItem(tr("Thin"), selectedLineWidthId(SelectedLineWidth::Thin));
+  lineWidth->addItem(tr("Normal"), selectedLineWidthId(SelectedLineWidth::Normal));
+  lineWidth->addItem(tr("Thick"), selectedLineWidthId(SelectedLineWidth::Thick));
+  lineWidth->setCurrentIndex(lineWidth->findData(selectedLineWidthId(savedLook.width)));
+  lineWidth->setToolTip(tr("How wide selected and highlighted edges and curves are drawn"));
+  const auto applySelectionLook = [chosenSelectionColor, lineWidth] {
+    SelectionLook chosen;
+    chosen.color = *chosenSelectionColor;
+    chosen.width = selectedLineWidthFromId(lineWidth->currentData().toString()).value_or(SelectedLineWidth::Normal);
+    if (saveSelectionLook(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: selection %1").arg(chosen.describe());
+    }
+  };
+  const QString selectionColorTitle = tr("Selection Color");
+  connect(selectionColorButton, &QPushButton::clicked, host,
+          [host, chosenSelectionColor, showSelectionColor, applySelectionLook, saved, selectionColorTitle,
+           live = window != nullptr] {
+            const QColor picked = dialogColor(*chosenSelectionColor, host, selectionColorTitle);
+            if (!picked.isValid()) {
+              return;
+            }
+            *chosenSelectionColor = QColor(picked.rgb()); // opaque
+            showSelectionColor();
+            qDebug().noquote() << QStringLiteral("Preferences selection color chosen: %1")
+                                      .arg(chosenSelectionColor->name());
+            if (live) {
+              applySelectionLook();
+              saved();
+            }
+          });
+  if (window != nullptr) {
+    connect(lineWidth, &QComboBox::currentIndexChanged, host, saving(applySelectionLook));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, lineWidth, applySelectionLook);
+  }
+  auto* selectionColorLabel = new QLabel(tr("Selection &color:"));
+  selectionColorLabel->setBuddy(selectionColorButton);
+  auto* lineWidthLabel = new QLabel(tr("Selected line width:"));
+  lineWidthLabel->setBuddy(lineWidth);
+  auto* backgroundRow = new QHBoxLayout;
+  backgroundRow->addWidget(background);
+  backgroundRow->addSpacing(12);
+  backgroundRow->addWidget(selectionColorLabel);
+  backgroundRow->addWidget(selectionColorButton);
+  backgroundRow->addSpacing(12);
+  backgroundRow->addWidget(lineWidthLabel);
+  backgroundRow->addWidget(lineWidth);
+  backgroundRow->addStretch(1);
+  auto* backgroundLabel = new QLabel(window != nullptr ? tr("View background:") : tr("Environment:"));
+  backgroundLabel->setBuddy(background);
+  display->addRow(backgroundLabel, backgroundRow);
   // The colours of the custom background; the buttons change them.
   const auto top = std::make_shared<QColor>(m_settings.top);
   const auto bottom = std::make_shared<QColor>(m_settings.bottom);
@@ -2892,6 +3000,7 @@ void ViewController::showPreferences(const QString& page) {
         {"fonts", "textformat", "textformat.alt"},
         {"sketch", "pencil.and.ruler", "pencil"},
         {"suppliers", "cart", "bag"},
+        {"assembly", "gearshape.2", "gearshape"},
     };
     for (const PreferencePage& entry : kPreferencePages) {
       QWidget* group = groups.value(QLatin1String(entry.id));

@@ -727,6 +727,8 @@ pub(crate) fn replace_member(
     let values = plan.values.clone();
     let ends = plan.own_ends.clone();
     let config = plan.source.config.clone();
+    // Its material follows its row (mitcad#1817).
+    let before = state.library_material_of(part);
     edit_part(state, part, |def| {
         def.config = config;
         for (name, value) in values {
@@ -735,6 +737,7 @@ pub(crate) fn replace_member(
         def.ends = ends;
         def.cuts.retain(|c| c.kind != "rip");
     })?;
+    state.follow_library_material(part, before.as_deref());
     if let Some(o) = state.assembly.occurrence_mut(occurrence) {
         match &plan.spot {
             Spot::Grounded(t) => {

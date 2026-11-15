@@ -11,8 +11,10 @@
 // (mitcad#1653) paint theirs the same way, with
 // the application's own kinds besides the model's: `sketch_point` and
 // `sketch_curve` ({sketch, name}: a point or curve of a sketch), `feature`
-// ({name}: an Intersection Curve), and an `occurrence` on a face, edge or
-// vertex of another component's body.
+// ({name}: an Intersection Curve), an `occurrence` on a face, edge or
+// vertex of another component's body, and `body` ({body, occurrence}: a
+// whole body where the occurrence by uids places it; a Properties row's,
+// mitcad#1816).
 // Plain Qt Core.
 
 #include <QJsonArray>

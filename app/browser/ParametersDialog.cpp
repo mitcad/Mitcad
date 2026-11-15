@@ -6,6 +6,7 @@
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <numeric>
 #include <optional>
 #include <utility>
 
@@ -27,6 +28,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QSettings>
 #include <QSlider>
 #include <QTabBar>
 #include <QTabWidget>
@@ -52,6 +54,7 @@
 #include "../platform/MacDialogs.hpp"
 #include "DecimalAlignDelegate.hpp"
 #include "DocumentHost.hpp"
+#include "ParameterSort.hpp"
 #include "TablesPage.hpp"
 
 namespace mitcad {
@@ -98,6 +101,11 @@ QString columnLogName(int column) {
   return column >= 0 && column < int(std::size(names)) ? QString::fromLatin1(names[column])
                                                          : QString::number(column);
 }
+
+// The table's sort (mitcad#1866) in the settings: "<column> ascending" or
+// "<column> descending" with the column as the log names it, or "none"
+// for the creation order.
+const char* const kSortSetting = "parameters/sort";
 
 QString refusedKey(const QString& name, int column) {
   return QStringLiteral("%1|%2").arg(name).arg(column);
@@ -181,6 +189,7 @@ public:
   }
 
   QString unit() const { return m_unit->currentText(); }
+  QString name() const { return m_name->text().trimmed(); }
 
 private:
   void add() {
@@ -463,6 +472,26 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_table->header()->resizeSection(kStep, 70);
   m_table->header()->resizeSection(kStrict, 50);
   m_table->header()->resizeSection(kSlider, 120);
+  // Sorting (mitcad#1866): a header's click sorts by its column, the next
+  // one in the reverse order, the third back to the creation order (Qt's
+  // clearable sort indicator); the last choice comes from the settings.
+  static_assert(kSlider == static_cast<int>(ParameterColumn::Slider), "the sort's columns are the table's");
+  QHeaderView* header = m_table->header();
+  header->setSectionsClickable(true);
+  header->setSortIndicatorShown(true);
+  header->setSortIndicatorClearable(true);
+  const QStringList savedSort =
+      QSettings().value(QLatin1String(kSortSetting)).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+  if (savedSort.size() == 2) {
+    for (int column = kName; column <= kSlider; ++column) {
+      if (columnLogName(column) == savedSort.at(0)) {
+        m_sortColumn = column;
+        m_sortOrder = savedSort.at(1) == QStringLiteral("descending") ? Qt::DescendingOrder : Qt::AscendingOrder;
+      }
+    }
+  }
+  header->setSortIndicator(m_sortColumn, m_sortOrder);
+  connect(header, &QHeaderView::sortIndicatorChanged, this, &ParametersDialog::sortBy);
   // The numbers of Expression and Value on one decimal axis each (mitcad#566).
   m_align = new DecimalAlignDelegate(m_table, {kExpression, kValue});
   m_table->setItemDelegateForColumn(kExpression, m_align);
@@ -759,8 +788,10 @@ void ParametersDialog::refresh() {
   } catch (const std::exception&) {
     m_options = configurations::Report();
   }
-  QString current;
-  if (QTreeWidgetItem* item = m_table->currentItem()) {
+  // The row selected stays selected; a row just renamed or added is
+  // (mitcad#1866), wherever the sort puts it.
+  QString current = std::exchange(m_select, QString());
+  if (QTreeWidgetItem* item = m_table->currentItem(); item != nullptr && current.isEmpty()) {
     current = item->data(kName, kNameRole).toString();
   }
   m_building = true;
@@ -794,8 +825,15 @@ void ParametersDialog::refresh() {
   QStringList rows; // for the log
   QStringList limitedRows;
   QStringList favored;
-  for (const QJsonValue& value : parameters) {
-    const QJsonObject parameter = value.toObject();
+  // The rows in the sorted order (mitcad#1866), each within its group;
+  // the groups, the features' among them, in the creation order.
+  std::vector<int> order(static_cast<size_t>(parameters.size()));
+  std::iota(order.begin(), order.end(), 0);
+  if (m_sortColumn >= 0) {
+    order = sortedParameterOrder(parameters, static_cast<ParameterColumn>(m_sortColumn), m_sortOrder);
+  }
+  for (const int index : order) {
+    const QJsonObject parameter = parameters.at(index).toObject();
     if (parameter.value(QStringLiteral("favorite")).toBool()) {
       favored << parameter.value(QStringLiteral("name")).toString();
       addRow(favorites, parameter);
@@ -814,27 +852,42 @@ void ParametersDialog::refresh() {
                 .arg(names.last(), parameter.value(QStringLiteral("expression")).toString(),
                      parameter.value(QStringLiteral("text")).toString(),
                      limited.isEmpty() ? QString() : QString(QLatin1Char(' ') + limitMark(limited)));
-    QTreeWidgetItem* parent = users;
     if (parameter.value(QStringLiteral("kind")).toString() != QStringLiteral("user")) {
       const QString owner = parameter.value(QStringLiteral("owner")).toString();
-      parent = owners.value(owner);
-      if (parent == nullptr) {
-        parent = new QTreeWidgetItem(models, {featureNames.value(owner, owner)});
-        parent->setData(kName, NativeControlIdentifierRole,
-                        QStringLiteral("parameters.group.%1").arg(featureNames.value(owner, owner)));
-        parent->setExpanded(true);
-        owners.insert(owner, parent);
+      if (!owners.contains(owner)) {
+        auto* group = new QTreeWidgetItem(models, {featureNames.value(owner, owner)});
+        group->setData(kName, NativeControlIdentifierRole,
+                       QStringLiteral("parameters.group.%1").arg(featureNames.value(owner, owner)));
+        group->setExpanded(true);
+        owners.insert(owner, group);
       }
     }
+  }
+  QHash<QString, QString> limitedOf;
+  QTreeWidgetItem* selected = nullptr;
+  for (const int index : order) {
+    const QJsonObject parameter = parameters.at(index).toObject();
+    const QString name = parameter.value(QStringLiteral("name")).toString();
+    QTreeWidgetItem* parent = users;
+    if (parameter.value(QStringLiteral("kind")).toString() != QStringLiteral("user")) {
+      parent = owners.value(parameter.value(QStringLiteral("owner")).toString(), models);
+    }
     QTreeWidgetItem* row = addRow(parent, parameter);
-    if (row->data(kName, kNameRole).toString() == current) {
+    if (name == current) {
       m_table->setCurrentItem(row);
+      selected = row;
     }
     // The marked cell and its tooltip, for the log (mitcad#665).
-    if (!limited.isEmpty()) {
-      limitedRows << QStringLiteral("%1 = %2 (%3)")
-                         .arg(names.last(), row->text(kValue),
-                              row->toolTip(kValue).replace(QLatin1Char('\n'), QStringLiteral("; ")));
+    if (!parameter.value(QStringLiteral("limited")).toString().isEmpty()) {
+      limitedOf.insert(name, QStringLiteral("%1 = %2 (%3)")
+                                 .arg(name, row->text(kValue),
+                                      row->toolTip(kValue).replace(QLatin1Char('\n'), QStringLiteral("; "))));
+    }
+  }
+  for (const QString& name : std::as_const(names)) {
+    const auto limited = limitedOf.constFind(name);
+    if (limited != limitedOf.cend()) {
+      limitedRows << limited.value();
     }
   }
   // Refusals of parameters that are gone are forgotten.
@@ -865,6 +918,10 @@ void ParametersDialog::refresh() {
   m_align->invalidate();
   applyFilter();
   updateButtons();
+  if (selected != nullptr && !selected->isHidden()) {
+    m_table->scrollToItem(selected);
+  }
+  logOrder();
   const QString logged = rows.join(QStringLiteral("; "));
   if (logged != m_loggedRows && isVisible()) {
     m_loggedRows = logged;
@@ -1030,6 +1087,10 @@ void ParametersDialog::submit(const QString& name, int column, const QString& te
         }
       }
       qDebug().noquote() << QStringLiteral("Parameter %1 %2: %3 = %4").arg(name, what, text, value);
+      // A renamed row stays selected under its new name (mitcad#1866).
+      if (column == kName) {
+        m_select = text;
+      }
       // A limit took effect (mitcad#665): said at once.
       if (!limitMessage.isEmpty()) {
         m_message->setText(limitMessage);
@@ -1056,7 +1117,9 @@ void ParametersDialog::addParameter() {
   AddParameterDialog dialog(m_host, this);
   qDebug().noquote() << QStringLiteral("Add User Parameter dialog opened: unit %1").arg(dialog.unit());
   prepareModal(&dialog);
-  execDialog(&dialog);
+  if (execDialog(&dialog) == QDialog::Accepted) {
+    m_select = dialog.name(); // selected where the sort puts it (mitcad#1866)
+  }
   refresh();
 }
 
@@ -1301,6 +1364,16 @@ void ParametersDialog::logLayout() {
     lines << QStringLiteral("Parameters %1 slider handle at %2")
                  .arg(name, at(m_table->viewport(), cell.topLeft() + handle.center()));
   }
+  // The columns' headers, which sort the rows (mitcad#1866).
+  QHeaderView* header = m_table->header();
+  for (int column = kName; column <= kSlider; ++column) {
+    if (header->isSectionHidden(column)) {
+      continue;
+    }
+    const QPoint center(header->sectionViewportPosition(column) + header->sectionSize(column) / 2,
+                        header->viewport()->height() / 2);
+    lines << QStringLiteral("Parameters header %1 at %2").arg(columnLogName(column), at(header->viewport(), center));
+  }
   lines << QStringLiteral("Parameters only limited at %1")
                .arg(at(m_limitedOnly, QPoint(10, m_limitedOnly->rect().center().y())));
   lines << QStringLiteral("Parameters add at %1").arg(at(m_add, m_add->rect().center()));
@@ -1354,6 +1427,7 @@ bool ParametersDialog::event(QEvent* event) {
   }
   if (event->type() == QEvent::Hide) {
     m_loggedScope.clear(); // told again when it opens again
+    m_loggedOrder.clear();
   }
   return QDialog::event(event);
 }
@@ -1455,6 +1529,57 @@ void ParametersDialog::previewExpression(const QString& name, const QString& tex
     m_loggedPreview = message;
     qDebug().noquote() << QStringLiteral("Parameter %1 typed %2: %3")
                               .arg(name, text, message.isEmpty() ? QStringLiteral("within its limits") : message);
+  }
+}
+
+// A header's click (mitcad#1866): the rows sorted by its column, or in the
+// creation order again; kept for the next opening.
+void ParametersDialog::sortBy(int column, Qt::SortOrder order) {
+  if (column < 0 || column >= m_table->columnCount()) {
+    column = -1;
+  }
+  if (column == m_sortColumn && (column < 0 || order == m_sortOrder)) {
+    return;
+  }
+  m_sortColumn = column;
+  m_sortOrder = order;
+  const QString sort =
+      column < 0 ? QStringLiteral("none")
+                 : QStringLiteral("%1 %2").arg(columnLogName(column), order == Qt::AscendingOrder
+                                                                          ? QStringLiteral("ascending")
+                                                                          : QStringLiteral("descending"));
+  QSettings().setValue(QLatin1String(kSortSetting), sort);
+  qDebug().noquote() << (column < 0 ? QStringLiteral("Parameters sorted in creation order")
+                                    : QStringLiteral("Parameters sorted by %1").arg(sort));
+  refresh();
+}
+
+// The rows as shown, group by group (mitcad#1866): "[User Parameters] a,
+// b [Model Parameters] [Extrude1] d1", and the selected row.
+void ParametersDialog::logOrder() {
+  if (!isVisible()) {
+    return;
+  }
+  QString order;
+  bool afterRow = false;
+  for (QTreeWidgetItemIterator it(m_table); *it != nullptr; ++it) {
+    const QString name = (*it)->data(kName, kNameRole).toString();
+    if (name.isEmpty()) {
+      order += QStringLiteral("%1[%2]").arg(order.isEmpty() ? QString() : QStringLiteral(" "), (*it)->text(kName));
+      afterRow = false;
+    } else {
+      order += (afterRow ? QStringLiteral(", ") : QStringLiteral(" ")) + name;
+      afterRow = true;
+    }
+  }
+  const QTreeWidgetItem* current = m_table->currentItem();
+  const QString selected = current != nullptr ? current->data(kName, kNameRole).toString() : QString();
+  if (!selected.isEmpty()) {
+    order += QStringLiteral("; selected %1").arg(selected);
+  }
+  if (order != m_loggedOrder) {
+    m_loggedOrder = order;
+    qDebug().noquote() << QStringLiteral("Parameters order: %1").arg(order);
   }
 }
 

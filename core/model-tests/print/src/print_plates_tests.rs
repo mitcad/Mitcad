@@ -189,6 +189,66 @@ fn bodies_and_occurrences_go_on_plates_with_counts() {
     assert_eq!(plates["plates"][0]["pieces"], 2);
 }
 
+/// Each plate lists the placements it prints, each once (mitcad#1807,
+/// Send to Slicer's Process row reads their settings): a body item's at
+/// its first shown placement however many copies, an occurrence item's
+/// bodies by their paths, and on the first plate what no plate names.
+#[test]
+fn each_plate_lists_the_placements_it_prints() {
+    let (mut doc, root_body, arm_body, arm) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate", "name": "Arm"}));
+    let placements = |doc: &Document<MockKernel>, plate: usize| -> Vec<(String, String)> {
+        query(doc, json!({"query": "print_plates"}))["plates"][plate]["bodies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| {
+                (
+                    b["body"].as_str().unwrap().to_owned(),
+                    b["occurrence"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+
+    // Nothing on a plate: both bodies on the first, the arm's by its
+    // occurrence.
+    let first = placements(&doc, 0);
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert!(
+        first.contains(&(arm_body.to_string(), arm.clone())),
+        "{first:?}"
+    );
+    assert!(first.iter().any(|(b, _)| *b == root_body.to_string()));
+    assert_eq!(placements(&doc, 1), Vec::<(String, String)>::new());
+
+    // The arm's occurrence twice on its plate: its body once, by its path;
+    // three of the root's body on the first: once.
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "Arm",
+               "items": [{"occurrence": arm.clone(), "count": 2}]}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "plate1",
+               "items": [{"body": root_body.to_string(), "count": 3}]}),
+    );
+    assert_eq!(
+        placements(&doc, 1),
+        vec![(arm_body.to_string(), arm.clone())]
+    );
+    let first = placements(&doc, 0);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0].0, root_body.to_string());
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(
+        plates["plates"][1]["bodies"][0]["name"],
+        json!(doc.body_name(arm_body))
+    );
+}
+
 #[test]
 fn a_plate_value_is_a_level_between_the_components_and_the_design() {
     let (mut doc, root_body, arm_body, arm) = plated();

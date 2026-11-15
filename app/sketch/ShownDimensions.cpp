@@ -77,14 +77,19 @@ void ShownDimensions::setSketches(std::vector<ShownSketch> sketches, double leng
 
 Projection ShownDimensions::projection(const SketchModel& model) const {
   const geometry::Frame frame = model.frame;
+  // On the face of a sketch on a curved one (mitcad#1768).
+  const std::optional<SketchSurface> surface = model.surface;
   const OcctViewer* viewer = &m_viewer;
-  const auto toScreen = [viewer, frame](const V2& p) { return viewer->toWidgetF(toModel(frame, p)); };
+  const auto toScreen = [viewer, frame, surface](const V2& p) {
+    return viewer->toWidgetF(surface ? surface->point(p) : toModel(frame, p));
+  };
   // Millimetres per pixel in the sketch's plane, as SketchController::pixel.
   const QPointF o = toScreen(V2{});
   const QPointF x = toScreen(V2{1.0, 0.0}) - o;
   const QPointF y = toScreen(V2{0.0, 1.0}) - o;
   const double perMm = std::max(std::hypot(x.x(), x.y()), std::hypot(y.x(), y.y()));
-  return {toScreen, perMm > 1e-9 ? 1.0 / perMm : 1.0};
+  // The lines bent with the face (mitcad#1853).
+  return {toScreen, perMm > 1e-9 ? 1.0 / perMm : 1.0, surface ? surface->step() : 0.0};
 }
 
 std::vector<ShownDimensions::Layout> ShownDimensions::layouts() const {

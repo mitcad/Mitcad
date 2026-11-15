@@ -117,6 +117,9 @@ struct DocumentSnapshot {
     bool grounded = false;
     bool visible = true;
     bool transparent = false; // drawn see-through with its contents (mitcad#1093)
+    // Its component's joints move in its parent's solve, for it alone
+    // (mitcad#1793).
+    bool flexible = false;
     // Where it places its component in the design: 4 rows of 4 numbers.
     QJsonArray world;
     QVector<Occurrence> children;
@@ -145,6 +148,9 @@ struct DocumentSnapshot {
     bool visible = true;
     bool transparent = false; // drawn see-through (mitcad#1093)
     bool mesh = false; // triangles without surfaces (mitcad#399)
+    // The folder of its component's Bodies folder it is listed in
+    // (mitcad#1802: an imported design's); empty: the Bodies folder itself.
+    QString folder;
     // The last feature before the marker that made or changed it (the
     // `bodies` query's `last_feature`, mitcad#1704); empty when unknown.
     QString lastFeature;

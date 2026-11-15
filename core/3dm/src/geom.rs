@@ -259,7 +259,10 @@ pub enum Geometry {
     Mesh(Box<Mesh>),
     Curve(Box<Curve>),
     Instance(InstanceRef),
-    /// A class not taken (points, annotations, SubD, …), by name.
+    /// A SubD's control net (mitcad#1757), which the import makes a Form
+    /// of.
+    SubD(Box<crate::subd::SubD>),
+    /// A class not taken (points, annotations, …), by name.
     Other(String),
 }
 
@@ -288,6 +291,7 @@ pub mod class {
     pub const EXTRUSION: Uuid = Uuid::parse("36F53175-72B8-4d47-BF1F-B4E6FC24F4B9");
     pub const MESH: Uuid = Uuid::parse("4ED7D4E4-E947-11d3-BFE5-0010830122F0");
     pub const INSTANCE_REF: Uuid = Uuid::parse("F9CFB638-B9D4-4340-87E3-C56E7865D96A");
+    pub const SUBD: Uuid = Uuid::parse("F09BA4D9-455B-42C3-BA3B-E6CCACEF853B");
     pub const INSTANCE_DEFINITION: Uuid = Uuid::parse("26F8BFF6-2618-417f-A158-153D64A94989");
     pub const LAYER: Uuid = Uuid::parse("95809813-E985-11d3-BFE5-0010830122F0");
 
@@ -469,6 +473,16 @@ fn increasing(params: &[f64]) -> bool {
     params.iter().all(|p| p.is_finite()) && params.windows(2).all(|w| w[0] < w[1])
 }
 
+/// Angles that turn forward, at least a little and at most once (an
+/// arc's, a surface of revolution's).
+fn full_turn_at_most(angles: [f64; 2]) -> bool {
+    let sweep = angles[1] - angles[0];
+    angles.iter().all(|a| a.is_finite())
+        && sweep.is_finite()
+        && sweep > 0.0
+        && sweep <= std::f64::consts::TAU * (1.0 + 1e-9)
+}
+
 pub fn read_curve(uuid: Uuid, r: &mut Reader) -> Result<Curve> {
     use class::*;
     if uuid == NURBS_CURVE || uuid == NURBS_CURVE_TL || uuid == NURBS_CURVE_OLD {
@@ -505,13 +519,7 @@ pub fn read_curve(uuid: Uuid, r: &mut Reader) -> Result<Curve> {
         let domain = r.interval()?;
         // An arc turns at most once, in the direction of its angles, over
         // an increasing domain.
-        let sweep = angles[1] - angles[0];
-        if !(radius.is_finite()
-            && sweep.is_finite()
-            && sweep > 0.0
-            && sweep <= std::f64::consts::TAU * (1.0 + 1e-9)
-            && increasing(&domain))
-        {
+        if !(radius.is_finite() && full_turn_at_most(angles) && increasing(&domain)) {
             return err("an arc whose radius, angles or domain are not valid");
         }
         return Ok(Curve::Arc {
@@ -646,6 +654,11 @@ pub fn read_surface(uuid: Uuid, r: &mut Reader) -> Result<Surface> {
         }
         let axis = [r.point()?, r.point()?];
         let angles = r.interval()?;
+        // It turns at most once, as an arc does (its spans are counted
+        // from the angles when the face is all of its surface).
+        if !full_turn_at_most(angles) {
+            return err("a surface of revolution whose angles are not valid");
+        }
         if major == 2 {
             r.skip(16)?; // the angle's parameters
         }
@@ -1128,6 +1141,8 @@ pub fn read_geometry(uuid: Uuid, r: &mut Reader) -> Result<Geometry> {
         Geometry::Mesh(Box::new(read_mesh(r)?))
     } else if uuid == INSTANCE_REF {
         Geometry::Instance(read_instance_ref(r)?)
+    } else if uuid == SUBD {
+        Geometry::SubD(Box::new(crate::subd::read_subd(r)?))
     } else {
         match read_surface(uuid, r)? {
             Surface::Other(_) => match read_curve(uuid, r)? {

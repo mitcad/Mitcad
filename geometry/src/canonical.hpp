@@ -22,7 +22,10 @@ namespace mitcad::geometry::detail {
 // of the result is closed on a seam, or a converted face does not check
 // valid (the result then stays as OCCT built it). `exact` widens that
 // tolerance for shapes OCCT approximated more loosely (a helix's sweep,
-// path_sweep.cpp).
-ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact = 1e-7);
+// path_sweep.cpp). With `seams_away` a new cylinder, cone, sphere or torus
+// has its seam opposite the face's middle, through none of the face
+// (mitcad#1849: the path past narrow faces bounds its regions by the
+// surface with its own seam).
+ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact = 1e-7, bool seams_away = false);
 
 } // namespace mitcad::geometry::detail

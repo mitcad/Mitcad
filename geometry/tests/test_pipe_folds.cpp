@@ -44,6 +44,7 @@
 //   mitered (a round section: the frame it is swept in does not matter).
 
 #include <algorithm>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -79,6 +80,7 @@
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 
+#include "../src/pipe_folds.hpp"
 #include "check.hpp"
 
 namespace test {
@@ -376,8 +378,16 @@ void test_short_chamfer() {
 
 void test_loop_back() {
   const double expected = loop_back_union();
+  // (mitcad#1788) The last leg crosses the first, far inside the path: the
+  // faces of the sweep in one piece cross for certain, so it is built in
+  // pieces at once, without OCCT's check of its faces (which took 88 of
+  // 89 s along four turns of a helix under a section wider than their
+  // gap). The check is not run for the pipe nor for the sweep.
+  const std::size_t checks = detail::faces_crossing_checks();
   check_resolved(a_pipe(loop_back(), PipeSection::Circular, 8), expected, "pipe, loop back");
   check_resolved(a_sweep(loop_back(), false, 4, false), expected, "sweep, loop back");
+  std::printf("loop back: faces-crossing checks run %zu\n", detail::faces_crossing_checks() - checks);
+  CHECK(detail::faces_crossing_checks() == checks);
 }
 
 void test_plain_pipe_unchanged() {

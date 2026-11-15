@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# A sketch on a cylinder's side (mitcad#1768) on sketch-cylinder-face.json
+# (a cylinder of radius 20 and height 60, F2.b0, its side F2:side(c1)):
+#   1. Create Sketch with nothing selected waits for a plane; a click on
+#      the cylinder's side starts Sketch2 on it, in the face's developed
+#      coordinates (the plane sent with `developed`), the view looking at
+#      the face.
+#   2. A rectangle from the sketch's origin typed 30 by 20: 30 mm around
+#      the face and 20 mm along its axis. Its one profile is drawn laid
+#      onto the face, and each of its lines has its length on the face
+#      (the `sketch_surface` query's curves): 30 mm for the two arcs
+#      around the axis, 20 mm for the two lines along it.
+#   3. Finish Sketch.
+# Run by tools/ui-sketch-cylinder-face-test.sh (Linux),
+# tools/ui-windows-sketch-cylinder-face-test.ps1 (Windows) and
+# tools/ui-macos-sketch-cylinder-face-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The cylinder's side takes the sketch.
+mark
+command sketch.create
+wait-log '^Create Sketch: select a plane'
+wait-log '^Pick face F2[.]b0/F2:side[(]c1[)] at '
+mark
+click-logged '^Pick face F2[.]b0/F2:side[(]c1[)] at '
+wait-log '^Sketch started on [{]"body":"F2[.]b0","developed":[{]"angle":'
+wait-log '^Sketch Sketch2 lies on its face in its developed coordinates [(]cylinder, radius 20[.]000 mm[)]$'
+wait-log '^Sketch view '
+wait-idle
+
+# 2. A rectangle by its typed sizes, from the sketch's origin.
+mark
+key r
+sketch-click 0 0
+type 30
+key Tab
+type 20
+key Return
+wait-log '^Added rectangle 30 x 20 mm at '
+wait-idle
+wait-log '^Profile r[{].* of F3 laid onto its face$'
+expect-profiles 1
+wait-log '^Sketch Sketch2 on its face [(]cylinder, radius 20[.]000 mm[)]: curves (c1 30[.]000 mm, c2 20[.]000 mm, c3 30[.]000 mm, c4 20[.]000 mm|c1 20[.]000 mm, c2 30[.]000 mm, c3 20[.]000 mm, c4 30[.]000 mm)$'
+key Escape
+
+# 3. Finish Sketch.
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+expect-profiles 1
+expect-never 'TestDriver: FAIL'

@@ -52,12 +52,29 @@ ShapePtr sweep_sheet(const std::string& feature, const std::vector<Path>& chains
 // curves.
 ShapePtr loft_sheet(const std::string& feature, const std::vector<Path>& sections, bool ruled, bool closed);
 
+// A surface helix's growth and flat ends (mitcad#1797), as the solid
+// helix's (HelixSweepSpec): `growth` moves the chains out per turn along
+// the direction from the axis towards their middle (a line from the axis
+// gives a conical helicoid). Over a `*_transition` (radians) the pitch
+// changes linearly between zero at the outer end and the full pitch, over
+// a `*_flat` the chains turn without rising: the start's flat comes first,
+// then its transition, the `revolutions` at the full pitch, the end's
+// transition and flat. With ends the growth follows the rise.
+struct HelixSheetOptions {
+  double growth = 0.0;
+  double start_flat = 0.0;
+  double start_transition = 0.0;
+  double end_transition = 0.0;
+  double end_flat = 0.0;
+};
+
 // The chains (each open or closed) moved by the screw motion about `axis`
 // that turns `revolutions` times right-handed about the axis direction
 // (left-handed with `left_handed`) while it rises `pitch` per turn along
-// it (mitcad#1777: a line gives a helicoid). Faces
+// it (mitcad#1777: a line gives a helicoid), with `options`' growth and
+// ends (mitcad#1797: then by the solid helix's motion). Faces
 // "<feature>:side(<curve>)".
 ShapePtr helix_sheet(const std::string& feature, const std::vector<Path>& chains, const gp_Ax1& axis, double pitch,
-                     double revolutions, bool left_handed);
+                     double revolutions, bool left_handed, const HelixSheetOptions& options = HelixSheetOptions());
 
 } // namespace mitcad::geometry

@@ -17,7 +17,10 @@
 //     of the joint driven there (the preview's `placements`), a contact
 //     turning it back; the document stays as it is. The Joint and Assembly
 //     Constraint panels' Animate plays the motion they make the same way,
-//     each frame the panel's feature previewed with the motion there.
+//     each frame the panel's feature previewed with the motion there. A
+//     flexible occurrence's row offers its component's joints animated
+//     inside it, for it alone (mitcad#1805: `joint_poses` with its
+//     `occurrence`, the joint solver's frames only).
 #include "MainWindow.hpp"
 
 #include <algorithm>
@@ -92,8 +95,10 @@ void MainWindow::setUpOccurrenceDrag() {
 MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
   const bool idle = m_mode == Mode::Idle && !m_session;
   const bool body = isBodyItem(item);
-  // In a design without components nothing drags.
-  if (m_snapshot.occurrences.isEmpty() || (item.occurrence.isEmpty() && !(body && idle))) {
+  // In a design without components nothing drags, nor while a command's
+  // panel is set aside (mitcad#1844: its animation plays on under a drag).
+  if (m_snapshot.occurrences.isEmpty() || (m_session && m_session->suspended()) ||
+      (item.occurrence.isEmpty() && !(body && idle))) {
     return {};
   }
   if (item.occurrence.isEmpty()) {
@@ -316,6 +321,13 @@ void MainWindow::occurrenceDragged(const gp_Pnt& target) {
       qDebug().noquote() << QStringLiteral("Drag of %1 stopped at contact: %2").arg(m_drag->name, touching);
     }
   }
+  // Where the drag shows the occurrences in the design (`design`: each
+  // path from the root that moves, also inside a flexible occurrence,
+  // mitcad#1793).
+  if (answer.contains(QStringLiteral("design"))) {
+    showPreviewPlacements({{QStringLiteral("placements"), answer.value(QStringLiteral("design"))}}, m_drag->bodies);
+    return;
+  }
   // Each occurrence that moves: from where it is shown to where the drag
   // puts it, in the design; what is inside it moves along.
   const QString parent = m_drag->path.section(QLatin1Char('/'), 0, -2);
@@ -364,16 +376,39 @@ void MainWindow::occurrenceDragFinished(const gp_Pnt& target, bool cancelled) {
       return;
     }
     QStringList values;
-    const QJsonObject joints = result.value(QStringLiteral("values")).toObject();
-    for (auto it = joints.begin(); it != joints.end(); ++it) {
-      const QJsonObject motions = it.value().toObject();
-      for (auto motion = motions.begin(); motion != motions.end(); ++motion) {
-        const bool turn = motion.key().startsWith(QLatin1Char('r'));
-        const double value = motion.value().toDouble() * (turn ? 57.29577951308232 : 1.0);
-        values << QStringLiteral("%1 %2 %3 %4")
-                      .arg(m_snapshot.feature(it.key()) != nullptr ? m_snapshot.feature(it.key())->name : it.key(),
-                           motion.key(), rounded(value), turn ? QStringLiteral("deg") : QStringLiteral("mm"));
+    // Each joint's values, "in Hinge:1" for a flexible occurrence's own
+    // (mitcad#1793).
+    const auto addValues = [this, &values](const QJsonObject& joints, const QString& in) {
+      for (auto it = joints.begin(); it != joints.end(); ++it) {
+        const QJsonObject motions = it.value().toObject();
+        for (auto motion = motions.begin(); motion != motions.end(); ++motion) {
+          const bool turn = motion.key().startsWith(QLatin1Char('r'));
+          const double value = motion.value().toDouble() * (turn ? 57.29577951308232 : 1.0);
+          values << QStringLiteral("%1 %2 %3 %4%5")
+                        .arg(m_snapshot.feature(it.key()) != nullptr ? m_snapshot.feature(it.key())->name : it.key(),
+                             motion.key(), rounded(value), turn ? QStringLiteral("deg") : QStringLiteral("mm"),
+                             in.isEmpty() ? QString() : QStringLiteral(" in ") + in);
+        }
       }
+    };
+    addValues(result.value(QStringLiteral("values")).toObject(), QString());
+    const QJsonObject flexible = result.value(QStringLiteral("flexible_values")).toObject();
+    for (auto it = flexible.begin(); it != flexible.end(); ++it) {
+      std::function<QString(const QVector<DocumentSnapshot::Occurrence>&)> nameOf =
+          [&](const QVector<DocumentSnapshot::Occurrence>& level) {
+            for (const DocumentSnapshot::Occurrence& occurrence : level) {
+              if (occurrence.uid == it.key()) {
+                return occurrence.name;
+              }
+              const QString inside = nameOf(occurrence.children);
+              if (!inside.isEmpty()) {
+                return inside;
+              }
+            }
+            return QString();
+          };
+      const QString name = nameOf(m_snapshot.occurrences);
+      addValues(it.value().toObject(), name.isEmpty() ? it.key() : name);
     }
     qDebug().noquote() << QStringLiteral("Dragged %1 to (%2, %3, %4)%5")
                               .arg(state.name, rounded(state.target.X()), rounded(state.target.Y()),
@@ -446,23 +481,24 @@ void MainWindow::animateSelectedJoint() {
   }
   // An agent's ui_command plays it once: an animation that plays holds
   // the design's other requests back.
-  startJointAnimation(uid, m_mcpRequestActive);
+  startJointAnimation(uid, QString(), m_mcpRequestActive);
 }
 
-void MainWindow::animateJoint(const QString& uid) {
+void MainWindow::animateJoint(const QString& uid, const QString& occurrence) {
   // The browser's Animate on the joint that plays stops it; on another
-  // joint, that one plays instead.
+  // joint (or the same one in another flexible occurrence), that one plays
+  // instead.
   if (m_animation) {
-    const bool same = m_animation->uid == uid;
+    const bool same = m_animation->uid == uid && m_animation->occurrence == occurrence;
     stopAnimation(same ? QStringLiteral("Animate again") : QStringLiteral("another joint animated"));
     if (same) {
       return;
     }
   }
-  startJointAnimation(uid, m_mcpRequestActive);
+  startJointAnimation(uid, occurrence, m_mcpRequestActive);
 }
 
-void MainWindow::startJointAnimation(const QString& uid, bool once) {
+void MainWindow::startJointAnimation(const QString& uid, const QString& occurrence, bool once) {
   if (m_animation || !canChangeModel() || modelBusy()) {
     return;
   }
@@ -479,6 +515,7 @@ void MainWindow::startJointAnimation(const QString& uid, bool once) {
   animation.uid = uid;
   animation.name = joint.value(QStringLiteral("name")).toString();
   animation.motion = motions.first().toString();
+  animation.occurrence = occurrence;
   animation.once = once;
   try {
     animation.def = queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}})
@@ -491,7 +528,21 @@ void MainWindow::startJointAnimation(const QString& uid, bool once) {
   const QString& motion = animation.motion;
   const bool turn = motion.startsWith(QLatin1Char('r'));
   animation.turn = turn;
-  const QJsonValue at = joint.value(QStringLiteral("values")).toObject().value(motion);
+  QJsonValue at = joint.value(QStringLiteral("values")).toObject().value(motion);
+  // Inside a flexible occurrence (mitcad#1805): where the joint is for it,
+  // from the `joints` query's `flexible` entries.
+  QString in;
+  if (!occurrence.isEmpty()) {
+    const QString last = occurrence.section(QLatin1Char('/'), -1);
+    in = last;
+    for (const QJsonValue& value : m_snapshot.joints.value(QStringLiteral("flexible")).toArray()) {
+      const QJsonObject flexible = value.toObject();
+      if (flexible.value(QStringLiteral("occurrence")).toString() == last) {
+        in = flexible.value(QStringLiteral("name")).toString();
+        at = flexible.value(QStringLiteral("values")).toObject().value(uid).toObject().value(motion);
+      }
+    }
+  }
   const double start =
       at.isDouble() ? at.toDouble() : joint.value(QStringLiteral("position")).toObject().value(motion).toDouble();
   const QJsonObject limit = joint.value(QStringLiteral("limits")).toObject().value(motion).toObject();
@@ -544,12 +595,14 @@ void MainWindow::startJointAnimation(const QString& uid, bool once) {
     for (const double value : animation.frames) {
       values.append(value);
     }
-    const QJsonArray frames = queryObject({{QStringLiteral("query"), QStringLiteral("joint_poses")},
-                                           {QStringLiteral("joint"), uid},
-                                           {QStringLiteral("motion"), motion},
-                                           {QStringLiteral("values"), values}})
-                                  .value(QStringLiteral("frames"))
-                                  .toArray();
+    QJsonObject request{{QStringLiteral("query"), QStringLiteral("joint_poses")},
+                        {QStringLiteral("joint"), uid},
+                        {QStringLiteral("motion"), motion},
+                        {QStringLiteral("values"), values}};
+    if (!occurrence.isEmpty()) {
+      request.insert(QStringLiteral("occurrence"), occurrence);
+    }
+    const QJsonArray frames = queryObject(request).value(QStringLiteral("frames")).toArray();
     if (frames.size() == animation.frames.size()) {
       for (const QJsonValue& frame : frames) {
         animation.poses.append(frame.toObject().value(QStringLiteral("placements")).toArray());
@@ -560,11 +613,20 @@ void MainWindow::startJointAnimation(const QString& uid, bool once) {
   } catch (const std::exception& e) {
     previewsWhy = errorText(e);
   }
+  if (!previewsWhy.isEmpty() && !occurrence.isEmpty()) {
+    // A preview drives the joint's own motion: inside a flexible
+    // occurrence only the joint solver's frames show it.
+    showStatus(tr("%1 cannot be animated in %2: %3").arg(animation.name, in, previewsWhy), NoticeLevel::Error);
+    qDebug().noquote() << QStringLiteral("Animation of %1 in %2 refused: %3").arg(animation.name, in, previewsWhy);
+    return;
+  }
+  // The motion, and inside a flexible occurrence where it moves.
+  const QString what = in.isEmpty() ? motion : QStringLiteral("%1 in %2").arg(motion, in);
   const QString how = previewsWhy.isEmpty() ? QStringLiteral("frames by the joint solver")
                                             : QStringLiteral("frames as previews: %1").arg(previewsWhy);
   if (once) {
     qDebug().noquote() << QStringLiteral("Animating %1 %2: %3 frames from %4 to %5 in %6 ms, %7")
-                              .arg(animation.name, motion)
+                              .arg(animation.name, what)
                               .arg(animation.frames.size())
                               .arg(motionValue(turn, start), motionValue(turn, animation.frames.last()))
                               .arg(animation.frames.size() * kFrameMs)
@@ -572,7 +634,7 @@ void MainWindow::startJointAnimation(const QString& uid, bool once) {
   } else {
     qDebug().noquote() << QStringLiteral("Animating %1 %2: back and forth from %3 to %4, %5 frames a pass in %6 ms, "
                                          "from %7, %8")
-                              .arg(animation.name, motion, motionValue(turn, low), motionValue(turn, high))
+                              .arg(animation.name, what, motionValue(turn, low), motionValue(turn, high))
                               .arg(kAnimationFrames)
                               .arg(kAnimationFrames * kFrameMs)
                               .arg(motionValue(turn, animation.frames.at(animation.index)), how);
@@ -742,9 +804,8 @@ void MainWindow::animationFrame() {
       // The panel's feature with its motion there (mitcad#1790), as the
       // panel previews it: an edit computed as the feature it edits.
       const QJsonObject def = m_animation->panel->at(m_animation->def, value);
-      command = m_session->isEditing() ? QJsonObject{{QStringLiteral("cmd"), QStringLiteral("edit_feature")},
-                                                     {QStringLiteral("uid"), m_session->editUid()},
-                                                     {QStringLiteral("def"), def}}
+      // An edit's frames with the joints after it holding (mitcad#1860).
+      command = m_session->isEditing() ? m_session->editPreviewCommand(def)
                                        : QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_feature")},
                                                      {QStringLiteral("def"), def}};
     } else {

@@ -2101,6 +2101,14 @@ pub(crate) fn repeat<K: Kernel>(
             let mut changes = Vec::new();
             let mut sheets = std::collections::BTreeMap::new();
             let count = bodies.len() as u32;
+            // Skipped copies (mitcad#547): their numbers are the elements'.
+            // Taken out first, so that a later copy on a skipped copy's
+            // place is made (mitcad#1832).
+            let made: Vec<Element> = elements
+                .iter()
+                .filter(|e| !skipped.contains(&e.index))
+                .copied()
+                .collect();
             for (j, body) in bodies.iter().enumerate() {
                 let shape = ctx.body(*body)?;
                 if combine {
@@ -2119,16 +2127,11 @@ pub(crate) fn repeat<K: Kernel>(
                 // Copies joined to the body that add nothing to it are left
                 // out (mitcad#1588).
                 let left_out = if combine && leaves_out_coincident(ctx) {
-                    coincident_copies(ctx, &shape, elements)
+                    coincident_copies(ctx, &shape, &made)
                 } else {
                     Vec::new()
                 };
-                // Skipped copies (mitcad#547): their numbers are the
-                // elements'.
-                for element in elements
-                    .iter()
-                    .filter(|e| !skipped.contains(&e.index) && !left_out.contains(&e.index))
-                {
+                for element in made.iter().filter(|e| !left_out.contains(&e.index)) {
                     let copy = body_copy(
                         ctx,
                         &shape,
@@ -3597,18 +3600,22 @@ fn repeat_bodies_joining_any<K: Kernel>(
     }
     let mut next = elements.iter().map(|e| e.index).max().unwrap_or(0) * count;
     let leaves_out = leaves_out_coincident(ctx);
+    // Skipped copies (mitcad#547): their numbers are the elements'. Taken
+    // out first, so that a later copy on a skipped copy's place is made
+    // (mitcad#1832).
+    let made: Vec<Element> = elements
+        .iter()
+        .filter(|e| !skipped.contains(&e.index))
+        .copied()
+        .collect();
     for (j, (body, shape)) in originals.iter().enumerate() {
         // Copies that add nothing to their body are left out (mitcad#1588).
         let left_out = if leaves_out {
-            coincident_copies(ctx, shape, elements)
+            coincident_copies(ctx, shape, &made)
         } else {
             Vec::new()
         };
-        // Skipped copies (mitcad#547): their numbers are the elements'.
-        for element in elements
-            .iter()
-            .filter(|e| !skipped.contains(&e.index) && !left_out.contains(&e.index))
-        {
+        for element in made.iter().filter(|e| !left_out.contains(&e.index)) {
             let instance = Instance {
                 feature: ctx.uid,
                 index: element.index,

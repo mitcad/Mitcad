@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use super::extrude::{
     Operation, ProfileRef, apply_operation, check_participants, check_profiles, participant_bodies,
-    profile_references, profile_regions, profile_set,
+    profile_references, profile_regions_on_faces, profile_set,
 };
 use super::geom_ref::{GeomRef, Want};
 use super::mapping::map_params;
@@ -256,9 +256,33 @@ impl<K: Kernel> Evaluate<K> for EmbossDef {
         }
         let taper = optional_param(ctx, self.taper_angle)?;
         check_taper(taper)?;
-        let (sketch, regions) = profile_regions(ctx, &self.profiles)?;
+        let (sketch, regions) = profile_regions_on_faces(ctx, &self.profiles)?;
         let operation = self.mode.operation();
         let participants = participant_bodies(ctx, operation, &self.default_participants())?;
+        // A sketch on a cylindrical or conical face (mitcad#1768): its
+        // profiles raised or sunk on that face, moved by the wrap's offsets.
+        if let Some(development) = &sketch.developed {
+            if self.face.is_some() || self.projects() {
+                return Err(
+                    "a sketch on a curved face is embossed on that face: no face, projection or \
+                     direction of its own"
+                        .to_owned(),
+                );
+            }
+            let axis = Axis {
+                origin: development.origin,
+                direction: development.axis,
+            };
+            let (frame, regions) = offsets.placed(development.frame, &regions, &axis);
+            let moved = crate::developed::Development {
+                frame,
+                ..(**development).clone()
+            };
+            let raise = self.mode == EmbossMode::Raise;
+            let tool =
+                super::developed::wrapped_regions(ctx, &moved, &regions, depth, raise, taper)?;
+            return apply_operation(ctx, operation, participants, tool, "emboss");
+        }
         let tool = self.tool(ctx, sketch.frame, &regions, depth, offsets, taper)?;
         apply_operation(ctx, operation, participants, tool, "emboss")
     }

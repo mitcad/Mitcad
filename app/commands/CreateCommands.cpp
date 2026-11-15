@@ -45,6 +45,8 @@ void registerCreateCommands(CommandRegistry& registry, const CommandContext& con
   registry.add(pointPatternCommand(context));
   registry.add(mirrorCommand(context));
   registry.add(envelopeCommand(context));
+  // Form (mitcad#1757): a section of its own before the Machine Elements.
+  registry.add(formCommand(context));
 }
 
 } // namespace mitcad

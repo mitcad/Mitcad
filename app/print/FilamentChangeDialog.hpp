@@ -40,8 +40,10 @@ namespace mitcad {
 // `Filament change dialog extent: <distance from bed | to object>` when At
 // changes, `Filament change dialog at: <place>` when a pick fills the
 // field, `Filament change dialog picks: <on | off>` when the field starts
-// or stops taking the view's picks, and `Filament change dialog refused:
-// <why>`.
+// or stops taking the view's picks, `Filament change dialog refused:
+// <why>`, `Filament change dialog: now row N` when a removal in the panel
+// moves the event it edits (mitcad#1842), and `Filament change dialog
+// closed: its event was removed`.
 class FilamentChangeDialog : public QDialog {
   Q_OBJECT
 
@@ -69,6 +71,13 @@ public:
   // Why the owner refused the event, under the fields.
   void showRefusal(const QString& why);
   int row() const { return m_row; }
+  // The event as it was when edit opened it (empty for a new one), which
+  // its owner finds again in the schedule before it applies the edit.
+  const QJsonObject& editedEvent() const { return m_event; }
+  // The panel removed an event above this one's: it is on `row` now.
+  void moveToRow(int row);
+  // The panel removed the event being edited: the window closes.
+  void eventRemoved();
 
 signals:
   // OK with a valid event.

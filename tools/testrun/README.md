@@ -495,6 +495,78 @@ turn, so that a change to a crate or library every test uses does not put
 every test in the lane (the fingerprints of `tools/ctest-fingerprints.py`
 decide which tests run at all; this only orders them).
 
+## Release fingerprints
+
+A release gate runs every test on every platform (Linux `tools/check-all.sh
+--full`, the Windows and macOS full ctest), although the kernel's geometry
+tests, about two fifths of all tests' CPU time, seldom have anything new to
+check when `geometry/` and the OCCT port have not changed since the last
+release (mitcad#1822). So in a release gate's run (`--release-passed DIR
+--release-tag X.Y.Z-rcN`) a `geometry*` ctest is skipped when its
+fingerprint is one with which it passed in an earlier release gate of the
+same platform. No other test is skipped this way, nor a test that sets up
+or cleans up a fixture.
+
+The fingerprint (`src/fingerprint.rs`) is the logic of
+`tools/ctest-fingerprints.py` (the development checks' ctests, [the check
+script](../../docs/development.md#the-check-script)) in Rust, so that it is
+the same on Linux, Windows and macOS: a SHA-256 of what the test depends
+on, found from the build itself:
+
+- its registration in ctest's listing (command, properties), without the
+  checkout's and the build folder's paths;
+- the files and folders of the source tree its command and environment
+  name;
+- each program it runs or names (the test executable): the CMake targets it
+  is built from, through their dependencies, from CMake's file API in the
+  build folder (codemodel-v2): each target's folder (less the folders of
+  other CMake directories and Rust crates, and less the files tests name),
+  its listed sources, a Corrosion crate's Rust closure (`cargo metadata`);
+  the build files (the top-level `CMakeLists.txt` and `CMakePresets.json`,
+  `cmake/`, `triplets/`, `third_party/` with the OCCT port and its patches,
+  `vcpkg.json`, `rust-toolchain.toml`); the compiler and its version (the
+  file API's toolchains-v1) and the build's options (`MITCAD_*` switches
+  and the build type of `CMakeCache.txt`);
+- the fingerprints of the fixtures it requires.
+
+Markdown documents count for no test, and the release's version is left
+out of the files `release.sh version` sets for every release (the
+top-level `CMakeLists.txt`, `vcpkg.json`, `core/Cargo.toml`,
+`core/Cargo.lock`): otherwise no fingerprint would ever repeat. A different
+compiler or compiler version, other options, another OCCT patch or any
+changed source the test is built from runs it. Without the file API's
+reply every fingerprint covers the whole tree (the release scripts ask for
+it before they configure: `.cmake/api/v1/query/codemodel-v2` and
+`toolchains-v1` in the build folder); without a fingerprint (ctest cannot
+list the tests, no `CMakeCache.txt`) every geometry test runs.
+
+The passes are kept per platform (`std::env::consts::OS`) in a folder that
+outlives the build folders, beside the release's persistent cargo folder:
+`DIR/<platform>/<test>`, a line per fingerprint, `<fingerprint>\t<release>`
+(the release and RC in which it last passed), the last 20 of each test.
+After the run the fingerprint of each geometry test that passed is kept
+with this gate's release; the platforms' records never mix, also in a
+shared folder.
+
+The run's first lines and its `report.txt` say what was decided, after the
+results line:
+
+```
+Release fingerprints: 120 of 165 geometry tests skipped (passed with the same fingerprint in an earlier release gate on windows), 45 run
+  Skipped geometry.sheet (last passed in 0.62.0-rc2)
+  ...
+Release fingerprints kept: 45 passes as 0.63.0-rc1 in C:/dev/release-passed/windows
+```
+
+or `all 165 geometry tests run: first release with fingerprints on linux`
+when the platform has no record yet (the first release after this
+landed), or `all 165 geometry tests run (--all-geometry)`, which forces
+every geometry test to run (its passes are kept as usual).
+`<out>/release-skipped.tsv` lists the skipped tests (name, fingerprint,
+the release they last passed in); the release scripts copy it into the
+platform's release report. The skipped tests are not in `results.tsv`.
+The time saved is read from the release timelines, not measured apart.
+
 ## Known limits
 
 - Each test is its own ctest process; parallel ctests of one build tree

@@ -39,6 +39,28 @@ pub struct AppearanceReport {
     pub hidden: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub hidden_set: usize,
+    /// The file's bodies with a name of their own, and the replay's bodies
+    /// named so (mitcad#1802); a body record that stores no name leaves
+    /// MitCad's.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub named: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub named_set: usize,
+    /// The file's bodies in a folder of the browser, and the replay's
+    /// bodies put into it (mitcad#1802).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub in_folders: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub in_folders_set: usize,
+    /// The bodies the file took out of the design (a removal) that the
+    /// replay still holds at its end, because their removals did not come
+    /// in (mitcad#1802): hidden, and named in `gaps`.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub removed_left: usize,
+    /// The stored solids no body record names that were hidden: no
+    /// bodies of the design (mitcad#1802).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unnamed_hidden: usize,
     /// The document appearances made.
     pub appearances: Vec<AppearanceEntry>,
     /// The file's physical materials.

@@ -1088,10 +1088,80 @@ void add_overhang(const Shape& body, int n, const TopoDS_Shape& filled, const To
   }
 }
 
+using EdgesAt = NCollection_IndexedDataMap<TopoDS_Shape, ShapeList, TopTools_ShapeMapHasher>;
+
+// The face's own part of the chain within `box` (fill_overflow's `sectors`,
+// mitcad#1849): on the face's side of a plane through each of its edges
+// that runs from a corner of the chain, a vertex where one of the face's
+// selected edges meets one other selected edge (`edges_at`: the edges at
+// each vertex). The plane holds that edge and parts the two selected edges'
+// directions there (t1 - t2, the edges leaving the vertex): across the
+// chain at a tangent corner, the mitre at a sharp one, so that the faces on
+// either side of the corner part the space between them. None where the
+// face has no such edge (a chain's end, a face of one edge).
+std::optional<TopoDS_Shape> sector_of(const TopoDS_Face& face, const ShapeSet& selected, const EdgesAt& edges_at,
+                                      const Box& box) {
+  ShapeSet own;
+  for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+    own.Add(ex.Current());
+  }
+  std::optional<TopoDS_Shape> sector;
+  ShapeSet done;
+  for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& side = TopoDS::Edge(ex.Current());
+    if (selected.Contains(side) || BRep_Tool::Degenerated(side) || done.Contains(side)) {
+      continue;
+    }
+    done.Add(side);
+    for (TopExp_Explorer vx(side, TopAbs_VERTEX); vx.More(); vx.Next()) {
+      const TopoDS_Vertex& v = TopoDS::Vertex(vx.Current());
+      if (!edges_at.Contains(v)) {
+        continue;
+      }
+      TopoDS_Edge mine;
+      TopoDS_Edge next;
+      int count = 0;
+      for (const TopoDS_Shape& edge : edges_at.FindFromKey(v)) {
+        if (!selected.Contains(edge)) {
+          continue;
+        }
+        ++count;
+        if (own.Contains(edge)) {
+          mine = TopoDS::Edge(edge);
+        } else {
+          next = TopoDS::Edge(edge);
+        }
+      }
+      if (count != 2 || mine.IsNull() || next.IsNull()) {
+        continue;
+      }
+      const std::optional<gp_Dir> t1 = leaving(mine, v);
+      const std::optional<gp_Dir> t2 = leaving(next, v);
+      const std::optional<gp_Dir> along = leaving(side, v);
+      if (!t1 || !t2 || !along) {
+        continue;
+      }
+      // (On the face's side: its selected edge leaves the corner along t1.)
+      gp_Vec normal = gp_Vec(*t1) - gp_Vec(*t2);
+      normal -= gp_Vec(*along) * normal.Dot(gp_Vec(*along));
+      if (normal.Magnitude() < 1.0e-6) {
+        continue;
+      }
+      const gp_Dir n(normal);
+      const gp_Pnt at = BRep_Tool::Pnt(v);
+      const TopoDS_Face plane = BRepBuilderAPI_MakeFace(gp_Pln(at, n)).Face();
+      const TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(plane, at.Translated(gp_Vec(n))).Solid();
+      sector = boolean<BRepAlgoAPI_Common>(sector ? *sector : solid_of(box), half);
+    }
+  }
+  return sector;
+}
+
 } // namespace
 
 std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& owner, double contact,
-                                     double steepness, bool walls_too, bool at_corners) {
+                                     double steepness, bool walls_too, bool at_corners, const OverflowReach* reach,
+                                     bool sectors) {
   if (!(contact > 0.0) || !(steepness > 0.0)) {
     return std::nullopt;
   }
@@ -1183,6 +1253,8 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
     // (At corners, each selected edge of a face on its own, with the points
     // where the regions met other selected edges' ends.)
     std::vector<gp_Pnt> loose;
+    // (Whether any face has its own part of the chain, `sectors`.)
+    bool any_sector = false;
     std::vector<std::pair<int, TopoDS_Shape>> groups;
     for (const int n : spine) {
       if (!at_corners) {
@@ -1248,8 +1320,36 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
           tips.insert(tips.end(), at.begin(), at.end());
         }
       }
-      if (!any_rim || !within_distance(rims, own, contact + tolerance)) {
+      // How far the dressup reaches along this face (`reach`: by edge, a
+      // two-distance or distance-and-angle chamfer's leg on it, mitcad#1819;
+      // else `contact` on every face): a face narrower than the dressup's
+      // longer leg but not than its leg on that face is no narrow face.
+      // (Only which faces are narrow: the regions are looked for within the
+      // dressup's whole reach, `contact`, as its longer leg runs on along
+      // the other face and its bevel past the narrow face's far edge there.)
+      double reach_n = contact;
+      if (reach != nullptr && *reach) {
+        reach_n = 0.0;
+        for (TopExp_Explorer ex(own, TopAbs_EDGE); ex.More(); ex.Next()) {
+          const int e = body.edge_index(ex.Current());
+          if (e >= 0 && owner[static_cast<std::size_t>(e)] >= 0) {
+            reach_n = std::max(reach_n, (*reach)(body, owner[static_cast<std::size_t>(e)], e, n));
+          }
+        }
+      }
+      if (!any_rim || !(reach_n > 0.0) || !within_distance(rims, own, reach_n + tolerance)) {
         continue;
+      }
+      // With `sectors`, the regions within the face's own part of the chain
+      // (mitcad#1849), in a box as large as the largest looked in; a face
+      // with no corner of the chain is left to the other tries.
+      std::optional<TopoDS_Shape> sector;
+      if (sectors && single.IsNull()) {
+        sector = sector_of(face, selected, edges_at, grown(bounds_of(own), 3.0 * contact + 2.0 * tolerance));
+        any_sector = any_sector || sector.has_value();
+        if (!sector) {
+          continue;
+        }
       }
       // A chamfer of concave edges adds material (mitcad#1260): past a
       // convex far edge of the narrow face it would hang out over the face
@@ -1275,6 +1375,9 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
         std::optional<TopoDS_Shape> side = side_of(face, protrusion, near);
         if (!side) {
           continue;
+        }
+        if (sector) {
+          side = boolean<BRepAlgoAPI_Common>(*side, *sector);
         }
         // A chamfer of concave edges stays on the narrow face's side of its
         // surface: under a plane only a slab a quarter of the chamfer deep
@@ -1363,6 +1466,7 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
                 wall.solid = found;
                 wall.face = n;
                 wall.within = near;
+                wall.whole = sector.has_value();
                 wall.continued = boolean<BRepAlgoAPI_Common>(continued_into(found, face, solid, depth, tolerance), solid);
                 removes.Append(found);
                 rising.push_back(wall);
@@ -1394,7 +1498,7 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
         }
       }
     }
-    if (fills.IsEmpty() && removes.IsEmpty()) {
+    if ((sectors && !any_sector) || (fills.IsEmpty() && removes.IsEmpty())) {
       return std::nullopt;
     }
     std::vector<int> faces = spine;
@@ -1467,7 +1571,8 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
   });
 }
 
-std::string overflow_failure(const Shape& body, const std::vector<int>& owner, double contact) {
+std::string overflow_failure(const Shape& body, const std::vector<int>& owner, double contact, const char* role,
+                             const OverflowReach* reach, const char* cause) {
   if (!(contact > 0.0)) {
     return {};
   }
@@ -1496,6 +1601,8 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
         ends.Add(vx.Current());
       }
       for (const int n : edge_faces.at(e)) {
+        const double along =
+            reach != nullptr && *reach ? (*reach)(body, owner[static_cast<std::size_t>(e)], e, n) : contact;
         // The face's far edges nearer the edge than the chamfer reaches
         // (not those at the edge's own ends), and the faces beyond them.
         std::vector<std::string> beyond;
@@ -1508,7 +1615,7 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
           for (TopExp_Explorer vx(ex.Current(), TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
             meets = ends.Contains(vx.Current());
           }
-          if (meets || distance(ex.Current(), body.edge(e)) >= contact - tolerance) {
+          if (meets || distance(ex.Current(), body.edge(e)) >= along - tolerance) {
             continue;
           }
           for (const int f : edge_faces.at(rim)) {
@@ -1530,10 +1637,13 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
         const std::string& edge = body.edge_name(e);
         places.push_back(edge_place(edge));
         places.push_back(face_place(body.face_names(n).front()));
-        message = std::string("the chamfer is wider than the face beside its edge and cannot meet the ") +
+        // (Which face it would take away, painted, and why it cannot: the
+        // faces beyond do not meet it, mitcad#1819.)
+        message = std::string("the ") + role +
+                  " is wider than the face beside its edge and would take that face away, but cannot meet the " +
                   (beyond.size() == 1 ? "face" : "faces") + " beyond it";
-        first = "the chamfer of " + (edge.empty() ? std::string("an unnamed edge") : "edge " + edge) +
-                " is wider than face " + body.face_names(n).front() + " and cannot meet " +
+        first = std::string("the ") + role + " of " + (edge.empty() ? std::string("an unnamed edge") : "edge " + edge) +
+                " is wider than face " + body.face_names(n).front() + ", which it would take away, and cannot meet " +
                 (beyond.size() == 1 ? "face " : "faces ") + beyond.front();
         places.push_back(face_place(beyond.front()));
         for (std::size_t k = 1; k < beyond.size() && k < 3; ++k) {
@@ -1569,6 +1679,11 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
       const std::string such = " (and " + std::to_string(more) + " more such " + (more == 1 ? "face" : "faces") + ")";
       first += such;
       message += such;
+    }
+    // (Why it cannot, mitcad#1849.)
+    if (cause != nullptr) {
+      first += cause;
+      message += cause;
     }
     return placed_error(message, first, places);
   } catch (const Standard_Failure&) {
@@ -1795,8 +1910,11 @@ bool put_walls_back(Cutouts& cutouts, const Shape& chamfered, const std::string&
           best = static_cast<int>(k);
         }
       }
-      const std::optional<TopoDS_Shape> open =
-          best >= 0 ? side_of(made[static_cast<std::size_t>(best)], true, wall.within) : std::nullopt;
+      // (A wall found within its face's sector is put back whole, the face
+      // beyond grown out to meet the dressup, mitcad#1849.)
+      const std::optional<TopoDS_Shape> open = best >= 0 && !wall.whole
+                                                   ? side_of(made[static_cast<std::size_t>(best)], true, wall.within)
+                                                   : std::nullopt;
       if (open) {
         ShapeList cut;
         bool closed = true;

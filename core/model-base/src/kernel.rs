@@ -2014,15 +2014,142 @@ pub trait Kernel: Send {
 
     /// A surface body of chains of curves (each in order, running along
     /// it; open or closed; `features::path::wall_chains`) moved by the
-    /// helix's screw motion ([`HelixSpec`]: its axis, pitch, revolutions and
-    /// hand; no growth, ends or seam shift; the regions and bodies are not
-    /// used). Faces `<feature>:side(<curve>)`.
+    /// helix's screw motion ([`HelixSpec`]: its axis, pitch, revolutions,
+    /// hand, and its growth and ends as MitCad's construction builds them,
+    /// mitcad#1797; no seam shift; the regions and bodies are not used).
+    /// Faces `<feature>:side(<curve>)`.
     fn helix_sheet(
         &self,
         _spec: &HelixSpec<'_, Self::Shape>,
         _chains: &[Vec<crate::sweeps::PathCurve>],
     ) -> Result<Self::Shape, KernelError> {
         Err(KernelError::Unsupported("helices of curves"))
+    }
+
+    // Subdivision surfaces: Form bodies sewn from the bicubic patches of a
+    // control cage's limit surface (mitcad#1757; `features::form`).
+
+    /// A body of B-spline patches ([`PatchBodySpec`]): each patch a face
+    /// named by its `face` (the whole name, split suffix and all), sewn to
+    /// its neighbours within `tolerance`. With `closed` the faces must close
+    /// into one solid (oriented with its material inside), else it is an
+    /// error; without, the sewn faces are a surface body (a sheet). The
+    /// surfaces are kept as given: no face is joined with another.
+    fn patch_body(&self, _spec: &PatchBodySpec<'_>) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("bodies of surface patches"))
+    }
+
+    // Fill Cavity: the empty spaces of a body below a cap plane
+    // (mitcad#1818; `features::fill_cavity`).
+
+    /// The empty spaces of the body inside the box of [`CavitySpec`]: the
+    /// box less the body, one shape per solid, in a deterministic geometric
+    /// order. A piece's faces keep the names of the body faces they are
+    /// pieces of; the box's own faces are named after `feature`: the top
+    /// (the face on the cap) `top`, the four sides `<feature>:fill_side(k)`
+    /// (k 0 to 3) and the bottom `<feature>:fill_bottom`, pieces of one
+    /// face numbered `#k`. A box the body does not reach is one piece, the
+    /// box whole; a box the body fills has none. The body is not changed.
+    fn cavity_pieces(
+        &self,
+        _spec: &CavitySpec<'_, Self::Shape>,
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        Err(KernelError::Unsupported("cavity fills"))
+    }
+
+    // Sketches on cylindrical and conical faces (mitcad#1768;
+    // `crate::developed`).
+
+    /// The curves of a sketch on a cylindrical or conical face laid onto it
+    /// and ruled along its normals ([`WrappedCurvesSpec`]): a surface body
+    /// of one band per curve, faces `<feature>:band(<curve>)`, which Split
+    /// Face splits the face with.
+    fn wrapped_curves(&self, _spec: &WrappedCurvesSpec<'_>) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("curves laid onto curved faces"))
+    }
+
+    // Press Pull continued: planar faces carried Straight or Along their
+    // walls, tapered by a draft or a scale (mitcad#1850;
+    // `features::press_pull`).
+
+    /// Each face (planar; each name every face it finds) continued as a
+    /// profile ([`PressPullSpec`]) and the new piece joined to the body (a
+    /// positive distance) or cut from it (a negative one). Faces are named
+    /// after `feature` as an extrusion of a face's: `side(<edge>)` from
+    /// each edge of the face by its name in the body, `start(<face>)` on
+    /// the face and `end(<face>)` the moved end, which also keeps the
+    /// face's own names; `<face>` is the face's name that finds it alone.
+    /// Along walls that neither turn about one axis nor run along one
+    /// direction, a turn that runs into the body or comes round to the
+    /// face, and a taper that closes the face are errors in words, their
+    /// places painted. The body is left as it is.
+    fn press_pull(
+        &self,
+        _feature: FeatureUid,
+        _body: &Self::Shape,
+        _faces: &[FaceName],
+        _spec: &PressPullSpec,
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported(
+            "press pull straight or along the walls",
+        ))
+    }
+
+    /// How the walls of a planar face continue past it ([`FaceRun`]), for
+    /// Press Pull's handle and choices. A name that finds no face or
+    /// several, and a face that is not planar, are errors.
+    fn face_run(&self, _body: &Self::Shape, _face: &FaceName) -> Result<FaceRun, KernelError> {
+        Err(KernelError::Unsupported("how a face's walls continue"))
+    }
+
+    // Mesh bodies with texture coordinates (mitcad#1862; the glTF import,
+    // `exchange::gltf_import`).
+
+    /// A mesh body as [`Kernel::triangle_body`] makes one, each point with
+    /// its texture coordinates (`uvs`, one per point: u to the image's
+    /// right, v up it, the image once over 0 to 1), which the body keeps
+    /// for an appearance projected by them (`appearance::Projection::Uv`).
+    /// Errors as `triangle_body`, and when `uvs` is not one per point.
+    fn textured_triangle_body(
+        &self,
+        _points: &[[f64; 3]],
+        _triangles: &[[u32; 3]],
+        _uvs: &[[f64; 2]],
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported(
+            "mesh bodies with texture coordinates",
+        ))
+    }
+
+    // Faces and edges stored as other types read as what they are (the
+    // `faces` and `edges` queries, mitcad#1863; `api/face_lists.rs`).
+
+    /// The surfaces of these faces (by index in the order of
+    /// [`Kernel::faces`]), each as [`Kernel::face_geometry`] reads one
+    /// face: a face stored as a spline, a revolution or an extrusion
+    /// within 1e-6 mm of a plane, cylinder, cone, sphere or torus is that
+    /// one; the others `Other` with their stored type, as
+    /// [`Kernel::face_geometries`] gives them. An index out of range is an
+    /// error.
+    fn recognised_face_geometries(
+        &self,
+        _shape: &Self::Shape,
+        _faces: &[usize],
+    ) -> Result<Vec<SurfaceGeometry>, KernelError> {
+        Err(KernelError::Unsupported("recognised face geometries"))
+    }
+
+    /// The curves of these edges (by index in the order of
+    /// [`Kernel::edges`]), each as [`Kernel::edge_geometry`] reads one
+    /// edge: an edge stored as a spline within 1e-6 mm of a line or a
+    /// circle is that one; the others `Other` with their stored type
+    /// (`degenerate` for degenerate edges).
+    fn recognised_edge_geometries(
+        &self,
+        _shape: &Self::Shape,
+        _edges: &[usize],
+    ) -> Result<Vec<CurveGeometry>, KernelError> {
+        Err(KernelError::Unsupported("recognised edge geometries"))
     }
 }
 
@@ -2539,6 +2666,36 @@ impl KernelError {
     pub fn is_out_of_memory(message: &str) -> bool {
         message.contains(Self::OUT_OF_MEMORY)
     }
+
+    /// The geometry kernel's refusal of a taper that closes the whole
+    /// profile before the end of the extrusion (mitcad#1851;
+    /// geometry/src/taper_events.cpp). The geometry's own messages are no
+    /// model message templates (docs/translations.md): this one, and the
+    /// two below, are listed here so that the application translates them.
+    pub const TAPER_CLOSES_PROFILE: &'static str = "the taper closes the whole profile before the end of the extrusion; make the angle or the distance smaller";
+
+    /// The geometry kernel's message of a taper that closes part of the
+    /// profile on its way where it could not build that (a wrapped
+    /// emboss's taper, mitcad#1854; geometry/src/taper_events.cpp).
+    pub const TAPER_CLOSES_PART: &'static str = "the taper closes part of the profile on its way, and the geometry kernel could not build that; make the angle smaller";
+
+    /// The geometry kernel's message of a taper it could not lean
+    /// (geometry/src/sweep.cpp taper_failure, mitcad#1851): the angle in
+    /// degrees and the extrusion's length in millimetres as it writes them.
+    pub fn taper_not_leaned(degrees: &str, length: &str) -> String {
+        format!(
+            "the taper failed: the geometry kernel could not lean the profile's walls by {degrees} degrees over {length} mm"
+        )
+    }
+
+    /// The geometry kernel's message of a taper whose profile changes its
+    /// shape within the extrusion where it could not build that (walls
+    /// meeting or vanishing; sweep.cpp taper_failure, mitcad#1851).
+    pub fn taper_not_resolved(degrees: &str, at: &str, length: &str) -> String {
+        format!(
+            "the taper failed: leaning by {degrees} degrees changes the profile's shape {at} mm from the sketch plane, before the extrusion's end {length} mm from it, and the geometry kernel could not build that"
+        )
+    }
 }
 
 impl fmt::Display for KernelError {
@@ -2660,7 +2817,11 @@ pub enum ExtrudeStart<S> {
     /// The profile plane moved along the sketch normal.
     Offset(f64),
     /// The profile projected along the sketch normal onto a plane or planar
-    /// face, moved along its normal by the bound's offset.
+    /// face, moved along its normal by the bound's offset; or onto a curved
+    /// face (mitcad#1848), moved along the sketch normal by the offset,
+    /// where the projection first reaches it from the profile's side: each
+    /// side then runs its distance from that outline (every line along the
+    /// direction the same length) or up to its target, without a taper.
     Object(Bound<S>),
 }
 
@@ -3362,4 +3523,143 @@ pub struct HelixCurveSpec {
 pub struct SectionPart<'a, S> {
     pub shape: &'a S,
     pub faces: &'a [FaceName],
+}
+
+// Subdivision surfaces (mitcad#1757).
+
+/// A non-rational B-spline patch of [`Kernel::patch_body`]: degrees along u
+/// and v, the poles `nu` by `nv` (pole (i, j), i along u, at `i * nv + j`),
+/// the distinct knots of each direction with their multiplicities (they
+/// add up to the poles plus the degree plus one), and the name of the face
+/// it becomes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfacePatch {
+    pub face: FaceName,
+    pub u_degree: u32,
+    pub v_degree: u32,
+    pub nu: usize,
+    pub nv: usize,
+    pub poles: Vec<Vec3>,
+    pub u_knots: Vec<f64>,
+    pub u_mults: Vec<u32>,
+    pub v_knots: Vec<f64>,
+    pub v_mults: Vec<u32>,
+}
+
+/// Input of [`Kernel::patch_body`].
+#[derive(Debug, Clone, Copy)]
+pub struct PatchBodySpec<'a> {
+    pub patches: &'a [SurfacePatch],
+    /// The patches close into a solid.
+    pub closed: bool,
+    /// How far apart the patches' shared boundaries may lie, mm.
+    pub tolerance: f64,
+}
+
+// Fill Cavity (mitcad#1818).
+
+/// Input of [`Kernel::cavity_pieces`]: a box in the frame of the cap, the
+/// points `origin + u x_axis + v y_axis + w normal` with `min[i] <= (u, v,
+/// w)[i] <= max[i]`. `x_axis` and `normal` are unit vectors at right
+/// angles, `y_axis` is `normal × x_axis`; the box's top is at `w =
+/// max[2]` (the cap, 0 when `origin` lies on it), its bottom at `min[2]`.
+/// Millimetres, in the body's coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct CavitySpec<'a, S> {
+    pub feature: FeatureUid,
+    pub body: &'a S,
+    /// The name of the box's top face.
+    pub top: &'a FaceName,
+    pub origin: Vec3,
+    pub x_axis: Vec3,
+    pub normal: Vec3,
+    pub min: Vec3,
+    pub max: Vec3,
+}
+
+// Sketches on cylindrical and conical faces (mitcad#1768).
+
+/// Input of [`Kernel::wrapped_curves`]: curves of a sketch whose plane
+/// (`frame`) is parallel to the axis, laid onto the cylinder of `axis` and
+/// `radius` (or the cone of `half_angle`, `axis` from its apex and `radius`
+/// its radius at the frame origin's height) exactly as
+/// [`EmbossWrapSpec`] lays a profile's edges, and each ruled along the
+/// surface's normals from the surface moved `inner` along them to the one
+/// moved `outer` (`inner < outer`, negative towards the axis). A curve that
+/// closes on the face (a line once around a cylinder) makes a closed band.
+#[derive(Debug, Clone, Copy)]
+pub struct WrappedCurvesSpec<'a> {
+    pub feature: FeatureUid,
+    pub frame: SketchFrame,
+    /// Each curve named by its sketch curve (`c3`).
+    pub curves: &'a [crate::segments::NamedSegment],
+    pub axis: Axis,
+    pub radius: f64,
+    /// Radians: 0 for a cylinder.
+    pub half_angle: f64,
+    pub inner: f64,
+    pub outer: f64,
+}
+
+// Press Pull continued (mitcad#1850).
+
+/// How [`Kernel::press_pull`] carries a face: along its own normal, the
+/// new walls straight from its outline, or along its walls (turning with
+/// them about their axis, or along their direction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PressPullRun {
+    Straight,
+    Along,
+}
+
+/// How the new piece widens or narrows over the run, outward positive:
+/// each wall leaning by `angle` (radians) as an extrusion's taper leans it,
+/// or the face's outline scaled about its area centre to `end` (1.1 for
+/// 110 %) at the end, linearly with the run's length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PressPullTaper {
+    None,
+    Draft { angle: f64 },
+    Scale { end: f64 },
+}
+
+/// Input of [`Kernel::press_pull`]: `distance` (mm, not zero) is the
+/// length of the path of the face's area centre, an arc's for a turn;
+/// positive out of the material.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PressPullSpec {
+    pub run: PressPullRun,
+    pub distance: f64,
+    pub taper: PressPullTaper,
+}
+
+/// How a face's walls continue ([`FaceRun`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FaceAlong {
+    /// The walls continue neither way: the error a person reads, with its
+    /// places (the walls that stop the run) in the placed form
+    /// ([`crate::notice::FeatureError::from_text`]).
+    Refused { error: String },
+    /// Every wall runs along `direction` (a unit vector out of the
+    /// material): the face is carried along it.
+    Straight { direction: [f64; 3] },
+    /// Every wall is of revolution about the axis through `origin` along
+    /// `axis` (a unit vector; the right hand turn about it goes out of the
+    /// material): the face turns about it, its area centre `radius` from it.
+    Turn {
+        origin: [f64; 3],
+        axis: [f64; 3],
+        radius: f64,
+    },
+}
+
+/// What [`Kernel::face_run`] gives: the face's area centre, its normal out
+/// of the material, how far its outline reaches from the centre at its
+/// farthest point (mm), and how its walls continue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceRun {
+    pub centre: [f64; 3],
+    pub normal: [f64; 3],
+    pub reach: f64,
+    pub along: FaceAlong,
 }

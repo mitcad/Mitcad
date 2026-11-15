@@ -402,9 +402,18 @@ pub mod cam;
 // Linked designs from outside the project: whether a link would be
 // followed, and the file copied into the project to link (mitcad#1719).
 pub use document::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+// Form: control cages, their edits and Catmull-Clark subdivision to the
+// limit surface's patches, the crate mitcad-subdiv (mitcad#1757).
+pub use mitcad_subdiv as subdiv;
 // The design and the files it refers to packed into a zip for a report
 // (mitcad#1795).
 pub use document::{DesignPackage, PackageExtra, UNSAVED_DESIGN_NAME};
 // Results taken from a document for its result store and written on
 // another thread (an autosave's, mitcad#1796).
 pub use document::ResultWrites;
+// Convert to Features: a placed library part replaced by its source's
+// features, every reference to it rewritten (mitcad#1815).
+pub use document::{CONVERT_LABEL, ConvertedPart};
+// Sketches on cylindrical and conical faces: the face's development and
+// the map between the sketch and the face (mitcad#1768).
+pub use mitcad_model_base::developed;

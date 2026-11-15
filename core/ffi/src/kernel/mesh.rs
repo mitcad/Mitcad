@@ -35,5 +35,16 @@ pub mod ffi {
         /// indices each. Errors without triangles or with an index out of
         /// range.
         fn mesh_from_triangles(vertices: &[f64], triangles: &[u32]) -> Result<SharedPtr<Shape>>;
+
+        /// A mesh body as `mesh_from_triangles` makes one, each vertex with
+        /// its texture coordinates (`uvs` u, v after each other, one pair
+        /// per vertex; mitcad#1862), kept as its triangulation's UV nodes.
+        /// Errors as `mesh_from_triangles`, and when `uvs` is not one pair
+        /// per vertex or holds a number that is not finite.
+        fn mesh_from_textured_triangles(
+            vertices: &[f64],
+            triangles: &[u32],
+            uvs: &[f64],
+        ) -> Result<SharedPtr<Shape>>;
     }
 }

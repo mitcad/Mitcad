@@ -64,10 +64,19 @@ struct EmbossWrapSpec {
   // a positive taper, the corners where neighbouring offsets meet, and an
   // edge whose corners pass each other drops out (its neighbours meet).
   // Each wall is ruled between its edge on the foot and its moved edge (or
-  // that corner) on the top, and the faces are sewn into the solid. A
-  // taper that collapses a region (a loop keeps fewer than two edges,
-  // neighbours do not meet, the moved edges cross) throws
-  // std::invalid_argument naming the region.
+  // that corner) on the top, and the faces are sewn into the solid.
+  // Where those moved loops collapse (a loop keeps fewer than two edges,
+  // neighbours do not meet, the moved edges cross: walls that meet or
+  // vanish on the way, mitcad#1854), the profile laid out on the top's
+  // development is tapered as an extrusion's taper, its topology events
+  // resolved (a slot filling from where its walls meet, a narrow part
+  // ending there), and bent onto the surfaces: a point h up goes h / depth
+  // of the way from the foot to the top at its parameters; the foot and
+  // the top lie on the surfaces, the walls are B-splines within 1e-7 of
+  // their size of the bend. A taper that closes the whole profile before
+  // the top throws std::invalid_argument naming the region, as before;
+  // one this cannot build throws it in words (the region and the reason
+  // in its detail).
   double taper = 0.0;
 };
 
@@ -124,5 +133,31 @@ struct EmbossProjectSpec {
 // partly off it (the message names the region), and std::runtime_error
 // when the solid cannot be built. The body is left as it is.
 ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec);
+
+// Sketch curves on a cylindrical or conical face (mitcad#1768): curves of
+// a sketch whose plane is parallel to `axis`, laid onto the cylinder of
+// `axis` and `radius` (or the cone of `half_angle`, `radius` its radius at
+// the frame origin's height) exactly as EmbossWrapSpec lays a profile's
+// edges, and each ruled along the surface's normals from the surface moved
+// `inner` along them to the surface moved `outer` (inner < outer; negative
+// towards the axis): a surface body of one band per curve, named
+// <feature>:band(<segment name>), which crosses the face along the curve.
+// Split Face splits a face with it. A curve that closes on the face (a
+// line once around a cylinder) is a closed band.
+struct WrappedCurvesSpec {
+  std::string feature;
+  Frame frame;
+  std::vector<Segment> curves;
+  gp_Ax1 axis;
+  double radius = 0.0;
+  double half_angle = 0.0; // radians: 0 for a cylinder
+  double inner = 0.0;
+  double outer = 0.0;
+};
+
+// Throws std::invalid_argument for no curves, a plane across the axis, a
+// band of no width or one that reaches the axis, and std::runtime_error
+// when a curve cannot be laid onto the face.
+ShapePtr wrapped_curves(const WrappedCurvesSpec& spec);
 
 } // namespace mitcad::geometry

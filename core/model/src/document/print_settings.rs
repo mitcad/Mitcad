@@ -750,17 +750,14 @@ impl<K: Kernel> Document<K> {
         let label = label.unwrap_or_else(|| format!("Set {}", property.key));
         let stored = property.clone();
         let set = set.to_owned();
+        // (A changed layer height evaluates the print-bridged holes again:
+        // `apply_with` compares it for every edit, mitcad#1516, mitcad#1831.)
         self.apply_with(|state| {
-            // Print-bridged holes take their layers from the design's layer
-            // height (mitcad#1516): they are evaluated again when it
-            // changes, the rest stays.
-            let layer = state.design_layer_height();
             if let Some(ty) = own_type {
                 state.put_print_type(ty);
             }
             state.properties.put(owner, &set, property);
-            let recompute = state.design_layer_height() != layer && state.has_print_bridging();
-            Ok((label, (), recompute))
+            Ok((label, (), false))
         })?;
         Ok(stored)
     }

@@ -3,16 +3,20 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepFill.hxx>
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools.hxx>
@@ -40,10 +44,12 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp.hxx>
 #include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Lin.hxx>
@@ -51,7 +57,9 @@
 
 #include "emboss_taper.hpp"
 #include "history.hpp"
+#include "space_map.hpp"
 #include "sweep.hpp"
+#include "taper_events.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -77,6 +85,11 @@ struct Wrap {
   // from its apex along a generator at the reference circle's parameters.
   double shift = 0.0;
   double top_rho = 0.0;
+  // The taper's angle and how far the top lies from the foot along the
+  // surface's normals (shift = depth tan(taper)): a taper whose walls meet
+  // or vanish on the way is built from them (mitcad#1854).
+  double taper = 0.0;
+  double depth = 0.0;
 };
 
 // A flat point (s, t) as the cone's parameters: the angle about the axis
@@ -376,19 +389,16 @@ gp_Pnt2d top_parameters(const Wrap& wrap, const gp_Pnt2d& flat) {
                   std::hypot(flat.X(), flat.Y()) - wrap.top_rho);
 }
 
-// The top's edges of a tapered emboss (mitcad#1547): the profile face laid
-// out on the top surface's development, its loops moved there by the
-// taper's shift with OCCT's offset (exact on the development, whose lengths
-// are the surface's), and the moved edges laid onto the top surface. Each
-// wrapped edge's top is replaced by its moved edge, with the same
-// parameters' direction as its base; the base edges stay.
-void tapered_tops(const Wrap& wrap, const detail::SweepFace& profile, EdgeMap& edges) {
+using LaidEdges = NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>;
+
+// The profile face laid out on the top surface's development (mitcad#1547),
+// in the plane z = 0, edge for edge (`laid`: each edge's image).
+TopoDS_Face developed_face(const Wrap& wrap, const detail::SweepFace& profile, const EdgeMap& edges,
+                           LaidEdges& laid) {
   const TopoDS_Face& planar = profile.face;
   BRep_Builder builder;
   const occ::handle<Geom_Surface> plane = BRep_Tool::Surface(planar);
   const auto in_plane = [](const gp_Pnt2d& p) { return gp_Pnt(p.X(), p.Y(), 0.0); };
-  // The profile face on the development, edge for edge.
-  NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> laid;
   NCollection_DataMap<TopoDS_Shape, TopoDS_Vertex, TopTools_ShapeMapHasher> laid_vertices;
   const auto laid_vertex = [&](const TopoDS_Vertex& flat) {
     if (!laid_vertices.IsBound(flat)) {
@@ -456,6 +466,19 @@ void tapered_tops(const Wrap& wrap, const detail::SweepFace& profile, EdgeMap& e
     builder.Add(face, wire);
   }
   face.Orientation(planar.Orientation());
+  return face;
+}
+
+// The top's edges of a tapered emboss (mitcad#1547): the profile face laid
+// out on the top surface's development, its loops moved there by the
+// taper's shift with OCCT's offset (exact on the development, whose lengths
+// are the surface's), and the moved edges laid onto the top surface. Each
+// wrapped edge's top is replaced by its moved edge, with the same
+// parameters' direction as its base; the base edges stay.
+void tapered_tops(const Wrap& wrap, const detail::SweepFace& profile, EdgeMap& edges) {
+  BRep_Builder builder;
+  LaidEdges laid;
+  const TopoDS_Face face = developed_face(wrap, profile, edges, laid);
   const detail::MovedLoops loops = detail::moved_loops(face, wrap.shift, detail::region_list(profile.regions));
 
   // The moved edges on the top surface; corners shared where they meet.
@@ -598,6 +621,125 @@ ShapePtr tapered_solid(const std::string& feature, const Wrap& wrap, const detai
   return namer.shape();
 }
 
+// The steps of wrapped_events, on stderr (mitcad#1854: diagnostics while a
+// failure seen only in the Windows VM's run is looked into).
+void trace_events(const std::string& what) {
+  std::fprintf(stderr, "wrapped taper: %s\n", what.c_str());
+  std::fflush(stderr);
+}
+
+// A tapered profile whose walls meet or vanish on the way (mitcad#1854: a
+// slot the taper closes, a narrow part it eats away), where the top's
+// moved loops collapse (`collapse`, the reason): built flat and bent onto
+// the surfaces. Flat, the profile laid out on the top's development (as
+// the top's loops are moved on it) is an extrusion's taper along +Z by the
+// depth, whose topology events the extrusion's taper resolves
+// (taper_events.hpp); a point (x, y, h) of it goes to the point h / depth
+// of the way from the foot to the top along the line between their points
+// at the top development's parameters of (x, y), on which the untapered
+// emboss's walls lie (space_map.hpp). Its foot and top lie on the two
+// surfaces exactly; at the top its loops are those moved by the shift,
+// with mitred corners, as tapered_tops moves them. Rethrows the collapse
+// when the taper closes the whole profile before the top (the emboss's
+// own refusal, as mitcad#1851's); throws in words when this cannot be
+// built (the reason in the detail, the foot's edges as places).
+ShapePtr wrapped_events(const std::string& feature, const Wrap& wrap, const detail::SweepFace& profile,
+                        const EdgeMap& edges, const std::string& collapse) {
+  trace_events("the top's loops collapse: " + error_message(collapse));
+  std::vector<ErrorPlace> places;
+  for (EdgeMap::Iterator it(edges); it.More() && places.size() < 32; it.Next()) {
+    const BRepAdaptor_Curve curve(it.Value().base);
+    places.push_back(point_place(curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2.0)));
+  }
+  const std::string why = error_message(collapse);
+  if (!(wrap.depth > 0.0)) {
+    throw std::invalid_argument(detail::taper_closes_part(why, places));
+  }
+  // The profile on the development, its edges sweeping the walls they do.
+  LaidEdges laid;
+  detail::SweepFace developed;
+  developed.face = developed_face(wrap, profile, edges, laid);
+  developed.regions = profile.regions;
+  for (const auto& [edge, name] : profile.edges) {
+    if (laid.IsBound(edge)) {
+      developed.edges.emplace_back(TopoDS::Edge(laid.Find(edge).Oriented(edge.Orientation())), name);
+    }
+  }
+  ShapePtr straight;
+  try {
+    straight = detail::distance_side(developed, wrap.depth, wrap.taper, gp::DZ(),
+                                     detail::cap_names(feature, "start", profile),
+                                     detail::cap_names(feature, "end", profile));
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::invalid_argument& error) {
+    // The whole profile closes: the emboss's own refusal (as mitcad#1851's
+    // projected one).
+    trace_events("the flat taper refused: " + error_message(error.what()));
+    throw std::invalid_argument(collapse);
+  } catch (const std::exception& error) {
+    if (std::string(error.what()).find("out of memory") != std::string::npos) {
+      throw;
+    }
+    trace_events("the flat taper failed: " + error_message(error.what()));
+    throw std::invalid_argument(detail::taper_closes_part(why + "; " + error_message(error.what()), places));
+  }
+  // A profile the taper closes before the top ends there (a convex one, as
+  // an extrusion's taper builds it): the emboss would not reach its top.
+  if (!straight || straight->occt().IsNull()) {
+    trace_events("the flat taper built nothing");
+    throw std::invalid_argument(detail::taper_closes_part(why, places));
+  }
+  const double reached = detail::bounds_of(straight->occt()).CornerMax().Z();
+  trace_events("the flat taper: " + std::to_string(straight->face_count()) + " faces, " +
+               (detail::is_valid(straight->occt()) ? "valid" : "INVALID") + ", reaching " + std::to_string(reached) +
+               " of " + std::to_string(wrap.depth));
+  if (reached < wrap.depth * (1.0 - 1.0e-7) - wrap.tolerance) {
+    throw std::invalid_argument(collapse); // (the emboss's own refusal, as #1851)
+  }
+  // The point h / depth of the way from the foot to the top.
+  const Wrap* on = &wrap;
+  const detail::SpaceMap bend = [on](const gp_Pnt& p) {
+    const gp_Pnt2d uv = top_parameters(*on, gp_Pnt2d(p.X(), p.Y()));
+    const gp_Pnt foot = on->base->Value(uv.X(), uv.Y());
+    const gp_Pnt top = on->top->Value(uv.X(), uv.Y());
+    return foot.Translated(gp_Vec(foot, top) * (p.Z() / on->depth));
+  };
+  // The foot on the foot's surface and the top on the top's, at the top
+  // development's parameters of their points.
+  const detail::LaidFaces caps = [on](const TopoDS_Face& face) -> std::optional<detail::LaidFace> {
+    const BRepAdaptor_Surface surface(face);
+    if (surface.GetType() != GeomAbs_Plane || !surface.Plane().Axis().Direction().IsParallel(gp::DZ(), 1.0e-9)) {
+      return std::nullopt;
+    }
+    const double z = surface.Plane().Location().Z();
+    const double near = std::max(1.0e-5, 1.0e-7 * on->depth);
+    const auto parameters = [on](const gp_Pnt& p) { return top_parameters(*on, gp_Pnt2d(p.X(), p.Y())); };
+    if (std::abs(z) <= near) {
+      return detail::LaidFace{on->base, parameters};
+    }
+    if (std::abs(z - on->depth) <= near) {
+      return detail::LaidFace{on->top, parameters};
+    }
+    return std::nullopt;
+  };
+  const double tolerance = std::max(wrap.tolerance, 1.0e-7);
+  int foot = 0;
+  int top = 0;
+  for (TopExp_Explorer f(straight->occt(), TopAbs_FACE); f.More(); f.Next()) {
+    if (const std::optional<detail::LaidFace> cap = caps(TopoDS::Face(f.Current()))) {
+      ++(cap->surface == wrap.base ? foot : top);
+    }
+  }
+  trace_events("laid on the foot " + std::to_string(foot) + ", on the top " + std::to_string(top) + " faces");
+  if (ShapePtr bent = detail::mapped_solid(*straight, bend, caps, tolerance)) {
+    trace_events("bent");
+    return bent;
+  }
+  trace_events("the bend failed");
+  throw std::invalid_argument(detail::taper_closes_part(why, places));
+}
+
 // The solid of one profile face wrapped and grown.
 ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detail::SweepFace& profile) {
   const TopoDS_Face& planar = profile.face;
@@ -633,7 +775,13 @@ ShapePtr wrapped_solid(const std::string& feature, const Wrap& wrap, const detai
                                   top));
   }
   if (wrap.shift != 0.0) {
-    tapered_tops(wrap, profile, edges);
+    // Where the top's moved loops collapse, the walls meet or vanish on
+    // the way: built flat and bent (mitcad#1854).
+    try {
+      tapered_tops(wrap, profile, edges);
+    } catch (const std::invalid_argument& collapse) {
+      return wrapped_events(feature, wrap, profile, edges, collapse.what());
+    }
   }
 
   // The loops on both cylinders, edge for edge in the same order.
@@ -782,6 +930,8 @@ ShapePtr wrapped_cone(const EmbossWrapSpec& spec) {
     wrap.rho0 = spec.radius / wrap.sin_angle;
     wrap.top_rho = wrap.rho0 + offset * std::cos(angle) / wrap.sin_angle;
     wrap.shift = std::abs(offset) * std::tan(spec.taper);
+    wrap.taper = spec.taper;
+    wrap.depth = std::abs(offset);
     wrap.base = new Geom_ConicalSurface(wrap.frame, angle, spec.radius);
     // The cone moved along its normals by the offset: the same angle, the
     // radius and the place along the axis it has at the same parameters.
@@ -851,6 +1001,8 @@ ShapePtr wrapped_emboss(const EmbossWrapSpec& spec) {
     wrap.base = new Geom_CylindricalSurface(wrap.frame, spec.radius);
     wrap.top = new Geom_CylindricalSurface(wrap.frame, spec.to_radius);
     wrap.shift = std::abs(spec.to_radius - spec.radius) * std::tan(spec.taper);
+    wrap.taper = spec.taper;
+    wrap.depth = std::abs(spec.to_radius - spec.radius);
 
     const Frame flat = flat_frame(spec.frame, wrap.frame);
     std::vector<ShapePtr> parts;
@@ -865,6 +1017,108 @@ ShapePtr wrapped_emboss(const EmbossWrapSpec& spec) {
       parts.push_back(wrapped_solid(spec.feature, wrap, face));
     }
     return detail::finished(*detail::fused(parts, "the emboss"), "the emboss");
+  });
+}
+
+// Sketch curves of a cylindrical or conical face laid onto it and ruled
+// along its normals (WrappedCurvesSpec, mitcad#1768): the curves are
+// wrapped as an emboss wraps a profile's edges, onto the surfaces moved
+// `inner` and `outer` along the normals, and each pair of edges bounds a
+// ruled band.
+ShapePtr wrapped_curves(const WrappedCurvesSpec& spec) {
+  if (spec.curves.empty()) {
+    throw std::invalid_argument("no curves to lay onto the face");
+  }
+  if (!(spec.outer > spec.inner)) {
+    throw std::invalid_argument("the curves' band on the face has no width");
+  }
+  const bool cone = spec.half_angle != 0.0;
+  const double angle = spec.half_angle;
+  if (cone && !(angle > 1.0e-6 && angle < kTwoPi / 4.0 - 1.0e-6)) {
+    throw std::invalid_argument("the cone's half angle must lie between 0 and 90 degrees");
+  }
+  detail::require_positive("face radius", spec.radius);
+  const double reach = cone ? std::cos(angle) : 1.0;
+  if (!(spec.radius + spec.inner * reach > 1.0e-7 * spec.radius)) {
+    throw std::invalid_argument("the curves' band reaches the face's axis");
+  }
+  const gp_Dir axis = spec.axis.Direction();
+  gp_Vec normal(spec.frame.normal());
+  if (std::abs(normal.Dot(gp_Vec(axis))) > 1.0e-6) {
+    throw std::invalid_argument("the curves' plane must be parallel to the face's axis");
+  }
+  return detail::run("curves on the face", [&] {
+    gp_Pnt centre = spec.axis.Location();
+    if (cone) {
+      const double height = gp_Vec(centre, spec.frame.origin).Dot(gp_Vec(axis));
+      centre = centre.Translated(gp_Vec(axis) * height);
+    }
+    // Towards the curves' plane from the axis.
+    if (gp_Vec(centre, spec.frame.origin).Dot(normal) < 0.0) {
+      normal.Reverse();
+    }
+    normal -= gp_Vec(axis) * normal.Dot(gp_Vec(axis));
+    Wrap wrap;
+    wrap.frame = gp_Ax3(centre, axis, gp_Dir(normal));
+    wrap.tolerance =
+        1.0e-7 * std::max(1.0, spec.radius + std::max(std::abs(spec.inner), std::abs(spec.outer)));
+    if (cone) {
+      wrap.cone = true;
+      wrap.sin_angle = std::sin(angle);
+      wrap.rho0 = spec.radius / wrap.sin_angle;
+      // The cone moved along its normals by an offset: the same angle and
+      // parameters, as an emboss's top.
+      const auto moved = [&](double offset) {
+        gp_Ax3 shifted = wrap.frame;
+        shifted.SetLocation(centre.Translated(gp_Vec(axis) * (-offset * wrap.sin_angle)));
+        return occ::handle<Geom_Surface>(
+            new Geom_ConicalSurface(shifted, angle, spec.radius + offset * std::cos(angle)));
+      };
+      wrap.radius = spec.radius;
+      wrap.to = spec.radius;
+      wrap.base = moved(spec.inner);
+      wrap.top = moved(spec.outer);
+    } else {
+      // The base's radius for wrapped_edge's radial image; the angles are
+      // the face's (uv_curve at spec.radius).
+      wrap.radius = spec.radius + spec.inner;
+      wrap.to = spec.radius + spec.outer;
+      wrap.base = new Geom_CylindricalSurface(wrap.frame, wrap.radius);
+      wrap.top = new Geom_CylindricalSurface(wrap.frame, wrap.to);
+    }
+    const Frame flat = flat_frame(spec.frame, wrap.frame);
+    BRep_Builder builder;
+    TopoDS_Compound bands;
+    builder.MakeCompound(bands);
+    std::vector<Shape::NamedFace> named;
+    for (const Segment& segment : spec.curves) {
+      const TopoDS_Edge edge = segment_edge(flat, segment);
+      const UvCurve uv = cone ? cone_uv_curve(edge, wrap) : uv_curve(edge, spec.radius);
+      const gp_Pnt2d a = uv.curve->Value(uv.first);
+      const gp_Pnt2d b = uv.curve->Value(uv.last);
+      TopoDS_Vertex base[2];
+      TopoDS_Vertex top[2];
+      builder.MakeVertex(base[0], wrap.base->Value(a.X(), a.Y()), wrap.tolerance);
+      builder.MakeVertex(top[0], wrap.top->Value(a.X(), a.Y()), wrap.tolerance);
+      // A curve that closes on the face (a ring around it) ends where it
+      // starts: one vertex.
+      const gp_Pnt end = wrap.base->Value(b.X(), b.Y());
+      if (end.Distance(BRep_Tool::Pnt(base[0])) <= 10.0 * wrap.tolerance) {
+        base[1] = base[0];
+        top[1] = top[0];
+      } else {
+        builder.MakeVertex(base[1], end, wrap.tolerance);
+        builder.MakeVertex(top[1], wrap.top->Value(b.X(), b.Y()), wrap.tolerance);
+      }
+      const WrappedEdge wrapped = wrapped_edge(wrap, uv, base, top);
+      const TopoDS_Face band = BRepFill::Face(wrapped.base, wrapped.top);
+      if (band.IsNull()) {
+        throw std::runtime_error("a curve could not be laid onto the face");
+      }
+      builder.Add(bands, band);
+      named.push_back({band, {spec.feature + ":band(" + segment.name + ")"}});
+    }
+    return std::make_shared<Shape>(bands, named);
   });
 }
 

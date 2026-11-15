@@ -60,7 +60,10 @@ pub mod ffi {
         ) -> Result<SharedPtr<Shape>>;
         /// The chains moved by the screw motion about the axis (x, y, z,
         /// dx, dy, dz) that rises `pitch` per turn for `revolutions` turns
-        /// (mitcad#1777).
+        /// (mitcad#1777), moving out `growth` per turn, with the ends
+        /// (start flat, start transition, end transition, end flat;
+        /// radians; mitcad#1797).
+        #[allow(clippy::too_many_arguments)]
         fn helix_sheet(
             feature: &str,
             curves: &[SweepCurve],
@@ -69,6 +72,8 @@ pub mod ffi {
             pitch: f64,
             revolutions: f64,
             left_handed: bool,
+            growth: f64,
+            ends: &[f64],
         ) -> Result<SharedPtr<Shape>>;
     }
 }

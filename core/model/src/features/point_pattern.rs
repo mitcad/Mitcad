@@ -289,6 +289,21 @@ impl<K: Kernel> Resolver for PointResolver<'_, '_, K> {
     fn renamed(&mut self, what: &str, stored: &str, found: &str, maker: FeatureUid) {
         self.ctx.found_renamed(what, &stored, &found, maker);
     }
+    // A 3D sketch's points and curves (mitcad#1832), in its component's
+    // coordinates as its planar sketches are.
+    fn spatial_path(
+        &mut self,
+        path: &super::spatial_path::SpatialPath,
+    ) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+        path.resolve(self.ctx)
+    }
+    fn spatial_entity(
+        &mut self,
+        sketch: FeatureUid,
+        entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        super::geom_ref::spatial_entity_in(self.ctx, sketch, entity)
+    }
 }
 
 fn point<K: Kernel>(

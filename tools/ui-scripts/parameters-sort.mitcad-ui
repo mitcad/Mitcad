@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: MIT
+# Edit Parameters sorted by a column (mitcad#1866, GitHub mitcad/Mitcad#338)
+# on parameters-sort.json: the user parameters len10 = 1 in, Width = 2 cm
+# (a favorite), len2 = 30 mm and count = 3, in this creation order, and
+# the model parameters of First block and Second block:
+#   1. The table opens in the creation order: Favorites, User Parameters,
+#      then Model Parameters with First block before Second block.
+#   2. Name's header: count, len2, len10, Width (natural order, d2 before
+#      d10, case-insensitive); again: the reverse; a third time: the
+#      creation order. The groups stay where they are.
+#   3. Value's header: Width (20 mm), len10 (25.4 mm), len2 (30 mm), then
+#      count (no unit); again: the reverse, kept in the settings.
+#   4. len2's expression edited to 10 mm: the row moves to its place in
+#      the sort and stays selected; the search filter hides count.
+#   5. OK and Edit Parameters again: the sort is kept; Value's header once
+#      more: the creation order.
+#   6. Sorted by Name, Add User Parameter len5: its row is selected in its
+#      place; Name twice: the creation order, kept in the settings.
+# Run by tools/ui-parameters-sort-test.sh (Linux),
+# tools/ui-windows-parameters-sort-test.ps1 (Windows) and
+# tools/ui-macos-parameters-sort-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting parameters/sort none
+
+# 1. The creation order.
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] len10, Width, len2, count [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+wait-log '^Parameters header name at '
+wait-log '^Parameters header value at '
+wait-idle
+
+# 2. Name: ascending, descending, the creation order.
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name ascending$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len2, len10, Width [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+expect-setting parameters/sort 'name ascending'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name descending$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] Width, len10, len2, count [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted in creation order$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] len10, Width, len2, count [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+expect-setting parameters/sort none
+wait-idle
+
+# 3. Value: by the numbers in mm (1 in = 25.4 mm), then the number
+# without a unit; then the reverse.
+mark
+dialog-click-logged '^Parameters header value at '
+wait-log '^Parameters sorted by value ascending$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] Width, len10, len2, count [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header value at '
+wait-log '^Parameters sorted by value descending$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len2, len10, Width [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^[]+$'
+wait-log '^Parameters len2 expression at '
+expect-setting parameters/sort 'value descending'
+wait-idle
+
+# 4. An edited row moves to its place and stays selected; the filter.
+mark
+dialog-dblclick-logged '^Parameters len2 expression at '
+wait-log '^Editing parameter len2 expression$'
+key ctrl+a
+type '10 mm'
+key Return
+wait-log '^Parameter len2 expression: 10 mm = '
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len10, Width, len2 [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^;]+; selected len2$'
+wait-idle
+focus-widget parametersFilter
+type len
+expect-parameter-cell count 0 '^count$' hidden
+expect-parameter-cell len2 0 '^len2$' visible
+expect-parameter-cell len10 0 '^len10$' visible
+key ctrl+a
+key Backspace
+expect-parameter-cell count 0 '^count$' visible
+wait-idle
+
+# 5. Closed and opened again: the sort kept; then the creation order.
+mark
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+mark
+command solid.parameters
+wait-log '^Parameters dialog opened$'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len10, Width, len2 [[]Model Parameters[]] '
+wait-idle
+mark
+dialog-click-logged '^Parameters header value at '
+wait-log '^Parameters sorted in creation order$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] len10, Width, len2, count [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] '
+expect-setting parameters/sort none
+wait-idle
+
+# 6. An added row selected in its place; back to the creation order.
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name ascending$'
+wait-idle
+mark
+button '^Add User Parameter$' parametersAdd
+focus-dialog '^Add User Parameter$'
+wait-log '^Add User Parameter dialog opened: unit mm$'
+focus-widget parameterName
+type len5
+focus-widget parameterExpression
+type 5
+key Return
+wait-log '^Added parameter len5 = 5 mm'
+focus-dialog '^Parameters$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] count, len2, len5, len10, Width [[]Model Parameters[]] [[]First block[]] [^[]+ [[]Second block[]] [^;]+; selected len5$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted by name descending$'
+wait-idle
+mark
+dialog-click-logged '^Parameters header name at '
+wait-log '^Parameters sorted in creation order$'
+wait-log '^Parameters order: [[]Favorites[]] Width [[]User Parameters[]] len10, Width, len2, count, len5 [[]Model Parameters[]] '
+expect-setting parameters/sort none
+button '^OK$'
+focus-main
+expect-dialog-gone '^Parameters$'
+expect-never 'TestDriver: FAIL'

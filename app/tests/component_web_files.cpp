@@ -15,6 +15,7 @@
 #include <QSettings>
 #include <QString>
 #include <QTemporaryDir>
+#include <QUrl>
 
 namespace {
 
@@ -126,6 +127,31 @@ void addressTests() {
   CHECK(normalWebAddress(text("   ")).isEmpty());
 }
 
+// Sites › Add This Page… (mitcad#1844): the loaded page; on the start page
+// (a data: address) the typed address, never the start page's own.
+void siteToAddTests() {
+  using mitcad::webSiteToAdd;
+  using mitcad::WebSite;
+  const QUrl start(text("data:text/html;charset=utf-8,%3Ch1%3EComponents%3C/h1%3E"));
+  // A typed address, Enter not pressed: the row holds the typed address.
+  CHECK((webSiteToAdd(start, text("Components from the web"), text("parts.example.com/catalog")) ==
+         WebSite{text("parts.example.com"), text("https://parts.example.com/catalog")}));
+  CHECK((webSiteToAdd(QUrl(), QString(), text("http://127.0.0.1:8000/")) ==
+         WebSite{text("127.0.0.1"), text("http://127.0.0.1:8000/")}));
+  CHECK((webSiteToAdd(QUrl(text("about:blank")), QString(), text("example.org")) ==
+         WebSite{text("example.org"), text("https://example.org")}));
+  // Nothing typed on the start page: nothing to add (the entry disabled).
+  CHECK(webSiteToAdd(start, text("Components from the web"), QString()).url.isEmpty());
+  CHECK(webSiteToAdd(start, QString(), text("   ")).url.isEmpty());
+  CHECK(webSiteToAdd(start, QString(), text("about:blank")).url.isEmpty());
+  // A loaded page: its address and title, whatever the field holds.
+  CHECK((webSiteToAdd(QUrl(text("https://parts.example.com/catalog")), text(" Parts catalog "),
+                      text("other.example")) ==
+         WebSite{text("Parts catalog"), text("https://parts.example.com/catalog")}));
+  CHECK((webSiteToAdd(QUrl(text("https://parts.example.com/catalog")), QString(), QString()) ==
+         WebSite{text("parts.example.com"), text("https://parts.example.com/catalog")}));
+}
+
 void downloadFailureTests() {
   using mitcad::webDownloadFailure;
   // Why a download stopped, in words (mitcad#1716): the connection, the
@@ -222,6 +248,7 @@ int componentWebFilesTests() {
   nameFilterTests();
   contentFilterTests();
   addressTests();
+  siteToAddTests();
   downloadFailureTests();
   sitesTests();
   foldersTests(QDir(directory.path()).filePath(QStringLiteral("downloads")));

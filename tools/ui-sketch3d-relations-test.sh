@@ -13,7 +13,8 @@
 # and Perpendicular of lines in space, Angle of two lines (a driving angle
 # listed in degrees), Symmetric of two points about the sketch's YZ plane
 # picked in the palette; each one edit, listed in words with no id,
-# topological name or coordinate; the sketch solves.
+# topological name or coordinate; Remove on a row while a value field has
+# the keyboard removes the row (mitcad#1836); the sketch solves.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-sketch3d-relations-test.sh
@@ -42,6 +43,7 @@ ui_expect_log '3D sketch edit angle_relation: done' 'the two lines were held at 
 ui_expect_log '| shown: Angle 1 on Line 2, Line 4: ' 'the angle is listed in words, in degrees'
 ui_expect_log '3D sketch edit symmetric about {"frame":"x"}: done' 'Symmetric of two points about the YZ plane'
 ui_expect_log '| shown: Symmetric 1 on Point 9, Point 10' 'the symmetry is listed in words'
+ui_expect_log ': Esc took the typed value back' 'a row was removed while a value field kept the keyboard and the value typed'
 ui_expect_log 'TestDriver: done' 'the relations were applied from the palette'
 # What a person reads has no id, topological name or coordinate (the
 # agents' part before "| shown:" keeps them).

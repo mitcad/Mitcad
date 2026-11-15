@@ -16,6 +16,7 @@
 #include <QStringList>
 
 #include "SketchGeometry.hpp"
+#include "SketchSurface.hpp"
 #include "mitcad/geometry/profile.hpp"
 
 namespace mitcad {
@@ -203,6 +204,16 @@ public:
   // mode's model has it in the design's, placed where the view shows the
   // component (SketchHost::sketchPlacement, mitcad#505).
   geometry::Frame frame;
+  // The cylindrical or conical face of a sketch on one (the query's
+  // `surface`, mitcad#1768), placed as `frame` is; none on a plane. The
+  // frame is then the face's carrier plane, and the sketch's coordinates
+  // are the face's developed ones.
+  std::optional<SketchSurface> surface;
+  // Where a sketch point is in the model (on the face of a sketch on a
+  // curved one, else on the plane), and the normal there (the face's out of
+  // the material, else the plane's).
+  gp_Pnt place(const V2& p) const;
+  gp_Dir normalAt(const V2& p) const;
   bool solved = false;
   QString error;
   // What the evaluation warns about (linked projections that could not

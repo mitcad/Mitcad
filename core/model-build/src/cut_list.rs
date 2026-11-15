@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::parts::{PartInfo, designation, part_number, part_values, typed_section};
 use crate::prelude::*;
 use crate::{BuildItem, MaterialMeta, SourceId};
@@ -34,10 +36,11 @@ impl Default for CutListOptions {
 
 /// A hole in a cut part: where, its diameter, depth and thread; or a
 /// joinery cut (mitcad#478): its kind, size and the other member.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachiningItem {
     /// The frame it is on (`end_b`, `slot_x+_1`, ...); empty for joinery.
     pub at: String,
+    #[serde(with = "nan_null")]
     pub diameter: f64,
     pub depth: Option<f64>,
     pub thread: Option<String>,
@@ -50,7 +53,7 @@ pub struct MachiningItem {
 }
 
 /// A timber row's own columns (mitcad#478).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimberColumns {
     pub material: MaterialMeta,
     /// The part's own grade, else its row's.
@@ -68,7 +71,7 @@ pub struct TimberColumns {
 }
 
 /// A profiled board's cut list columns (mitcad#477).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoardColumns {
     /// `tongue_and_groove`, `shiplap`, `feather_edge`, `deck`.
     pub profile: String,
@@ -80,7 +83,7 @@ pub struct BoardColumns {
 }
 
 /// A group of identical cut parts.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CutRow {
     pub source: SourceId,
     pub designation: String,
@@ -158,9 +161,55 @@ pub trait CutListBuild<K: Kernel> {
 
     /// The cut list.
     fn build_cut_list(&self, options: CutListOptions) -> CutList;
+
+    /// What Convert to Features (mitcad#1815) keeps of a part for the
+    /// cut list: its row for itself alone, the area its volume is
+    /// reckoned with and its stock, as JSON for its component's `listed`;
+    /// None for a component the cut list has no row of.
+    fn listed_row(&self, component: ComponentUid) -> Option<serde_json::Value>;
 }
 
 impl<K: Kernel> CutListBuild<K> for Document<K> {
+    fn listed_row(&self, component: ComponentUid) -> Option<serde_json::Value> {
+        let list = self.build_cut_list(CutListOptions::default());
+        let mut row = list
+            .rows
+            .into_iter()
+            .find(|r| r.components.contains(&component))?;
+        row.quantity = 0;
+        row.components.clear();
+        if let Some(t) = &mut row.timber {
+            t.running_metres = 0.0;
+            t.volume = 0.0;
+            if let Some(b) = &mut t.board {
+                b.area = 0.0;
+            }
+        }
+        let info = self.part_info(component)?;
+        let stock = self
+            .state()
+            .library_sources
+            .get(row.source)
+            .and_then(|source| {
+                let meta = source
+                    .build
+                    .as_ref()
+                    .and_then(|b| crate::BuildMeta::read_row(b, row.config.as_deref()).ok())
+                    .unwrap_or_default();
+                meta.length.as_ref().map(|length| ListedStock {
+                    label: source.label(),
+                    lengths: length.stock_lengths(),
+                    timber: meta.is_timber(),
+                })
+            });
+        serde_json::to_value(Listed {
+            row,
+            area: info.meta.section_area(),
+            stock,
+        })
+        .ok()
+    }
+
     fn part_machining(&self, info: &PartInfo) -> Vec<(FeatureUid, MachiningItem)> {
         let mut added: BTreeMap<FeatureUid, Option<ComponentUid>> = BTreeMap::new();
         for c in &self.assembly().components {
@@ -364,21 +413,43 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                 frame: frame.clone(),
                 size: size.clone(),
             });
-            row.quantity += quantity;
-            row.components.push(info.component);
-            if let Some(t) = &mut row.timber {
-                let n = row.quantity as f64;
-                t.running_metres = row.length * n / 1000.0;
-                t.volume = area.unwrap_or(t.section[0] * t.section[1]) * row.length * n / 1e9;
-                if let Some(b) = &mut t.board {
-                    b.area = b.each * row.length * n / 1e6;
-                }
+            add_to_row(row, info.component, quantity, area);
+        }
+        // The parts converted to features (mitcad#1815): as they were
+        // listed, after the rows of their frame, with their stock.
+        type StockKey = (SourceId, Option<String>, Option<String>);
+        let mut listed_stock: BTreeMap<StockKey, ListedStock> = BTreeMap::new();
+        for c in &self.assembly().components {
+            let Some(listed) = c
+                .listed
+                .as_ref()
+                .and_then(|value| serde_json::from_value::<Listed>(value.clone()).ok())
+            else {
+                continue;
+            };
+            cut.push(c.uid);
+            let key = format!(
+                "{}|listed|{}",
+                listed.row.frame.as_deref().unwrap_or_default(),
+                serde_json::to_string(&listed.row).unwrap_or_default()
+            );
+            let row = groups.entry(key).or_insert_with(|| listed.row.clone());
+            let quantity = quantities.get(&c.uid).copied().unwrap_or(1).max(1);
+            add_to_row(row, c.uid, quantity, listed.area);
+            if let Some(stock) = listed.stock {
+                listed_stock.insert(
+                    (
+                        listed.row.source,
+                        listed.row.config.clone(),
+                        listed.row.size.clone(),
+                    ),
+                    stock,
+                );
             }
         }
         let rows: Vec<CutRow> = groups.into_values().collect();
         // The stock: first fit of the longest pieces into the longest stock,
         // per source and configuration row, and per typed size (mitcad#1328).
-        type StockKey = (SourceId, Option<String>, Option<String>);
         let mut by_source: BTreeMap<StockKey, Vec<f64>> = BTreeMap::new();
         for row in &rows {
             for _ in 0..row.quantity {
@@ -390,18 +461,24 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
         }
         let mut stock = Vec::new();
         for ((id, config, size), mut pieces) in by_source {
-            let Some(source) = self.state().library_sources.get(id) else {
-                continue;
+            // The source's stock, or a converted part's as it was listed.
+            let (lengths, timber, label) = match self.state().library_sources.get(id) {
+                Some(source) => {
+                    let meta = source
+                        .build
+                        .as_ref()
+                        .and_then(|b| crate::BuildMeta::read_row(b, config.as_deref()).ok())
+                        .unwrap_or_default();
+                    let Some(length) = meta.length.as_ref() else {
+                        continue;
+                    };
+                    (length.stock_lengths(), meta.is_timber(), source.label())
+                }
+                None => match listed_stock.get(&(id, config.clone(), size.clone())) {
+                    Some(stock) => (stock.lengths.clone(), stock.timber, stock.label.clone()),
+                    None => continue,
+                },
             };
-            let meta = source
-                .build
-                .as_ref()
-                .and_then(|b| crate::BuildMeta::read_row(b, config.as_deref()).ok())
-                .unwrap_or_default();
-            let Some(length) = meta.length.as_ref() else {
-                continue;
-            };
-            let lengths = length.stock_lengths();
             let Some(&stock_length) = lengths.first() else {
                 continue;
             };
@@ -434,7 +511,7 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
             // that holds its cuts (the last cut needs no kerf after it).
             let mut offcut: f64 = bars.iter().map(|(left, _)| *left).sum();
             let mut stock_lengths = Vec::new();
-            if meta.is_timber() {
+            if timber {
                 offcut = 0.0;
                 for (_, cuts) in &bars {
                     let used: f64 = cuts.iter().sum::<f64>()
@@ -449,9 +526,9 @@ impl<K: Kernel> CutListBuild<K> for Document<K> {
                 }
             }
             let designation = match (&config, &size) {
-                (_, Some(size)) => format!("{} ({size})", source.label()),
-                (Some(row), None) if meta.is_timber() => format!("{} {row}", source.label()),
-                _ => source.label(),
+                (_, Some(size)) => format!("{label} ({size})"),
+                (Some(row), None) if timber => format!("{label} {row}"),
+                _ => label,
             };
             stock.push(StockEntry {
                 source: id,
@@ -524,5 +601,60 @@ impl<K: Kernel> CutListCrateOps<K> for Document<K> {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// What Convert to Features (mitcad#1815) keeps of a part for the cut
+/// list ([`CutListBuild::listed_row`]): its row for itself alone (no
+/// quantity, components or totals), the section area its volume is
+/// reckoned with, and the stock its source cut it from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Listed {
+    row: CutRow,
+    #[serde(default)]
+    area: Option<f64>,
+    #[serde(default)]
+    stock: Option<ListedStock>,
+}
+
+/// A converted part's stock: its source's name and stock lengths, and
+/// whether it is timber (each stock piece the shortest that holds it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ListedStock {
+    label: String,
+    lengths: Vec<f64>,
+    timber: bool,
+}
+
+/// Counts a part into its row: its quantity, its component, and a timber
+/// row's running metres, volume (by `area`, else the section) and boards'
+/// area over the row.
+fn add_to_row(row: &mut CutRow, component: ComponentUid, quantity: usize, area: Option<f64>) {
+    row.quantity += quantity;
+    row.components.push(component);
+    if let Some(t) = &mut row.timber {
+        let n = row.quantity as f64;
+        t.running_metres = row.length * n / 1000.0;
+        t.volume = area.unwrap_or(t.section[0] * t.section[1]) * row.length * n / 1e9;
+        if let Some(b) = &mut t.board {
+            b.area = b.each * row.length * n / 1e6;
+        }
+    }
+}
+
+/// A number that may be NaN (a joinery cut's diameter), null in JSON.
+mod nan_null {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if value.is_nan() {
+            serializer.serialize_none()
+        } else {
+            serializer.serialize_f64(*value)
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
     }
 }

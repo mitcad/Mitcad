@@ -495,7 +495,7 @@ fn extrude_values_get_parameters_and_checks() {
                 json!({"type": "distance", "distance": 5}),
                 json!({"start": {"type": "object", "object": {"type": "body", "body": "F2.b0"}}}),
             ),
-            "starts from a plane or a planar face",
+            "starts from a plane or a face, not a body",
         ),
         (
             extrude_def(
@@ -3023,4 +3023,84 @@ fn an_extrusion_goes_along_its_own_direction() {
             .to_string();
         assert!(error.contains(expected), "'{expected}' not in '{error}'");
     }
+}
+
+/// An extrusion that starts from a curved face (mitcad#1848, GitHub
+/// #341): letters cut 0.1 mm deep from a cylindrical face, the face as the
+/// start object. The face goes to the kernel as the start (continued past
+/// its edges, or not when chained), the letters and the distance with it,
+/// and the cut takes them from the body; the design file keeps the start.
+/// (The mock builds a plain prism; the geometry library's test finds the
+/// floor 0.1 mm below the face under every letter.)
+#[test]
+fn an_extrusion_starts_from_a_curved_face() {
+    let mut b = block();
+    let side = "F2:side(c1[c4,c2])";
+    b.doc.kernel().surfaces.borrow_mut().insert(
+        side.to_owned(),
+        mitcad_model::datum::SurfaceGeometry::Cylinder {
+            origin: [30.0, 30.0, 0.0],
+            axis: [0.0, 0.0, 1.0],
+            radius: 30.0,
+        },
+    );
+    let sketch = b
+        .doc
+        .add_sketch(mitcad_model::features::SketchPlane::Xy)
+        .unwrap()
+        .uid;
+    let letters: Vec<_> = [[5.0, 5.0], [15.0, 5.0], [25.0, 5.0]]
+        .into_iter()
+        .map(|corner| {
+            b.doc
+                .add_rectangle(
+                    sketch,
+                    corner,
+                    &mitcad_model::test_support::num(4.0),
+                    &mitcad_model::test_support::num(8.0),
+                )
+                .unwrap()
+                .region
+        })
+        .collect();
+    let profiles: Vec<Value> = letters
+        .iter()
+        .map(|region| json!({"sketch": sketch, "region": region}))
+        .collect();
+    let body = b.body;
+    let engraving = |chained: bool| {
+        def(json!({"type": "extrude", "profiles": profiles,
+                   "extent": {"type": "distance", "distance": 0.1},
+                   "start": {"type": "object",
+                             "object": {"type": "face", "body": body, "face": side,
+                                        "chained": chained}},
+                   "operation": "cut", "participants": [body]}))
+    };
+    let uid = b.doc.add_feature(&engraving(false), None).unwrap().uid;
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    let spec = last_spec(&b.doc);
+    assert!(
+        spec.contains(&format!(
+            "from object face {side} extend true: distance 0.1 taper 0"
+        )),
+        "{spec}"
+    );
+    let history = b.doc.body_shape(body).unwrap().history.clone();
+    assert!(history.starts_with("cut(prism(F2:0..20),"), "{history}");
+    // Chained: the face itself, not its surface continued.
+    b.doc.edit_feature(uid, &engraving(true)).unwrap();
+    assert_eq!(status(&b.doc, uid), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).contains(&format!("from object face {side} extend false")),
+        "{}",
+        last_spec(&b.doc)
+    );
+    // Saved and opened again: the same start.
+    let text = b.doc.to_json();
+    let mut loaded = Document::from_json(&text, MockKernel::default()).unwrap();
+    loaded.recompute();
+    assert_eq!(status(&loaded, uid), FeatureStatus::Ok);
+    let start = query(&loaded, json!({"query": "feature", "uid": uid}))["def"]["start"].clone();
+    assert_eq!(start["object"]["face"], side, "{start}");
+    assert_eq!(start["object"]["chained"], true, "{start}");
 }

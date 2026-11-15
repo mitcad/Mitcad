@@ -321,6 +321,7 @@ fn role<S>(
                 | FeatureDef::JointOrigin(_)
                 | FeatureDef::PatternAtPoints(_)
                 | FeatureDef::BoundLength(_)
+                | FeatureDef::EdgeFrame(_)
                 | FeatureDef::BodyTransfer(_)
         )
         || matches!(def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some())
@@ -345,7 +346,11 @@ fn role<S>(
         || matches!(def, FeatureDef::Envelope(_))
         || newest.is_some_and(|output| {
             output.reads.iter().any(|read| match read {
-                Read::BodyIn(..) | Read::BodiesIn(..) | Read::Placement(..) | Read::Assembly(_) => {
+                Read::BodyIn(..)
+                | Read::BodiesIn(..)
+                | Read::Placement(..)
+                | Read::Flexed(..)
+                | Read::Assembly(_) => {
                     true
                 }
                 Read::Sketch(uid, _)

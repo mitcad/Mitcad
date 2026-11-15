@@ -50,6 +50,10 @@ pub use assembly_import::{ImportStructure, ImportedComponent, ImportedFile, file
 // the file (mitcad#1629).
 pub use assembly_import::ImportWrapper;
 
+// glTF files as mesh bodies and components (mitcad#1826).
+mod gltf_import;
+pub use gltf_import::{gltf_file_json, is_gltf_path};
+
 // Animated USDZ export: time-sampled placements (mitcad#1597).
 pub mod usdz_animation;
 pub use usdz_animation::{

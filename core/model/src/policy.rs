@@ -267,7 +267,8 @@ pub fn containment<P>(def: &FeatureDef<P>) -> Option<Setting> {
         | FeatureDef::RigidGroup(_)
         | FeatureDef::ConstraintSet(_)
         | FeatureDef::PatternAtPoints(_)
-        | FeatureDef::BoundLength(_) => None,
+        | FeatureDef::BoundLength(_)
+        | FeatureDef::EdgeFrame(_) => None,
         _ => Some(Setting::Features),
     }
 }

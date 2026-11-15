@@ -294,6 +294,21 @@ impl<K: Kernel> Document<K> {
         }
     }
 
+    /// The material a body is made of as [`Self::body_material`] finds it,
+    /// or None when neither it nor a component up `path` names one
+    /// (mitcad#1817): what lists, title blocks and masses show, never the
+    /// built-in default that only stands for a density.
+    pub fn body_material_named(
+        &self,
+        uid: BodyUid,
+        path: Option<&[OccurrenceUid]>,
+    ) -> Option<&Material> {
+        match self.body_material(uid, path) {
+            (_, MaterialSource::Default) => None,
+            (material, _) => Some(material),
+        }
+    }
+
     /// The material a body names as its own, when it exists.
     fn own_material(&self, uid: BodyUid) -> Option<&Material> {
         self.state

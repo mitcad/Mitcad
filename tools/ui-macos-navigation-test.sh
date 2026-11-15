@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 # check-all sources: app/view app/OcctViewer app/framework/TestDriver tools/cli
+# check-all sources: tools/ui-scripts/navigation-reverse-pan.mitcad-ui tools/ui-scripts/navigation-reverse-pan-restored.mitcad-ui
 # Real navigation settings, a process restart, and camera gestures.
 set -u
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -65,4 +66,25 @@ for chrome in floating docked; do
     [ "$UI_FAILURES" = 0 ] || exit 1
   done
 done
-echo "PASS: navigation controls, restart, release ordering and actual camera input; evidence in $UI_OUT"
+# Reverse vertical pan (mitcad#1873, GitHub mitcad/Mitcad#340): the shared
+# steps of tools/ui-navigation-reverse-pan-test.sh, its setting read back by
+# a second process. The Settings window saves each change; Cmd+W closes it.
+export MITCAD_SETTINGS_DIR=$UI_ROOT/settings-reverse-pan
+export MITCAD_TEST_PREFERENCES_DONE=ctrl+w
+mkdir -p "$MITCAD_SETTINGS_DIR"
+for run in reverse-pan:floating reverse-pan-restored:docked; do
+  part=${run%%:*}
+  chrome=${run##*:}
+  MITCAD_TEST_INPUT=$here/ui-scripts/navigation-$part.mitcad-ui \
+    ui_run_app "$part" --ui=qt --chrome="$chrome" --no-recovery --no-mcp --demo
+  ui_expect_log 'TestDriver: the view panned the opposite way' \
+    "$part: a vertical two-finger scroll pans the other way when Reverse vertical pan changes"
+  if [ "$part" = reverse-pan ]; then
+    ui_expect_log 'TestDriver: the view panned the same way' \
+      "$part: Reverse vertical pan leaves the horizontal scroll as it was"
+  fi
+  ui_expect_log 'TestDriver: done' "$part: completed"
+  ui_expect_no_log '^TestDriver: FAIL' "$part: assertions passed"
+  [ "$UI_FAILURES" = 0 ] || exit 1
+done
+echo "PASS: navigation controls, restart, release ordering, reversed pan and actual camera input; evidence in $UI_OUT"

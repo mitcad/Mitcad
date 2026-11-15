@@ -114,12 +114,27 @@ impl<K: Kernel> Importer<'_, K> {
         if new.is_empty() { replaced } else { new }
     }
 
-    /// A body input by the item that made it: its only body, else the body
-    /// at the decoded index (or the one of its bodies the names give).
-    /// Where a base feature took the item's state, the body found by its
-    /// names comes first. `None` when the decoder gives no producer, or the
-    /// replay does not have that body.
+    /// A body input by the item that made it: by the body's record first
+    /// (`records.rs`, mitcad#1808: the body it gives refuses the one the
+    /// producer's index names where they differ), else its only body, else
+    /// the body at the decoded index (or the one of its bodies the names
+    /// give). Where a base feature took the item's state, the body found by
+    /// its names comes first. `None` when the decoder gives no producer, or
+    /// the replay does not have that body.
     pub(crate) fn produced_body(&self, fp: &Fingerprint) -> Option<BodyUid> {
+        if let Ok(uid) = self.recorded_body(fp) {
+            if crate::tracing()
+                && let Some(other) = self.produced_by_index(fp).filter(|b| *b != uid)
+            {
+                eprintln!("import: the item that made the body names {other}, its record {uid}");
+            }
+            return Some(uid);
+        }
+        self.produced_by_index(fp)
+    }
+
+    /// [`Importer::produced_body`] by the producer's index alone.
+    fn produced_by_index(&self, fp: &Fingerprint) -> Option<BodyUid> {
         let f3d = fp.f3d.as_ref()?;
         let producer = f3d.producer?;
         let (made, own) = self.made_by(producer);
@@ -253,17 +268,56 @@ impl<K: Kernel> Importer<'_, K> {
         found
     }
 
-    /// A body input among the replay's bodies: by the item that made it
-    /// first, else by its names or measures.
+    /// A body input among the replay's bodies: by its record or the item
+    /// that made it first, else by its names or measures.
     pub(crate) fn body_ref(&self, fp: &Fingerprint) -> Option<BodyUid> {
         let found = self
             .external_body(fp)
             .or_else(|| self.produced_body(fp))
-            .or_else(|| refs::resolve_body(self.doc, fp));
+            .or_else(|| refs::resolve_body(self.doc, fp))
+            .or_else(|| self.unbuilt_body(fp));
         if let Some(body) = found {
             self.hint_path(fp, body);
         }
         found
+    }
+
+    /// While a suppressed item is translated to come in unbuilt
+    /// (`suppressed::Run::unbuilt`, mitcad#1808): a body input made by an
+    /// item that came in as one suppressed feature, the body of that
+    /// feature at the file's index (`_f3d.body_index`). No state of the
+    /// import holds such a body, so neither its record nor its names find
+    /// it. Counted in `unbuilt`; None otherwise.
+    fn unbuilt_body(&self, fp: &Fingerprint) -> Option<BodyUid> {
+        let counter = self.suppressed.unbuilt.as_ref()?;
+        let f3d = fp.f3d.as_ref()?;
+        let producer = f3d.producer?;
+        let index = u32::try_from(f3d.body_index?).ok()?;
+        let made: Vec<FeatureUid> = self
+            .report
+            .items
+            .iter()
+            .find(|r| r.index == producer)?
+            .features
+            .iter()
+            .filter_map(|f| f.parse::<FeatureUid>().ok())
+            .filter(|uid| {
+                self.doc.feature(*uid).is_some_and(|f| {
+                    f.suppressed
+                        && !matches!(
+                            f.def,
+                            FeatureDef::Sketch(_)
+                                | FeatureDef::Base(_)
+                                | FeatureDef::Placeholder(_)
+                        )
+                })
+            })
+            .collect();
+        let [feature] = made[..] else {
+            return None;
+        };
+        counter.set(counter.get() + 1);
+        Some(BodyUid::new(feature, index))
     }
 
     /// A body of another document that the design names (`_f3d.document`,

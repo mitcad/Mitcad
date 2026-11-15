@@ -1621,13 +1621,46 @@ Real `.3dm` models are never committed. `MITCAD_3DM_CORPUS` points at a
 folder of them (subfolders too): openly licensed sample models, each
 with its source and licence in an `index.tsv` (mitcad#1715). The cargo
 test `core.3dm` reads and converts each `.3dm` file without OCCT (every
-object read, every B-rep's faces on a surface and its loops closed), and
+object read, every B-rep's faces on a surface and its loops closed, every
+SubD's net a Form's cage), and
 the ctest `3dm.corpus` (`tools/cli/3dm-corpus.cmake`) imports each model
 an `index.tsv` lists (column `file`; `check` `no` for a model with
 objects left out on purpose) with `mitcad-cli import-3dm --check`, a
 model a child process, several at once, as the `.dwg` corpus does: every
-body built and valid, every solid, surface and mesh taken. Both skip
-without the variable.
+body built and valid, every solid, surface and mesh taken. A row may add
+`expect`, a regular expression the import's text must match (no `;`, `[`
+or `]`), and `edit`, a `mitcad-cli run` script beside the index run on
+the imported design. Both skip without the variable.
+
+The SubD model of the corpus (mitcad#1810; content id `98400d4d`, MIT,
+written by the format's own application at archive version 80) uses
+both: its row expects the Form line `8 vertices, 6 faces, 8 creased
+edges, 1 corners, closed` (five edges creased for good, three semi-sharp,
+one corner vertex), the note on its one edge whose sharpness changes
+along it, and every check passing; its script checks the Form's stored
+cage against the file (the vertices at their points in millimetres with
+the file's ids, the six faces' ids, the corner, each crease and the
+semi-sharp ones' sharpness 1, 3 and 1.5), the body (24 faces, its box
+from the corner vertex at the origin to within the cage's box of 10 mm,
+0.01 mm allowed), and that a vertex moved with `form.move` rebuilds it.
+
+### glTF corpus
+
+Real glTF files are never committed (the committed sample,
+`core/gltf/samples`, is written for the tests). `MITCAD_GLTF_CORPUS`
+points at a folder of openly licensed sample files (subfolders too),
+each with its source and licence in an `index.tsv` and the attribution
+in a licence file beside it (mitcad#1826). The ctest `gltf.corpus`
+(`tools/cli/gltf-corpus.cmake`) imports each file an `index.tsv` lists
+(column `file`) through OCCT with `mitcad-cli run`, in the index's
+folder so that a `.gltf` file's buffers and images beside it are read.
+The column `check` names the file's script of commands and expectations
+beside the index: it imports the file and checks facts read from the
+file itself (the `gltf_file` query's nodes, meshes, triangles, materials
+and images; the bodies and components the import makes, their
+placements, volumes and bounding boxes; the materials as appearances).
+A row whose `check` is empty or `no` is only imported. Skipped without
+the variable; not one of the release's required corpora.
 
 ### FreeCAD reference models and corpus
 
@@ -1878,7 +1911,7 @@ no AppKit, every ctest, the package;
 
 ### The check script
 
-`tools/check-all.sh [--full] [--ui-jobs N] [--ui auto|all] [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off] [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N] [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...]`
+`tools/check-all.sh [--full] [--ui-jobs N] [--ui auto|all] [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off] [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N] [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...] [--release-passed DIR --release-tag X.Y.Z-rcN [--all-geometry]]`
 
 It checks at two depths:
 
@@ -1962,6 +1995,25 @@ lists each test's decision; `tools/ctest-fingerprints.py plan ...
 --explain <test>` prints what a fingerprint is made of, and
 `tools/check-all.sh --dry-run` lists the ctests, the corpus and the UI
 tests that would run for the working tree, building and running nothing.
+
+The release gates' geometry tests (mitcad#1822): `--full` runs every
+ctest, but the Linux release gate gives it `--release-passed DIR
+--release-tag X.Y.Z-rcN`, and the ctest step's test runner then skips a
+`geometry*` ctest whose fingerprint is one with which it passed in an
+earlier release gate on Linux (an indented `ctest:<name>` row,
+`skipped`), and keeps the fingerprints of this run's passes with the
+release's name. The Windows and macOS release gates do the same in their
+full ctest. The fingerprint is the one above, computed by `mitcad-testrun`
+itself (in Rust, the same on every platform), with the release's version
+left out of the files every release changes; the passes are kept per
+platform outside the build folders, and the platforms' records never mix.
+`--all-geometry` runs them all; a platform without records (the first
+release with fingerprints) runs them all to record them, and every
+release's report lists
+the skipped tests with the release in which each last passed
+([tools/testrun/README.md](../tools/testrun/README.md#release-fingerprints)).
+Development checks never skip by release fingerprints, and no other test
+group is skipped this way.
 
 UI tests by what changed (`--ui auto`, the default): a UI test is skipped
 (a `skipped` row) when its fingerprint is one it passed with on the

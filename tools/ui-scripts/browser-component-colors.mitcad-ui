@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# The Browser's component color bars (mitcad#1876), on the design of
+# tools/ui-scripts/browser-component-colors.json: a body in the root, Bolt
+# placed twice (Bolt:1, Bolt:2), Plate:1, the root active. Every component,
+# occurrence and body row has its component's timeline color (the root's
+# rows the default orange of the section caps), both placements of Bolt
+# the same; the colors follow an activation, a rename, a move to another
+# component, a new component and its undo, and a theme change.
+wait-idle
+
+# The timeline's band colors of the two components, and the Browser's rows
+# in them; the root's rows in the section caps' orange.
+capture bolt '^Timeline component colors: Bolt (#[0-9a-f]{6}), Plate #[0-9a-f]{6}$'
+capture plate '^Timeline component colors: Bolt #[0-9a-f]{6}, Plate (#[0-9a-f]{6})$'
+expect-log '^Browser colors: Root #f29e1a, Root/Bodies/[^,]+ #f29e1a, Root/Bolt:1 ${bolt}, Root/Bolt:1/Bodies/[^,]+ ${bolt}, Root/Bolt:2 ${bolt}, Root/Bolt:2/Bodies/[^,]+ ${bolt}, Root/Plate:1 ${plate}, Root/Plate:1/Bodies/[^,]+ ${plate}$'
+expect-no-log '^Browser colors: .* none'
+screenshot-widget modelBrowserTree '${MITCAD_TEST_WORK}/browser-component-colors-light.png'
+
+# Activating a component changes no color.
+mark
+model-command '{"cmd":"activate_component","component":"Plate"}'
+wait-idle
+model-command '{"cmd":"activate_component","component":"Root"}'
+wait-idle
+expect-no-log '^Browser colors: '
+expect-no-log '^Timeline component colors: '
+
+# A rename: the renamed component's rows keep its color.
+mark
+model-command '{"cmd":"rename_component","component":"Plate","name":"Base"}'
+wait-log '^Timeline component colors: Bolt ${bolt}, Base ${plate}$'
+wait-log '^Browser colors: Root #f29e1a, Root/Bodies/[^,]+ #f29e1a, Root/Bolt:1 ${bolt}, Root/Bolt:1/Bodies/[^,]+ ${bolt}, Root/Bolt:2 ${bolt}, Root/Bolt:2/Bodies/[^,]+ ${bolt}, Root/Base:1 ${plate}, Root/Base:1/Bodies/[^,]+ ${plate}$'
+
+# Bolt:2 moved into Base:1: its rows keep Bolt's color under Base's.
+mark
+model-command '{"cmd":"reparent_occurrence","occurrence":"Bolt:2","parent":"Base:1"}'
+wait-log '^Browser colors: Root #f29e1a, Root/Bodies/[^,]+ #f29e1a, Root/Bolt:1 ${bolt}, Root/Bolt:1/Bodies/[^,]+ ${bolt}, Root/Base:1 ${plate}, Root/Base:1/Bodies/[^,]+ ${plate}, Root/Base:1/Bolt:2 ${bolt}, Root/Base:1/Bolt:2/Bodies/[^,]+ ${bolt}$'
+expect-no-log '^Timeline component colors: '
+
+# A new component gets its timeline color in the Browser at once; undone,
+# its row goes and the others keep theirs.
+mark
+model-command '{"cmd":"create_component","name":"Pin","activate":false}'
+capture pin '^Timeline component colors: Bolt ${bolt}, Base ${plate}, Pin (#[0-9a-f]{6})$'
+wait-log '^Browser colors: Root #f29e1a, .*, Root/Base:1/Bolt:2/Bodies/[^,]+ ${bolt}, Root/Pin:1 ${pin}$'
+expect-no-log '^Timeline component colors: Bolt ${bolt}, Base ${plate}, Pin (${bolt}|${plate})$'
+mark
+command edit.undo
+wait-log '^Timeline component colors: Bolt ${bolt}, Base ${plate}$'
+wait-log '^Browser colors: Root #f29e1a, .*, Root/Base:1/Bolt:2/Bodies/[^,]+ ${bolt}$'
+
+# The dark theme: the same bars, nothing styled anew.
+mark
+color-scheme dark
+wait-idle
+sleep 500
+expect-no-log '^Browser colors: '
+screenshot-widget modelBrowserTree '${MITCAD_TEST_WORK}/browser-component-colors-dark.png'
+color-scheme light
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

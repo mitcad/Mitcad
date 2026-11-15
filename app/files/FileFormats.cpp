@@ -54,6 +54,9 @@ FileKind fileKind(const QString& path) {
   if (suffix == QStringLiteral("3dm")) {
     return FileKind::ThreeDm;
   }
+  if (suffix == QStringLiteral("glb") || suffix == QStringLiteral("gltf")) {
+    return FileKind::Gltf;
+  }
   return FileKind::None;
 }
 
@@ -69,7 +72,8 @@ namespace {
 const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.iam *.IAM *.ifc *.IFC *.ifczip *.rvt *.RVT *.rfa *.RFA "
                          "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.3dm *.3DM *.step *.stp *.iges *.igs *.brep "
                          "*.brp";
-const char* const kMesh = "*.stl *.obj";
+// glTF files (mitcad#1826) in both spellings, as the others.
+const char* const kMesh = "*.stl *.obj *.glb *.GLB *.gltf *.GLTF";
 const char* const kDrawing = "*.dxf *.svg";
 
 QString kinds(bool designs) {
@@ -79,7 +83,7 @@ QString kinds(bool designs) {
                       QLatin1String(kDrawing));
   filters << QObject::tr("MitCad designs (*.mitcad)");
   filters << QObject::tr("CAD files (%1)").arg(QLatin1String(kCad));
-  filters << QObject::tr("Meshes: STL and OBJ (%1)").arg(QLatin1String(kMesh));
+  filters << QObject::tr("Meshes: STL, OBJ and glTF (%1)").arg(QLatin1String(kMesh));
   filters << QObject::tr("Drawings: DXF and SVG (%1)").arg(QLatin1String(kDrawing));
   filters << QObject::tr("All files (*)");
   return filters.join(QStringLiteral(";;"));

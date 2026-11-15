@@ -1,0 +1,46 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Booleans: the decomposition of a walking intersection line at the faces'
+boundaries reads no point past the line's ends (mitcad#1819).
+
+IntTools_WLineTool::DecompositionOfWLine, where it moves a sub-line's end
+point onto a natural boundary or near a tangent zone, looks along the line
+for a neighbouring point distinct from the end's neighbour: two loops step
+the index one point on and read theWLine->Point(index) before the loop's
+condition checks it, so where every point up to the line's end lies on
+the neighbour (within gp::Resolution) the last step reads Point(0) or
+Point(NbPnts + 1). A release build has no range check there and read a
+null node (a segmentation fault: a boolean of a two-distance chamfer of a
+tangent chain over a cylinder strip with the body it was made on); a
+debug build raised Standard_OutOfRange. Each loop now stops before an
+index outside 1..NbPnts, as when it finds no distinct point; every case
+that read only points of the line keeps its result.
+
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_WLineTool.cxx
+@@ -853,6 +853,11 @@
+               while ((anindexother <= iLast) && (anindexother >= iFirst))
+               {
+                 anindexother = (j == 0) ? (anindexother + 1) : (anindexother - 1);
++                if (anindexother < 1 || anindexother > aNbPnts)
++                {
++                  // Past the line's end: no point there to compare with.
++                  break;
++                }
+                 const IntSurf_PntOn2S& aPrevNeighbourPoint = theWLine->Point(anindexother);
+                 double                 nU2, nV2;
+ 
+@@ -984,6 +989,11 @@
+             {
+               aneighbourpointindex2 =
+                 (j == 0) ? (aneighbourpointindex2 + 1) : (aneighbourpointindex2 - 1);
++              if (aneighbourpointindex2 < 1 || aneighbourpointindex2 > aNbPnts)
++              {
++                // Past the line's end: no point there to compare with.
++                break;
++              }
+               const IntSurf_PntOn2S& aPrevNeighbourPoint = theWLine->Point(aneighbourpointindex2);
+               double                 nU2, nV2;
+ 

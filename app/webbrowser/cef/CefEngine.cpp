@@ -105,10 +105,23 @@ public:
     if (!processType.empty()) {
       return;
     }
-    // Painted in software from the off-screen buffer (OnPaint): no GPU
-    // process, which VMs and test sessions do not have.
-    commandLine->AppendSwitch("disable-gpu");
+    // The page is composited in software into the off-screen buffer
+    // (OnPaint), which the view paints into its widget: no GPU texture to
+    // share with Qt, the same on a machine without a GPU.
     commandLine->AppendSwitch("disable-gpu-compositing");
+    // WebGL (mitcad#1861): model sites draw their 3D previews with it, and
+    // fail without it. The GPU process renders it on the machine's GPU
+    // where there is one that Chromium accepts, and in software
+    // (SwiftShader) where there is none or Chromium refuses its driver (VMs,
+    // test sessions); the canvas then reaches the software compositor as
+    // any other picture. Chromium no longer falls back to SwiftShader for
+    // WebGL by itself, and calls the switch that allows it unsafe for
+    // untrusted content: its shader compiler and rasteriser run on the CPU
+    // in the GPU process. Allowed here, as a site without WebGL does not
+    // work at all, the GPU is used wherever it can be, and the pages are
+    // the supplier sites the user chose (app/COMMANDS.md, "Component from
+    // Web", The browser). Not "disable-gpu", which turns WebGL off.
+    commandLine->AppendSwitch("enable-unsafe-swiftshader");
     commandLine->AppendSwitch("no-first-run");
     commandLine->AppendSwitch("no-default-browser-check");
 #if defined(__APPLE__)

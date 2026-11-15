@@ -557,3 +557,53 @@ curved edges", 100 cross-drilled posts in a 10 by 10 grid (400 faces,
 300 B-spline edges, each column's posts behind each other) took the
 exact algorithm 297 s, the quick path 0.2 s. A move or a redraw of the
 sheet takes the view from the cache either way.
+
+## Pipes that pass through themselves (mitcad#1788)
+
+`MITCAD_TRACE_PIPE_FOLDS=1` prints a line per stage of a pipe or sweep the
+geometry may build in pieces (`swept_resolving_folds`,
+`geometry/src/pipe_folds.cpp`) on standard error, each with the time
+since the line before: `pipe folds: path looked at: folds no, comes back
+near itself yes, unresolvable no: <ms> ms`, `swept in one piece: sound`,
+`checked for faces crossing: crossing`, `comes back closer than the
+profile is wide: faces cross, not checked`, `planned <n> cuts`, `<n>
+pieces swept`, `pieces fused`, `union checked`.
+
+Measured in the Windows build VM, `mitcad-cli run --timings`, a pipe of
+8 mm along four turns of a helix of radius 10 rising 5 a turn (the turns
+4.98 mm apart), before the changes below:
+
+| Stage | ms |
+|---|---|
+| path looked at | 4 |
+| swept in one piece | 61 |
+| checked for faces crossing (OCCT's `BRepAlgoAPI_Check`, self-interference) | 88 251 |
+| planned 4 cuts | 0 |
+| 5 pieces swept | 10 |
+| pieces fused | 573 |
+| union checked | 58 |
+| the whole `add_feature` | 89 028 |
+
+The union of the pieces was cheap; 99 % of the time went into the check
+of the pipe in one piece for faces crossing each other. Two changes:
+
+- Where the path comes back closer to itself than the circle inside the
+  profile about the path is wide (between points at least two reaches
+  from the path's ends, farther apart along it than four reaches), the
+  tubes of that circle along the two stretches overlap, so the faces
+  cross for certain: the geometry goes straight to the pieces, without
+  the sweep in one piece and its check (`Unfolder::crosses_for_certain`;
+  the check runs only where that distance cannot decide, a square's or a
+  triangle's corners that may pass). For the case above that leaves the
+  pieces (0.65 s of the stages measured above, not measured again), and
+  it holds for every path of mitcad#1697 that
+  crosses itself (`geometry.pipe_folds`' loop back runs no check,
+  `detail::faces_crossing_checks`).
+- The model refuses a pipe along a helix whose turns lie closer than its
+  section is wide before the geometry (`core/model-api/src/commands.md`,
+  *pipe*): its joined turns are a ribbed sleeve, not a pipe along the
+  helix, as a Coil refuses them.
+
+The faces-crossing check also stops on a cancel request now, as the
+booleans do, so a preview made obsolete by a newer value gives way there
+too.

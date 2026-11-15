@@ -699,6 +699,38 @@ fn coplanar_face(output: &SpatialSketchOutput, id: ConstraintUid) -> bool {
     )
 }
 
+/// The end of a projected curve (`ends`, its start and end among `made`)
+/// that an attachment to the source curve's start or end (`which`) holds
+/// (mitcad#1833): the one nearest the attachment's `target` in the plane,
+/// since the projection may run the other way along its source (a conic
+/// arc is made counter-clockwise, an edge-on conic a line ordered by
+/// coordinate). The label decides only without a target or when both ends
+/// are as near (a closed curve's).
+fn attached_end(
+    made: &[Entity],
+    (start, end): (EntityUid, EntityUid),
+    which: SpatialCurvePoint,
+    target: Option<[f64; 3]>,
+) -> EntityUid {
+    let (labelled, other) = match which {
+        SpatialCurvePoint::End => (end, start),
+        _ => (start, end),
+    };
+    let Some(target) = target else {
+        return labelled;
+    };
+    let distance = |id: EntityUid| {
+        made.iter().find(|e| e.id == id).and_then(|e| match e.kind {
+            EntityKind::Point { at } => Some((at[0] - target[0]).hypot(at[1] - target[1])),
+            _ => None,
+        })
+    };
+    match (distance(labelled), distance(other)) {
+        (Some(near), Some(far)) if far + PLANE_TOLERANCE < near => other,
+        _ => labelled,
+    }
+}
+
 /// A projection record of a 3D sketch's source (an attachment's or a
 /// reference curve's) with `entities`; None for the origin.
 fn projection_of(source: &SpatialSource, entities: Vec<Ref>) -> Option<Projection> {
@@ -1011,12 +1043,15 @@ fn flatten<P: Clone>(
         let SpatialCurveKind::Reference { source, .. } = &c.kind else {
             continue;
         };
+        // A planar projection's curve is stored as construction in the 3D
+        // sketch (a reference curve), its own flag in the records; the
+        // view and the conversion both read it there (mitcad#1833).
+        let construction = if records.references.contains(&Ref::Curve(*id)) {
+            records.construction_references.contains(&Ref::Curve(*id))
+        } else {
+            c.construction
+        };
         if !strict {
-            let construction = if records.references.contains(&Ref::Curve(*id)) {
-                records.construction_references.contains(&Ref::Curve(*id))
-            } else {
-                c.construction
-            };
             if !construction {
                 flat.reference_curves.push((*id, curve.clone()));
             }
@@ -1033,7 +1068,7 @@ fn flatten<P: Clone>(
         for e in &mut made {
             e.fixed = true;
             e.reference = true;
-            e.construction = c.construction;
+            e.construction = construction;
         }
         let refs: Vec<Ref> = made.iter().map(Entity::as_ref).collect();
         for e in made {
@@ -1148,6 +1183,23 @@ fn flatten<P: Clone>(
                         let Some(made_curve) = made.iter().find(|e| !e.is_point()).cloned() else {
                             continue;
                         };
+                        let kind = match (which, made_curve.kind.ends()) {
+                            (SpatialCurvePoint::Middle, _) | (_, None) => {
+                                ConstraintKind::Midpoint {
+                                    point: *point,
+                                    curve: made_curve.id,
+                                }
+                            }
+                            (_, Some(ends)) => ConstraintKind::Coincident {
+                                point: *point,
+                                entity: Ref::Point(attached_end(
+                                    &made,
+                                    ends,
+                                    which,
+                                    output.targets.get(&c.id).copied(),
+                                )),
+                            },
+                        };
                         let refs: Vec<Ref> = made.iter().map(Entity::as_ref).collect();
                         for e in made {
                             in_plane.insert(e.id);
@@ -1156,24 +1208,6 @@ fn flatten<P: Clone>(
                         if let Some(projection) = projection_of(&whole, refs) {
                             flat.def.projections.push(projection);
                         }
-                        let kind = match (which, made_curve.kind.ends()) {
-                            (SpatialCurvePoint::Middle, _) | (_, None) => {
-                                ConstraintKind::Midpoint {
-                                    point: *point,
-                                    curve: made_curve.id,
-                                }
-                            }
-                            (SpatialCurvePoint::Start, Some((s, _))) => {
-                                ConstraintKind::Coincident {
-                                    point: *point,
-                                    entity: Ref::Point(s),
-                                }
-                            }
-                            (SpatialCurvePoint::End, Some((_, e))) => ConstraintKind::Coincident {
-                                point: *point,
-                                entity: Ref::Point(e),
-                            },
-                        };
                         flat.def.constraints.push(Constraint::new(c.id, kind));
                         flat.projected.push(c.id.to_string());
                     }

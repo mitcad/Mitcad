@@ -1,0 +1,199 @@
+# SPDX-License-Identifier: MIT
+# Joint's picks under another component than the active one (mitcad#1856,
+# GitHub mitcad/Mitcad#344, app/COMMANDS.md "The component that holds the
+# picks"), on joint-holder.json: Frame:1 (grounded) in the root, and
+# Roller:1, a sub-assembly of Shaft:1, Tube:1 (joined to Shaft) and
+# Collar:1 (in a rigid group with Shaft), with Roller activated by its
+# radio button:
+#   1. Joint from Tube's top face to Frame's top face: the question offers
+#      the root, which holds both picks; Make it in puts the joint there
+#      (its add_feature names the root), Roller stays active, and OK
+#      mounts Roller whole. Undo takes it back.
+#   2. The same with Don't ask again: the preference reads Use the
+#      component that holds both (holder); the next Joint on the same
+#      picks asks nothing and goes into the root.
+#   3. Preferences > Assembly shows that choice and sets it back to Ask:
+#      the question shows again; Keep Roller keeps the joint in Roller,
+#      whose refusal the panel shows.
+#   4. Tube's and Frame's faces selected before Joint starts (mitcad#1864):
+#      the same question before the panel opens; Make it in the root, OK
+#      mounts Roller whole. Undo takes it back.
+# Run by tools/ui-joint-holder-test.sh (Linux),
+# tools/ui-windows-joint-holder-test.ps1 (Windows) and
+# tools/ui-macos-joint-holder-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting assembly/jointComponent ask
+command view.fit
+wait-idle
+mark
+click-logged '^Browser radio Root/Roller:1 at '
+wait-log '^Activated Roller$'
+wait-idle
+
+# 1. The question; Make it in the root mounts Roller whole.
+capture-undo-depth start
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F6[.]b0/F6:end[(]'
+wait-log '^Joint Origin A: 1 face' 30
+wait-idle 30
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Joint component asked: The two picks are in Roller and in Frame[.] A joint made in Roller can move only Roller.s own parts[.] Make it in .+, which holds both, so that Roller moves as a whole[?] [[]Make it in .+, Keep Roller[]]$' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in '
+wait-log '^Joint component answer: make it in .+$'
+focus-main
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Panel Joint notice: Joint goes into .+, which holds both picks; Roller stays active[.]$'
+wait-log '^Joint Origin B: 1 face' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Panel Joint error: '
+expect-no-log '^Joint component answer: .*don.t ask again'
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*moved O2.*; made in .+, which holds the picks$' 30
+wait-idle
+expect-no-log '^Activated '
+expect-undo-depth ${start} 1
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle
+expect-undo-depth ${start} 0
+
+# 2. Don't ask again: the preference, then no question.
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F6[.]b0/F6:end[(]'
+wait-log '^Joint Origin A: 1 face' 30
+wait-idle 30
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Joint component asked: The two picks are in Roller and in Frame[.]' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Don.t ask again$'
+button '^Make it in '
+wait-log '^Joint component answer: make it in .+, don.t ask again$'
+wait-log '^Preferences: when the picks are in another component holder$'
+focus-main
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-setting assembly/jointComponent holder
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*moved O2.*; made in .+, which holds the picks$' 30
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle
+expect-undo-depth ${start} 0
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F6[.]b0/F6:end[(]'
+wait-log '^Joint Origin A: 1 face' 30
+wait-idle 30
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Joint component by the preference: .+ [(]holds the picks; Roller active[)]$' 30
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Joint component asked'
+mark
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle
+
+# 3. Preferences > Assembly: back to Ask; the question again, Keep Roller.
+mark
+command tools.preferences.assembly
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property preferencesJointComponent currentIndex 1
+focus-widget preferencesJointComponent
+key Home
+key Return
+wait-log '^Preferences: when the picks are in another component ask$'
+focus-main
+wait-idle
+expect-setting assembly/jointComponent ask
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F6[.]b0/F6:end[(]'
+wait-log '^Joint Origin A: 1 face' 30
+wait-idle 30
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Joint component asked: The two picks are in Roller and in Frame[.]' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Keep Roller$'
+wait-log '^Joint component answer: keep Roller$'
+focus-main
+wait-log '^Panel Joint kept: C0$'
+wait-log '^Panel Joint error: Select geometry inside Roller, the component the joint goes into[.]' 60
+wait-idle 30
+expect-no-log '^Panel Joint holder: C0$'
+mark
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle
+expect-undo-depth ${start} 0
+
+# 4. The two faces selected before Joint starts (mitcad#1864): the question
+#    comes before the panel opens; Make it in the root, and the first
+#    preview is computed there. The places are those Joint logs.
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle
+mark
+click-pick 'face F6[.]b0/F6:end[(]'
+wait-log '^Selected: 1 face' 30
+wait-idle
+click-pick 'face F2[.]b0/F2:end[(]' ctrl
+wait-log '^Selected: 2 faces' 30
+wait-idle
+mark
+command assemble.joint
+wait-log '^Joint component of the selection made before it: 2 pick[(]s[)]$' 30
+wait-log '^Joint component asked: The two picks are in Roller and in Frame[.] A joint made in Roller can move only Roller.s own parts[.] Make it in .+, which holds both, so that Roller moves as a whole[?] [[]Make it in .+, Keep Roller[]]$' 30
+focus-dialog '^Component for the Joint$|^The two picks are in '
+button '^Make it in '
+wait-log '^Joint component answer: make it in .+$'
+focus-main
+wait-log '^Command Joint started' 30
+wait-log '^Panel Joint holder: C0$'
+wait-log '^Panel Joint notice: Joint goes into .+, which holds both picks; Roller stays active[.]$'
+wait-log '^Joint Origin A: 1 face' 30
+wait-log '^Joint Origin B: 1 face' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Panel Joint error: '
+mark
+button '^OK$'
+wait-log '^Added joint Joint[0-9]+ [(]rigid[)]: .*moved O2.*; made in .+, which holds the picks$' 30
+wait-idle
+expect-no-log '^Activated '
+expect-undo-depth ${start} 1
+mark
+command edit.undo
+expect-log '^Undo: '
+wait-idle
+expect-undo-depth ${start} 0
+expect-never 'TestDriver: FAIL'

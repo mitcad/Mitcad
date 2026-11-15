@@ -55,8 +55,16 @@ recurse without end or allocate far more than the file holds:
   finite, non-decreasing, no knot repeated more than the degree and a
   domain that is not empty (`geom::valid_knots`); orders of 26 at most
   (OCCT's degree 25); control points finite and weights not 0; arcs of at
-  most a full turn over an increasing domain; lines, polylines and
-  polycurves with increasing parameters.
+  most a full turn over an increasing domain, and surfaces of revolution
+  of at most a full turn the same way; lines, polylines and polycurves
+  with increasing parameters.
+- What the conversion builds from the product of two curves is bounded,
+  since each curve is bounded by its bytes but their product is not: an
+  arc is made of at most `nurbs::MAX_ARC_SPANS` spans, and a sum surface
+  or a whole surface of revolution with more than
+  `nurbs::MAX_SURFACE_POLES` control points is refused in words, its
+  face not built. A failed allocation aborts instead of panicking, so the
+  import's catch of panics would not save it.
 - A mesh's compressed vertex buffer is inflated to the size its vertex
   count gives and no more (12 bytes a vertex, the count itself checked
   against the chunk), and its CRC is checked.
@@ -131,7 +139,8 @@ layers) corrected these points:
   skipped), extrusions (profiles, path, up direction, caps, mitered
   ends), NURBS curves and surfaces, lines, arcs, polylines, polycurves,
   plane surfaces, surfaces of revolution, sum surfaces, meshes (versions
-  1 and 3, compressed vertex buffers), block instances.
+  1 and 3, compressed vertex buffers), block instances, SubD objects'
+  control nets (below).
 
 ## The conversion
 
@@ -171,9 +180,86 @@ neutral model of `core/asm` in millimetres:
   each profile, the caps planes, each face facing out (by the profiles'
   winding). Mitered extrusions are not converted.
 
+## SubD objects
+
+A SubD object (class `F09BA4D9-455B-42C3-BA3B-E6CCACEF853B`, format
+version 7 and later) is read as its control net, level 0
+(`src/subd.rs`, mitcad#1757), from the format's facts in its published
+reference source, as the rest of the reader:
+
+- The object's data: a byte, 0 for an empty SubD; then a chunk with a
+  version of two ints (major 1) holding the count of levels, the largest
+  vertex, edge and face ids (three ints) and a bounding box (always
+  empty), then one chunk per level (major 1, minor 1 or later), then
+  texture settings, the symmetry and the face packing, which are not read
+  (the chunk is left with them).
+- A level: its index (u16; level 0 is read, the levels after it are the
+  net subdivided and are not), three bytes, the net's bounding box, then
+  four u32 archive ids that part the components: vertices from the first
+  to the second, edges to the third, faces to the fourth. The components
+  follow in that order, each with the next archive id (checked: they
+  follow on without a gap), its own id (u32) and its level (u16); then,
+  from archive version 70, additions: a size byte and that many bytes
+  each, 0 a slot not there, 254 a chunk, 255 the end (before 70, two
+  optional points behind a flag byte each).
+- A list of components (a vertex's edges and faces, an edge's vertices
+  and faces, a face's edges): a u16 count and per item its archive id
+  (u32) and a flag byte, whose lowest bit says that the item is taken
+  against its own direction (a face that runs along the edge from its
+  second vertex to its first).
+- A vertex: its tag (1 smooth, 2 crease, 3 corner, 4 dart), its point,
+  the counts of its edges and faces (u16 each), a byte 0 (or a count of
+  saved limit points and 101 bytes each), its edge list and its face
+  list, then its additions (or a byte 0 before version 70).
+- An edge: its tag (1 smooth, 2 crease, 4 smooth with both ends sharp
+  vertices), the count of its faces, two sector coefficients and the
+  sharpness at its start (f64s), its vertex list (two) and its face list,
+  then its additions: from archive version 80 the first, of 8 bytes, is
+  the sharpness at its end. A smooth edge with a sharpness is a
+  semi-sharp crease; version 7 keeps no sharpness.
+- A face: the id of the level-0 face it comes from and an obsolete int,
+  its edge count (u16) and its edge list (whose count repeats it), then
+  its additions (texture domain, material, colour, packing, texture
+  points), all skipped.
+
+Every count is checked against the bytes left in its chunk before it is
+read (the least size of a vertex, an edge and a face against the level's
+bytes), every archive id against its part of the level.
+
+`subd::subd_cage` makes the net a Form's control cage
+(`mitcad_subdiv::Cage`) in millimetres: each face's loop from its edges
+in order (refused when they do not join), the faces turned to run one way
+and out of each closed piece (`mitcad_subdiv::orient`; refused for a
+one-sided surface), an edge of more than two faces refused, the creased
+edges between two faces creases sharp for good, a smooth edge with a
+sharpness a crease of that sharpness (the mean of its ends' where they
+differ, said in a note), corner vertices corners, vertices on no face left
+out (a note); the vertices and faces keep the file's ids where they are
+all above 0 and distinct. The notes and the errors are words, without ids
+or points. The import (`core/ffi/src/import_3dm.rs`) makes each cage an
+editable Form feature; what is not carried (the symmetry, the subdivided
+levels, per-face texture, material and colour, the format's own sector
+rules) is listed in `core/model-api/src/commands.md`, *.3dm import*.
+
+The test writer writes SubD objects as the reader reads them
+(`testfile::write_subd`, `testfile::subd`): a cube of 2 cm with a creased
+edge, a semi-sharp edge whose sharpness runs from 1 to 2, a corner and a
+vertex on no face, of archive version 80 (or 70). The reading is also
+checked on a SubD written by the format's own application (mitcad#1810):
+the test files under `MITCAD_3DM_CORPUS` hold an openly licensed model of
+archive version 80 (content id `98400d4d`, MIT) with one SubD, a box of
+10 mm: 8 vertices, 6 quads, the bottom ring and one vertical edge creased
+(a corner where three creases meet, a dart where one ends), three vertical
+edges semi-sharp (1, 3, and 0.5 to 2.5 along the edge) and the top ring
+smooth. Its `index.tsv` row checks the import's Form line and runs a
+`mitcad-cli` script on the imported design
+([development.md](../../docs/development.md#3dm-corpus)).
+
 ## Tests
 
-`core.3dm` (cargo): the sample model of `testfile` (a box whose bottom,
+`core.3dm` (cargo): the SubD cube of `testfile` (archive versions 80 and
+70: the cage, its ids, creases, corner and notes; faces turned round and
+refused nets), the sample model of `testfile` (a box whose bottom,
 front and left planes face in, a cylinder on a surface of revolution with
 its seam, an extruded plate with a hole, a round extrusion, a compressed
 mesh, a curve, a block with two instances), a block that holds an
@@ -186,12 +272,15 @@ short and damaged, curves nested too deep or with invalid knots, angles
 or parameters, a count larger than its chunk, and the models of
 `MITCAD_3DM_CORPUS` (each face on a plane whose outer loop is straight
 faces as the file means: its loop's sense by its vertices, turned by the
-face's `reversed`). Through OCCT (`tools/cli`): `cli.import_3dm` (the
+face's `reversed`; each SubD's net makes a Form's cage). Through OCCT (`tools/cli`): `cli.import_3dm` (the
 sample), `cli.import_3dm_block_in_itself` (the block placed once, the
 instance in itself left out), `cli.render_3dm_plane_surfaces` (the three
 plane surfaces imported facing up and rendered lit from above) and
 `3dm.corpus` (the models an `index.tsv`
-under `MITCAD_3DM_CORPUS` lists; [development.md](../../docs/development.md#3dm-corpus)).
+under `MITCAD_3DM_CORPUS` lists; [development.md](../../docs/development.md#3dm-corpus)),
+`cli.import_3dm_subd` (the SubD cube as a Form feature, built as a solid)
+and `cli.import_3dm_subd_edit` (that Form's cage as the file's, a vertex
+moved with `form.move`).
 
 `mitcad-3dm-inspect [--convert] [--faces] <file.3dm>` prints a model's
 summary; with `--convert` each B-rep's and extrusion's conversion and its

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-gltf"
+description = "Reader of glTF 2.0 files (.glb and .gltf): the node tree, triangle meshes, metallic-roughness materials and their images, for the import of mesh bodies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_gltf"
+
+[dependencies]
+# The file's JSON, read as values (an unknown member is left alone).
+serde_json = { workspace = true }

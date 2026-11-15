@@ -26,11 +26,15 @@
 // seen from the front, right and above), "created" (UTC, ISO 8601),
 // "generator" ("MitCad <version>")}.
 
+#include <vector>
+
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QtGlobal>
+
+#include "web/WebGlb.hpp"
 
 namespace mitcad {
 
@@ -57,6 +61,15 @@ struct PageResult {
   // What is not as in the design: texture images that could not be read.
   QStringList warnings;
 };
+
+// The visible bodies of the design in `context` as placed (the `instances`
+// query's), each body meshed once within the options' deflections (on a
+// copy: the design's shapes are not changed), with their appearances and
+// their faces' (texture images found as the view finds them, relative ones
+// in options.designFolder). What is not as in the design (a body that
+// cannot be meshed, a texture image missing) goes to `warnings`. The page
+// and the glTF export (web/GltfExport.hpp) write these.
+std::vector<PageBody> pageBodies(const CommandContext& context, const PageOptions& options, QStringList& warnings);
 
 // The design open in `context`, as one self-contained HTML page at `path`:
 // its visible bodies as placed, meshed within the options' deflections

@@ -117,7 +117,10 @@ struct Manipulator {
   // Arrow: the value at the origin (a handle at origin + (value - base)).
   double base = 0.0;
   // Arrow: millimetres along the arrow per unit of the value (a diameter's
-  // handle sits at the radius: 0.5).
+  // handle sits at the radius: 0.5). Ring: radians per unit of the value
+  // (1: the value is the angle; a length along an arc of radius r, 1 / r:
+  // Press Pull along a turn, mitcad#1850), a drag then stepping by the
+  // zoom's step instead of whole degrees.
   double factor = 1.0;
   // Arrow: the smallest value a drag gives; the handle stops there
   // (mitcad#693; Two Sides distances cross their start since mitcad#765).
@@ -446,6 +449,8 @@ struct InputDef {
   // on the command's last OK, from any design, instead of `defaultText`
   // (mitcad#1028, framework/RememberedValues.hpp: Fillet's Radius); the
   // default when nothing is kept or it does not evaluate in the design.
+  // Choice: likewise the option chosen, instead of `defaultChoice`, when
+  // the choice offers it (mitcad#1868: Flange's Measured and Position).
   // For a list's input, the first row's value is kept. Editing a feature
   // and Cancel keep nothing.
   bool remembered = false;
@@ -603,6 +608,12 @@ struct InputDef {
   QString addLabel; // the button that adds a row
   QString rowLabel; // "Set %1"
   int minRows = 1;
+  // List: the preview leaves out a row whose selections are not all made
+  // yet (an empty row, one with only its first pick) and shows the
+  // complete rows; the panel still says what the row needs, and OK waits
+  // for it (mitcad#1813: Assembly Constraint's rows). Without it a row that
+  // waits for a pick takes the whole preview away.
+  bool previewCompleteRows = false;
 
   // Shown only while this holds (for a list's input: of its row's state).
   std::function<bool(const CommandState&)> visible;
@@ -920,6 +931,10 @@ struct InputDef {
   InputDef& withStepMinimum(double least, bool above = false) {
     stepMinimum = least;
     stepAboveMinimum = above;
+    return *this;
+  }
+  InputDef& withCompleteRowsPreviewed() {
+    previewCompleteRows = true;
     return *this;
   }
 
@@ -1303,6 +1318,11 @@ struct CommandDef {
   // named Close: what was applied stays; else it closes.
   std::function<bool(CommandState&, const CommandContext&)> apply;
   bool repeats = false;
+  // Editing a feature with `apply` (mitcad#1812: a derived part's panel,
+  // whose edit is BUILD's or the component's own command): the timeline
+  // stays where it is, the feature is not rolled back, and `apply` runs the
+  // edit's commands on the design as it is (one undo step of their own).
+  bool editInPlace = false;
   // A panel that only shows something (Measure, mitcad#1010): one Close
   // button in place of OK and Cancel; Enter and Esc close it too.
   bool closeOnly = false;
@@ -1344,6 +1364,13 @@ struct CommandDef {
   // kept one starts from those settings, but for the inputs the user
   // changed before. Editing a feature and Cancel keep nothing.
   std::function<std::optional<PanelSizeKey>(const CommandState&, const CommandContext&)> settingsKey;
+  // The state beside the inputs that says which of them the user set by
+  // hand (mitcad#1845), its objects' and checks' keys: Hole's typed size
+  // fields and Depth, Thread's chosen size, BUILD's typed offsets. Repeat
+  // (mitcad#1686) sets them as the last OK left them after the inputs and
+  // their reactions, which take every restored value as set by hand: a
+  // field that followed its driver follows it again, one typed stays typed.
+  QStringList repeatState;
   // Items drawn in a colour of their own while the panel is open, besides
   // the inputs' picks (3D Print's print bed faces to choose from,
   // mitcad#857); a click on one picks it as on the item. Asked whenever
@@ -1426,6 +1453,11 @@ struct CommandDef {
   // Fills the inputs from a definition to edit: the `feature` query's def,
   // with the feature's "uid" added (see CommandContext::valueText).
   std::function<void(const QJsonObject&, CommandState&, const CommandContext&)> load;
+  // Whether the feature's hover text and selection card read its key
+  // value and sizes through `load` (featurePresentation); false for a load
+  // that asks the model much (mitcad#1812: Derived Component's four
+  // queries), whose features keep the plain hover text.
+  bool loadForHover = true;
   // Whether the inputs can hold all of a definition of `featureType`, so
   // that editing loses nothing (every definition when unset).
   std::function<bool(const QJsonObject&)> canEdit;

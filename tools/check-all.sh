@@ -29,6 +29,7 @@
 #          [--ctest auto|all] [--ctest-jobs N] [--testrun auto|off]
 #          [--corpus auto|always|never] [--corpus-tests N] [--corpus-jobs N]
 #          [--memory SIZE|auto] [--overlap auto|off] [--fresh] [--only STEP,...]
+#          [--release-passed DIR --release-tag X.Y.Z-rcN [--all-geometry]]
 #   --full          the full check, before a release build: --ctest all,
 #                   --corpus always, --ui all (--release is the same), and
 #                   at the end each fuzz target of core/fuzz for 60 s
@@ -163,6 +164,17 @@
 #                   guide, root-compile, ctest, corpus, ui, fuzz (with
 #                   --full), or single UI
 #                   tests (ui-sketch) or ctests (ctest:core.model).
+#   --release-passed DIR, --release-tag X.Y.Z-rcN, --all-geometry
+#                   with --full, the Linux release gate's (release/
+#                   build-linux.sh, mitcad#1822): the ctest step's test
+#                   runner skips a geometry* ctest whose fingerprint passed
+#                   in an earlier release gate on this platform (kept in
+#                   DIR/linux/<test>), keeps this run's passes with the
+#                   release's name and lists the skipped tests in
+#                   build/dev/testrun/ctest/release-skipped.tsv (each a
+#                   skipped ctest:<name> row); --all-geometry runs them
+#                   all (tools/testrun/README.md, "Release fingerprints").
+#                   Development checks never give them.
 #   --dry-run       builds and runs nothing: lists the ctests, the corpus
 #                   and the UI tests that would run for the working tree as
 #                   it is (against the last configure's targets), and why.
@@ -278,6 +290,10 @@ FULL=0
 DRY=0
 FRESH=()
 ONLY=""
+# A release gate's passes of the geometry ctests (mitcad#1822).
+RELEASE_PASSED=""
+RELEASE_TAG=""
+ALL_GEOMETRY=0
 ARGS=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
@@ -295,6 +311,9 @@ while [ $# -gt 0 ]; do
     --fresh) FRESH=(--fresh); shift ;;
     --only) ONLY=$2; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --release-passed) RELEASE_PASSED=$2; shift 2 ;;
+    --release-tag) RELEASE_TAG=$2; shift 2 ;;
+    --all-geometry) ALL_GEOMETRY=1; shift ;;
     -h | --help) sed -n '3,/^set -uo/{/^set -uo/d;s/^# \{0,1\}//;p}' "$SELF"; exit 0 ;;
     *) echo "unknown option $1 (--help)" >&2; exit 2 ;;
   esac
@@ -308,6 +327,15 @@ if [ "$FULL" = 1 ]; then
   CTEST=all
   CORPUS=always
   UI=all
+fi
+# The test runner's arguments of a release gate's ctest step.
+RELEASE_ARGS=()
+if [ -n "$RELEASE_PASSED$RELEASE_TAG" ] || [ "$ALL_GEOMETRY" = 1 ]; then
+  [ "$FULL" = 1 ] || { echo "--release-passed, --release-tag and --all-geometry are for --full" >&2; exit 2; }
+  [ -n "$RELEASE_PASSED" ] && [ -n "$RELEASE_TAG" ] ||
+    { echo "--release-passed DIR and --release-tag X.Y.Z-rcN go together" >&2; exit 2; }
+  RELEASE_ARGS=(--release-passed "$RELEASE_PASSED" --release-tag "$RELEASE_TAG")
+  [ "$ALL_GEOMETRY" = 0 ] || RELEASE_ARGS+=(--all-geometry)
 fi
 # A dry run keeps no history, holds no memory scope and takes no slot
 # (it still says which memory mode a run would take).
@@ -768,13 +796,17 @@ changed_files() {
 # off), or when it does not finish (it cannot list the tests, it stops),
 # ctest -j <fallback-jobs> in a test slot as before.
 test_step() {
-  local name=$1 jobs=$2 out=$BUILD/testrun/$1 start status=0 result changed=()
+  local name=$1 jobs=$2 out=$BUILD/testrun/$1 start status=0 result changed=() release=()
   shift 2
+  # A release gate's ctest step (TESTRUN_RELEASE): the geometry tests by
+  # their release fingerprints (RELEASE_ARGS, mitcad#1822).
+  [ -z "${TESTRUN_RELEASE:-}" ] || release=(${RELEASE_ARGS[@]+"${RELEASE_ARGS[@]}"})
   if [ "$TESTRUN" != off ] && [ -x "$TESTRUN_BIN" ]; then
     start=$(now_us)
     echo "== $name (mitcad-testrun --schedule; build/dev/testrun/$name)"
     mkdir -p "$out"
     : > "$out/status.txt"
+    rm -f "$out/release-skipped.tsv"
     # The change's files (since the merge base with origin/main, and what is
     # not committed yet): their tests go into the runner's priority lane
     # (mitcad#790 step 4), so their failures show first.
@@ -782,11 +814,15 @@ test_step() {
       changed=(--changed "$out/changed.txt")
     fi
     "$TESTRUN_BIN" --build "$BUILD" --schedule --out "$out" ${TESTRUN_JOBS:+-j "$TESTRUN_JOBS"} \
-      ${TESTRUN_CORPUS:+--corpus-children} ${RUNNER_MEMORY[@]+"${RUNNER_MEMORY[@]}"} "${changed[@]}" "$@" \
-      > "$LOGS/$name.log" 2>&1 9>&- || status=$?
+      ${TESTRUN_CORPUS:+--corpus-children} ${RUNNER_MEMORY[@]+"${RUNNER_MEMORY[@]}"} "${changed[@]}" \
+      ${release[@]+"${release[@]}"} "$@" > "$LOGS/$name.log" 2>&1 9>&- || status=$?
     if grep -q '^finished' "$out/status.txt" && [ -f "$out/results.tsv" ]; then
       testrun_lines "$out/results.tsv" "$out/logs" >> "$LOGS/$name.log"
       result=ok
+      # A release gate's run: the geometry tests skipped and the passes kept.
+      if [ ${#release[@]} -gt 0 ]; then
+        grep '^Release fingerprints' "$out/report.txt" 2> /dev/null | sed 's/^/   /'
+      fi
       if [ "$status" != 0 ]; then
         result=FAIL
         sed -n 's/^Results: /   mitcad-testrun: /p' "$out/report.txt"
@@ -967,8 +1003,17 @@ if wanted ctest || [ -n "$(ctest_named)" ]; then
     # from the files' history (mitcad#875), unless --corpus-jobs fixes them.
     ctest_children=1
     [ -z "$CORPUS_JOBS" ] || ctest_children=""
-    TESTRUN_CORPUS=$ctest_children test_step ctest "$CTEST_JOBS" -R "$regex" -E "$CORPUS_TESTS"
+    TESTRUN_RELEASE=$RELEASE_PASSED TESTRUN_CORPUS=$ctest_children \
+      test_step ctest "$CTEST_JOBS" -R "$regex" -E "$CORPUS_TESTS"
     ctest_rows "$LOGS/ctest.log"
+    # A release gate's geometry tests that passed with the same fingerprint
+    # in an earlier release gate (mitcad#1822): skipped rows.
+    if [ -f "$BUILD/testrun/ctest/release-skipped.tsv" ]; then
+      awk -F'\t' 'NR > 1 && $1 != "" { print $1 }' "$BUILD/testrun/ctest/release-skipped.tsv" |
+        while read -r name; do
+          printf '  ctest:%s\t0\tskipped\n' "$name" >> "$TIMINGS"
+        done
+    fi
     if [ "$BUILT" = 1 ]; then
       python3 tools/ctest-fingerprints.py record --plan "$LOGS/ctest-plan.tsv" --log "$LOGS/ctest.log" \
         --passed "$CTEST_PASSED" > /dev/null

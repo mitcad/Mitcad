@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The design of tools/ui-scripts/fill-cavity.mitcad-ui (mitcad#1818): a block 40 x 20 x 15 (Box1, F1, Body1) with a wall 20 x 20 x 5 on its right half (Box2, F2, joined), a blind slit along the wall's foot 2 x 10, 5 deep (Box3, F3: 100), a groove across the lower half open at both ends 10 wide, 3 deep (Box4, F4: 600; wide and shallow so that its floor shows in the view), and Plane1 (F5) 15 above XY, the lower half's top: 14000 - 100 - 600 = 13300."},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"origin","plane":"xy"},"corner":[0,0],"length":40,"width":20,"height":15,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"fixed","origin":[20,0,15],"normal":[0,0,1],"x_axis":[1,0,0]},"length":20,"width":20,"height":5,"operation":"join","participants":["F1.b0"]}},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"fixed","origin":[18,5,10],"normal":[0,0,1],"x_axis":[1,0,0]},"length":2,"width":10,"height":10,"operation":"cut","participants":["F1.b0"]}},
+  {"cmd":"add_feature","def":{"type":"box","plane":{"type":"fixed","origin":[2,-1,12],"normal":[0,0,1],"x_axis":[1,0,0]},"length":10,"width":22,"height":8,"operation":"cut","participants":["F1.b0"]}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":15}}},
+  {"expect":{"body":"F1.b0","volume":13300,"tolerance":1e-9}},
+  {"expect":{"feature":"F5","status":"ok"}}
+]

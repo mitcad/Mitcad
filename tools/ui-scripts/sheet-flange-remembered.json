@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Flange's remembered choices (mitcad#1868; tools/ui-sheet-flange-remembered-test.sh and its Windows and macOS twins): sheet rules F1 (t = 2, r = 3, K = 0.3, back reference), Sketch1 F2 with a 35 x 20 rectangle at x = -30..5, y = 0..20, the sheet Face F3 (F3.b0) on it and a Flange F4 on its edge at x = -30 with the defaults Tangent Length and Bend Line; the side face at x = 5 is free for a new Flange."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":2,"bend_radius":3,"allowance":{"type":"k_factor","k":0.3},"reference_side":"back","bend_relief":{"type":"rectangular","width":2,"depth":3},"corner_relief":{"type":"round","width":2,"depth":3}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[-30,0],"width":35,"height":20},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"expect":{"feature":"F3","status":"ok","body":"F3.b0"}},
+  {"cmd":"add_feature","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c4[c3,c1]"}},"angle":1.5707963267948966,"length":{"mode":"tangent","value":10},"position":"bend_line"}},
+  {"expect":{"feature":"F4","status":"ok","body":"F3.b0"}}
+]

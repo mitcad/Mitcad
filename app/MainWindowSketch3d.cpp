@@ -42,6 +42,7 @@
 #include <TopoDS.hxx>
 #include <gp_Ax3.hxx>
 
+#include "framework/CommandDockWidth.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/FloatingLayout.hpp"
 #include "framework/GlassCard.hpp"
@@ -55,6 +56,7 @@
 #include "sketch/SketchController.hpp"
 #include "sketch/SketchModel.hpp"
 #include "sketch/SketchPalette.hpp"
+#include "sketch/SketchSurface.hpp"
 #include "sketch/SketchTool.hpp"
 
 namespace mitcad {
@@ -126,6 +128,7 @@ void MainWindow::setUpSketch3d() {
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    keepUnscrolledSideways(scroll); // mitcad#1825
     scroll->setWidget(m_palette3d);
     if (m_floating != nullptr) {
       scroll->setAutoFillBackground(false);
@@ -434,7 +437,35 @@ std::vector<SketchEntityDisplay> MainWindow::sketchDisplay(const QString& uid) c
     return spatialSketchEntities(
         queryObject({{QStringLiteral("query"), QStringLiteral("sketch3d")}, {QStringLiteral("uid"), uid}}));
   }
-  return sketchEntities(queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), uid}}));
+  const QJsonObject sketch =
+      queryObject({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), uid}});
+  // On a cylindrical or conical face (mitcad#1768): its curves as the model
+  // lays them on the face, in pieces about a twentieth of a radian long.
+  const std::optional<mitcad::sketch::SketchSurface> surface =
+      mitcad::sketch::SketchSurface::fromJson(sketch.value(QStringLiteral("surface")));
+  if (!surface) {
+    return sketchEntities(sketch);
+  }
+  const QJsonObject onFace = queryObject({{QStringLiteral("query"), QStringLiteral("sketch_surface")},
+                                          {QStringLiteral("sketch"), uid},
+                                          {QStringLiteral("curves"), true},
+                                          {QStringLiteral("segment"), surface->step()}});
+  // For UI tests: each curve's length on the face, when they change.
+  QStringList lengths;
+  for (const QJsonValue& value : onFace.value(QStringLiteral("curves")).toArray()) {
+    const QJsonObject curve = value.toObject();
+    lengths << QStringLiteral("%1 %2 mm")
+                   .arg(curve.value(QStringLiteral("id")).toString())
+                   .arg(curve.value(QStringLiteral("length")).toDouble(), 0, 'f', 3);
+  }
+  const QString line = QStringLiteral("Sketch %1 on its face (%2): curves %3")
+                           .arg(sketch.value(QStringLiteral("name")).toString(uid), surface->describe(),
+                                lengths.isEmpty() ? QStringLiteral("none") : lengths.join(QStringLiteral(", ")));
+  if (m_loggedFaceCurves.value(uid) != line) {
+    m_loggedFaceCurves.insert(uid, line);
+    qDebug().noquote() << line;
+  }
+  return sketchEntities(sketch, onFace);
 }
 
 QString MainWindow::sketch3dRefusal(const CommandDef& def) const {

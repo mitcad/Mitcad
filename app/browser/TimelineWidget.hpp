@@ -249,6 +249,10 @@ private:
   QVector<int> m_buttonIcons; // their QStyle::StandardPixmap
   QStringList m_buttonSymbols; // their SF Symbols in a floating card; empty: the style's
   QString m_loggedColours;
+  // The components' band colours as last logged (mitcad#1876): "Timeline
+  // component colors: Bolt #e0892a, Plate #3aa35b" (the root has no band;
+  // "none" without components), the colours the Browser's bars take too.
+  QString m_loggedComponentColors;
   TimelineStrip* m_strip = nullptr;
   QScrollArea* m_scroll = nullptr;
   QLineEdit* m_editor = nullptr;

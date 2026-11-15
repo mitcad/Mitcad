@@ -1070,41 +1070,61 @@ impl<'a> SpatialEdit<'a> {
     }
 
     /// Whether anything still uses a point: a curve, a relation or a
-    /// dimension (a Plane-Bound relation, which only keeps a shape's points
-    /// in its plane, does not hold a point on its own).
+    /// dimension (a membership, which only keeps a list of points in a
+    /// plane, does not hold a point on its own).
     fn used(&self, point: EntityUid) -> bool {
         !self.def.curves_at(point).is_empty()
             || self
                 .def
                 .relations_of(point)
                 .iter()
-                .any(|k| !self.plane_bound(*k))
+                .any(|k| !self.membership(*k))
             || !self.def.texts_at(point).is_empty()
     }
 
-    /// Whether `id` is a Plane-Bound relation (mitcad#1550).
-    fn plane_bound(&self, id: ConstraintUid) -> bool {
+    /// Whether `id` keeps a list of points in a plane: a Plane-Bound
+    /// relation (mitcad#1550), the On Sketch Plane relation or an On Plane
+    /// relation (mitcad#1661).
+    fn membership(&self, id: ConstraintUid) -> bool {
         matches!(
             self.def.constraint(id).map(|c| &c.kind),
             Some(
-                SpatialConstraintKind::PlaneBound { .. } | SpatialConstraintKind::FrameBound { .. }
+                SpatialConstraintKind::PlaneBound { .. }
+                    | SpatialConstraintKind::FrameBound { .. }
+                    | SpatialConstraintKind::OnSketchPlane { .. }
+                    | SpatialConstraintKind::OnPlane { .. }
             )
         )
     }
 
-    /// Takes a point out of the Plane-Bound relations that list it; one
-    /// left with fewer than two points goes.
+    /// Takes a point out of the relations that list it with others: a
+    /// Plane-Bound relation left with fewer than two points goes, an On
+    /// Plane relation left with none goes. An On Sketch Plane relation
+    /// left empty stays until [`Self::keep_held`] has listed the points it
+    /// still holds.
     fn unbind(&mut self, point: EntityUid) -> Result<(), String> {
         let mut emptied = Vec::new();
         for c in &mut self.def.constraints {
-            if let SpatialConstraintKind::PlaneBound { points, .. }
-            | SpatialConstraintKind::FrameBound { points, .. } = &mut c.kind
-                && points.contains(&point)
-            {
-                points.retain(|p| *p != point);
-                if points.len() < 2 {
-                    emptied.push(c.id);
+            match &mut c.kind {
+                SpatialConstraintKind::PlaneBound { points, .. }
+                | SpatialConstraintKind::FrameBound { points, .. }
+                    if points.contains(&point) =>
+                {
+                    points.retain(|p| *p != point);
+                    if points.len() < 2 {
+                        emptied.push(c.id);
+                    }
                 }
+                SpatialConstraintKind::OnPlane { points, .. } if points.contains(&point) => {
+                    points.retain(|p| *p != point);
+                    if points.is_empty() {
+                        emptied.push(c.id);
+                    }
+                }
+                SpatialConstraintKind::OnSketchPlane { points } => {
+                    points.retain(|p| *p != point);
+                }
+                _ => {}
             }
         }
         for id in emptied {
@@ -1113,10 +1133,61 @@ impl<'a> SpatialEdit<'a> {
         Ok(())
     }
 
+    /// The points the On Sketch Plane relation holds: every point of the
+    /// elevation group of a point it lists.
+    fn held_on_sketch_plane(&self) -> Vec<EntityUid> {
+        let listed = match self.def.on_sketch_plane().map(|c| &c.kind) {
+            Some(SpatialConstraintKind::OnSketchPlane { points }) => points,
+            _ => return Vec::new(),
+        };
+        let groups = self.def.elevation_groups();
+        let held: BTreeSet<EntityUid> = listed
+            .iter()
+            .filter_map(|p| groups.get(p))
+            .copied()
+            .collect();
+        groups
+            .iter()
+            .filter(|(_, g)| held.contains(g))
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
+    /// After a deletion: the points of `held` that are left stay on the
+    /// sketch plane (a group whose listed point went, or that the deletion
+    /// split, lists one of its own again); an On Sketch Plane relation
+    /// left with no point goes.
+    fn keep_held(&mut self, held: &[EntityUid]) -> Result<(), String> {
+        let left: Vec<EntityUid> = held
+            .iter()
+            .copied()
+            .filter(|p| self.def.point(*p).is_some())
+            .collect();
+        if !left.is_empty() {
+            self.keep_on_sketch_plane(&left)?;
+        }
+        let empty = self.def.on_sketch_plane().and_then(|c| match &c.kind {
+            SpatialConstraintKind::OnSketchPlane { points } if points.is_empty() => Some(c.id),
+            _ => None,
+        });
+        if let Some(id) = empty {
+            self.drop_relation(id)?;
+        }
+        Ok(())
+    }
+
     /// Deletes a curve with the relations and dimensions of the curve
     /// itself; its points stay where another curve, a relation or a
-    /// dimension still uses them.
+    /// dimension still uses them (a plane membership alone does not keep
+    /// them).
     pub fn delete_curve(&mut self, id: EntityUid) -> Result<(), String> {
+        let held = self.held_on_sketch_plane();
+        self.delete_curve_only(id)?;
+        self.keep_held(&held)
+    }
+
+    /// [`Self::delete_curve`] without the On Sketch Plane bookkeeping.
+    fn delete_curve_only(&mut self, id: EntityUid) -> Result<(), String> {
         let curve = self.require_curve(id)?.clone();
         for relation in self.def.relations_of(id) {
             self.drop_relation(relation)?;
@@ -1136,9 +1207,11 @@ impl<'a> SpatialEdit<'a> {
     /// Deletes a point. One that curves, relations or dimensions use is
     /// deleted only `with_dependents`, together with them (the curves'
     /// other points stay where something still uses them); otherwise the
-    /// error names them.
+    /// error names them. A relation that lists it with other points in a
+    /// plane keeps the others (mitcad#1834).
     pub fn delete_point(&mut self, id: EntityUid, with_dependents: bool) -> Result<(), String> {
         self.position(id)?;
+        let held = self.held_on_sketch_plane();
         let curves = self.def.curves_at(id);
         self.unbind(id)?;
         let relations = self.def.relations_of(id);
@@ -1164,13 +1237,13 @@ impl<'a> SpatialEdit<'a> {
             self.remove_relation(relation)?;
         }
         for curve in curves {
-            self.delete_curve(curve)?;
+            self.delete_curve_only(curve)?;
         }
         if self.def.point(id).is_some() {
             self.def.points.retain(|p| p.id != id);
             self.report.removed.push(point_name(id));
         }
-        Ok(())
+        self.keep_held(&held)
     }
 
     /// Pulls points toward local targets in the solve that finishes the

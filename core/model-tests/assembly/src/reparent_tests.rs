@@ -704,6 +704,13 @@ fn a_joint_to_geometry_outside_the_new_parent_keeps_the_occurrence_there() {
             )),
             "{error}"
         );
+        // Box:1 holds Part:1 itself: the reason says only to join it again
+        // (mitcad#1847).
+        assert!(
+            error.contains(&format!("Delete it and join Part:1 again inside {name}"))
+                && !error.contains("as well"),
+            "{error}"
+        );
         assert_eq!(doc.to_json(), saved);
     }
 }
@@ -1059,4 +1066,219 @@ fn a_joint_that_would_move_the_old_parent_instead_is_refused() {
     let before = world(&doc);
     command(&mut doc, reparent("O1/O2", ""));
     assert_same_world(&before, &world(&doc));
+}
+
+// Several occurrences of one parent move together (mitcad#1847).
+
+/// A roller on a shaft, all in the root: Shaft:1 (O1), Bearing:1 (O2) and
+/// Tube:1 (O3), each with a block; Bearing:1 and Tube:1 in RigidGroup1,
+/// Bearing:1 joined onto Shaft:1 by Joint1; Holder:1 (O4), empty, beside
+/// them. The root is active.
+fn roller() -> (Document<MockKernel>, FeatureUid, FeatureUid) {
+    let mut doc = Document::new(MockKernel::default());
+    let part = |doc: &mut Document<MockKernel>, name: &str, at: Transform| {
+        doc.activate_component(ComponentUid::ROOT).unwrap();
+        doc.create_component(Some(name), at, true).unwrap();
+        block(doc).1
+    };
+    let shaft = part(&mut doc, "Shaft", shift(0.0, 0.0, 0.0));
+    let bearing = part(&mut doc, "Bearing", shift(20.0, 0.0, 0.0));
+    part(&mut doc, "Tube", shift(40.0, 0.0, 0.0));
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    doc.create_component(Some("Holder"), shift(0.0, 80.0, 0.0), true)
+        .unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let result = command(
+        &mut doc,
+        json!({"cmd": "add_rigid_group", "occurrences": ["O2", "O3"]}),
+    );
+    let group: FeatureUid = result["uid"].as_str().unwrap().parse().unwrap();
+    let a = side(&doc, "O2", bearing, "start");
+    let b = side(&doc, "O1", shaft, "end");
+    let joint = joint(&mut doc, a, b);
+    (doc, group, joint)
+}
+
+#[test]
+fn every_unavailable_parent_of_a_grouped_roller_says_why() {
+    let (doc, ..) = roller();
+    let answer = query(
+        &doc,
+        json!({"query": "reparent_occurrence", "occurrence": "O2"}),
+    );
+    assert_eq!(answer["problems"], json!([]), "{answer}");
+    // Its rigid group is offered to move with it.
+    assert_eq!(
+        answer["rigid_group"],
+        json!([{"occurrence": "O3", "name": "Tube:1", "path": "O3", "path_name": "Root/Tube:1"}])
+    );
+    let destinations = answer["destinations"].as_array().unwrap();
+    assert!(!destinations.is_empty());
+    for row in destinations {
+        assert_eq!(row["eligible"], false, "{row}");
+        let reason = row["reason"].as_str().unwrap();
+        assert!(!reason.is_empty(), "{row}");
+        // In words: no uids of occurrences, components or features.
+        let uid = reason
+            .as_bytes()
+            .windows(2)
+            .any(|w| matches!(w[0], b'O' | b'C' | b'F') && w[1].is_ascii_digit());
+        assert!(!uid, "{reason}");
+    }
+    let holder = destinations
+        .iter()
+        .find(|d| d["occurrence"] == "O4")
+        .unwrap()["reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        holder.contains(
+            "RigidGroup1: it holds Bearing:1 rigidly to Tube:1, which would not be in Holder"
+        ),
+        "{holder}"
+    );
+    assert!(
+        holder.contains("Joint1: it joins Bearing:1 to Shaft:1, which is not in Holder"),
+        "{holder}"
+    );
+    // Each blocker also on its own, as the picker lists them under the row.
+    let reasons = &destinations
+        .iter()
+        .find(|d| d["occurrence"] == "O4")
+        .unwrap()["reasons"];
+    assert_eq!(reasons.as_array().map(Vec::len), Some(2), "{reasons}");
+}
+
+#[test]
+fn a_rigid_group_joined_to_a_shaft_outside_is_refused_with_what_to_do() {
+    let (mut doc, ..) = roller();
+    let saved = doc.to_json();
+    let depth = doc.undo_depth();
+    // Both members together: the group could go whole, the joint to the
+    // shaft in the root cannot.
+    let answer = query(
+        &doc,
+        json!({"query": "reparent_occurrence", "occurrence": "O2", "with": ["O3"],
+               "parent": "O4"}),
+    );
+    assert_eq!(answer["rigid_group"], json!([]), "{answer}");
+    assert_eq!(answer["plan"]["eligible"], false, "{answer}");
+    let problems = answer["plan"]["problems"].as_array().unwrap();
+    assert_eq!(problems.len(), 1, "{answer}");
+    let problem = problems[0].as_str().unwrap();
+    assert!(
+        problem.starts_with("Joint1: it joins Bearing:1 to Shaft:1, which is not in Holder")
+            && problem.contains(
+                "Move Shaft:1 into Holder as well, or delete it and join Bearing:1 again inside \
+                 Holder"
+            ),
+        "{problem}"
+    );
+    let error = rejected(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": "O2", "with": ["O3"], "parent": "O4"}),
+    );
+    assert!(
+        error.contains("Move Shaft:1 into Holder as well"),
+        "{error}"
+    );
+    assert_eq!(doc.to_json(), saved);
+    assert_eq!(doc.undo_depth(), depth);
+}
+
+#[test]
+fn a_rigid_group_with_its_shaft_moves_as_one() {
+    let (mut doc, group, joint) = roller();
+    let before = world(&doc);
+    let depth = doc.undo_depth();
+    let holder = doc
+        .assembly()
+        .occurrence(OccurrenceUid(4))
+        .unwrap()
+        .component;
+    let plan = query(
+        &doc,
+        json!({"query": "reparent_occurrence", "occurrence": "O2", "with": ["O3", "O1"],
+               "parent": "O4"}),
+    )["plan"]
+        .clone();
+    assert_eq!(plan["eligible"], true, "{plan}");
+    assert_eq!(plan["moved"], json!(["O4/O2", "O4/O3", "O4/O1"]));
+
+    let result = command(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": "O2", "with": ["O3", "O1"],
+               "parent": "O4"}),
+    );
+    assert_eq!(result["path"], "O4/O2", "{result}");
+    assert_eq!(result["moved"].as_array().unwrap().len(), 3, "{result}");
+    let names: Vec<&str> = result["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["RigidGroup1", "Joint1"], "{result}");
+    assert!(
+        result["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["split"].is_null())
+    );
+    for uid in [1, 2, 3] {
+        assert_eq!(parent_of(&doc, OccurrenceUid(uid)), holder);
+    }
+    // The group and the joint go whole into Holder, their paths unchanged.
+    assert_eq!(component_of(&doc, group), holder);
+    assert_eq!(def_of(&doc, group)["occurrences"], json!(["O2", "O3"]));
+    assert_eq!(component_of(&doc, joint), holder);
+    let def = def_of(&doc, joint);
+    assert_eq!(
+        (
+            def["a"]["occurrence"].clone(),
+            def["b"]["occurrence"].clone()
+        ),
+        (json!("O2"), json!("O1"))
+    );
+    for uid in [group, joint] {
+        assert!(doc.status(uid).unwrap().is_ok(), "{:?}", doc.status(uid));
+    }
+    assert_same_world(&before, &world(&doc));
+    let loaded = reopened(&doc);
+    assert_eq!(component_of(&loaded, joint), holder);
+    assert_same_world(&before, &world(&loaded));
+
+    // One undo step puts all three and their features back.
+    assert_eq!(doc.undo_depth(), depth + 1);
+    assert_eq!(
+        doc.undo().as_deref(),
+        Some("Move Bearing:1, Tube:1, Shaft:1 to Holder")
+    );
+    for uid in [1, 2, 3] {
+        assert_eq!(parent_of(&doc, OccurrenceUid(uid)), ComponentUid::ROOT);
+    }
+    assert_eq!(component_of(&doc, group), ComponentUid::ROOT);
+    assert_eq!(component_of(&doc, joint), ComponentUid::ROOT);
+    assert_same_world(&before, &world(&doc));
+}
+
+#[test]
+fn occurrences_of_different_parents_do_not_move_together() {
+    let mut doc = nested();
+    doc.create_component(Some("Bracket"), shift(0.0, 50.0, 0.0), true)
+        .unwrap();
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let saved = doc.to_json();
+    let error = rejected(
+        &mut doc,
+        json!({"cmd": "reparent_occurrence", "occurrence": "O1/O2", "with": ["O4"],
+               "parent": ""}),
+    );
+    assert!(
+        error.contains("Part:1 and Bracket:1 are in different components"),
+        "{error}"
+    );
+    assert_eq!(doc.to_json(), saved);
 }

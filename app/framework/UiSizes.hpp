@@ -70,6 +70,17 @@ inline int uiRoomSize(int pixels) {
 // font size of its own (8 pt at 100 % is 6.4 pt at 80 %).
 inline double uiTextScale() { return ui_sizes_detail::textPercent / 100.0; }
 
+// The Command panel (mitcad#1825, GitHub mitcad/Mitcad#336) in the Docked
+// layout and its card in the Floating one (mitcad#1846): 300 px at the
+// default sizes, as a room it grows with the larger of Text size and Icon
+// size, so that the Sketch Palette and a command's panel fit it at every
+// size; the Docked panel is dragged wider, never narrower than this.
+inline constexpr int kCommandPanelWidth = 300;
+inline int commandPanelMinimumWidth() { return uiRoomSize(kCommandPanelWidth); }
+// The width it opens at: the one dragged to and remembered (0: none), at
+// least the minimum at this run's sizes.
+inline int commandPanelWidth(int remembered) { return std::max(remembered, commandPanelMinimumWidth()); }
+
 // A kept value as a size: 80 to 200 in steps of 5, else 100.
 int uiSizeFromValue(const QVariant& value);
 

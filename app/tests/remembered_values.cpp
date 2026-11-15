@@ -3,7 +3,7 @@
 // keeps the fields' values in the settings (commands/<command>/<input>),
 // an edit and Cancel keep nothing; a new panel starts with the value read
 // back, or with the default when none is kept or it does not evaluate in
-// the design at hand.
+// the design at hand. A choice marked so keeps its option (mitcad#1868).
 #include "framework/RememberedValues.hpp"
 
 #include <cstdio>
@@ -114,6 +114,38 @@ void storeTests() {
   CHECK(mitcad::rememberedValue(kChamfer, QStringLiteral("distance")) == QStringLiteral("2.5 mm"));
   CHECK(mitcad::rememberedValue(kChamfer, QStringLiteral("distance2")) == QStringLiteral("4 mm"));
   CHECK(mitcad::rememberedValue(kChamfer, QStringLiteral("angle")).isEmpty());
+  QSettings().remove(QStringLiteral("commands"));
+}
+
+// A choice marked to remember (mitcad#1868): Flange's Measured and
+// Position keep the option chosen on a new flange's OK, used where the
+// choice offers it.
+void choiceTests() {
+  QSettings().remove(QStringLiteral("commands"));
+  const QString flange = QStringLiteral("sheet.flange");
+  const QString position = QStringLiteral("position");
+  const QStringList offered = {QStringLiteral("bend_line"), QStringLiteral("inside"), QStringLiteral("outside")};
+  // Nothing kept: the default.
+  mitcad::PanelStart start = mitcad::panelStartChoice(flange, position, QStringLiteral("bend_line"), offered);
+  CHECK(start.text == QStringLiteral("bend_line"));
+  CHECK(!start.fromMemory);
+
+  // An edit and Cancel keep nothing; a new flange's OK keeps the option.
+  mitcad::rememberPanelValues(flange, fields(position, QStringLiteral("outside")), true, true);
+  mitcad::rememberPanelValues(flange, fields(position, QStringLiteral("inside")), false, false);
+  CHECK(mitcad::rememberedValue(flange, position).isEmpty());
+  mitcad::rememberPanelValues(flange, fields(position, QStringLiteral("outside")), true, false);
+  CHECK(QSettings().value(QStringLiteral("commands/sheet.flange/position")).toString() == QStringLiteral("outside"));
+  start = mitcad::panelStartChoice(flange, position, QStringLiteral("bend_line"), offered);
+  CHECK(start.text == QStringLiteral("outside"));
+  CHECK(start.fromMemory);
+
+  // An option the choice no longer offers: the default, without an error.
+  start = mitcad::panelStartChoice(flange, position, QStringLiteral("bend_line"),
+                                   {QStringLiteral("bend_line"), QStringLiteral("inside")});
+  CHECK(start.text == QStringLiteral("bend_line"));
+  CHECK(!start.fromMemory);
+  CHECK(start.remembered == QStringLiteral("outside"));
   QSettings().remove(QStringLiteral("commands"));
 }
 
@@ -274,6 +306,7 @@ int rememberedValuesTests() {
   QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
   CHECK(QSettings().fileName().startsWith(directory.path()));
   storeTests();
+  choiceTests();
   panelSettingsTests();
   QSettings::setDefaultFormat(format);
   QCoreApplication::setOrganizationName(organization);

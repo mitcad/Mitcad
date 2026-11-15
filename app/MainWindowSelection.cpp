@@ -27,6 +27,8 @@
 #include "framework/Ribbon.hpp"
 #include "framework/SelectionFilterPanel.hpp"
 #include "framework/TestSync.hpp"
+#include "sketch/SketchController.hpp"
+#include "view/SelectionLook.hpp"
 
 namespace mitcad {
 
@@ -302,6 +304,20 @@ void MainWindow::logSketchPickPlaces() {
                                                                       : QStringLiteral("visible"))
                               .arg(at.x())
                               .arg(at.y());
+  }
+}
+
+void MainWindow::applySelectionLook() {
+  // The widths and OCCT's own selection; the highlights shown drawn again.
+  m_viewer->setSelectionLook(savedSelectionLook());
+  // The selection outside a command in the new colour (a command's
+  // highlights keep the command's colours).
+  if (m_mode != Mode::Command) {
+    updateIdleHighlights();
+  }
+  // Sketch mode's selection, painted over the view.
+  if (m_sketch != nullptr && m_sketch->isActive()) {
+    m_sketch->refreshView();
   }
 }
 

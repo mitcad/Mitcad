@@ -323,3 +323,49 @@ fn a_converted_sketch_on_a_face_puts_a_corner_on_it() {
     assert_eq!(status(&b.doc, sketch), FeatureStatus::Ok);
     assert!((point(&b.doc, sketch, corner)[2] - 30.0).abs() <= TOL);
 }
+
+/// mitcad#1832: the solve after the last touching plane is measured too. A
+/// point on a free-form face (a sphere of radius 30 about (0, 0, 100) that
+/// only the kernel's projection knows) that starts on it reaches it on the
+/// first solve: with no touching plane tried after it, the sketch is
+/// solved, not "points do not reach their faces".
+#[test]
+fn a_sketch_that_reaches_its_faces_on_the_last_solve_is_solved() {
+    use crate::features::spatial_sketch::TEST_FACE_ROUNDS;
+
+    TEST_FACE_ROUNDS.with(|rounds| rounds.set(Some(0)));
+    let mut b = block();
+    let body = b.body;
+    let back = side(b.extrude, 1, 2);
+    {
+        let kernel = b.doc.kernel();
+        kernel.surfaces.borrow_mut().insert(
+            back.to_string(),
+            SurfaceGeometry::Other {
+                kind: "bspline".to_owned(),
+            },
+        );
+        kernel
+            .projected_faces
+            .borrow_mut()
+            .insert(back.to_string(), ([0.0, 0.0, 100.0], 30.0));
+    }
+    let sketch = b.doc.add_spatial_sketch(SketchPlane::Xy).unwrap().uid;
+    let (f, report) = b
+        .doc
+        .edit_spatial_sketch(sketch, "Attach", |e| {
+            let o = e.add_point([0.0; 3])?;
+            e.attach(o, SpatialSource::Origin)?;
+            let f = e.add_point([0.0, 18.0, 76.0])?;
+            e.attach(f, face(body, &back))?;
+            for (axis, value) in [(SpatialAxis::X, 0.0), (SpatialAxis::Y, 18.0)] {
+                e.add_dimension(offset(o, f, axis), Some(&ValueInput::Number(value)), false)?;
+            }
+            Ok(f)
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+    TEST_FACE_ROUNDS.with(|rounds| rounds.set(None));
+    assert_eq!(report.status.dof, 0, "{:?}", report.status);
+    assert_eq!(status(&b.doc, sketch), FeatureStatus::Ok);
+    assert!(near(point(&b.doc, sketch, f), [0.0, 18.0, 76.0]));
+}

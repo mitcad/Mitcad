@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-subdiv"
+description = "Control cages of Form features, their edits and Catmull-Clark subdivision to surface patches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_subdiv"
+
+# Below the model (mitcad#1757): no OCCT, no model types.
+[dependencies]
+mitcad-vec3 = { path = "../vec3" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -16,6 +16,7 @@
 #include "browser/BrowserController.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "sketch/Sketch3dController.hpp"
+#include "sketch/SketchSurface.hpp"
 #include "view/ModeBanner.hpp"
 
 namespace mitcad {
@@ -100,8 +101,10 @@ void MainWindow::logSketchPicks() {
 
 QString MainWindow::pickPlaneText() const {
   // The kind chosen names itself (mitcad#1524).
-  return m_sketchSpatial ? tr("Create 3D Sketch: pick a plane or a planar face. Esc cancels.")
-                         : tr("Create Sketch: pick a plane or a planar face. Esc cancels.");
+  // A 2D sketch also on a cylindrical or conical face (mitcad#1768).
+  return m_sketchSpatial
+             ? tr("Create 3D Sketch: pick a plane or a planar face. Esc cancels.")
+             : tr("Create Sketch: pick a plane, a planar face or a cylindrical or conical face. Esc cancels.");
 }
 
 void MainWindow::updateModeBanner() {
@@ -128,7 +131,8 @@ void MainWindow::updateModeBanner() {
 void MainWindow::refusePlanePick(const SelectionItem& item) {
   QString reason;
   if (item.kind == SelectKind::Plane ||
-      (item.kind == SelectKind::Face && item.geometry == QStringLiteral("plane"))) {
+      (item.kind == SelectKind::Face && item.geometry == QStringLiteral("plane")) ||
+      (!m_sketchSpatial && sketch::isDevelopedFace(item))) {
     reason = sketchSupportRefusal(item); // the design policy's (mitcad#220)
   } else if (item.kind == SelectKind::Face) {
     // What the face is instead of a plane, from its surface's type.
@@ -139,9 +143,18 @@ void MainWindow::refusePlanePick(const SelectionItem& item) {
                          : surface == QStringLiteral("torus")  ? tr("a toroidal surface")
                          : surface == QStringLiteral("mesh")   ? tr("a mesh's triangles")
                                                                : tr("a free-form surface, such as a thread's");
-    // In words (mitcad#1741): the face's name is for the log below.
-    reason = tr("The face is not planar (%1); pick a planar face or a plane, or make one with Construct.")
-                 .arg(kind);
+    // In words (mitcad#1741): the face's name is for the log below. A 2D
+    // sketch lies on a cylindrical or conical face too (mitcad#1768); a 3D
+    // sketch on planes only.
+    const bool developed = surface == QStringLiteral("cylinder") || surface == QStringLiteral("cone");
+    if (m_sketchSpatial || developed) {
+      reason = tr("The face is not planar (%1); pick a planar face or a plane, or make one with Construct.")
+                   .arg(kind);
+    } else {
+      reason = tr("The face is neither planar nor cylindrical or conical (%1); pick a plane or a planar, "
+                  "cylindrical or conical face, or make a plane with Construct.")
+                   .arg(kind);
+    }
   }
   if (reason.isEmpty()) {
     return;

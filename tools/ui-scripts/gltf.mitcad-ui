@@ -1,0 +1,82 @@
+# SPDX-License-Identifier: MIT
+# glTF export and import through the real UI (mitcad#1826), the shared
+# input script of tools/ui-gltf-test.sh (Linux),
+# tools/ui-windows-gltf-test.ps1 and tools/ui-macos-gltf-test.sh, on
+# tools/ui-scripts/gltf.json saved as robot.mitcad (Bar and Tile, two
+# components, one body red, one textured):
+#   1. File > Export to robot.glb: the extension chooses glTF binary, the
+#      two bodies (24 triangles) in one file;
+#   2. File > Export to robot.gltf: glTF, its buffer and texture image
+#      written beside it (three files);
+#   3. File > Import of robot.gltf into the open design: asked where it
+#      goes, into a component of its own named after the file, one undo
+#      step;
+#   4. File > Import of robot.glb into a new, empty design: nothing asked,
+#      its two components.
+# The wrappers then read both files back with mitcad-cli
+# (tools/ui-scripts/gltf-read.json) and open the .glb with --open
+# (tools/ui-scripts/gltf-open.mitcad-ui).
+wait-idle
+
+# 1. glTF binary.
+mark
+command file.export
+focus-dialog '^Export$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/robot.glb"
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: glTF binary \(\*\.glb\) to ${MITCAD_TEST_WORK:re}/robot\.glb, refinement [a-z]+'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/robot\.glb: glb, 2 body\(ies\), 24 triangles, 1 file\(s\), [0-9]+ bytes'
+expect-file "${MITCAD_TEST_WORK}/robot.glb"
+
+# 2. glTF, with its buffer and image beside it.
+mark
+command file.export
+focus-dialog '^Export$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/robot.gltf"
+sleep 300
+key Return
+focus-main
+wait-log 'Export dialog: glTF \(\*\.gltf\) to ${MITCAD_TEST_WORK:re}/robot\.gltf, refinement [a-z]+'
+wait-log 'Exported ${MITCAD_TEST_WORK:re}/robot\.gltf: gltf, 2 body\(ies\), 24 triangles, 3 file\(s\), [0-9]+ bytes'
+expect-file "${MITCAD_TEST_WORK}/robot.gltf"
+expect-file "${MITCAD_TEST_WORK}/robot.bin"
+expect-file "${MITCAD_TEST_WORK}/robot_texture1.png"
+
+# 3. Import of the .gltf into the design with content: asked where it goes
+# (mitcad#1629); Enter makes a component named after the file.
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/robot.gltf"
+sleep 300
+key Return
+wait-log 'Import place dialog opened: robot\.gltf'
+# Message boxes have no window title on macOS; match the same question.
+focus-dialog '^Import robot\.gltf into a new component named robot, or into the active component\?$'
+key Return
+wait-log 'Import place: new component'
+focus-main
+wait-log 'Imported robot\.gltf as .*: 2 body\(ies\), 2 component\(s\), 2 occurrence\(s\), into component robot$'
+mark
+key ctrl+z
+wait-log 'Undo: Import robot\.gltf'
+
+# 4. Import of the .glb into a new, empty design: nothing to ask.
+key ctrl+n
+wait-log 'New document'
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/robot.glb"
+sleep 300
+key Return
+focus-main
+wait-log 'Imported robot\.glb as .*: 2 body\(ies\), 2 component\(s\), 2 occurrence\(s\)$'
+expect-no-log 'Import place dialog opened'
+expect-never 'TestDriver: FAIL|Could not export|Could not import'

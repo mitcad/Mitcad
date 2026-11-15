@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Convert to Features (mitcad#1815) on convert-features.json: Member:1, a
+# synthetic timber member 98 x 48 and 1000 long placed from the runner's
+# library (convert-features-library.json, its design
+# convert-features-member.json: the section's width is the parameter W),
+# stands on the grounded Plate:1 by Joint1. From the member's row menu in
+# the browser, Convert to Features; the question names it and is answered
+# with its default button. The timeline then has the member's section
+# sketch and its extrusion, the bodies are as they were and the joint
+# holds. The section's width W (its sketch's dimension) set to 120 mm:
+# the member grows, the joint still holds. All geometry is synthetic.
+# Run by tools/ui-convert-features-test.sh (Linux),
+# tools/ui-windows-convert-features-test.ps1 (Windows) and
+# tools/ui-macos-convert-features-test.sh (macOS), which make the library
+# and the design.
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+mark
+command view.fit
+wait-idle
+# 400 x 400 x 20 + 98 x 48 x 1000.
+expect-model-bodies 2 7904000
+# The member converted from its row's menu, the question answered.
+mark
+context-menu-logged '^Browser Root/Member:1 at ' 'Convert to Features'
+expect-log '^Context menu: .*Convert to Features'
+wait-log '^Convert to Features Member:1[?] [(]features[)]$' 30
+focus-dialog '^Convert to Features$|^Convert Member:1 to features[?]$'
+key Return
+expect-dialog-gone '^Convert to Features$|^Convert Member:1 to features[?]$'
+wait-log '^Converted Member:1 to features: Sketch1, Extrude1, mount:end_a, mount:end_b$' 60
+wait-idle 30
+# The timeline has its section sketch and its extrusion; nothing moved or
+# failed.
+wait-log '^Timeline Sketch1 at ' 30
+wait-log '^Timeline Extrude1 at ' 30
+expect-model-bodies 2 7904000
+expect-no-log '^Timeline cell Joint1: failed'
+# The section edited: its width W, the sketch's dimension, 98 -> 120 mm.
+mark
+model-command '{"cmd":"set_parameter","name":"W","expression":"120 mm"}'
+wait-idle 30
+# 400 x 400 x 20 + 120 x 48 x 1000.
+expect-model-bodies 2 8960000
+expect-no-log '^Timeline cell (Joint1|Extrude1|Sketch1): failed'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

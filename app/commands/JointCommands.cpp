@@ -170,13 +170,6 @@ QString featureComponent(const QString& uid, const CommandContext& context) {
   }
 }
 
-// The component a joint goes into: an edit keeps its own (the hidden input
-// "component"), else the active one.
-QString jointComponent(const CommandState& state, const CommandContext& context) {
-  const QString loaded = state.text(QStringLiteral("component"));
-  return loaded.isEmpty() ? activeComponent(context) : loaded;
-}
-
 // An item's occurrence path from a component that `paths` place; none when
 // the item is not inside it. The component's own geometry has the empty
 // path.
@@ -193,6 +186,78 @@ std::optional<QString> pathFrom(const SelectionItem& item, const QStringList& pa
     }
   }
   return std::nullopt;
+}
+
+// The picks that decide the component a new joint goes into (mitcad#1856):
+// Joint's origins, As-Built Joint's and Rigid Group's components, every
+// row's references of Assembly Constraint; not a motion origin.
+Selection holderPicks(const CommandState& state) {
+  Selection picks;
+  for (const char* id : {"a", "b", "occurrences"}) {
+    picks += state.items(QString::fromLatin1(id));
+  }
+  const QString rows = QStringLiteral("rows");
+  for (int i = 0; i < state.rows(rows); ++i) {
+    const CommandState row = state.row(rows, i);
+    for (const char* id : {"a", "b", "b2"}) {
+      picks += row.items(QString::fromLatin1(id));
+    }
+  }
+  return picks;
+}
+
+// The component a new joint goes into instead of the active one, the lowest
+// that holds its picks (mitcad#1856, MainWindowJointHolder.cpp): the hidden
+// input "holder", which the question after a pick or the preference sets,
+// while it still holds every pick; empty otherwise, and for an edit.
+QString chosenHolder(const CommandState& state, const CommandContext& context) {
+  const QString holder = state.text(QStringLiteral("holder"));
+  if (holder.isEmpty() || !state.text(QStringLiteral("component")).isEmpty()) {
+    return QString();
+  }
+  const QStringList paths = placingPaths(holder, context);
+  const Selection picks = holderPicks(state);
+  const bool holds = std::all_of(picks.begin(), picks.end(),
+                                 [&paths](const SelectionItem& item) { return pathFrom(item, paths).has_value(); });
+  return holds ? holder : QString();
+}
+
+// The component a joint goes into: an edit keeps its own (the hidden input
+// "component"); a new one goes into the component chosen to hold its picks
+// (chosenHolder), else into the active one.
+QString jointComponent(const CommandState& state, const CommandContext& context) {
+  const QString loaded = state.text(QStringLiteral("component"));
+  if (!loaded.isEmpty()) {
+    return loaded;
+  }
+  const QString holder = chosenHolder(state, context);
+  return holder.isEmpty() ? activeComponent(context) : holder;
+}
+
+// add_feature's `component` of a new joint made in the component chosen to
+// hold its picks, the active one staying active (mitcad#1856).
+std::function<void(QJsonObject&, const CommandState&)> intoHolder(const CommandContext& context) {
+  return [&context](QJsonObject& command, const CommandState& state) {
+    const QString holder = chosenHolder(state, context);
+    if (!holder.isEmpty()) {
+      command.insert(QStringLiteral("component"), holder);
+    }
+  };
+}
+
+// The name of the occurrence a path from the root names; the root's
+// component name for the root's own geometry.
+QString occurrenceNameAt(const QString& path, const CommandContext& context) {
+  if (path.isEmpty()) {
+    return componentName(kRoot, context);
+  }
+  QString name;
+  eachOccurrence(context, [&path, &name](const QJsonObject& node, const QString& at) {
+    if (at == path) {
+      name = str(node, "name");
+    }
+  });
+  return name.isEmpty() ? componentName(occurrenceComponent(path, context), context) : name;
 }
 
 // An occurrence, as the inputs of components keep it: a component picked in
@@ -683,6 +748,24 @@ QString jointLine(const QJsonObject& joint, const QJsonObject& joints) {
   return line;
 }
 
+// A feature made in the component that holds its picks rather than in the
+// active one (mitcad#1856): the status line says so, "Joint1 made in
+// Assembly, which holds both picks"; the log line's addition, empty for one
+// made in the active component.
+QString madeInHolder(const QString& name, const QString& component, int picks, const CommandContext& context) {
+  const QString made = component.isEmpty() ? kRoot : component;
+  if (made == activeComponent(context)) {
+    return QString();
+  }
+  const QString holder = componentName(made, context);
+  const QString text = picks == 2 ? QObject::tr("%1 made in %2, which holds both picks").arg(name, holder)
+                                  : QObject::tr("%1 made in %2, which holds all its picks").arg(name, holder);
+  if (auto* host = const_cast<DocumentHost*>(dynamic_cast<const DocumentHost*>(&context))) {
+    host->showStatus(text, NoticeLevel::Information);
+  }
+  return QStringLiteral("; made in %1, which holds the picks").arg(holder);
+}
+
 QString addedJoint(const CommandContext& context, const QString& type, const QString& what) {
   const QJsonObject joints = jointsOf(context);
   const QJsonObject joint = newest(joints.value(QStringLiteral("joints")).toArray(),
@@ -690,13 +773,22 @@ QString addedJoint(const CommandContext& context, const QString& type, const QSt
   if (joint.isEmpty()) {
     return QStringLiteral("Added %1").arg(what);
   }
-  return QStringLiteral("Added %1 %2").arg(what, jointLine(joint, joints));
+  return QStringLiteral("Added %1 %2").arg(what, jointLine(joint, joints)) +
+         madeInHolder(str(joint, "name"), str(joint, "component"), 2, context);
 }
 
 // --- Joint
 
 Built originsOf(const CommandState& state, const CommandContext& context, const QStringList& inputs,
                 QJsonObject& def) {
+  // Both picks on one component: no component's joint joins them
+  // (mitcad#1856), said in words.
+  if (inputs.size() == 2 && !state.items(inputs[0]).isEmpty() && !state.items(inputs[1]).isEmpty() &&
+      state.items(inputs[0]).first().occurrence == state.items(inputs[1]).first().occurrence) {
+    return Built::failure(QObject::tr("Both picks are on %1: a joint joins two different components.")
+                              .arg(occurrenceNameAt(state.items(inputs[0]).first().occurrence, context)),
+                          inputs[1]);
+  }
   const QString component = jointComponent(state, context);
   const QStringList paths = placingPaths(component, context);
   for (const QString& input : inputs) {
@@ -891,6 +983,10 @@ CommandDef jointCommand(const CommandContext& context) {
   // The motion it makes played back and forth from the preview (mitcad#1790).
   def.inputs += {animateInput(jointMotionChoices)};
   def.inputs += {hidden(QStringLiteral("component")), hidden(QStringLiteral("position"))};
+  // The component that holds the picks, when the question made it the
+  // joint's (or declined it; mitcad#1856).
+  def.inputs += {hidden(QStringLiteral("holder")), hidden(QStringLiteral("kept"))};
+  def.addOptions = intoHolder(context);
   def.enabled = [&context] { return occurrenceCount(context) > 0; };
   // The handles stand on the joint's origin where the preview puts it.
   def.previewReported = keepPlacements;
@@ -982,6 +1078,9 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
   // keeps it while A and B stay.
   def.inputs += {hidden(QStringLiteral("component")), hidden(QStringLiteral("position")),
                  hidden(QStringLiteral("relative")), hidden(QStringLiteral("pair"))};
+  // The component that holds the picks (mitcad#1856).
+  def.inputs += {hidden(QStringLiteral("holder")), hidden(QStringLiteral("kept"))};
+  def.addOptions = intoHolder(context);
   def.enabled = [&context] { return occurrenceCount(context) > 1; };
 
   def.build = [](const CommandState& state, const CommandContext& context) {
@@ -1359,7 +1458,11 @@ CommandDef rigidGroupCommand(const CommandContext& context) {
           .withAccepts(isPlaced)
           .withConvert(occurrenceItem),
       hidden(QStringLiteral("component")),
+      // The component that holds the picks (mitcad#1856).
+      hidden(QStringLiteral("holder")),
+      hidden(QStringLiteral("kept")),
   };
+  def.addOptions = intoHolder(context);
   def.enabled = [&context] { return occurrenceCount(context) > 1; };
 
   def.build = [](const CommandState& state, const CommandContext& context) {
@@ -1404,7 +1507,8 @@ CommandDef rigidGroupCommand(const CommandContext& context) {
     for (const QJsonValue& name : group.value(QStringLiteral("names")).toArray()) {
       names << name.toString();
     }
-    return QStringLiteral("Added rigid group %1: %2").arg(str(group, "name"), names.join(QStringLiteral(", ")));
+    return QStringLiteral("Added rigid group %1: %2").arg(str(group, "name"), names.join(QStringLiteral(", "))) +
+           madeInHolder(str(group, "name"), str(group, "component"), static_cast<int>(names.size()), context);
   };
   return def;
 }
@@ -1617,15 +1721,27 @@ std::optional<QJsonObject> rowOrigin(const CommandState& row, const QString& inp
 
 // The `constraint_row` query of a row's picks; empty without both.
 QJsonObject rowQuery(const CommandState& row, const CommandContext& context) {
-  const QStringList paths = placingPaths(activeComponent(context), context);
-  const auto a = rowOrigin(row, QStringLiteral("a"), paths);
-  const auto b = rowOrigin(row, QStringLiteral("b"), paths);
+  QString component = activeComponent(context);
+  QStringList paths = placingPaths(component, context);
+  auto a = rowOrigin(row, QStringLiteral("a"), paths);
+  auto b = rowOrigin(row, QStringLiteral("b"), paths);
+  if ((!a || !b) && !row.items(QStringLiteral("a")).isEmpty() && !row.items(QStringLiteral("b")).isEmpty()) {
+    // Picks outside the active component (the constraint goes into the one
+    // that holds them, mitcad#1856): what they measure is the same in the
+    // root, which holds every pick.
+    component = kRoot;
+    paths = placingPaths(component, context);
+    a = rowOrigin(row, QStringLiteral("a"), paths);
+    b = rowOrigin(row, QStringLiteral("b"), paths);
+  }
   if (!a || !b) {
     return QJsonObject();
   }
   try {
-    return context.queryObject(
-        {{QStringLiteral("query"), QStringLiteral("constraint_row")}, {QStringLiteral("a"), *a}, {QStringLiteral("b"), *b}});
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("constraint_row")},
+                                {QStringLiteral("a"), *a},
+                                {QStringLiteral("b"), *b},
+                                {QStringLiteral("component"), component}});
   } catch (const std::exception&) {
     return QJsonObject();
   }
@@ -1864,12 +1980,24 @@ CommandDef constraintCommand(const CommandContext& context) {
                }),
            // A locked insert's turn as loaded: an edit keeps it.
            hidden(QStringLiteral("lock_angle"))},
-          QObject::tr("Add Constraint"), QObject::tr("Constraint %1")),
+          QObject::tr("Add Constraint"), QObject::tr("Constraint %1"))
+          // A row that waits for its picks leaves the others' preview
+          // (mitcad#1813).
+          .withCompleteRowsPreviewed(),
       // A row's value played back and forth from the preview (mitcad#1790).
       animateInput([&context](const CommandState& state) { return constraintMotionChoices(state, context); }),
       hidden(QStringLiteral("component")),
+      // The component that holds the picks (mitcad#1856).
+      hidden(QStringLiteral("holder")),
+      hidden(QStringLiteral("kept")),
   };
+  def.addOptions = intoHolder(context);
   def.enabled = [&context] { return occurrenceCount(context) > 1; };
+  // The picks on the component the preview moves are drawn where the
+  // preview puts it, not also where the design has it (mitcad#1813), as
+  // Joint's.
+  def.previewReported = keepPlacements;
+  def.pickMoved = pickMovedInPreview;
 
   def.build = [](const CommandState& state, const CommandContext& context) {
     const QString component = jointComponent(state, context);
@@ -1998,7 +2126,9 @@ CommandDef constraintCommand(const CommandContext& context) {
     if (set.isEmpty()) {
       return QStringLiteral("Added constraint");
     }
-    return QStringLiteral("Added constraint %1").arg(constraintLine(set, joints));
+    return QStringLiteral("Added constraint %1").arg(constraintLine(set, joints)) +
+           madeInHolder(str(set, "name"), str(set, "component"),
+                        2 * static_cast<int>(set.value(QStringLiteral("rows")).toArray().size()), context);
   };
   withAnimate(def, constraintPanelMotion);
   return def;

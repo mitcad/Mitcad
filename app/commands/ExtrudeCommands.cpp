@@ -308,13 +308,15 @@ CommandDef extrudeCommand(const CommandContext& context) {
             handle.scale = itemsScale(state.items(QStringLiteral("profiles")), model); // mitcad#1431
             return handle;
           }),
-      // A point stands for the plane through it (mitcad#1329).
+      // A point stands for the plane through it (mitcad#1329); a curved
+      // face takes the profiles projected onto it (mitcad#1848).
       selectionInput(QStringLiteral("start_object"), QObject::tr("Start Object"),
                      kPlaneKinds | kPointKinds | kStraightLineKinds, 1, 1)
-          .withTooltip(QObject::tr(
-              "The plane, planar face, point or straight line (its parallel plane) the profiles start at"))
-          .withAccepts(
-              [](const SelectionItem& item) { return isPlanar(item) || isPointLike(item) || isStraightLine(item); })
+          .withTooltip(QObject::tr("The plane, face, point or straight line the profiles start at"))
+          .withAccepts([](const SelectionItem& item) {
+            return isPlanar(item) || item.kind == SelectKind::Face || isPointLike(item) || isStraightLine(item);
+          })
+          .withoutMeshes()
           .withPlanesByDepth() // another component's face before an origin plane behind it (mitcad#762)
           .withVisible(choiceIs(QStringLiteral("start"), QStringLiteral("object"))),
       choiceInput(QStringLiteral("direction"), QObject::tr("Direction"), kDirections, kOneSide),
@@ -654,7 +656,9 @@ CommandDef extrudeCommand(const CommandContext& context) {
         // The plane through the line parallel to the profiles (mitcad#1329).
         plane = {{QStringLiteral("type"), QStringLiteral("line")}, {QStringLiteral("line"), item.reference()}};
       }
-      if (item.kind == SelectKind::Face && item.occurrence != here) {
+      // A curved face goes as a face too: the profiles are projected onto
+      // it (mitcad#1848).
+      if (item.kind == SelectKind::Face && (item.occurrence != here || !isPlanar(item))) {
         plane = {{QStringLiteral("type"), QStringLiteral("face")},
                  {QStringLiteral("body"), item.owner},
                  {QStringLiteral("face"), item.name}};

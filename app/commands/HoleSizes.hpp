@@ -97,6 +97,9 @@ void followSizeAgain(CommandState& state, const CommandContext& model);
 std::function<void(CommandState&, const CommandContext&)> markTyped(const QString& id);
 // A Depth typed (or dragged): kept when a recess would reach it.
 void markDepthTyped(CommandState& state, const CommandContext& model);
+// The state that says which fields and whether Depth were typed: Repeat
+// sets it as the last OK left it (CommandDef::repeatState, mitcad#1845).
+QStringList typedState();
 // A hole loaded for editing: the fields whose stored values its size does
 // not give (or expressions) count as typed, and so does its Depth.
 void markLoaded(const QJsonObject& feature, CommandState& state, const CommandContext& context);

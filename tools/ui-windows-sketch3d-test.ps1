@@ -29,8 +29,10 @@
 #      takes back the field, then the chain, then the tool; a Line from
 #      the origin whose end snaps onto a side face of the box with the On
 #      Face badge (mitcad#1549), the relation and the face's record in the
-#      palette's lists; Finish.
-#   5. Editing (mitcad#1526): 3DSketch1 again, AB's length typed 50 in the
+#      palette's lists; a Center Point Arc's Pick Normal still waiting as
+#      Finish ends the sketch, which stops the tool (mitcad#1835).
+#   5. Editing (mitcad#1526): 3DSketch1 again, a click picks its point p2,
+#      no Pick Normal filter left (mitcad#1835), AB's length typed 50 in the
 #      palette's list (W2) and removed (W3), B dragged along X as one undo
 #      step, undone; Finish.
 #   6. Converting (mitcad#1544): Sketch1 edited, the Sketch Palette's 3D
@@ -270,15 +272,31 @@ Ui-Step 'Esc (the tool)'                 { Ui-Key 'Escape' }
 Ui-ExpectNew '3D sketch tool Line: stopped' 'the tool ends'
 Ui-ExpectNew ' On Face p' 'the On Face relation is in the list'
 Ui-ExpectNew "face $face of F1.b0; body F1.b0; its point slides on the face" 'the face''s record is listed'
+
+Write-Host '--- Finish while Pick Normal waits (mitcad#1835): it ends with its tool'
+Ui-Mark
+Ui-Step 'Center Point Arc (F8)'          { Ui-Key 'F8' }
+Ui-ExpectNew '3D sketch tool Center Point Arc: started' 'Center Point Arc draws again'
+Ui-ExpectNew '3D sketch control Pick Normal at' 'its Normal row is shown'
+Ui-Step 'Pick Normal'                    { Ui-ClickLogged '3D sketch control Pick Normal' }
+Ui-ExpectNew '3D sketch Center Point Arc: picking the normal' 'the next click would pick the normal'
 Ui-Mark
 Ui-Step 'finish (Ctrl+Enter)'            { Ui-Key 'ctrl+Return' }
+Ui-ExpectNew '3D sketch tool Center Point Arc: stopped' 'Finish ends the tool, its Pick Normal with it'
 Ui-ExpectNew 'Sketch finished' 'finished'
 
 Write-Host '--- 3D sketch editing (mitcad#1526): a dimension typed in the list, a drag along X'
 Ui-Mark
 Ui-Step 'edit 3DSketch1 (double-click)'  { Ui-DoubleClickLogged 'Timeline 3DSketch1' }
 Ui-ExpectNew 'Editing 3D sketch F2 (3DSketch1)' '3DSketch1 is edited again'
+Ui-ExpectNew '3D sketch entity F2/p2 at' 'its points are drawn where a click picks them'
 Ui-ExpectNew '3D sketch item k3 Length c3: 40.00 mm' 'the list gives AB''s length'
+Ui-Mark
+Ui-Step 'click p2 (mitcad#1835)'         { Ui-ClickLogged '3D sketch entity F2/p2' }
+Ui-ExpectNew 'Selected: 1 sketch point [sketch point p2 of F2]' 'a point is picked: no Pick Normal filter left from the sketch before'
+Ui-Step 'Esc (clear the selection)'      { Ui-Key 'Escape' }
+Ui-ExpectNew 'Selected: nothing' 'Esc cleared the selection'
+Ui-Sync # the card laid out again without the selection
 Ui-Mark
 Ui-Step 'drag along X'                   { Ui-ClickLogged '3D sketch edit control drag axis X' }
 Ui-ExpectNew '3D sketch drag on: along X' 'drags go along X'

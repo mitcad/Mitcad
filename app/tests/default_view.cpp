@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The default 3D view (mitcad#1698, view/DefaultView.hpp): Home, a design
-// read into a new design's Top and Create Sketch's plane pick in a new
-// design look a few degrees off the isometric view. Seen through OCCT's
+// The default 3D view (mitcad#1698, view/DefaultView.hpp): Home and a new
+// design (mitcad#1809) look a few degrees off the isometric view. Seen through OCCT's
 // orthographic camera as the 3D view sets it (that direction, Z up), the
 // origin planes' squares in the Centred style (100 mm, centred on the
 // origin: Preferences › Display › Origin planes with Style Centred and Size

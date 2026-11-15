@@ -240,3 +240,32 @@ if(BUILD_TESTING AND TARGET mitcad AND TARGET mitcad-cli AND Python3_Interpreter
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1;LIBGL_ALWAYS_SOFTWARE=1")
   endif()
 endif()
+
+# WebGL in Component from Web's browser (mitcad#1861, GitHub
+# mitcad/Mitcad#333): a page of the test's own HTTP server makes a WebGL
+# context, draws a triangle and reads it back, through the GPU where there
+# is one and in software (SwiftShader) on the hidden displays here; the
+# same script on Linux and Windows, run by a wrapper on macOS; only where
+# the web browser component is built.
+if(BUILD_TESTING AND TARGET mitcad AND Python3_Interpreter_FOUND
+   AND selection_ui_platform AND selection_ui_web_browser)
+  set(webgl_ui_test "app.ui-${selection_ui_platform}-component-web-webgl")
+  if(APPLE)
+    add_test(NAME "${webgl_ui_test}"
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-component-web-webgl-test.sh"
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-component-web-webgl"
+              "${selection_ui_web_browser}")
+  else()
+    selection_ui_command_prefix(430)
+    add_test(NAME "${webgl_ui_test}"
+      COMMAND ${selection_ui_prefix} "${Python3_EXECUTABLE}"
+              "${CMAKE_SOURCE_DIR}/tools/ui-component-web-webgl-test.py"
+              "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-component-web-webgl"
+              "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
+  endif()
+  set_tests_properties("${webgl_ui_test}" PROPERTIES TIMEOUT 300 ${selection_ui_alone}
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  if(selection_ui_platform STREQUAL "linux")
+    set_property(TEST "${webgl_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")
+  endif()
+endif()

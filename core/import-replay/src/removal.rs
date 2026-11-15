@@ -8,7 +8,7 @@
 //! the replay's state on ([`Oracle::retire`]), as the tools a combine
 //! consumed do (`producers.rs`).
 
-use mitcad_dump::TimelineItem;
+use mitcad_dump::{Fingerprint, Reference, TimelineItem};
 
 use crate::history::{Sig, bodies_distance};
 
@@ -27,7 +27,8 @@ impl<K: crate::ImportKernel> crate::Importer<'_, K> {
             false
         };
         if !self.pending.is_empty() {
-            return not("items before it are pending");
+            return self.remove_behind_pending(at, index, item)
+                || not("items before it are pending");
         }
         let Some(q) = self.oracle.cursor else {
             return not("the replay stands for no state");
@@ -42,10 +43,18 @@ impl<K: crate::ImportKernel> crate::Importer<'_, K> {
         if bodies_distance(&stored_sigs, &current_sigs).is_none() {
             return not("the bodies are not the state's");
         }
-        let candidate = match self.translate(index, item) {
-            Ok(mut c) if !c.is_empty() => c.remove(0),
-            Ok(_) => return not("nothing to try"),
-            Err(e) => return not(&e),
+        // The body by its record first (mitcad#1802): the item that made
+        // it counts its bodies among those it still has, so after a removal
+        // of one of them its index names another (a reported design's
+        // removals took 70 bodies the file shows so).
+        let by_record = self.removed_by_record(item, &stored);
+        let candidate = match &by_record {
+            Some((c, _)) => c.clone(),
+            None => match self.translate(index, item) {
+                Ok(mut c) if !c.is_empty() => c.remove(0),
+                Ok(_) => return not("nothing to try"),
+                Err(e) => return not(&e),
+            },
         };
         let removed = candidate.defs[0]["bodies"][0].as_str().unwrap_or_default();
         if crate::tracing() {
@@ -78,9 +87,23 @@ impl<K: crate::ImportKernel> crate::Importer<'_, K> {
                 .min_by(|(_, a), (_, b)| a.distance(&sig).total_cmp(&b.distance(&sig)))
                 .and_then(|(b, _)| b.id)
         };
-        let Some(id) = nearest(&|s| s.same(&sig)).or_else(|| nearest(&|s| s.matches(&sig))) else {
+        let recorded = by_record.as_ref().map(|(_, id)| *id);
+        let Some(id) = recorded
+            .or_else(|| nearest(&|s| s.same(&sig)))
+            .or_else(|| nearest(&|s| s.matches(&sig)))
+        else {
             return not("no stored body is the removed one");
         };
+        // Never a body the file keeps in the design (mitcad#1802): where
+        // the records name the stored body found and it is not one the file
+        // took out, the removal found the wrong one (a pasted copy and its
+        // original lie in one place with the same measures).
+        if recorded.is_none()
+            && let Some((b, _)) = stored.iter().find(|(b, _)| b.id == Some(id))
+            && self.kept_in_design(crate::stored_record(&b.source))
+        {
+            return not("the body found is one the file keeps in the design");
+        }
         let depth = self.doc.undo_depth();
         let uids = match self.try_candidate(index, &candidate, item.name()) {
             Ok(uids) => uids,
@@ -98,9 +121,111 @@ impl<K: crate::ImportKernel> crate::Importer<'_, K> {
             self.undo_to(depth);
             return not("the bodies left are not the state's others");
         }
+        if crate::tracing() {
+            let source = stored
+                .iter()
+                .find(|(b, _)| b.id == Some(id))
+                .map(|(b, _)| &b.source);
+            eprintln!(
+                "import: {}: retires {source:?} from state {q}",
+                crate::item_name(item)
+            );
+        }
         self.oracle.retire(q, &[id]);
         self.report.history.matched += 1;
         self.accepted(at, index, &uids, &candidate, Some(true));
         true
+    }
+
+    /// A removal while items before it are pending (mitcad#1802: in a
+    /// reported design 262 removals came after items the history had not
+    /// settled yet, and their bodies stayed in the design). The replay does
+    /// not stand for a state then, so the removal is not checked against
+    /// one; its body is found by its record in the state the replay last
+    /// stood for ([`Importer::removed_by_record`]) and removed, and the
+    /// stored body leaves the states from there on, so that the fallback
+    /// the pending items may take does not bring it back. False when the
+    /// record does not settle it.
+    fn remove_behind_pending(&mut self, at: usize, index: i64, item: &TimelineItem) -> bool {
+        let Some(q) = self.oracle.cursor else {
+            return false;
+        };
+        let kernel = self.doc.kernel();
+        let Ok(stored) = self.oracle.state(kernel, q).map(<[_]>::to_vec) else {
+            return false;
+        };
+        let Some((candidate, id)) = self.removed_by_record(item, &stored) else {
+            return false;
+        };
+        let depth = self.doc.undo_depth();
+        let uids = match self.try_candidate(index, &candidate, item.name()) {
+            Ok(uids) => uids,
+            Err(_) => {
+                self.undo_to(depth);
+                return false;
+            }
+        };
+        if crate::tracing() {
+            let source = stored
+                .iter()
+                .find(|(b, _)| b.id == Some(id))
+                .map(|(b, _)| &b.source);
+            eprintln!(
+                "import: {}: retires {source:?} from state {q}",
+                crate::item_name(item)
+            );
+        }
+        self.oracle.retire(q, &[id]);
+        self.accepted(at, index, &uids, &candidate, None);
+        true
+    }
+
+    /// The body input of a removal (`itemToRemove`).
+    fn removed_input(item: &TimelineItem) -> Option<Fingerprint> {
+        let detail = item
+            .detail
+            .as_ref()
+            .and_then(|d| serde_json::to_value(d).ok())?;
+        let map = detail.get("itemToRemove")?.as_object()?.clone();
+        match Reference::from_map(map) {
+            Reference::Body(fp) => Some(*fp),
+            _ => None,
+        }
+    }
+
+    /// The removal of the replay's body that is the stored body the item's
+    /// body record names (mitcad#1802), with that stored body's id: the
+    /// item's body reference names its body object (`_f3d.body_entity`),
+    /// whose record in the file's body records gives its blob and ASM
+    /// record; the stored body of the state `stored` from that record is
+    /// the removed one, and the replay's body that is it
+    /// ([`Importer::body_of_record`]: in its component, by its faces and
+    /// measures, where several are by the item that made it) the one to
+    /// remove. None when any step does not settle it.
+    fn removed_by_record(
+        &self,
+        item: &TimelineItem,
+        stored: &[(crate::history::StoredBody<K::Shape>, Sig)],
+    ) -> Option<(crate::Candidate, u64)> {
+        let fp = Self::removed_input(item)?;
+        let source = self.record_source(&fp)?;
+        let producer = fp.f3d.as_ref().and_then(|f| f.producer);
+        let (uid, id) = match self.body_of_record(&source, producer, stored) {
+            Ok(found) => found,
+            Err(why) => {
+                if crate::tracing() {
+                    eprintln!(
+                        "import: {}: its record {source} does not settle the body: {why:?}",
+                        crate::item_name(item)
+                    );
+                }
+                return None;
+            }
+        };
+        let mut c = crate::Candidate::new(
+            serde_json::json!({"type": "remove_body", "bodies": [uid.to_string()]}),
+        );
+        c.input_provenance = crate::InputProvenance::Read;
+        Some((c, id))
     }
 }

@@ -1,0 +1,37 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. Rib Extend Ends from a boss's top edge (mitcad#1857, GitHub #345): the base and the two cylinders of f3_rib_direction.json, a 100 x 40 x 10 base (Sketch1 F1, Extrude1 F2) with cylinders of radius 10 joined on it at (20, 20) up to z = 60 (Sketch2 F3, Extrude2 F4) and at (80, 20) up to z = 30 (Sketch3 F5, Extrude3 F6): 40000 + 7000 pi mm3."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 100, "height": 40},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [20, 20], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F3", "region": "r{c1}"}],
+    "start": {"type": "offset", "offset": 10}, "extent": {"type": "distance", "distance": 50},
+    "operation": "join", "participants": ["F2.b0"]}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F5", "center": [80, 20], "diameter": 20},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F5", "region": "r{c1}"}],
+    "start": {"type": "offset", "offset": 10}, "extent": {"type": "distance", "distance": 20},
+    "operation": "join", "participants": ["F2.b0"]}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 61991.14857512855}},
+
+  {"comment": "On the midplane y = 20 (Plane1 F7 from XZ: normal +Y, sketch y -Z), Sketch4 F8: a slanted line from the tall cylinder's top edge, (30, 60), to the low one's, (70, 30), in X and Z."},
+  {"cmd": "add_feature", "def": {"type": "construction_plane", "definition": {"type": "offset", "plane": "xz", "distance": 20}}},
+  {"cmd": "sketch.create", "plane": "F7"},
+  {"cmd": "sketch.add_line", "sketch": "F8", "start": [30, -60], "end": [70, -30]},
+
+  {"comment": "Rib1 (F9), 4 thick, Direction the sketch's y (straight down), up to the next faces, without Extend Ends: the trapezoid under the line down to the base, 40 * 35 * 4 = 5600, its tips touching the cylinders only on the midplane."},
+  {"cmd": "add_feature", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": "sketch_y"}},
+  {"expect": {"feature": "Rib1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 67591.14857512855}},
+
+  {"comment": "With Extend Ends: the start's continuation rises over the tall cylinder's top face, and only the wall below its top edge closes it off. The start fills from its tip up to the curved face below the line along the tangent through the edge, nothing over the top face, and the rib does not warn (before mitcad#1857 the start stayed as drawn with the warning 'meets no face of the bodies'). At t across the thickness the wall is w = 10 - sqrt(100 - t^2) from the tip: the start fills 50 w - 3/8 w^2, the end 20 w - 3/8 w^2, together 70 * (40 - 2 sqrt(96) - 100 asin(0.2)) - 3/4 * (800 - 16/3 - 20 (2 sqrt(96) + 100 asin(0.2))) = 18.755948828582333 more. One solid with the base and both cylinders."},
+  {"cmd": "edit_feature", "uid": "F9", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
+    "extent": {"type": "to_next"}, "direction": "sketch_y", "extend_ends": true}},
+  {"expect": {"feature": "Rib1", "status": "ok"}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 67609.90452395713}},
+  {"expect": {"body": "F2.b0", "max": [100, 40, 60]}}
+]

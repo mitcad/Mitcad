@@ -24,6 +24,15 @@
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
+#include <Geom2dAPI_Interpolate.hxx>
+#include <Geom2d_BSplineCurve.hxx>
+#include <Geom2d_Curve.hxx>
+#include <GeomAdaptor_Curve.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <NCollection_List.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <ElCLib.hxx>
 #include <gp_Cylinder.hxx>
@@ -84,6 +93,7 @@
 #include "helix_brep.hpp"
 #include "history.hpp"
 #include "pipe_folds.hpp"
+#include "space_map.hpp"
 #include "spine.hpp"
 #include "sweep.hpp"
 #include "util.hpp"
@@ -325,7 +335,7 @@ std::vector<gp_Pnt> plane_points(const Spine& rail, const std::vector<gp_Ax3>& f
   return points;
 }
 
-ShapePtr varied_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces,
+ShapePtr lofted_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces,
                       const TopoDS_Wire& part, double at, const Variation& variation,
                       const Range& range) {
   const Spine spine(part);
@@ -494,6 +504,501 @@ ShapePtr varied_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace
     parts.push_back(detail::with_holes(solids.front(), {solids.begin() + 1, solids.end()}, "the sweep"));
   }
   return detail::fused(parts, "the sweep");
+}
+
+// A taper alone, the part of the path `length` long and the profile `s0`
+// along it, as an extrusion's taper from the profile each way along
+// `along` (the walls leaning by the angle per unit of the path, as above),
+// whose topology events detail::distance_side resolves: the part from the
+// profile to the part's end and the part back to its start, fused; the
+// caps named as the sweep's. Null when neither has a length, and where the
+// whole profile closes before an end (a convex one the extrusion ends in a
+// pyramid, or one it refuses): that stays the sweep's own refusal, the
+// only failure (mitcad#1851). `origin`: the profile's point on the path.
+ShapePtr taper_extrusions(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces, double length,
+                          double s0, const gp_Pnt& origin, const gp_Dir& along, double taper, const Range& range) {
+  const double inside = 1e-9 * std::max(1.0, length);
+  std::vector<ShapePtr> parts;
+  try {
+    for (const detail::SweepFace& face : faces) {
+      // The caps at the path's first and last points (cap_order).
+      const auto caps = cap_order(range, detail::cap_names(spec.feature, "start", face),
+                                  detail::cap_names(spec.feature, "end", face));
+      if (length - s0 > inside) {
+        parts.push_back(detail::distance_side(face, length - s0, taper, along,
+                                              s0 <= inside ? caps.first : NameList{}, caps.second));
+      }
+      if (s0 > inside) {
+        parts.push_back(detail::distance_side(face, s0, taper, along.Reversed(),
+                                              length - s0 > inside ? NameList{} : caps.second, caps.first));
+      }
+    }
+  } catch (const std::invalid_argument&) {
+    return nullptr; // (the whole profile closes: the sweep's own refusal)
+  }
+  if (parts.empty()) {
+    return nullptr;
+  }
+  const ShapePtr whole = detail::fused(parts, "the sweep");
+  double ahead = -std::numeric_limits<double>::infinity();
+  double behind = -std::numeric_limits<double>::infinity();
+  for (TopExp_Explorer v(whole->occt(), TopAbs_VERTEX); v.More(); v.Next()) {
+    const double s = gp_Vec(origin, BRep_Tool::Pnt(TopoDS::Vertex(v.Current()))).Dot(gp_Vec(along));
+    ahead = std::max(ahead, s);
+    behind = std::max(behind, -s);
+  }
+  const double slack = std::max(1e-6, 1e-7 * length);
+  if ((length - s0 > inside && ahead < length - s0 - slack) || (s0 > inside && behind < s0 - slack)) {
+    return nullptr;
+  }
+  return whole;
+}
+
+// Whether the variation is a taper alone.
+bool taper_alone(const Variation& variation) {
+  return variation.taper != 0.0 && variation.twist == 0.0 && variation.scale == 1.0 && !variation.rail &&
+         !variation.rail2;
+}
+
+// A taper alone along a straight path whose walls meet or vanish on the
+// way (mitcad#1851): the copies lofted above end there, as the profile's
+// offset changes its loops ("the taper closes the profile before the end
+// of the sweep"). Along a line the sweep is an extrusion's taper from the
+// profile each way (taper_extrusions). Null unless the part of the path is
+// one line and the variation a taper only.
+ShapePtr straight_taper_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces,
+                              const TopoDS_Wire& part, double at, const Variation& variation, const Range& range) {
+  if (!taper_alone(variation)) {
+    return nullptr;
+  }
+  const Spine spine(part);
+  int edges = 0;
+  bool line = true;
+  for (TopExp_Explorer e(part, TopAbs_EDGE); e.More(); e.Next()) {
+    ++edges;
+    line = line && BRepAdaptor_Curve(TopoDS::Edge(e.Current())).GetType() == GeomAbs_Line;
+  }
+  if (edges != 1 || !line) {
+    return nullptr;
+  }
+  const double length = spine.length();
+  const double s0 = std::clamp(at - range.from, 0.0, length);
+  return taper_extrusions(spec, faces, length, s0, spine.point(s0), spine.tangent(s0), variation.taper, range);
+}
+
+// The frames along a smooth part of a path at its arc lengths
+// (mitcad#1854), as lofted_sweep places its copies of the profile
+// (detail::follow_frames: on a planar path the frame keeps its angle to
+// the plane's normal, else it turns least), smooth in the arc length
+// within each edge: an edge's arc length is taken to its curve's parameter
+// through a table of the two interpolated (a line's and a circle's in
+// proportion), a twisted path's frame's x direction through the
+// interpolated directions at stations along it. Past the part's ends the
+// frames run on straight along its end tangents.
+class PathFrames {
+public:
+  PathFrames(const Spine& spine, double s0, const gp_Dir& normal) : m_length(spine.length()) {
+    for (int i = 0; i < spine.edge_count(); ++i) {
+      const Spine::EdgeCurve edge = spine.edge_curve(i);
+      Piece piece;
+      piece.curve = edge.curve;
+      piece.first = edge.first;
+      piece.last = edge.last;
+      piece.forward = edge.forward;
+      piece.start = spine.edge_start(i);
+      piece.length = spine.edge_length(i);
+      const GeomAdaptor_Curve adaptor(edge.curve, edge.first, edge.last);
+      if (adaptor.GetType() != GeomAbs_Line && adaptor.GetType() != GeomAbs_Circle) {
+        // The arc length at evenly spaced parameters, its last scaled to
+        // the edge's length, and the parameter interpolated through them.
+        constexpr int kSamples = 128;
+        std::vector<double> lengths(kSamples + 1, 0.0);
+        const auto u_at = [&](int k) {
+          const double f = static_cast<double>(k) / kSamples;
+          return edge.forward ? edge.first + f * (edge.last - edge.first) : edge.last - f * (edge.last - edge.first);
+        };
+        for (int k = 1; k <= kSamples; ++k) {
+          const double a = std::min(u_at(k - 1), u_at(k));
+          const double b = std::max(u_at(k - 1), u_at(k));
+          lengths[static_cast<std::size_t>(k)] =
+              lengths[static_cast<std::size_t>(k - 1)] + GCPnts_AbscissaPoint::Length(adaptor, a, b);
+        }
+        const double total = lengths.back();
+        if (!(total > 0.0)) {
+          throw std::invalid_argument("the path has no length");
+        }
+        const occ::handle<NCollection_HArray1<gp_Pnt2d>> points =
+            new NCollection_HArray1<gp_Pnt2d>(1, kSamples + 1);
+        const occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, kSamples + 1);
+        for (int k = 0; k <= kSamples; ++k) {
+          points->SetValue(k + 1, gp_Pnt2d(u_at(k), 0.0));
+          params->SetValue(k + 1, lengths[static_cast<std::size_t>(k)] * piece.length / total);
+        }
+        Geom2dAPI_Interpolate interpolate(points, params, false, 1.0e-12);
+        interpolate.Perform();
+        if (!interpolate.IsDone()) {
+          throw std::invalid_argument("the path's arc length could not be followed");
+        }
+        piece.parameter = interpolate.Curve();
+      }
+      m_pieces.push_back(piece);
+    }
+    if (m_pieces.empty()) {
+      throw std::invalid_argument("the path has no length");
+    }
+    m_plane = spine.plane_normal();
+    if (m_plane) {
+      // As follow_frames: the frame's angle to the plane's normal kept.
+      const gp_Dir t0 = tangent(s0);
+      m_across = gp_Vec(normal).Dot(gp_Vec(m_plane->Crossed(t0)));
+      m_up = gp_Vec(normal).Dot(gp_Vec(*m_plane));
+      return;
+    }
+    constexpr int kStations = 256;
+    std::vector<double> stations;
+    for (int k = 0; k <= kStations; ++k) {
+      stations.push_back(m_length * k / kStations);
+    }
+    const std::vector<gp_Ax3> frames = detail::follow_frames(spine, s0, normal, stations);
+    const occ::handle<NCollection_HArray1<gp_Pnt>> points = new NCollection_HArray1<gp_Pnt>(1, kStations + 1);
+    const occ::handle<NCollection_HArray1<double>> params = new NCollection_HArray1<double>(1, kStations + 1);
+    for (int k = 0; k <= kStations; ++k) {
+      points->SetValue(k + 1, gp_Pnt(frames[static_cast<std::size_t>(k)].XDirection().XYZ()));
+      params->SetValue(k + 1, stations[static_cast<std::size_t>(k)]);
+    }
+    GeomAPI_Interpolate interpolate(points, params, false, 1.0e-12);
+    interpolate.Perform();
+    if (!interpolate.IsDone()) {
+      throw std::invalid_argument("the path's frames could not be followed");
+    }
+    m_normals = interpolate.Curve();
+  }
+
+  // The frame at arc length s: at the path's point, z along its tangent.
+  gp_Ax3 at(double s) const {
+    const double inside = std::clamp(s, 0.0, m_length);
+    gp_Pnt p;
+    const gp_Dir t = tangent(inside, &p);
+    p.Translate(gp_Vec(t) * (s - inside));
+    gp_Vec x;
+    if (m_plane) {
+      x = gp_Vec(m_plane->Crossed(t)) * m_across + gp_Vec(*m_plane) * m_up;
+    } else {
+      x = gp_Vec(m_normals->Value(inside).XYZ());
+      x -= gp_Vec(t) * x.Dot(gp_Vec(t));
+    }
+    return gp_Ax3(p, t, gp_Dir(x));
+  }
+
+  // The arc lengths where the part's edges meet.
+  std::vector<double> joints() const {
+    std::vector<double> result;
+    for (std::size_t i = 1; i < m_pieces.size(); ++i) {
+      result.push_back(m_pieces[i].start);
+    }
+    return result;
+  }
+
+  // Whether the tangent turns where the edges meet (the path is not
+  // smooth).
+  bool kinked() const {
+    for (std::size_t i = 1; i < m_pieces.size(); ++i) {
+      const Piece& before = m_pieces[i - 1];
+      const Piece& after = m_pieces[i];
+      if (!tangent_of(before, before.length).IsParallel(tangent_of(after, 0.0), 1.0e-6) ||
+          tangent_of(before, before.length).Dot(tangent_of(after, 0.0)) < 0.0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+private:
+  struct Piece {
+    occ::handle<Geom_Curve> curve;
+    double first = 0.0;
+    double last = 0.0;
+    bool forward = true;
+    double start = 0.0;
+    double length = 0.0;
+    occ::handle<Geom2d_Curve> parameter; // of the arc length; null: in proportion
+  };
+
+  static double parameter_of(const Piece& piece, double local) {
+    if (piece.parameter.IsNull()) {
+      const double f = piece.length > 0.0 ? local / piece.length : 0.0;
+      return piece.forward ? piece.first + f * (piece.last - piece.first) : piece.last - f * (piece.last - piece.first);
+    }
+    return piece.parameter->Value(local).X();
+  }
+
+  static gp_Dir tangent_of(const Piece& piece, double local, gp_Pnt* point = nullptr) {
+    gp_Pnt p;
+    gp_Vec v;
+    piece.curve->D1(parameter_of(piece, local), p, v);
+    if (v.Magnitude() <= gp::Resolution()) {
+      throw std::invalid_argument("the path has no direction at a point");
+    }
+    if (point != nullptr) {
+      *point = p;
+    }
+    return piece.forward ? gp_Dir(v) : gp_Dir(v.Reversed());
+  }
+
+  gp_Dir tangent(double s, gp_Pnt* point = nullptr) const {
+    std::size_t i = 0;
+    while (i + 1 < m_pieces.size() && m_pieces[i + 1].start <= s) {
+      ++i;
+    }
+    const Piece& piece = m_pieces[i];
+    return tangent_of(piece, std::clamp(s - piece.start, 0.0, piece.length), point);
+  }
+
+  std::vector<Piece> m_pieces;
+  double m_length = 0.0;
+  std::optional<gp_Dir> m_plane;
+  double m_across = 1.0; // the frame's x along plane x tangent
+  double m_up = 0.0;     // and along the plane's normal
+  occ::handle<Geom_Curve> m_normals;
+};
+
+// A taper alone along a curved path whose walls meet or vanish on the way
+// (mitcad#1854): the taper's extrusions built straight along the tangent
+// at the profile, by the part's length each way (taper_extrusions, where
+// the events are resolved), and bent along the path (space_map.hpp): a
+// point of them in the profile's frame there, (x, y, z) with z = zp + a
+// (zp the profile plane's z at (x, y), a how far it lies along the
+// extrusion), goes to (x, y, zp) in the path's frame a further along it:
+// the copy of the profile at each place along the path, offset by the
+// taper there, as lofted_sweep places it. The caps lie on planes (the
+// profile's plane moved rigidly). A path of several edges is bent piece by
+// piece (each piece's slab of the extrusions between the planes parallel
+// to the profile where the edges meet) and the pieces fused, as the bend
+// turns there where the path's curvature changes. Null unless the
+// variation is a taper only, the path smooth and open, and the bend one to
+// one (the profile reaching less far from the path than its centres of
+// curvature).
+ShapePtr curved_taper_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces,
+                            const TopoDS_Wire& part, double at, const Variation& variation, const Range& range) {
+  if (!taper_alone(variation) || range.around || faces.empty()) {
+    return nullptr;
+  }
+  const Spine spine(part);
+  const double length = spine.length();
+  const double s0 = std::clamp(at - range.from, 0.0, length);
+  const gp_Dir t0 = spine.tangent(s0);
+  const std::optional<gp_Dir> plane = spine.plane_normal();
+  const gp_Dir n0 = plane ? plane->Crossed(t0) : detail::any_normal(t0);
+  std::optional<PathFrames> frames;
+  try {
+    OCC_CATCH_SIGNALS
+    frames.emplace(spine, s0, n0);
+  } catch (const std::invalid_argument&) {
+    return nullptr;
+  } catch (const Standard_Failure&) {
+    return nullptr;
+  }
+  if (frames->kinked()) {
+    return nullptr;
+  }
+  const gp_Ax3 start = frames->at(s0);
+  const gp_Pnt o0 = start.Location();
+  const gp_Vec x0(start.XDirection());
+  const gp_Vec y0(start.YDirection());
+  const gp_Vec z0(start.Direction());
+  // The profile's plane.
+  const gp_Vec normal(spec.frame.normal());
+  const double tilt = normal.Dot(z0);
+  if (std::abs(tilt) < 1.0e-6) {
+    return nullptr;
+  }
+  const double offset = normal.Dot(gp_Vec(spec.frame.origin, o0));
+  // The point's coordinates in the profile's frame, and the plane's z there.
+  struct Local {
+    double x = 0.0;
+    double y = 0.0;
+    double zp = 0.0;
+    double a = 0.0;
+  };
+  const auto local = [=](const gp_Pnt& p) {
+    const gp_Vec d(o0, p);
+    Local l;
+    l.x = d.Dot(x0);
+    l.y = d.Dot(y0);
+    l.zp = -(offset + l.x * normal.Dot(x0) + l.y * normal.Dot(y0)) / tilt;
+    l.a = d.Dot(z0) - l.zp;
+    return l;
+  };
+  // (Any failure of the straight taper, the whole profile closing among
+  // them, leaves the sweep's own refusal.)
+  ShapePtr straight;
+  try {
+    straight = taper_extrusions(spec, faces, length, s0, start.Location(), start.Direction(), variation.taper,
+                                range);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const std::exception& error) {
+    if (std::string(error.what()).find("out of memory") != std::string::npos) {
+      throw;
+    }
+    return nullptr;
+  }
+  if (!straight || straight->occt().IsNull()) {
+    return nullptr;
+  }
+  // One to one: the profile's farthest reach from the path, times how fast
+  // the frame turns, below 1 (with room).
+  const Bnd_Box box = detail::bounds_of(straight->occt());
+  double xmin = 0.0, ymin = 0.0, zmin = 0.0, xmax = 0.0, ymax = 0.0, zmax = 0.0;
+  box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+  double reach = 0.0;
+  for (const double x : {xmin, xmax}) {
+    for (const double y : {ymin, ymax}) {
+      for (const double z : {zmin, zmax}) {
+        const Local l = local(gp_Pnt(x, y, z));
+        reach = std::max(reach, std::abs(l.x) + std::abs(l.y) + std::abs(l.zp));
+      }
+    }
+  }
+  double turn = 0.0;
+  constexpr int kSamples = 256;
+  gp_Ax3 previous = frames->at(0.0);
+  for (int k = 1; k <= kSamples; ++k) {
+    const gp_Ax3 next = frames->at(length * k / kSamples);
+    const double step = length / kSamples;
+    turn = std::max({turn, gp_Vec(previous.XDirection()).Subtracted(gp_Vec(next.XDirection())).Magnitude() / step,
+                     gp_Vec(previous.YDirection()).Subtracted(gp_Vec(next.YDirection())).Magnitude() / step,
+                     gp_Vec(previous.Direction()).Subtracted(gp_Vec(next.Direction())).Magnitude() / step});
+    previous = next;
+  }
+  if (!(reach * turn < 0.9)) {
+    return nullptr;
+  }
+  const detail::SpaceMap bend = [=, &frames](const gp_Pnt& p) {
+    const Local l = local(p);
+    const gp_Ax3 f = frames->at(s0 + l.a);
+    return f.Location()
+        .Translated(gp_Vec(f.XDirection()) * l.x)
+        .Translated(gp_Vec(f.YDirection()) * l.y)
+        .Translated(gp_Vec(f.Direction()) * l.zp);
+  };
+  // A face parallel to the profile lies where a is the same: the bend moves
+  // it rigidly, from the profile's frame to the path's frame a further on
+  // less a along its z.
+  const double near = 1.0e-9 * std::max(1.0, length);
+  const detail::LaidFaces caps = [=, &frames](const TopoDS_Face& face) -> std::optional<detail::LaidFace> {
+    const BRepAdaptor_Surface surface(face);
+    if (surface.GetType() != GeomAbs_Plane ||
+        !surface.Plane().Axis().Direction().IsParallel(gp_Dir(normal), 1.0e-9)) {
+      return std::nullopt;
+    }
+    const double a = local(surface.Plane().Location()).a;
+    const gp_Ax3 f = frames->at(s0 + a);
+    const gp_Ax3 moved(f.Location().Translated(gp_Vec(f.Direction()) * -a), f.Direction(), f.XDirection());
+    gp_Trsf rigid;
+    rigid.SetDisplacement(start, moved);
+    const occ::handle<Geom_Surface> placed = BRep_Tool::Surface(face);
+    if (placed.IsNull()) {
+      return std::nullopt;
+    }
+    return detail::LaidFace{occ::down_cast<Geom_Surface>(placed->Transformed(rigid)), {}};
+  };
+  const double tolerance = 1.0e-7 * std::max(1.0, std::sqrt(box.SquareExtent()));
+  // Where the edges meet, the slabs between the planes there.
+  std::vector<double> cuts;
+  for (const double joint : frames->joints()) {
+    const double a = joint - s0;
+    if (a > -s0 + near && a < length - s0 - near) {
+      cuts.push_back(a);
+    }
+  }
+  if (cuts.empty()) {
+    return detail::mapped_solid(*straight, bend, caps, tolerance);
+  }
+  const double wide = 2.0 * std::sqrt(box.SquareExtent()) + 1.0;
+  cuts.insert(cuts.begin(), -s0 - wide);
+  cuts.push_back(length - s0 + wide);
+  std::vector<ShapePtr> pieces;
+  for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+    // The slab: a large face of the profile's plane moved a = cuts[i] along
+    // the extrusion, swept to a = cuts[i + 1].
+    // (Its middle where the middle of the extrusions' box falls on it.)
+    const gp_Pnt on = spec.frame.origin.Translated(z0 * cuts[i]);
+    const gp_Pnt middle((xmin + xmax) / 2.0, (ymin + ymax) / 2.0, (zmin + zmax) / 2.0);
+    const gp_Pln base(middle.Translated(normal * -normal.Dot(gp_Vec(on, middle))), gp_Dir(normal));
+    const TopoDS_Face face = BRepBuilderAPI_MakeFace(base, -wide, wide, -wide, wide).Face();
+    BRepPrimAPI_MakePrism slab(face, z0 * (cuts[i + 1] - cuts[i]));
+    slab.Build();
+    if (!slab.IsDone()) {
+      return nullptr;
+    }
+    BRepAlgoAPI_Common common;
+    NCollection_List<TopoDS_Shape> arguments;
+    arguments.Append(straight->occt());
+    NCollection_List<TopoDS_Shape> tools;
+    tools.Append(slab.Shape());
+    common.SetArguments(arguments);
+    common.SetTools(tools);
+    common.SetNonDestructive(true);
+    detail::build(common);
+    if (!common.IsDone() || common.HasErrors() || common.Shape().IsNull()) {
+      return nullptr;
+    }
+    detail::FaceNamer namer(common.Shape());
+    namer.carry(common, *straight);
+    const ShapePtr cut = namer.shape();
+    if (!(detail::volume_of(cut->occt()) > 0.0)) {
+      continue;
+    }
+    const ShapePtr bent = detail::mapped_solid(*cut, bend, caps, tolerance);
+    if (!bent) {
+      return nullptr;
+    }
+    pieces.push_back(bent);
+  }
+  if (pieces.empty()) {
+    return nullptr;
+  }
+  if (pieces.size() == 1) {
+    return pieces.front();
+  }
+  // The pieces meet on the same planes, their edges there within the
+  // bend's tolerance of each other.
+  for (const double fuzzy : {0.0, 10.0 * tolerance}) {
+    try {
+      const ShapePtr joined = detail::fused(pieces, "the sweep", true, fuzzy);
+      if (joined && !joined->occt().IsNull() && detail::is_valid(joined->occt())) {
+        return joined;
+      }
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const std::runtime_error& error) {
+      if (std::string(error.what()).find("out of memory") != std::string::npos) {
+        throw;
+      }
+    }
+  }
+  return nullptr;
+}
+
+ShapePtr varied_sweep(const SweepSpec& spec, const std::vector<detail::SweepFace>& faces,
+                      const TopoDS_Wire& part, double at, const Variation& variation,
+                      const Range& range) {
+  try {
+    return lofted_sweep(spec, faces, part, at, variation, range);
+  } catch (const std::invalid_argument& error) {
+    if (std::string(error.what()).find("the taper closes the profile before the end of the sweep") ==
+        std::string::npos) {
+      throw;
+    }
+    if (ShapePtr straight = straight_taper_sweep(spec, faces, part, at, variation, range)) {
+      return straight;
+    }
+    if (ShapePtr curved = curved_taper_sweep(spec, faces, part, at, variation, range)) {
+      return curved;
+    }
+    throw;
+  }
 }
 
 // The arc lengths inside the spine where its tangent turns through the
@@ -1712,14 +2217,18 @@ std::vector<double> shifted_cuts(double turns, double shift) {
   return cuts;
 }
 
-ShapePtr growing_helix(const HelixSweepSpec& spec, const std::vector<detail::SweepFace>& faces) {
+// The growing screw motion of Mitcad's helix (its turn, rise and growth;
+// with ends by the rise law), without its way `out`, and the whole turns it
+// makes (`turns`: with ends more than the revolutions). Shared by the
+// solid helix and the surface helix of curves (mitcad#1797).
+GrowingScrew helix_screw(const HelixSweepSpec& spec, double& turns) {
   GrowingScrew screw;
   screw.base = spec.axis.Location();
   screw.axis = spec.axis.Direction();
   screw.angle = (spec.left_handed ? -1.0 : 1.0) * kTwoPi * spec.revolutions;
   screw.rise = spec.pitch * spec.revolutions;
   screw.growth = spec.growth * spec.revolutions;
-  double turns = spec.revolutions;
+  turns = spec.revolutions;
   if (has_ends(spec)) {
     RiseLaw law;
     law.per_radian = spec.pitch / kTwoPi;
@@ -1738,6 +2247,12 @@ ShapePtr growing_helix(const HelixSweepSpec& spec, const std::vector<detail::Swe
     screw.ends = law;
     turns = law.total() / kTwoPi;
   }
+  return screw;
+}
+
+ShapePtr growing_helix(const HelixSweepSpec& spec, const std::vector<detail::SweepFace>& faces) {
+  double turns = spec.revolutions;
+  GrowingScrew screw = helix_screw(spec, turns);
   // Out: from the axis towards the profiles' centre, else across the
   // profile plane's normal (profiles centred on the axis).
   const gp_Vec offset(screw.base, center_of(box_of(faces)));
@@ -2474,6 +2989,79 @@ ShapePtr coil(const CoilSpec& spec) {
     return detail::finished(*result, "the coil");
   });
 }
+
+namespace detail {
+
+// A wire moved by Mitcad's helix motion into the faces it sweeps (the
+// surface helix of curves with a growth or ends, mitcad#1797): the solid
+// helix's screw (helix_screw), out from the axis towards the wire's middle,
+// as one sweep without caps (a surface may pass through itself, so it
+// needs no pieces).
+ScrewedWire screwed_wire(const TopoDS_Wire& wire, const HelixSweepSpec& spec) {
+  double turns = spec.revolutions;
+  GrowingScrew screw = helix_screw(spec, turns);
+  Bnd_Box extent;
+  BRepBndLib::Add(wire, extent);
+  if (extent.IsVoid()) {
+    throw std::invalid_argument("surface helix: a chain has no extent");
+  }
+  // Out: from the axis towards the wire's middle, else across the plane of
+  // the axis and the wire's extent (a wire centred on the axis).
+  const gp_Vec offset(screw.base, center_of(extent));
+  const gp_Vec radial = offset - gp_Vec(screw.axis) * offset.Dot(gp_Vec(screw.axis));
+  if (radial.Magnitude() > Precision::Confusion()) {
+    screw.out = gp_Dir(radial);
+  } else {
+    screw.out = any_normal(screw.axis);
+  }
+  if (screw.growth < 0.0) {
+    // The wire's nearest point to the axis along `out` at the end.
+    gp_Trsf local;
+    local.SetTransformation(gp_Ax3(screw.base, screw.axis, screw.out));
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(BRepBuilderAPI_Transform(wire, local, true).Shape(), box, false, false);
+    double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    if (x0 + screw.growth <= Precision::Confusion()) {
+      throw std::invalid_argument("the helix narrows into its axis; make it narrow less or turn less");
+    }
+  }
+  // The law's curve: the axis, as long as the rise (as screwed_loop's).
+  const TopoDS_Edge line =
+      BRepBuilderAPI_MakeEdge(screw.base,
+                              screw.base.Translated(gp_Vec(screw.axis) * (screw.rise != 0.0 ? screw.rise : 1.0)))
+          .Edge();
+  const TopoDS_Wire path = BRepBuilderAPI_MakeWire(line).Wire();
+  const occ::handle<BRepFill_ShapeLaw> section = new BRepFill_ShapeLaw(wire, true);
+  const occ::handle<BRepFill_LocationLaw> location = new BRepFill_Edge3DLaw(path, new GrowingScrewLaw(screw));
+  BRepFill_Sweep sweep(section, location, true);
+  sweep.SetTolerance(1.0e-6, 1.0e-6, 1.0e-5, 1.0e-2);
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> reversed;
+  NCollection_DataMap<TopoDS_Shape, occ::handle<NCollection_HArray2<TopoDS_Shape>>, TopTools_ShapeMapHasher> tapes;
+  NCollection_DataMap<TopoDS_Shape, occ::handle<NCollection_HArray2<TopoDS_Shape>>, TopTools_ShapeMapHasher> rails;
+  const int segments = std::max(30, static_cast<int>(std::ceil(turns * 16.0)));
+  sweep.Build(reversed, tapes, rails, BRepFill_Modified, GeomAbs_C2, GeomFill_Location, 11, segments);
+  throw_if_cancelled();
+  if (!sweep.IsDone()) {
+    throw std::runtime_error("the curves could not be moved along the helix");
+  }
+  ScrewedWire result;
+  result.shape = sweep.Shape();
+  const occ::handle<NCollection_HArray2<TopoDS_Shape>> faces = sweep.SubShape();
+  for (int i = 1; i <= section->NbLaw(); ++i) {
+    std::vector<TopoDS_Shape> swept;
+    for (int j = faces->LowerCol(); j <= faces->UpperCol(); ++j) {
+      const TopoDS_Shape& face = faces->Value(i, j);
+      if (!face.IsNull() && face.ShapeType() == TopAbs_FACE) {
+        swept.push_back(face);
+      }
+    }
+    result.faces.emplace_back(section->Edge(i), std::move(swept));
+  }
+  return result;
+}
+
+} // namespace detail
 
 ShapePtr helix_sweep(const HelixSweepSpec& spec) {
   if (spec.regions.empty()) {

@@ -1,0 +1,52 @@
+[
+  {"comment": "Form (mitcad#1757). Form1 (F1): a box cage of 40 x 40 x 40 about the origin, one segment a side: 8 vertices, 6 faces (ids 1 bottom, 2 top, 3 -Y, 4 +Y, 5 -X, 6 +X; vertices 1-4 at the bottom, 5-8 at the top). Its limit surface is 24 patches sewn into one smooth solid, four a cage face."},
+  {"cmd": "form.create", "primitive": {"type": "box", "size": [40, 40, 40]}},
+  {"expect": {"feature": "Form1", "status": "ok", "bodies": 1, "body": "F1.b0", "faces": 24,
+    "has_face": "F1:cage(2)#0"}},
+
+  {"comment": "Edited: the top 10 up, an edge loop round the sides halfway up the edge from vertex 1 to vertex 5 (40 faces), the lower half of the +X side (keeping id 6) extruded 10 out (4 walls: 56 faces). Each edit recomputes the body."},
+  {"cmd": "form.move", "form": "F1", "faces": [2], "by": [0, 0, 10]},
+  {"expect": {"feature": "Form1", "status": "ok", "body": "F1.b0", "faces": 24}},
+  {"cmd": "form.insert_loop", "form": "F1", "edge": [1, 5], "at": 0.5},
+  {"expect": {"feature": "Form1", "status": "ok", "body": "F1.b0", "faces": 40}},
+  {"cmd": "form.extrude", "form": "F1", "faces": [6], "distance": 10},
+  {"expect": {"feature": "Form1", "status": "ok", "body": "F1.b0", "faces": 56, "has_face": "F1:cage(6)#3"}},
+  {"expect": {"query": {"query": "form_cage", "uid": "F1"}, "result": {"name": "Form1", "closed": true}}},
+
+  {"comment": "Exported to STEP and read back (Base1, F2): the same faces."},
+  {"cmd": "export", "path": "form.step", "bodies": ["F1.b0"]},
+  {"cmd": "import_file", "path": "form.step", "wrap": false},
+  {"expect": {"feature": "Base1", "status": "ok", "bodies": 2, "body": "F2.b0", "faces": 56}},
+
+  {"comment": "Form2 (F3): the same box about (100, 0, 0), its top 5 up, the top's four edges creased (vertices 5-6-7-8): the top stays flat and meets the sides at a sharp edge, two edges a cage edge (the top's corner k and the side's corner at the same vertex)."},
+  {"cmd": "form.create", "primitive": {"type": "box", "size": [40, 40, 40]}, "center": [100, 0, 0]},
+  {"cmd": "form.move", "form": "F3", "faces": [2], "by": [0, 0, 5]},
+  {"cmd": "form.crease", "form": "F3", "edges": [[5, 6], [6, 7], [7, 8], [8, 5]]},
+  {"expect": {"feature": "Form2", "status": "ok", "bodies": 3, "body": "F3.b0", "faces": 24,
+    "has_edge": "E{F3:cage(2)#0|F3:cage(3)#3}"}},
+  {"expect": {"body": "F3.b0", "has_edge": "E{F3:cage(2)#2|F3:cage(4)#2}"}},
+
+  {"comment": "Fillet1 (F4): the creased edge rounded all round, 2 mm. Cylinder1 (F5): a hole of 8 mm through the middle."},
+  {"cmd": "add_feature", "def": {"type": "fillet", "body": "F3.b0", "radius": 2, "edges": [
+    "E{F3:cage(2)#0|F3:cage(3)#3}", "E{F3:cage(2)#1|F3:cage(3)#2}",
+    "E{F3:cage(2)#1|F3:cage(6)#3}", "E{F3:cage(2)#2|F3:cage(6)#2}",
+    "E{F3:cage(2)#2|F3:cage(4)#2}", "E{F3:cage(2)#3|F3:cage(4)#1}",
+    "E{F3:cage(2)#3|F3:cage(5)#2}", "E{F3:cage(2)#0|F3:cage(5)#1}"]}},
+  {"expect": {"feature": "Fillet1", "status": "ok", "bodies": 3}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": {"type": "origin", "plane": "xy"},
+    "center": [100, 0], "diameter": 8, "height": 80, "symmetric": true, "operation": "cut",
+    "participants": ["F3.b0"]}},
+  {"expect": {"feature": "Cylinder1", "status": "ok", "bodies": 3, "body": "F3.b0", "has_face": "F5:side0"}},
+  {"cmd": "export", "path": "form-rounded.step", "bodies": ["F3.b0"]},
+  {"cmd": "import_file", "path": "form-rounded.step", "wrap": false},
+  {"expect": {"feature": "Base2", "status": "ok", "bodies": 4}},
+
+  {"comment": "Form3 (F7): a box of 40 x 20 x 20 about (0, 100, 0), symmetric across the plane through its centre square to x: two segments along x, the stored half 5 faces (ids 2, 4, 6, 8 and the +X end 10), mirrored. The end extruded 10 out: its mirror image too, 18 cage faces, 72 patches."},
+  {"cmd": "form.create", "primitive": {"type": "box", "size": [40, 20, 20]}, "center": [0, 100, 0], "symmetry": "x"},
+  {"expect": {"feature": "Form3", "status": "ok", "bodies": 5, "body": "F7.b0", "faces": 40,
+    "has_face": "F7:mirror(10)#0"}},
+  {"cmd": "form.extrude", "form": "F7", "faces": [10], "distance": 10},
+  {"expect": {"feature": "Form3", "status": "ok", "body": "F7.b0", "faces": 72}},
+  {"expect": {"query": {"query": "form_cage", "uid": "F7"}, "result": {"closed": true,
+    "symmetry": {"origin": [0, 100, 0], "normal": [1, 0, 0]}}}}
+]

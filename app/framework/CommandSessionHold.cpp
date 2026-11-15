@@ -170,7 +170,7 @@ void CommandSession::showPreviewHeld(const QString& why) {
   if (m_done) {
     return;
   }
-  if (m_manipulators) {
+  if (m_manipulators && !m_suspended) { // set aside: resume() shows them (mitcad#1844)
     m_manipulators->setHandlesShown(true);
   }
   qDebug().noquote() << QStringLiteral("Preview shown (%1)").arg(why);

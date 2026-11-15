@@ -27,6 +27,7 @@
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/LengthUnits.hpp"
 #include "../sketch/SketchController.hpp"
+#include "../sketch/SketchSurface.hpp"
 #include "CommandSupport.hpp"
 
 namespace mitcad {
@@ -54,12 +55,26 @@ bool isOriginPlane(const SelectionItem& item) {
           item.owner == QStringLiteral("yz"));
 }
 
-// The plane as the model names it: a datum's uid or a face of a body.
-QJsonValue planeRef(const SelectionItem& item) {
+// The plane as the model names it: a datum's uid or a face of a body; a
+// cylindrical or conical face with the angle of the sketch's origin about
+// its axis where it was picked (mitcad#1768).
+QJsonValue planeRef(const SelectionItem& item, const CommandContext& context) {
   if (item.kind == SelectKind::Plane) {
     return item.owner;
   }
+  if (sketch::isDevelopedFace(item)) {
+    return sketch::developedPlane(item, [&context](const QJsonObject& request) {
+      return QJsonValue(context.queryObject(request));
+    });
+  }
   return QJsonObject{{QStringLiteral("face"), item.name}, {QStringLiteral("body"), item.owner}};
+}
+
+// A picked plane that is a curved face (mitcad#1768): the sketch lies in
+// its developed coordinates and takes no offset, move, angle or flip.
+bool developedPick(const CommandState& s) {
+  const Selection& planes = s.items(kPlane);
+  return !planes.isEmpty() && sketch::isDevelopedFace(planes.first());
 }
 
 // The sketch the panel moves.
@@ -137,8 +152,11 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
   def.offeredFor = [](const Selection&) { return false; };
   // Empty, the sketch keeps its plane ("Same Plane"); a pick is the new one.
   InputDef planeInput = selectionInput(kPlane, QObject::tr("Plane"), cmd::kPlaneKinds, 0, 1);
-  planeInput.withTooltip(QObject::tr("An origin or construction plane, or a planar face made before the sketch"))
-      .withAccepts(cmd::isPlanar);
+  // Also a cylindrical or conical face (mitcad#1768).
+  planeInput
+      .withTooltip(QObject::tr("An origin or construction plane, or a planar, cylindrical or conical face before "
+                               "the sketch"))
+      .withAccepts([](const SelectionItem& item) { return cmd::isPlanar(item) || sketch::isDevelopedFace(item); });
   planeInput.emptyShows = [](const CommandState&) { return std::make_pair(QObject::tr("Same Plane"), QColor()); };
   def.inputs = {
       // In the sketch being edited it is that sketch, not pickable (a
@@ -150,18 +168,25 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
             loadSketch(s, context);
           }),
       planeInput,
+      // None of them on a curved face (mitcad#1768): the sketch lies in its
+      // developed coordinates there.
       valueInput(QStringLiteral("offset"), QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(QObject::tr("Along the plane's normal")),
+          .withTooltip(QObject::tr("Along the plane's normal"))
+          .withVisible([](const CommandState& s) { return !developedPick(s); }),
       // Beside Offset: both act on the normal (as mitcad#656's placements).
       flipInput(kFlip, QObject::tr("Flip"))
           .withTooltip(QObject::tr("Turns the sketch over: its normal reversed"))
-          .withBesidePrevious(),
+          .withBesidePrevious()
+          .withVisible([](const CommandState& s) { return !developedPick(s); }),
       valueInput(QStringLiteral("x"), QObject::tr("Move X"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(QObject::tr("Along the sketch's x axis on the plane")),
+          .withTooltip(QObject::tr("Along the sketch's x axis on the plane"))
+          .withVisible([](const CommandState& s) { return !developedPick(s); }),
       valueInput(QStringLiteral("y"), QObject::tr("Move Y"), ValueKind::Length, QStringLiteral("0 mm"))
-          .withTooltip(QObject::tr("Along the sketch's y axis on the plane")),
+          .withTooltip(QObject::tr("Along the sketch's y axis on the plane"))
+          .withVisible([](const CommandState& s) { return !developedPick(s); }),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
-          .withTooltip(QObject::tr("About the plane's normal, from the sketch's x axis towards its y axis")),
+          .withTooltip(QObject::tr("About the plane's normal, from the sketch's x axis towards its y axis"))
+          .withVisible([](const CommandState& s) { return !developedPick(s); }),
   };
   // The sketch being edited (always that one), else the one selected before
   // (the context menus give it), with its plane and placement.
@@ -171,7 +196,7 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
     }
     loadSketch(s, context);
   };
-  def.build = [](const CommandState& s, const CommandContext&) -> Built {
+  def.build = [](const CommandState& s, const CommandContext& context) -> Built {
     const QString uid = movedSketch(s);
     if (uid.isEmpty()) {
       return Built::failure(QObject::tr("Select the sketch to move."), kSketch);
@@ -183,7 +208,7 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
     const Selection& planes = s.items(kPlane);
     if (!planes.isEmpty()) {
       const SelectionItem& plane = planes.first();
-      command.insert(kPlane, planeRef(plane));
+      command.insert(kPlane, planeRef(plane, context));
       // Where it was picked, as Create Sketch sends it: another
       // component's plane or face is linked (mitcad#100).
       if (!isOriginPlane(plane)) {
@@ -192,11 +217,15 @@ void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchContro
       // Upright on the new plane, as a new sketch is (mitcad#692).
       command.insert(QStringLiteral("upright"), true);
     }
-    for (const PlacementValue& value : kValues) {
-      const QString id = QString::fromLatin1(value.id);
-      command.insert(id, s.expression(id));
+    // A curved face takes no placement (mitcad#1768): its hidden values
+    // are left out.
+    if (!developedPick(s)) {
+      for (const PlacementValue& value : kValues) {
+        const QString id = QString::fromLatin1(value.id);
+        command.insert(id, s.expression(id));
+      }
+      command.insert(kFlip, s.checked(kFlip));
     }
-    command.insert(kFlip, s.checked(kFlip));
     return Built::of(command);
   };
   // "Redefined the plane of Sketch1: plane xz, offset 5 mm, x 0 mm, y 0 mm,

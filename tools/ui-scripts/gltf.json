@@ -1,0 +1,18 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"glTF export and import (mitcad#1826), the design of tools/ui-scripts/gltf.mitcad-ui: two components made from two boxes. Bar, 40 x 30 x 20 mm, placed 100 mm along x, its body in a red appearance; Tile, 10 x 10 x 5 mm, turned a quarter about z and placed 50 mm along y and 10 mm up, its body in a textured appearance (a 1 x 1 PNG image embedded)."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":40,"width":30,"height":20,"operation":"new_body"}},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":10,"width":10,"height":5,"operation":"new_body"}},
+  {"cmd":"rename_body","uid":"F1.b0","name":"Bar"},
+  {"cmd":"rename_body","uid":"F2.b0","name":"Tile"},
+  {"cmd":"create_appearance","id":"signal_red","name":"Signal red","base_color":[0.8,0.1,0.1],"roughness":0.4},
+  {"cmd":"create_appearance","id":"oak_board","name":"Oak board",
+    "texture":{"path":"oak.png","data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","size":[50,50]}},
+  {"cmd":"set_body_appearance","uid":"F1.b0","appearance":"signal_red"},
+  {"cmd":"set_body_appearance","uid":"F2.b0","appearance":"oak_board"},
+  {"cmd":"components_from_bodies","bodies":["F1.b0","F2.b0"]},
+  {"cmd":"set_occurrence_transform","occurrence":"Bar:1","transform":{"translation":[100,0,0]}},
+  {"cmd":"set_occurrence_transform","occurrence":"Tile:1",
+    "transform":{"translation":[0,50,10],"rotation":{"axis":[0,0,1],"angle":1.5707963267948966}}},
+  {"expect":{"instances":2}}
+]

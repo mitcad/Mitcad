@@ -32,7 +32,7 @@ use super::{
     CheckContext, EvalContext, Evaluate, FeatureDef, FeatureInfo, FeatureOutput, References,
     is_false,
 };
-use crate::ids::FeatureUid;
+use crate::ids::{FeatureUid, OccurrenceUid};
 use crate::joints::Motion;
 use crate::kernel::Kernel;
 use crate::parameters::ParamId;
@@ -43,6 +43,11 @@ use crate::parameters::ParamId;
 pub struct LinkedMotion {
     pub joint: FeatureUid,
     pub motion: Motion,
+    /// A joint of a flexible occurrence's component, as that occurrence
+    /// moves it (mitcad#1793): the occurrence, placed in the link's
+    /// component. None: a joint of the link's own component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence: Option<OccurrenceUid>,
 }
 
 /// A size of a coupling: a value, or the radius of round geometry picked

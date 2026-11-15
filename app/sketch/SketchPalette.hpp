@@ -106,6 +106,9 @@ private:
   // Logs the Create and Constraints buttons' places, their rows and
   // whether any is clipped (mitcad#1027).
   void logButtons() const;
+  // Logs whether every row is whole within the panel (mitcad#1825: at a
+  // large Text size and Icon size the Docked panel cut the labels).
+  void logRows() const;
 
   SketchController& m_c;
   CommandRegistry& m_registry;
@@ -131,6 +134,7 @@ private:
   QCheckBox* m_hideAbove = nullptr;
   QCheckBox* m_spatial = nullptr; // 3D Sketch: converts the sketch (mitcad#1544)
   QComboBox* m_dimensionText = nullptr;
+  QLabel* m_dimensionLabel = nullptr; // "Dimension text" before it
   QWidget* m_autoSection = nullptr;
   QRadioButton* m_autoFirst = nullptr;
   QRadioButton* m_autoLast = nullptr;

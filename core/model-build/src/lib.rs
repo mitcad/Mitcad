@@ -32,6 +32,8 @@ pub(crate) mod frames;
 pub(crate) mod swap;
 // The middle of a free stretch of a side (mitcad#1401).
 pub(crate) mod gap;
+// Members along an edge (mitcad#1814).
+pub(crate) mod edge;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -56,6 +58,8 @@ pub use spacing::{SpacingInput, SpacingMode};
 pub use swap::{SwapInput, Swapped};
 pub use timber::{Lie, PointTo};
 pub use wood::EndInput;
+// Members along an edge (mitcad#1814).
+pub use edge::{AlongEdge, AlongEdit, AlongPart, along_of};
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};
@@ -101,6 +105,8 @@ pub mod prelude {
     };
     pub use super::wood::WoodBuild;
     pub(crate) use super::wood::WoodCrateOps;
+    // Members along an edge (mitcad#1814).
+    pub(crate) use super::edge::{AlongCrateOps, AlongEditCrateOps};
 }
 
 /// Items other Mitcad crates use; not part of this crate's API.

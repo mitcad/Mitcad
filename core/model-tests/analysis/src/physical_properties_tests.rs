@@ -89,8 +89,22 @@ fn uids(answer: &Value) -> Vec<String> {
 /// turned 90 degrees about Z: in the design x 80 to 100, y 20 to 40,
 /// z 30 to 50.
 fn two_boxes() -> Document<MockKernel> {
+    // Steel as the design's default material: a body without a material
+    // has no mass (mitcad#1817).
+    boxes(Some("steel"))
+}
+
+/// The bodies of [`two_boxes`], with `material` as the design's default
+/// material, or with no material set anywhere.
+fn boxes(material: Option<&str>) -> Document<MockKernel> {
     let mut doc = Document::new(MockKernel::default());
     doc.kernel().physical.set(true);
+    if let Some(material) = material {
+        command(
+            &mut doc,
+            json!({"cmd": "set_component_material", "component": "C0", "material": material}),
+        );
+    }
     command(&mut doc, block("F1", 10.0));
     command(
         &mut doc,
@@ -415,4 +429,60 @@ fn each_occurrence_counts_with_the_material_it_has_there() {
         1e-12,
     );
     assert_total_is_the_center_of_mass(&doc, &answer);
+}
+
+/// What the Properties window names, groups and highlights a body by
+/// (mitcad#1816): a body without a material anywhere says so and has no
+/// density and no mass (mitcad#1817); a component's body has its
+/// component's name and own body count and the occurrence path by uids;
+/// the root's has none of them.
+#[test]
+fn bodies_carry_their_component_path_and_whether_a_material_is_set() {
+    let mut doc = boxes(None);
+    let answer = properties(&doc, json!({"query": "properties"}));
+    let bodies = answer["bodies"].as_array().unwrap();
+    for body in bodies {
+        assert_eq!(body["no_material"], true, "{answer}");
+        assert!(body["material"].is_null(), "{answer}");
+        for key in ["density", "mass", "inertia", "principal_moments"] {
+            assert_eq!(body.get(key), None, "{key}: {answer}");
+        }
+    }
+    assert_eq!(answer["total"]["no_material"], 2, "{answer}");
+    assert_eq!(answer["total"].get("mass"), None, "{answer}");
+    assert_eq!(bodies[0].get("component_name"), None, "{answer}");
+    assert_eq!(bodies[0].get("path"), None, "{answer}");
+    assert_eq!(bodies[1]["component_name"], "Arm", "{answer}");
+    assert_eq!(bodies[1]["component_bodies"], 1, "{answer}");
+    assert_eq!(bodies[1]["path"], "O1", "{answer}");
+    assert_eq!(bodies[1].get("part"), None, "{answer}");
+
+    // A material of its own takes the flag away and gives the body its
+    // density and mass; the other body still has none.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": "F4.b0", "material": "aluminum"}),
+    );
+    let answer = properties(&doc, json!({"query": "properties"}));
+    let bodies = answer["bodies"].as_array().unwrap();
+    assert_eq!(bodies[1].get("no_material"), None, "{answer}");
+    assert_eq!(bodies[1]["material"], "aluminum");
+    near(&bodies[1]["density"], 2.70, 1e-12);
+    near(&bodies[1]["mass"], 8000.0 * 2.70e-6, 1e-12);
+    assert_eq!(bodies[0]["no_material"], true, "{answer}");
+    assert_eq!(bodies[0].get("mass"), None, "{answer}");
+    assert_eq!(answer["total"]["no_material"], 1, "{answer}");
+
+    // The design's default material is a material set: the root's body is
+    // made of it, with its mass.
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
+    let answer = properties(&doc, json!({"query": "properties"}));
+    let bodies = answer["bodies"].as_array().unwrap();
+    assert_eq!(bodies[0].get("no_material"), None, "{answer}");
+    assert_eq!(bodies[0]["material"], "steel");
+    near(&bodies[0]["mass"], 4000.0 * STEEL, 1e-12);
+    assert_eq!(answer["total"].get("no_material"), None, "{answer}");
 }

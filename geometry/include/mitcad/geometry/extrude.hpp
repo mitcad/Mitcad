@@ -70,7 +70,15 @@ struct ExtrudeSide {
 // sides or symmetric) against it, both from the start: the profile plane
 // moved by `start_offset` along the sketch normal, or the plane of `start`
 // (a plane or a planar face; the profile is projected onto it along the
-// sketch normal and needs no taper).
+// sketch normal and needs no taper). A curved face as `start` (mitcad#1848:
+// a cylinder, cone, sphere, torus or any other surface; with `extend` its
+// surface continued past its edges) takes the profile projected onto it
+// along the extrusion's direction, where the projection first reaches it
+// from the profile's side of the face, moved by the start's offset along
+// the sketch normal: each side then runs from that surface by its distance
+// (every line along the extrusion through the profile the same length) or
+// up to its target, without a taper. The face must lie under the whole
+// profile.
 //
 // Faces are named after `feature`:
 //   side(<segment>)            swept from a profile segment

@@ -18,6 +18,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 
 namespace {
@@ -157,6 +158,27 @@ int renderMeshTests() {
     const MeshData mesh = meshOf(meshBody(true, false));
     CHECK(mesh.indices.size() == 3);
     CHECK(mesh.turned == 0);
+    // Without texture coordinates the mesh has none.
+    CHECK(mesh.uvs.empty());
+  }
+  {
+    // A mesh body's UV nodes are its texture coordinates (mitcad#1862):
+    // one pair per vertex, as the triangulation has them; a box's faces
+    // (their UV nodes are surface parameters) bring none.
+    const TopoDS_Shape body = meshBody(false, true);
+    TopLoc_Location location;
+    const occ::handle<Poly_Triangulation> triangles =
+        BRep_Tool::Triangulation(TopoDS::Face(body), location);
+    triangles->AddUVNodes();
+    for (int n = 1; n <= triangles->NbNodes(); ++n) {
+      triangles->SetUVNode(n, gp_Pnt2d(0.25 * n, 1.0 - 0.25 * n));
+    }
+    const MeshData mesh = meshOf(body);
+    CHECK(mesh.uvs.size() == mesh.positions.size() / 3 * 2);
+    CHECK(mesh.uvs.size() == 8);
+    CHECK(mesh.uvs.size() == 8 && mesh.uvs[0] == 0.25f && mesh.uvs[1] == 0.75f && mesh.uvs[6] == 1.0f &&
+          mesh.uvs[7] == 0.0f);
+    CHECK(meshOf(meshedBox()).uvs.empty());
   }
   return failures;
 }

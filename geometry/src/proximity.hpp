@@ -8,6 +8,7 @@
 // needs.
 
 #include <array>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -15,7 +16,7 @@
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <Bnd_Box.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
-#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <TopoDS_Face.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_DataMap.hxx>
 #include <NCollection_IndexedMap.hxx>
@@ -24,6 +25,7 @@
 #include <TopAbs_State.hxx>
 #include <TopoDS_Shape.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pnt.hxx>
 
 namespace mitcad::geometry::detail {
@@ -102,6 +104,74 @@ private:
   std::unique_ptr<GeomAPI_ProjectPointOnSurf> projection_;
 };
 
+// The crossings of lines with a body's faces, as
+// IntCurvesFace_ShapeIntersector finds them (the same points of the same
+// faces, in the same order), but asking only the faces the line's segment
+// can cross (mitcad#1801). The shape intersector asks every face for every
+// line, and a face whose surface is not a plane or quadric searches a
+// polyhedron of its whole surface and classifies what it finds in the
+// face: on a body with a modelled thread, every ray of the dressups'
+// checks searched every turn of the thread's faces. Here a face is asked
+// only where the segment passes through its surface's box, a B-spline's
+// only where it passes through the boxes of its Bezier patches' poles,
+// halved again and again (which hold the surface), and each face's
+// searcher is made when first asked and kept with the face for the
+// thread's next bodies that share it.
+class BoundaryRays {
+public:
+  BoundaryRays(const TopoDS_Shape& body, double tolerance);
+  BoundaryRays(const BoundaryRays&) = delete;
+  BoundaryRays& operator=(const BoundaryRays&) = delete;
+  ~BoundaryRays();
+
+  // As IntCurvesFace_ShapeIntersector::Perform: the crossings with W in
+  // [from, to] along the line.
+  void Perform(const gp_Lin& line, double from, double to);
+  // The nearest crossing (the least W in [from, to]) and every crossing
+  // within the confusion tolerance of it, as Perform finds them, without
+  // asking the faces the segment can cross only farther on; none only where
+  // Perform finds none.
+  void PerformNearest(const gp_Lin& line, double from, double to);
+  // False, as the shape intersector's, when a face cannot be intersected
+  // at all (a surface without extent in a direction).
+  bool IsDone() const { return done_; }
+  int NbPnt() const { return static_cast<int>(hits_.size()); }
+  // The i-th crossing (1-based) by W.
+  double WParameter(int i) const;
+  double UParameter(int i) const;
+  double VParameter(int i) const;
+  TopAbs_State State(int i) const;
+  const TopoDS_Face& Face(int i) const;
+  const gp_Pnt& Pnt(int i) const;
+
+  // How many faces the last Perform asked (for the tests).
+  int asked() const { return asked_; }
+
+private:
+  struct Part;
+  struct Hit {
+    std::size_t part;
+    int point; // (its number on its face)
+    double w, u, v;
+    TopAbs_State state;
+    gp_Pnt pnt;
+  };
+  const Hit& hit(int i) const { return hits_[static_cast<std::size_t>(i - 1)]; }
+  // Where the segment from `start` to `end` enters face i's boxes (the
+  // fraction of the segment), none where it misses them.
+  std::optional<double> enters(std::size_t i, const gp_Pnt& start, const gp_Pnt& end) const;
+  // Face i's crossings added; false where it is not done.
+  bool ask(std::size_t i, const gp_Lin& line, double from, double to);
+  void sort_hits();
+
+  std::vector<Part> parts_;
+  double tolerance_;
+  bool ready_ = true;
+  bool done_ = false;
+  int asked_ = 0;
+  std::vector<Hit> hits_;
+};
+
 // Which side of a closed body's boundary a point lies on, as a ray from it
 // first crosses the boundary (mitcad#1257).
 enum class RaySide { Inside, Outside, Near };
@@ -120,8 +190,8 @@ constexpr double kRayTransverse = 0.05;
 // run through the whole body: on a body of long spline faces, a thread's,
 // it took 60 ms a point in a debug build, 40 times as long as the rounding
 // it checked; a short ray meets only the faces near the point.)
-std::optional<RaySide> ray_side(IntCurvesFace_ShapeIntersector& boundary, const gp_Pnt& point,
-                                const gp_Dir& direction, double close, double reach);
+std::optional<RaySide> ray_side(BoundaryRays& boundary, const gp_Pnt& point, const gp_Dir& direction, double close,
+                                double reach);
 
 // The side of `point` by rays the whole way through the body (`through`
 // longer than its box's diagonal) in a few fixed directions skew to the
@@ -130,8 +200,8 @@ std::optional<RaySide> ray_side(IntCurvesFace_ShapeIntersector& boundary, const 
 // within `tolerance` / kRayTransverse of the point (it may lie within
 // `tolerance` of it, on it for a classifier); none where none tells
 // (mitcad#1796).
-std::optional<RaySide> skew_ray_side(IntCurvesFace_ShapeIntersector& boundary, const gp_Pnt& point,
-                                     double tolerance, double through);
+std::optional<RaySide> skew_ray_side(BoundaryRays& boundary, const gp_Pnt& point, double tolerance,
+                                     double through);
 
 // A ray length that runs through the whole of a shape from any point in its
 // box (twice its box's diagonal); 0 for an empty shape.
@@ -159,7 +229,7 @@ public:
 
 private:
   TopoDS_Shape body_;
-  std::unique_ptr<IntCurvesFace_ShapeIntersector> rays_;
+  std::unique_ptr<BoundaryRays> rays_;
   double through_ = 0.0;
   std::unique_ptr<BRepClass3d_SolidClassifier> classifier_;
 };

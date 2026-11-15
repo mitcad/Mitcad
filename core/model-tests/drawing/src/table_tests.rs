@@ -894,6 +894,12 @@ fn one_component_in_two_material_paths_has_distinct_grouped_balloon_numbers() {
         &mut doc,
         json!({"cmd": "create_component", "name": "SteelParent"}),
     );
+    // Steel as SteelParent's default: a body without a material lists none
+    // (mitcad#1817).
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "SteelParent", "material": "steel"}),
+    );
     command(
         &mut doc,
         json!({"cmd": "create_component", "name": "Shared"}),

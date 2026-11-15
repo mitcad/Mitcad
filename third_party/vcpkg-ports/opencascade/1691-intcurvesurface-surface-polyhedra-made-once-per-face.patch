@@ -1,0 +1,369 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Booleans and offsets: the intersection of an edge with a face
+(IntTools_BeanFaceIntersector::ComputeAroundExactIntersection) asks
+IntCurveSurface_HInter for the points where the edge's curve meets the
+face's surface, and for a surface that is neither a quadric nor a plane
+HInter samples each piece of the surface into a polyhedron (up to 40 x 40
+points with their derivatives, and its deflection) for every curve. A
+boolean's or an offset's faces meet many edges, so each face's polyhedra
+were made again for every edge (mitcad#1823: the closed offsets of lofts
+spent a third of their time making them). HInter gets Perform(Curve,
+Surface, Polyhedra), the same intersection as Perform(Curve, Surface) with
+the polyhedron of each piece taken from Polyhedra where made before for
+the same bounds and kept there where made now, and IntTools_Context keeps
+the polyhedra of each face for its edge/face intersections: the same
+polyhedra, so the same intersection points.
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
+index cedd74772..3c1e57f38 100644
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
+@@ -568,7 +568,17 @@ void IntTools_BeanFaceIntersector::ComputeAroundExactIntersection()
+   occ::handle<BRepAdaptor_Curve>   aCurve   = new BRepAdaptor_Curve(myCurve);
+   occ::handle<BRepAdaptor_Surface> aSurface = new BRepAdaptor_Surface(mySurface);
+ 
+-  anExactIntersector.Perform(aCurve, aSurface);
++  if (myContext.IsNull() || mySurface.Face().IsNull())
++  {
++    anExactIntersector.Perform(aCurve, aSurface);
++  }
++  else
++  {
++    // The surface's polyhedra made once for all the edges intersected with the face.
++    anExactIntersector.Perform(aCurve,
++                               aSurface,
++                               myContext->CurveSurfacePolyhedra(mySurface.Face()));
++  }
+ 
+   if (anExactIntersector.IsDone())
+   {
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
+index e53ec8dfe..9bf0b2398 100644
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
+@@ -61,6 +61,7 @@ IntTools_Context::IntTools_Context()
+       myBndBoxDataMap(100, myAllocator),
+       mySurfAdaptorMap(100, myAllocator),
+       myOBBMap(100, myAllocator),
++      myPolyhedraMap(100, myAllocator),
+       myCreateFlag(0),
+       myPOnSTolerance(1.e-12)
+ {
+@@ -80,6 +81,7 @@ IntTools_Context::IntTools_Context(const occ::handle<NCollection_BaseAllocator>&
+       myBndBoxDataMap(100, myAllocator),
+       mySurfAdaptorMap(100, myAllocator),
+       myOBBMap(100, myAllocator),
++      myPolyhedraMap(100, myAllocator),
+       myCreateFlag(1),
+       myPOnSTolerance(1.e-12)
+ {
+@@ -190,6 +192,14 @@ IntTools_Context::~IntTools_Context()
+     myAllocator->Free(pOBB);
+   }
+   myOBBMap.Clear();
++  for (NCollection_DataMap<TopoDS_Shape, IntCurveSurface_HInter::Polyhedra*, TopTools_ShapeMapHasher>::
++         Iterator anIt(myPolyhedraMap);
++       anIt.More();
++       anIt.Next())
++  {
++    delete anIt.Value();
++  }
++  myPolyhedraMap.Clear();
+ }
+ 
+ //=================================================================================================
+@@ -359,6 +369,19 @@ void IntTools_Context::SetSurfaceAdaptor(const TopoDS_Face&         theFace,
+ 
+ //=================================================================================================
+ 
++IntCurveSurface_HInter::Polyhedra& IntTools_Context::CurveSurfacePolyhedra(const TopoDS_Face& theFace)
++{
++  IntCurveSurface_HInter::Polyhedra* pPolyhedra = nullptr;
++  if (!myPolyhedraMap.Find(theFace, pPolyhedra))
++  {
++    pPolyhedra = new IntCurveSurface_HInter::Polyhedra();
++    myPolyhedraMap.Bind(theFace, pPolyhedra);
++  }
++  return *pPolyhedra;
++}
++
++//=================================================================================================
++
+ Geom2dHatch_Hatcher& IntTools_Context::Hatcher(const TopoDS_Face& aF)
+ {
+   Geom2dHatch_Hatcher* pHatcher = nullptr;
+diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
+index 1c78357ea..71ecea094 100644
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
+@@ -20,6 +20,7 @@
+ 
+ #include <NCollection_BaseAllocator.hxx>
+ #include <NCollection_DataMap.hxx>
++#include <IntCurveSurface_HInter.hxx>
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <Standard_Integer.hxx>
+ #include <Precision.hxx>
+@@ -245,6 +246,11 @@ public:
+   //! correct value for all projectors
+   Standard_EXPORT void SetPOnSProjectionTolerance(const double theValue);
+ 
++  //! Returns the polyhedra of the face's surface kept for the intersections
++  //! of curves with it (IntCurveSurface_HInter::Perform with them).
++  Standard_EXPORT IntCurveSurface_HInter::Polyhedra& CurveSurfacePolyhedra(
++    const TopoDS_Face& theFace);
++
+   DEFINE_STANDARD_RTTIEXT(IntTools_Context, Standard_Transient)
+ 
+ protected:
+@@ -265,6 +271,8 @@ protected:
+   // clang-format off
+   NCollection_DataMap<TopoDS_Shape, Bnd_OBB*, TopTools_ShapeMapHasher> myOBBMap; // Map of oriented bounding boxes
+   // clang-format on
++  NCollection_DataMap<TopoDS_Shape, IntCurveSurface_HInter::Polyhedra*, TopTools_ShapeMapHasher>
++    myPolyhedraMap;
+   int    myCreateFlag;
+   double myPOnSTolerance;
+ 
+diff --git a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
+index 1ef15c81b..ef40e0aab 100644
+--- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
++++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
+@@ -117,6 +117,152 @@ void IntCurveSurface_HInter::Perform(const TheCurve& curve, const TheSurface& su
+ 
+ //=================================================================================================
+ 
++IntCurveSurface_HInter::Polyhedra::~Polyhedra()
++{
++  for (const Entry& anEntry : myEntries)
++  {
++    delete anEntry.Polyhedron;
++  }
++}
++
++//=================================================================================================
++
++const ThePolyhedron* IntCurveSurface_HInter::Polyhedra::Find(const double U1,
++                                                             const double V1,
++                                                             const double U2,
++                                                             const double V2) const
++{
++  for (const Entry& anEntry : myEntries)
++  {
++    if (anEntry.U1 == U1 && anEntry.V1 == V1 && anEntry.U2 == U2 && anEntry.V2 == V2)
++    {
++      return anEntry.Polyhedron;
++    }
++  }
++  return nullptr;
++}
++
++//=================================================================================================
++
++const ThePolyhedron& IntCurveSurface_HInter::Polyhedra::Add(const double   U1,
++                                                            const double   V1,
++                                                            const double   U2,
++                                                            const double   V2,
++                                                            ThePolyhedron* thePolyhedron)
++{
++  myEntries.push_back(Entry{U1, V1, U2, V2, thePolyhedron});
++  return *thePolyhedron;
++}
++
++//=================================================================================================
++
++void IntCurveSurface_HInter::Perform(const TheCurve&   curve,
++                                     const TheSurface& surface,
++                                     Polyhedra&        thePolyhedra)
++{
++  // Perform(curve, surface) with InternalPerform(c, p, s, u1, v1, u2, v2) taking the
++  // polyhedron of each piece of the surface from thePolyhedra.
++  IntCurveSurface_InterImpl::Perform<TheCurve, TheCurveTool, TheSurface, TheSurfaceTool>(
++    curve,
++    surface,
++    done,
++    [this]() { this->ResetFields(); },
++    [this, &thePolyhedra](const TheCurve&   c,
++                          const TheSurface& s,
++                          double            u0,
++                          double            v0,
++                          double            u1,
++                          double            v1) {
++      IntCurveSurface_InterImpl::
++        PerformBounds<TheCurve, TheCurveTool, TheSurface, TheSurfaceTool, ThePolygon>(
++          c,
++          s,
++          u0,
++          v0,
++          u1,
++          v1,
++          [this](const auto&       conic,
++                 const TheCurve&   cc,
++                 const TheSurface& ss,
++                 double            uu1,
++                 double            vv1,
++                 double            uu2,
++                 double            vv2) { this->PerformConicSurf(conic, cc, ss, uu1, vv1, uu2, vv2); },
++          [this, &thePolyhedra](const TheCurve&   cc,
++                                const ThePolygon& p,
++                                const TheSurface& ss,
++                                double            uu1,
++                                double            vv1,
++                                double            uu2,
++                                double            vv2) {
++            this->InternalPerform(cc, p, ss, uu1, vv1, uu2, vv2, thePolyhedra);
++          },
++          [this](const TheCurve& cc, const TheSurface& ss) {
++            this->InternalPerformCurveQuadric(cc, ss);
++          });
++    });
++}
++
++//=================================================================================================
++
++void IntCurveSurface_HInter::InternalPerform(const TheCurve&   curve,
++                                             const ThePolygon& polygon,
++                                             const TheSurface& surface,
++                                             const double      U1,
++                                             const double      V1,
++                                             const double      U2,
++                                             const double      V2,
++                                             Polyhedra&        thePolyhedra)
++{
++  // As IntCurveSurface_InterImpl::InternalPerformPolygonBounds, which makes the
++  // polyhedron for every call.
++  const GeomAbs_SurfaceType aSurfaceType = TheSurfaceTool::GetType(surface);
++  if ((aSurfaceType == GeomAbs_Plane) || (aSurfaceType == GeomAbs_Cylinder)
++      || (aSurfaceType == GeomAbs_Cone) || (aSurfaceType == GeomAbs_Sphere))
++  {
++    InternalPerformCurveQuadric(curve, surface);
++    return;
++  }
++  const ThePolyhedron* aPolyhedron = thePolyhedra.Find(U1, V1, U2, V2);
++  if (aPolyhedron == nullptr)
++  {
++    if (aSurfaceType != GeomAbs_BSplineSurface)
++    {
++      int nbsu = TheSurfaceTool::NbSamplesU(surface, U1, U2);
++      int nbsv = TheSurfaceTool::NbSamplesV(surface, V1, V2);
++      if (nbsu > 40)
++      {
++        nbsu = 40;
++      }
++      if (nbsv > 40)
++      {
++        nbsv = 40;
++      }
++      aPolyhedron =
++        &thePolyhedra.Add(U1, V1, U2, V2, new ThePolyhedron(surface, nbsu, nbsv, U1, V1, U2, V2));
++    }
++    else
++    {
++      occ::handle<Adaptor3d_Surface> aS = TheSurfaceTool::UTrim(surface, U1, U2, 1.e-9);
++      aS                                = aS->VTrim(V1, V2, 1.e-9);
++      occ::handle<Adaptor3d_TopolTool> aTopTool = new Adaptor3d_TopolTool(aS);
++      double                           defl     = 0.1;
++      aTopTool->SamplePnts(defl, 10, 10);
++
++      int                        nbpu = aTopTool->NbSamplesU();
++      int                        nbpv = aTopTool->NbSamplesV();
++      NCollection_Array1<double> Upars(1, nbpu), Vpars(1, nbpv);
++      aTopTool->UParameters(Upars);
++      aTopTool->VParameters(Vpars);
++
++      aPolyhedron = &thePolyhedra.Add(U1, V1, U2, V2, new ThePolyhedron(surface, Upars, Vpars));
++    }
++  }
++  InternalPerform(curve, polygon, surface, *aPolyhedron, U1, V1, U2, V2);
++}
++
++//=================================================================================================
++
+ void IntCurveSurface_HInter::Perform(const TheCurve&   curve,
+                                      const TheSurface& surface,
+                                      const double      U1,
+diff --git a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
+index 1c4b806e5..cfa1ac52a 100644
+--- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
++++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
+@@ -24,6 +24,8 @@
+ #include <NCollection_Array2.hxx>
+ #include <NCollection_Array1.hxx>
+ 
++#include <vector>
++
+ class IntCurveSurface_TheHCurveTool;
+ class Adaptor3d_HSurfaceTool;
+ class IntCurveSurface_ThePolygonOfHInter;
+@@ -90,6 +92,52 @@ public:
+                                const occ::handle<Adaptor3d_Surface>&        Surface,
+                                const IntCurveSurface_ThePolyhedronOfHInter& Polyhedron);
+ 
++  //! The polyhedra of one surface by the parameter bounds they were made for,
++  //! kept by the caller between intersections of curves with that surface.
++  class Polyhedra
++  {
++  public:
++    DEFINE_STANDARD_ALLOC
++
++    Polyhedra() = default;
++    Standard_EXPORT ~Polyhedra();
++    Polyhedra(const Polyhedra&)            = delete;
++    Polyhedra& operator=(const Polyhedra&) = delete;
++
++    //! The polyhedron kept for these bounds, or null.
++    Standard_EXPORT const IntCurveSurface_ThePolyhedronOfHInter* Find(const double U1,
++                                                                      const double V1,
++                                                                      const double U2,
++                                                                      const double V2) const;
++
++    //! Keeps the polyhedron (made with new, now owned here) for these bounds.
++    Standard_EXPORT const IntCurveSurface_ThePolyhedronOfHInter& Add(
++      const double                           U1,
++      const double                           V1,
++      const double                           U2,
++      const double                           V2,
++      IntCurveSurface_ThePolyhedronOfHInter* thePolyhedron);
++
++  private:
++    struct Entry
++    {
++      double                                 U1, V1, U2, V2;
++      IntCurveSurface_ThePolyhedronOfHInter* Polyhedron;
++    };
++
++    std::vector<Entry> myEntries;
++  };
++
++  //! Compute the Intersection between the curve and the surface, as
++  //! Perform(Curve, Surface) does, with the polyhedra of the surface's pieces
++  //! taken from <thePolyhedra> where made before and kept there where made
++  //! now: the same polyhedra for the same bounds, so the same intersections,
++  //! without sampling the surface again for every curve. <thePolyhedra> must
++  //! be used only with the same surface (the same geometry and location).
++  Standard_EXPORT void Perform(const occ::handle<Adaptor3d_Curve>&   Curve,
++                               const occ::handle<Adaptor3d_Surface>& Surface,
++                               Polyhedra&                            thePolyhedra);
++
+ protected:
+   //! Compute the Intersection between the curve and the
+   //! surface
+@@ -186,6 +234,17 @@ protected:
+                                      const occ::handle<Adaptor3d_Surface>& Surface);
+ 
+ private:
++  //! InternalPerform(Curve, Polygon, Surface, U1, V1, U2, V2) with the
++  //! surface's polyhedron for the bounds from <thePolyhedra>.
++  Standard_EXPORT void InternalPerform(const occ::handle<Adaptor3d_Curve>&       Curve,
++                                       const IntCurveSurface_ThePolygonOfHInter& Polygon,
++                                       const occ::handle<Adaptor3d_Surface>&     Surface,
++                                       const double                              U1,
++                                       const double                              V1,
++                                       const double                              U2,
++                                       const double                              V2,
++                                       Polyhedra&                                thePolyhedra);
++
+   Standard_EXPORT void DoSurface(const occ::handle<Adaptor3d_Surface>& surface,
+                                  const double                          u0,
+                                  const double                          u1,

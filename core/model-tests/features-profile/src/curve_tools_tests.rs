@@ -3,7 +3,8 @@
 //! cylindrical face of 20 mm diameter, pitch 5 and 4 turns, lies on the
 //! face within 1e-6 mm from its low end up, and drives a Pipe; on a conical
 //! face it follows the cone (a growing helix from the kernel); its
-//! refusals; a Helix of a sketch line is a new surface body; an
+//! refusals; a Helix of a sketch line is a new surface body, with Helix's
+//! heights, growth and flat ends (mitcad#1797); an
 //! Intersection Curve of that surface and a body is one curve, a face of a
 //! body taken as it is, and its refusals. The geometry is checked with OCCT
 //! by `geometry/tests/test_curve_tools.cpp` (`geometry.curve_tools`) and
@@ -363,7 +364,12 @@ fn a_helix_of_a_line_is_a_surface_body() {
         !faces.is_empty() && faces.iter().all(|f| f.starts_with("F4:side(")),
         "{faces:?}"
     );
-    // A solid helix takes no curves; a surface one no growth.
+    // A plain helicoid: no growth, no ends.
+    assert!(
+        sheet[0].ends_with("growth 0 ends [0.0, 0.0, 0.0, 0.0])"),
+        "{sheet:?}"
+    );
+    // A solid helix takes no curves; a surface one is MitCad's construction.
     let refused = doc.command(
         &json!({"cmd": "add_feature", "def": {"type": "helix",
                 "curves": {"sketch": "F3", "curves": [line]}, "axis": "z", "pitch": 5,
@@ -374,13 +380,112 @@ fn a_helix_of_a_line_is_a_surface_body() {
     let refused = doc.command(
         &json!({"cmd": "add_feature", "def": {"type": "helix",
                 "curves": {"sketch": "F3", "curves": [line]}, "surface": true, "axis": "z",
-                "pitch": 5, "revolutions": 4, "growth": 1, "operation": "new_body"}})
+                "pitch": 5, "revolutions": 4, "growth": 1, "construction": "freecad",
+                "operation": "new_body"}})
         .to_string(),
     );
     assert!(
         refused
             .as_ref()
-            .is_err_and(|e| e.to_string().contains("no growth")),
+            .is_err_and(|e| e.to_string().contains("MitCad's construction")),
+        "{refused:?}"
+    );
+}
+
+/// mitcad#1797: a surface helix takes Helix's size pairs, Growth and flat
+/// ends. The panel gives a height as a ratio (Pitch and Height: revolutions
+/// "<height> / <pitch>"; Height and Revolutions: pitch "<height> /
+/// <revolutions>"), which the model turns into the turns and the pitch the
+/// kernel gets; a growth and the ends reach the kernel as a solid helix's
+/// do, and the design file keeps them.
+#[test]
+fn a_surface_helix_takes_heights_growth_and_flat_ends() {
+    let mut doc = cylinder_block();
+    let (helix, line) = helicoid(&mut doc);
+    let curves = json!({"sketch": "F3", "curves": [line]});
+    let edit = |doc: &mut Document<MockKernel>, sizes: Value| {
+        let mut def = json!({"type": "helix", "curves": curves, "surface": true, "axis": "z",
+                             "operation": "new_body"});
+        for (key, value) in sizes.as_object().unwrap() {
+            def[key] = value.clone();
+        }
+        command(
+            doc,
+            json!({"cmd": "edit_feature", "uid": helix, "def": def}),
+        );
+        assert_eq!(status(doc, &helix), FeatureStatus::Ok);
+        specs(doc, "helix_sheet(F4: ")
+            .last()
+            .cloned()
+            .expect("a helix sheet")
+    };
+
+    // Pitch and Height: 20 mm at a pitch of 5 is 4 turns.
+    let sheet = edit(
+        &mut doc,
+        json!({"pitch": "5 mm", "revolutions": "20 mm / 5 mm"}),
+    );
+    assert!(sheet.contains("pitch 5 revolutions 4 left"), "{sheet}");
+    // Height and Revolutions: 30 mm in 4 turns is a pitch of 7.5.
+    let sheet = edit(&mut doc, json!({"pitch": "30 mm / 4", "revolutions": 4}));
+    assert!(sheet.contains("pitch 7.5 revolutions 4 left"), "{sheet}");
+
+    // Growth: a conical helicoid, 1 mm out per turn, MitCad's construction.
+    let sheet = edit(
+        &mut doc,
+        json!({"pitch": 5, "revolutions": 4, "growth": "1 mm"}),
+    );
+    assert!(
+        sheet.ends_with("growth 1 ends [0.0, 0.0, 0.0, 0.0])"),
+        "{sheet}"
+    );
+    let saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    let stored = saved["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "helix")
+        .cloned()
+        .expect("the helix");
+    assert_eq!(stored["construction"], json!("mitcad"), "{stored}");
+    assert!(stored.get("growth").is_some(), "{stored}");
+
+    // Flat ends: in the order start flat, start transition, end
+    // transition, end flat; kept by saving and opening.
+    let sheet = edit(
+        &mut doc,
+        json!({"pitch": 5, "revolutions": 4,
+               "start": {"transition_angle": "90 deg", "flat_angle": "180 deg"},
+               "end": {"transition_angle": "90 deg", "flat_angle": "180 deg"}}),
+    );
+    assert!(sheet.contains("growth 0 ends [3.14159"), "{sheet}");
+    assert!(sheet.contains(", 1.5707963"), "{sheet}");
+    let reopened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+    let saved: Value = serde_json::from_str(&reopened.to_json()).unwrap();
+    let stored = saved["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["type"] == "helix")
+        .cloned()
+        .expect("the helix");
+    assert!(
+        stored.get("start").is_some() && stored.get("end").is_some(),
+        "{stored}"
+    );
+
+    // Its values are checked as a solid helix's are.
+    let refused = doc.command(
+        &json!({"cmd": "edit_feature", "uid": helix, "def": {"type": "helix",
+                "curves": curves, "surface": true, "axis": "z", "pitch": 5,
+                "revolutions": 4, "start": {"transition_angle": "-10 deg", "flat_angle": 0},
+                "operation": "new_body"}})
+        .to_string(),
+    );
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("start transition")),
         "{refused:?}"
     );
 }

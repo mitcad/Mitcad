@@ -172,7 +172,7 @@ std::vector<HighlightPass> paintHighlightLayers(QPainter& painter, const Highlig
         } else {
           // A patterned line with flat ends to its dashes: round ones
           // would close the gaps of a 4 px line (mitcad#1619).
-          painter.setPen(QPen(stroke.color, 4.0, stroke.style,
+          painter.setPen(QPen(stroke.color, layers.strokeWidth, stroke.style,
                               stroke.style == Qt::SolidLine ? Qt::RoundCap : Qt::FlatCap, Qt::RoundJoin));
         }
         if (stroke.path.size() == 1) {

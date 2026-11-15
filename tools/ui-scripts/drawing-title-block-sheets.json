@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-title-block-sheets.mitcad-ui (mitcad#1841): a 40 x 30 x 20 block and Drawing1 (D1, A3, the ISO template: its title block 180 x 36 in the frame's lower right corner, 230,10 to 410,46 on the sheet) with three sheets, each the ISO template's."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 40, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}], "extent": {"type": "distance", "distance": 20}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3", "template": "iso"},
+  {"cmd": "add_drawing_sheet", "drawing": "D1"},
+  {"cmd": "add_drawing_sheet", "drawing": "D1"}
+]

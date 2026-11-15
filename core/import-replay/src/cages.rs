@@ -12,6 +12,11 @@
 //! of the bodies whose boxes do, the one whose box comes closest to the
 //! cage's on every side takes it, each body and each cage once. A cage that
 //! encloses no new body stays in the dump only.
+//!
+//! The report says of each kept cage whether it maps onto a Form's cage
+//! (mitcad#1757, `ControlCage::form_cage`), so that it opens as an editable
+//! Form (`form.create` with the primitive `kept_cage`), and if not, why in
+//! words; the body stays as the file stores it either way.
 
 use std::collections::BTreeSet;
 
@@ -20,6 +25,7 @@ use mitcad_model::features::FeatureDef;
 use mitcad_model::features::cage::{CageEdge, CageGrip, CageVertex, CageVertexTag, ControlCage};
 use mitcad_model::{BaseInput, Kernel};
 
+use crate::report::FormCageReport;
 use crate::{Importer, geom};
 
 /// A box: its lowest and highest corners, mm.
@@ -36,7 +42,7 @@ const MARGIN_MM: f64 = 0.1;
 impl<K: Kernel> Importer<'_, K> {
     /// Gives the new bodies of a fallback's base features their cages
     /// (`BaseInput::cages`).
-    pub(crate) fn attach_cages(&self, inputs: &mut [BaseInput<K::Shape>]) {
+    pub(crate) fn attach_cages(&mut self, inputs: &mut [BaseInput<K::Shape>]) {
         let Some(cages) = self.dump.f3d.as_ref().and_then(|f| f.cages.as_deref()) else {
             return;
         };
@@ -85,11 +91,19 @@ impl<K: Kernel> Importer<'_, K> {
             .collect();
         for (c, b) in pair(&cage_boxes, &boxes) {
             let (i, j) = at[b];
+            let kept = model_cage(open[c]);
+            let opens = kept.form_cage();
+            self.report.form_cages.push(FormCageReport {
+                cage: kept.source.clone().unwrap_or_default(),
+                body: inputs[i].bodies[j].name.clone(),
+                form: opens.is_ok(),
+                why: opens.err(),
+            });
             let cages = &mut inputs[i].cages;
             if cages.len() <= j {
                 cages.resize(j + 1, None);
             }
-            cages[j] = Some(Box::new(model_cage(open[c])));
+            cages[j] = Some(Box::new(kept));
         }
     }
 }
@@ -180,7 +194,98 @@ pub(crate) fn model_cage(cage: &FormCage) -> ControlCage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mitcad_dump::cage::{CageEdge as FileEdge, CageVertex as FileVertex};
+    use mitcad_dump::cage::{CageEdge as FileEdge, CageGrip as FileGrip, CageVertex as FileVertex};
+
+    /// A decoded cage of a cube of 2 cm as the file keeps it: uniform knot
+    /// intervals of 1, the faces as the half-edges run round them, the
+    /// edge from the vertex at (2, 0, 0) to the one at (2, 2, 0) creased.
+    fn file_cube() -> FormCage {
+        let corner = [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 2.0],
+            [2.0, 0.0, 2.0],
+            [2.0, 2.0, 2.0],
+            [0.0, 2.0, 2.0],
+        ];
+        let faces: Vec<Vec<u32>> = vec![
+            vec![0, 3, 2, 1],
+            vec![4, 5, 6, 7],
+            vec![0, 1, 5, 4],
+            vec![1, 2, 6, 5],
+            vec![2, 3, 7, 6],
+            vec![3, 0, 4, 7],
+        ];
+        let mut edges: Vec<FileEdge> = Vec::new();
+        for f in &faces {
+            for k in 0..f.len() {
+                let (a, b) = (f[k], f[(k + 1) % f.len()]);
+                if !edges.iter().any(|e| e.vertices == [b, a]) {
+                    edges.push(FileEdge {
+                        vertices: [a, b],
+                        crease: [a, b] == [2, 1],
+                        ..FileEdge::default()
+                    });
+                }
+            }
+        }
+        FormCage {
+            name: "TSpline.cube.tsm".into(),
+            degree: 3,
+            vertices: corner
+                .iter()
+                .map(|&position| FileVertex {
+                    position,
+                    tag: VertexTag::Smooth,
+                    ..FileVertex::default()
+                })
+                .collect(),
+            faces,
+            edges,
+            settings: vec![("end-conditions".into(), "SUBD_CREASES".into())],
+            ..FormCage::default()
+        }
+    }
+
+    /// A decoded uniform cage maps onto a Form's cage in mm (mitcad#1757):
+    /// its vertices and faces in order, closed, the creased edge a crease.
+    #[test]
+    fn a_uniform_file_cage_opens_as_a_form_cage() {
+        let kept = model_cage(&file_cube());
+        let form = kept.form_cage().expect("a Form cage");
+        form.check().unwrap();
+        assert!(form.full().closed());
+        assert_eq!(form.vertices.len(), 8);
+        assert_eq!(form.position(7), Some([20.0, 20.0, 20.0]));
+        assert_eq!(form.faces.len(), 6);
+        assert_eq!(form.faces[0].vertices, [1, 4, 3, 2]);
+        assert_eq!(form.crease(2, 3), Some(f64::INFINITY));
+        assert_eq!(form.creases.len(), 1);
+    }
+
+    /// A cage with a secondary control point, a weight or knot intervals
+    /// of their own does not map; the words say why.
+    #[test]
+    fn a_file_cage_that_is_no_form_cage_says_why() {
+        let mut grips = file_cube();
+        grips.grips.push(FileGrip {
+            vertex: 2,
+            position: [2.1, 2.1, 0.0],
+            weight: 1.0,
+        });
+        let why = model_cage(&grips).form_cage().unwrap_err();
+        assert!(why.contains("beside its vertices"), "{why}");
+        let mut knots = file_cube();
+        knots.edges[3].knot = 0.5;
+        let why = model_cage(&knots).form_cage().unwrap_err();
+        assert!(why.contains("knot intervals"), "{why}");
+        let mut weight = file_cube();
+        weight.vertices[5].weight = 0.8;
+        let why = model_cage(&weight).form_cage().unwrap_err();
+        assert!(why.contains("weight"), "{why}");
+    }
 
     #[test]
     fn each_cage_goes_to_the_body_it_encloses_most_closely() {

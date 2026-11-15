@@ -334,6 +334,40 @@ fn a_parameter_only_the_dimension_uses_is_changed_keeping_its_form() {
 }
 
 #[test]
+fn an_own_value_in_an_expression_of_a_shared_parameter_fits_a_minor_diameter() {
+    // mitcad#1832: `gland/2` with `gland` used by another parameter too,
+    // M76x2 6H, whose minor diameter 73.8349365 is written `73.835`: its
+    // own value is the expression with the number in the parameter's
+    // place, within half a micrometre of the diameter, and it fits.
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "gland", "expression": "72 mm"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "groove", "expression": "gland + 4 mm"}),
+    );
+    ring(&mut doc, "gland/2");
+    let uid = thread(&mut doc, "F2.b0", INNER, "M76x2", "6H");
+    assert_eq!(warnings(&doc, uid).len(), 1, "{:?}", warnings(&doc, uid));
+    let fixed = auto_fix(&mut doc, uid, Some("own"));
+    assert_eq!(fixed["fixed"], 1, "{fixed}");
+    let fit = &fixed["fitted"][0];
+    assert_eq!(fit["named"], false, "{fixed}");
+    let new = fit["new"].as_str().unwrap_or_else(|| panic!("{fixed}"));
+    assert!(new.contains("73.835") && new.ends_with("/2"), "{fixed}");
+    assert_eq!(param(&doc, "gland"), ("72 mm".to_owned(), 72.0));
+    assert!(warnings(&doc, uid).is_empty(), "{:?}", warnings(&doc, uid));
+    let cylinders = doc.kernel().face_cylinders.borrow();
+    assert!(
+        (cylinders[INNER].radius - 73.8349365 / 2.0).abs() <= 5e-4,
+        "{:?}",
+        cylinders[INNER]
+    );
+}
+
+#[test]
 fn a_face_no_dimension_sets_is_left_to_be_changed_by_hand() {
     // A circle without a dimension (its radius stays where it was drawn).
     let mut doc = Document::new(MockKernel::default());

@@ -68,7 +68,7 @@ build with the full `ctest` in the Windows VM. The macOS counterpart is
 |---|---|
 | build | The `macos-release` preset with every core; compiler warnings fail. |
 | native | The AppKit frontend is off, none of its objects exists and no `app.ui-macos-native*` test is registered. |
-| ctest | Every ctest through `tools/test-macos.sh` (`mitcad-testrun --schedule`, `-j` the cores): headless tests and the GUI harnesses beside each other, the window-server tests one at a time under `macos_desktop`. |
+| ctest | Every ctest through `tools/test-macos.sh` (`mitcad-testrun --schedule`, `-j` the cores): headless tests and the GUI harnesses beside each other, the window-server tests one at a time under `macos_desktop`. With `--release-passed DIR --release-tag X.Y.Z-rcN` (a release's check) a `geometry*` ctest whose fingerprint passed in an earlier release check on macOS is skipped and listed with the release it last passed in; `--all-geometry` runs them all ([release fingerprints](../tools/testrun/README.md#release-fingerprints)). |
 | package | `tools/package-macos.sh`: install, signature, `tools/check-bundle-macos.sh`, the `.dmg`. |
 
 ```bash

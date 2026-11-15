@@ -574,8 +574,7 @@ serializer) refers to the cage's surface record right after the name, and
 the timeline item that the records referring to either refer to is the
 Form item.
 
-MitCad has no subdivision or T-spline surfaces and no cage editor, so the
-cage is kept as data with the body (`BaseBody::cage`,
+MitCad has no T-spline surfaces, so the cage is kept as data with the body (`BaseBody::cage`,
 `core/model/src/features/cage.rs`, in mm): it is saved and read with the
 design and does not take part in the body's evaluation. When a fallback
 brings in new bodies (`core/import-replay/src/cages.rs`), each cage that
@@ -591,3 +590,23 @@ None of the private corpora's files holds a cage entry (6.11.2026), so the
 decoding and the join are checked on synthetic programs and records only
 (`core/f3d-design/src/cage.rs`, `core/import-replay/src/cages.rs`,
 `core/model/src/features/cage.rs` tests).
+
+### A kept cage opened as a Form (mitcad#1757)
+
+A kept cage that is uniform (degree 3, every control point its vertex's
+own with a weight of 1, every edge of the same knot interval) maps onto
+the cage of MitCad's Form feature (`ControlCage::form_cage`): the vertices
+and faces in order (ids 1, 2, …), the faces turned to run counter-clockwise
+seen from outside (`mitcad_subdiv::orient`), the creased edges between two
+faces creases and the corner vertices corners. `form.create` with the
+primitive `kept_cage` opens it as an editable Form (`core/model-api/src/commands.md`,
+*Forms from imported cages*). The import does not do this by itself: the
+Form's surface is the Catmull-Clark limit surface of the cage, which is
+the stored faces on the cage's regular quads but not exactly near star
+points and T-junctions, and the import keeps the bodies the file stores.
+The report's `form_cages` (and its text, `control cage of <body>: …`) says
+of each kept cage whether it opens as a Form and, if not, why in words: a
+cage with secondary control points, rational points or knot intervals of
+their own stays the file's body only. Tests on synthetic decoded cages
+(`core/import-replay/src/cages.rs`, `core/model/src/features/cage.rs`,
+`core/model/src/document/kept_cages.rs`).

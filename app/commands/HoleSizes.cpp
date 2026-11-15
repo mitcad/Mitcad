@@ -402,6 +402,8 @@ void markDepthTyped(CommandState& state, const CommandContext&) {
   }
 }
 
+QStringList typedState() { return {kTyped, kDepthTyped}; }
+
 void markLoaded(const QJsonObject& feature, CommandState& state, const CommandContext& context) {
   const QJsonObject kind = feature.value(QStringLiteral("kind")).toObject();
   const QString type = kind.value(QStringLiteral("type")).toString();

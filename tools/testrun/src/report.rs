@@ -65,6 +65,9 @@ pub struct Summary<'a> {
     pub ui: Option<&'a str>,
     /// The free budget over the run (`--memory-budget free`, mitcad#872).
     pub free: Option<&'a str>,
+    /// A release gate's geometry tests skipped by their fingerprints and
+    /// the passes kept (`fingerprint::Plan::text`, mitcad#1822).
+    pub release: Option<&'a str>,
 }
 
 /// A duration as "41 min 12 s".
@@ -193,6 +196,9 @@ pub fn render(s: &Summary) -> String {
     }
     if let Some(ui) = s.ui {
         let _ = writeln!(out, "{ui}");
+    }
+    if let Some(release) = s.release {
+        let _ = writeln!(out, "{}", release.trim_end());
     }
     let reruns = outcomes.iter().filter(|o| o.first.is_some());
     for o in reruns {
@@ -441,6 +447,21 @@ mod tests {
             text.contains("Rerun alone after its memory limit: core.big"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_release_skips_are_reported() {
+        let outcomes = [outcome("geometry.sheet", ResultKind::Passed, 0.0, 3.0)];
+        let release = "Release fingerprints: 1 of 2 geometry tests skipped, 1 run\n  \
+                       Skipped geometry.suite.fillet (last passed in 0.62.0-rc2)\n";
+        let summary = Summary {
+            elapsed: 3.0,
+            outcomes: &outcomes,
+            release: Some(release),
+            ..Summary::default()
+        };
+        let text = render(&summary);
+        assert!(text.contains(release), "{text}");
     }
 
     #[test]

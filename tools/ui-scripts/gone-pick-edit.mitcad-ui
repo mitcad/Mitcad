@@ -3,8 +3,9 @@
 # gone-pick-edit.json: Thread1's first face went when Extrude1 took another
 # circle. The Faces chip says one of its two picks is missing, the panel's
 # message names the input in words, the list of picks marks the gone one,
-# and its ✕ takes it out: the edit then builds and OK keeps it. All
-# geometry is synthetic.
+# and its ✕ takes it out: the edit then builds and OK keeps it. Before
+# that, one pick clicked off and another on keeps the list in the new
+# pick's words (mitcad#1844). All geometry is synthetic.
 # Run by tools/ui-gone-pick-edit-test.sh (Linux) and
 # tools/ui-windows-gone-pick-edit-test.ps1 (Windows).
 wait-idle
@@ -21,6 +22,20 @@ wait-log '^Panel Thread picks faces: 1[.] .* [(]missing[)]; 2[.] ' 30
 wait-log '^Panel Thread error: A face of Faces is gone: pick it again' 30
 wait-idle 30
 screenshot '${MITCAD_TEST_WORK}/gone-pick-edit.png'
+# The words follow the picks (mitcad#1844): the other rod's face clicked
+# off and the new rod's face (of the gone pick's body) clicked on, the same
+# count of picks, and the list names the new pick by its own words, not by
+# those of the pick it replaced.
+capture gone '^Panel Thread picks faces: 1[.] (.*) [(]missing[)]; 2[.] '
+capture other '^Panel Thread picks faces: 1[.] .* [(]missing[)]; 2[.] (.*)$'
+mark
+click-pick 'face F4[.]b0/F4:side[(]c2[)]'
+click-pick 'face F2[.]b0/F2:side[(]c4[)]'
+wait-log '^Thread Faces: 2 faces' 30
+wait-log '^Thread Faces: 1 of 2 pick[(]s[)] gone: face F2:side[(]c2[)] of F2[.]b0' 30
+wait-log '^Panel Thread picks faces: 1[.] ${gone:re} [(]missing[)]; 2[.] ${gone:re}$' 30
+wait-idle 30
+expect-no-log '^Panel Thread picks faces: 1[.] .* [(]missing[)]; 2[.] ${other:re}$'
 # The gone pick is the one chosen in the list: its ✕ takes it out.
 mark
 button '^✕$' remove_pick_faces

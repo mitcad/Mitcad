@@ -549,11 +549,12 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
         let shown = self.drawing_shown(drawing);
         let mut names: Vec<String> = Vec::new();
         for s in &shown {
-            let name = self
-                .body_material_under(s.body, drawing.component, &s.path)
-                .0
-                .name
-                .clone();
+            // A body without a material names none (mitcad#1817), never steel.
+            let (material, source) = self.body_material_under(s.body, drawing.component, &s.path);
+            if source == mitcad_model::MaterialSource::Default {
+                continue;
+            }
+            let name = material.name.clone();
             if !names.contains(&name) {
                 names.push(name);
             }
@@ -583,11 +584,13 @@ impl<K: Kernel> DrawingTemplatesLocal<K> for Document<K> {
                     mass.volume
                 }
             };
-            let density = self
-                .body_material_under(s.body, drawing.component, &s.path)
-                .0
-                .density;
-            kg += volume * density * 1e-6;
+            // A body without a material has no mass, and so has the
+            // drawing (mitcad#1817): never a default's.
+            let (material, source) = self.body_material_under(s.body, drawing.component, &s.path);
+            if source == mitcad_model::MaterialSource::Default {
+                return String::new();
+            }
+            kg += volume * material.density * 1e-6;
             measured += 1;
         }
         if measured == 0 {

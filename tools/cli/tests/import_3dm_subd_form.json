@@ -1,0 +1,15 @@
+[
+  {"comment": "A SubD object imported from a .3dm model (mitcad#1757, cli.import_3dm_subd: the test writer's cube net of 20 mm, a creased edge, a semi-sharp edge of sharpness 1 to 2, a corner) is an editable Form feature F1 named after the object: its cage is the file's net with the file's ids, its body a solid of one face per corner of each cage face, and a vertex moved with form.move rebuilds it."},
+  {"expect": {"feature": "blob", "status": "ok"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"body": "blob", "faces": 24}},
+  {"expect": {"query": {"query": "form_cage", "uid": "F1"}, "result": {
+    "name": "blob", "closed": true,
+    "stored": {"corners": [17],
+               "creases": [{"edge": [12, 13]}, {"edge": [15, 16], "sharpness": 1.5}]}}}},
+  {"cmd": "form.move", "form": "F1", "vertices": [17], "by": [0, 0, 5]},
+  {"expect": {"feature": "blob", "status": "ok"}},
+  {"expect": {"body": "blob", "faces": 24}},
+  {"expect": {"query": {"query": "form_cage", "uid": "F1"}, "result": {
+    "stored": {"corners": [17], "creases": [{"edge": [12, 13]}, {"edge": [15, 16], "sharpness": 1.5}]}}}}
+]

@@ -78,6 +78,33 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
   NAV_CHECK(sanitizeNavigationSpeed(std::numeric_limits<double>::quiet_NaN()) == 1.0);
   NAV_CHECK(sanitizeNavigationSpeed(std::numeric_limits<double>::infinity()) == 1.0);
 
+  // The two-finger scroll's directions (mitcad#1873): off by default; each
+  // pan axis reversed on its own, the orbit as a whole, zoom never.
+  {
+    NavigationSettings scroll;
+    NAV_CHECK(!scroll.reversePanHorizontal && !scroll.reversePanVertical && !scroll.reverseScrollOrbit);
+    const QPointF delta(3.0, -5.0);
+    for (const Action action : {Action::Pan, Action::Orbit, Action::Zoom, Action::None}) {
+      NAV_CHECK(scrollDragDelta(scroll, action, delta) == delta);
+    }
+    scroll.reversePanHorizontal = true;
+    NAV_CHECK(scrollDragDelta(scroll, Action::Pan, delta) == QPointF(-3.0, -5.0));
+    NAV_CHECK(scrollDragDelta(scroll, Action::Orbit, delta) == delta);
+    scroll.reversePanHorizontal = false;
+    scroll.reversePanVertical = true;
+    NAV_CHECK(scrollDragDelta(scroll, Action::Pan, delta) == QPointF(3.0, 5.0));
+    NAV_CHECK(scrollDragDelta(scroll, Action::Orbit, delta) == delta);
+    scroll.reversePanHorizontal = true;
+    NAV_CHECK(scrollDragDelta(scroll, Action::Pan, delta) == QPointF(-3.0, 5.0));
+    NAV_CHECK(scrollDragDelta(scroll, Action::Zoom, delta) == delta);
+    scroll.reversePanHorizontal = false;
+    scroll.reversePanVertical = false;
+    scroll.reverseScrollOrbit = true;
+    NAV_CHECK(scrollDragDelta(scroll, Action::Orbit, delta) == QPointF(-3.0, 5.0));
+    NAV_CHECK(scrollDragDelta(scroll, Action::Pan, delta) == delta);
+    NAV_CHECK(scrollDragDelta(scroll, Action::Zoom, delta) == delta);
+  }
+
   QTemporaryDir directory;
   NAV_CHECK(directory.isValid());
   const auto path = directory.filePath(QStringLiteral("navigation.ini"));
@@ -86,6 +113,7 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
     NavigationSettings fresh;
     loadNavigationDetails(store, fresh);
     NAV_CHECK(fresh.customBindings.isEmpty());
+    NAV_CHECK(!fresh.reversePanHorizontal && !fresh.reversePanVertical && !fresh.reverseScrollOrbit);
     fresh.scheme = NavigationScheme::MiddleOrbit;
     saveNavigationDetails(store, fresh);
     NAV_CHECK(!store.contains(QStringLiteral("view/navigationBindings")));
@@ -107,6 +135,8 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
     settings.trackpadSpeed = 0.25;
     settings.turnStep = 30.0;
     settings.orbitCenter = OrbitCenter::Cursor;
+    settings.reversePanVertical = true; // mitcad#1873
+    settings.reverseScrollOrbit = true;
     saveNavigationDetails(store, settings);
     store.sync();
     NAV_CHECK(store.status() == QSettings::NoError);
@@ -126,6 +156,10 @@ inline void navigationSettingsTests(void (*verify)(bool, const char*, int)) {
     NAV_CHECK(loaded.turnStep == 30.0);
     NAV_CHECK(loaded.orbitCenter == OrbitCenter::Cursor);
     NAV_CHECK(store.value(QStringLiteral("view/orbitCenter")).toString() == QStringLiteral("cursor"));
+    NAV_CHECK(!loaded.reversePanHorizontal && loaded.reversePanVertical && loaded.reverseScrollOrbit);
+    NAV_CHECK(store.value(QStringLiteral("view/reversePanVertical")).toBool() &&
+              !store.value(QStringLiteral("view/reversePanHorizontal")).toBool());
+    NAV_CHECK(scrollDragDelta(loaded, Action::Pan, QPointF(2.0, 4.0)) == QPointF(2.0, -4.0));
     store.setValue(QStringLiteral("view/orbitCenter"), QStringLiteral("invalid"));
     store.setValue(QStringLiteral("view/orbitSpeed"), QStringLiteral("invalid"));
     store.setValue(QStringLiteral("view/panSpeed"), -100.0);

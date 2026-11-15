@@ -7,6 +7,8 @@ use std::sync::Arc;
 use super::Document;
 use crate::datum::{Datum, DatumAxis, DatumPlane, Vec3};
 use crate::features::SketchOutput;
+use crate::features::construction::drawn::DEFAULT_SIZE;
+use crate::features::construction::{DrawnExtent, DrawnSource};
 use crate::features::geom_ref::{self, GeomRef, Resolver};
 use crate::ids::{BodyUid, FeatureUid};
 use crate::kernel::Kernel;
@@ -79,6 +81,41 @@ impl<K: Kernel> Document<K> {
             .collect()
     }
 
+    /// Where a construction plane or axis before the marker is drawn
+    /// (mitcad#1827): at its resize handles' size where they set one
+    /// (mitcad#1748), about the middle of what it is made from; else over
+    /// what it is made from; else the default size
+    /// ([`DEFAULT_SIZE`]) centred on its origin. None
+    /// for another datum (a point, a joint origin) or a feature without a
+    /// datum.
+    pub fn datum_drawn(&self, uid: FeatureUid) -> Option<(DrawnExtent, DrawnSource)> {
+        let entry = self.feature(uid)?;
+        if !super::has_display_size(&entry.def) {
+            return None;
+        }
+        let datum = self.datum(uid)?;
+        let fitted = self
+            .feature_result(uid)
+            .and_then(|result| result.output.as_deref())
+            .and_then(|output| output.drawn);
+        drawn_at(&datum, fitted, self.datum_display_size(uid))
+    }
+
+    /// Where the previewed construction plane or axis is drawn, as
+    /// [`Self::datum_drawn`] gives the finished one: an edited feature at
+    /// its own display size where it has one.
+    pub fn preview_drawn(&self) -> Option<(DrawnExtent, DrawnSource)> {
+        let preview = self.preview.as_ref()?;
+        let datum = preview.result.datums.get(&preview.uid).map(|d| d.value)?;
+        let fitted = preview
+            .result
+            .result(preview.uid)
+            .and_then(|result| result.output.as_deref())
+            .and_then(|output| output.drawn);
+        let stored = self.datum_display_size(preview.uid);
+        drawn_at(&datum, fitted, stored)
+    }
+
     /// The datum of the previewed construction feature.
     pub fn preview_datum(&self) -> Option<Datum> {
         let preview = self.preview.as_ref()?;
@@ -115,6 +152,23 @@ impl<K: Kernel> Document<K> {
     /// A point reference at the marker.
     pub fn resolve_point(&self, reference: &GeomRef) -> Result<Vec3, String> {
         geom_ref::resolve_point(&mut self.resolver(), reference)
+    }
+}
+
+/// Where a datum is drawn: at the stored size about the middle of its
+/// fitted extent (or its origin), else its fitted extent, else the default
+/// size about its origin (mitcad#1827).
+fn drawn_at(
+    datum: &Datum,
+    fitted: Option<DrawnExtent>,
+    stored: Option<f64>,
+) -> Option<(DrawnExtent, DrawnSource)> {
+    use DrawnSource as S;
+    match (fitted, stored) {
+        (Some(fitted), Some(size)) => Some((fitted.sized(size), S::DisplaySize)),
+        (None, Some(size)) => DrawnExtent::centred(datum, size).map(|e| (e, S::DisplaySize)),
+        (Some(fitted), None) => Some((fitted, S::Fitted)),
+        (None, None) => DrawnExtent::centred(datum, DEFAULT_SIZE).map(|e| (e, S::Default)),
     }
 }
 

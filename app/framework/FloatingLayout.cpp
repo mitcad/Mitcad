@@ -778,7 +778,10 @@ void FloatingLayout::layoutCards() {
     // taller than the room under the cube (mitcad#655: 3D Print's panel)
     // grows up to the top first, the cube moving to its left, before it
     // scrolls.
-    const int width = entry.sizing.width > 0 ? entry.sizing.width : 300;
+    // Within the view (the Command card grows with Text size and Icon size,
+    // mitcad#1846).
+    const int width = std::min(entry.sizing.width > 0 ? entry.sizing.width : 300,
+                               std::max(1, view.width() - 2 * kMargin));
     const int share = static_cast<int>((view.height() - 2 * kMargin) * entry.sizing.maxHeightShare);
     int top = std::max(view.top() + insetTop + OcctViewer::kCubeArea, topLimit);
     int limit = std::min(share, cardsBottom - top);

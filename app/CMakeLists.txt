@@ -52,6 +52,9 @@ qt_add_executable(mitcad
   browser/PolicyDialog.hpp
   browser/ReorientDialog.cpp
   browser/ReorientDialog.hpp
+  # Convert to Features: a placed library part to its own features (mitcad#1815).
+  browser/ConvertToFeatures.cpp
+  browser/ConvertToFeatures.hpp
   # File > Design Properties: the design's summary and statistics (mitcad#1088).
   browser/DesignPropertiesDialog.cpp
   browser/DesignPropertiesDialog.hpp
@@ -1381,6 +1384,9 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE tests/component_web_files.cpp webbrowser/ComponentWebFiles.cpp
                  webbrowser/ComponentWebFiles.hpp files/FileFormats.cpp files/FileFormats.hpp
                  tests/browser_component.cpp webbrowser/BrowserComponent.cpp webbrowser/BrowserComponent.hpp)
+  # The browser's keys (mitcad#1840): AltGr's characters typed, Control's
+  # shortcuts not, Option's characters on macOS not system keys.
+  target_sources(test_app PRIVATE tests/browser_keys.cpp webbrowser/BrowserKeys.cpp webbrowser/BrowserKeys.hpp)
 endif()
 # The first use with a local manifest (mitcad#1579): a package and a manifest
 # signed by mitcad-release with a test key, checked, verified, unpacked and
@@ -1471,6 +1477,9 @@ target_sources(mitcad PRIVATE
   build/BuildModel.cpp
   build/BuildModel.hpp
   commands/BuildCommands.cpp)
+# The edit panel of a derived part: a BUILD part, or a component inserted
+# with options (mitcad#1812, app/COMMANDS.md "Derived Component").
+target_sources(mitcad PRIVATE commands/DerivedPartCommands.cpp)
 # The part picker's data (mitcad#418, app/library): the user's favourite
 # parts and groups in the settings, the picker's order, the library parts
 # the design uses (the model's `library_usage` query) and the groups' tree
@@ -1538,6 +1547,11 @@ target_sources(mitcad PRIVATE
   web/WebPage.cpp
   web/WebPage.hpp
   web/WebPageHtml.cpp)
+# File > Export's glTF types (mitcad#1826): the page's bodies and the
+# component tree as a .glb or .gltf file of the page's writer.
+target_sources(mitcad PRIVATE
+  web/GltfExport.cpp
+  web/GltfExport.hpp)
 file(GLOB_RECURSE MITCAD_WEB_VIEWER_FILES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/app/web/viewer/*" "${PROJECT_SOURCE_DIR}/third_party/three/*")
 if(MITCAD_WEB_VIEWER_FILES)
@@ -3171,9 +3185,9 @@ endif()
 target_sources(mitcad PRIVATE
   sketch/SketchItemList.cpp
   sketch/SketchItemList.hpp)
-# The default 3D view (mitcad#1698, app/COMMANDS.md "A new design looks at
-# Top"): Home, a design read into a new design's Top and the first
-# sketch's plane pick look a few degrees off the isometric view, so that
+# The default 3D view (mitcad#1698, app/COMMANDS.md "A new design shows
+# its origin, seen from the default view"): Home and a new design
+# (mitcad#1809) look a few degrees off the isometric view, so that
 # the origin planes' edges do not lie on top of each other.
 target_sources(mitcad PRIVATE view/DefaultView.hpp)
 if(BUILD_TESTING)
@@ -3267,8 +3281,89 @@ endif()
 # dimensions drawn over the view outside sketch mode, as sketch mode draws
 # them.
 target_sources(mitcad PRIVATE sketch/ShownDimensions.cpp sketch/ShownDimensions.hpp)
+# Forms (mitcad#1757, app/COMMANDS.md "Form"): Form in the SOLID tab's
+# CREATE menu, a body shaped by an editable control cage; Edit Form, the
+# panel a Form's double-click opens, with its cage drawn and picked over
+# the view.
+target_sources(mitcad PRIVATE commands/FormCommands.cpp commands/FormCage.cpp commands/FormCage.hpp
+                              view/FormCageOverlay.cpp view/FormCageOverlay.hpp MainWindowForm.cpp)
+if(BUILD_TESTING)
+  # The cage read, the picks, the edits' commands and refusals, the lines
+  # drawn: plain Qt Core.
+  target_sources(test_app PRIVATE tests/form_cage.cpp commands/FormCage.cpp commands/FormCage.hpp)
+endif()
 # The orbit's center (mitcad#1791, GitHub mitcad/Mitcad#300,
 # app/COMMANDS.md "The orbit's center"): Preferences › Navigation's Orbit
 # center (Model or Cursor) and a fixed center set from the view's context
 # menu, with its marker and its test steps.
 target_sources(mitcad PRIVATE view/OrbitCenterView.cpp framework/TestDriverOrbitCenter.cpp)
+# Preferences › Display › Selection color and Selected line width
+# (mitcad#1803, GitHub mitcad/Mitcad#309, app/COMMANDS.md "Selection color
+# and line width"): the colour the view and sketch mode draw the selection
+# in, and the selection's and the hover's line widths, scaled by the
+# device pixel ratio.
+target_sources(mitcad PRIVATE view/SelectionLook.cpp view/SelectionLook.hpp)
+if(BUILD_TESTING)
+  # The settings' load and save and the widths: Qt Core and Gui (the
+  # selection role's colour, framework/Theme.cpp, is in test_app already).
+  target_sources(test_app PRIVATE tests/selection_look.cpp view/SelectionLook.cpp view/SelectionLook.hpp)
+endif()
+# The Properties window (mitcad#1816, app/COMMANDS.md "Physical
+# Properties"): several bodies as a summary and a table with equal bodies
+# merged, one body's values in three groups, even units and Copy's text.
+target_sources(mitcad PRIVATE commands/PropertiesReport.cpp commands/PropertiesReport.hpp)
+if(BUILD_TESTING)
+  # Names, materials, merged rows, the summary, units and the copied text:
+  # plain Qt Core (framework/LengthUnits.cpp is in test_app already).
+  target_sources(test_app PRIVATE tests/properties_report.cpp commands/PropertiesReport.cpp
+                 commands/PropertiesReport.hpp)
+endif()
+# Fill Cavity in the SOLID tab's MODIFY group (mitcad#1818): a closed pocket
+# of a body filled up to a plane.
+target_sources(mitcad PRIVATE commands/FillCavityCommands.cpp)
+# Sketches on cylindrical and conical faces (mitcad#1768, app/COMMANDS.md
+# "Sketches on curved faces"): Create Sketch and Redefine Sketch Plane on
+# such a face, the sketch's points, curves, previews and profiles drawn on
+# the face by the model's map, and the pointer met with the face through
+# the `sketch_surface` query's rays.
+target_sources(mitcad PRIVATE sketch/SketchSurface.cpp sketch/SketchSurface.hpp)
+if(BUILD_TESTING)
+  # The map, the normals, the polylines and the profile laid onto the face,
+  # and the angle of a click: Qt Core and OCCT's shape building and meshing.
+  target_sources(test_app PRIVATE tests/sketch_surface.cpp sketch/SketchSurface.cpp sketch/SketchSurface.hpp)
+  target_link_libraries(test_app PRIVATE TKMesh TKTopAlgo TKBRep)
+endif()
+# The Docked layout's Command panel's width (mitcad#1825, GitHub
+# mitcad/Mitcad#336, app/COMMANDS.md "The Command panel's width"): at least
+# 300 px times the larger of Text size and Icon size, dragged wider by its
+# edge and remembered (commandPanel/dockWidth).
+target_sources(mitcad PRIVATE framework/CommandDockWidth.cpp framework/CommandDockWidth.hpp)
+# BUILD parts deleted as members (mitcad#1811, mitcad#1820, mitcad#1843):
+# the Browser's Delete and Delete Component share the build_remove command
+# list, which leaves a fastener to its connector when both go.
+target_sources(mitcad PRIVATE browser/BuildMembers.cpp browser/BuildMembers.hpp)
+if(BUILD_TESTING)
+  # The adders read from build_parts and the command list: plain Qt Core.
+  target_sources(test_app PRIVATE tests/build_members.cpp browser/BuildMembers.cpp browser/BuildMembers.hpp)
+endif()
+# Joint, As-Built Joint, Rigid Group and Assembly Constraint on picks under
+# another component than the active one (mitcad#1856, app/COMMANDS.md "The
+# component that holds the picks"): the question that offers the component
+# holding every pick, its preference, and the main window's side.
+target_sources(mitcad PRIVATE browser/JointHolderQuestion.cpp browser/JointHolderQuestion.hpp
+               MainWindowJointHolder.cpp)
+if(BUILD_TESTING)
+  # Its texts, its buttons and check box, and the preference: Qt Widgets on
+  # the offscreen platform.
+  target_sources(test_app PRIVATE tests/joint_holder_question.cpp browser/JointHolderQuestion.cpp
+                 browser/JointHolderQuestion.hpp)
+endif()
+# Edit Parameters sorted by a column (mitcad#1866, GitHub mitcad/Mitcad#338):
+# the rows' keys (numbers in the common unit of their kind, texts in
+# natural order, boxes on or off) and their order within a group.
+target_sources(mitcad PRIVATE browser/ParameterSort.cpp browser/ParameterSort.hpp)
+if(BUILD_TESTING)
+  # The keys and the order: plain Qt Core (framework/ParameterSuggest.cpp
+  # is in test_app already).
+  target_sources(test_app PRIVATE tests/parameter_sort.cpp browser/ParameterSort.cpp browser/ParameterSort.hpp)
+endif()

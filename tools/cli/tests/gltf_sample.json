@@ -1,0 +1,20 @@
+[
+  {"comment": "The public-domain glTF sample (core/gltf/samples/two-blocks.gltf, CC0; mitcad#1826) through OCCT, run in that folder. Two root nodes: Stand (holding Base and Post) becomes a component placed by an occurrence that turns glTF's Y up into Z up; Marker, a mesh of the design, is a body of the root. Metres become millimetres."},
+  {"cmd": "import_file", "path": "two-blocks.gltf"},
+  {"expect": {"bodies": 3}},
+  {"expect": {"query": {"query": "components"}, "tolerance": 1e-9, "result": {
+    "components": [{}, {"name": "Stand"}],
+    "occurrences": [{"name": "Stand:1", "transform": [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0]]}]}}},
+  {"comment": "Mesh bodies of one face, closed: their volumes are the boxes' (100 x 10 x 100 and 20 x 150 x 20 mm), single precision as the file keeps it."},
+  {"expect": {"body": "Base", "faces": 1, "volume": 100000, "tolerance": 1e-5}},
+  {"expect": {"body": "Post", "faces": 1, "volume": 60000, "tolerance": 1e-5}},
+  {"expect": {"body": "Marker", "faces": 1, "volume": 60000, "tolerance": 1e-5}},
+  {"comment": "Where the design shows them: the post 40 mm along x, 40 mm toward the viewer (-y) and 10 mm up in the stand; the marker 200 mm along x."},
+  {"expect": {"occurrence": "Stand:1", "body": "Post", "bbox": {"min": [40, -60, 10], "max": [60, -40, 160]},
+    "tolerance": 1e-5}},
+  {"expect": {"body": "Marker", "bbox": {"min": [200, -20, 0], "max": [220, 0, 150]}, "tolerance": 1e-5}},
+  {"comment": "The materials as appearances, by their names, in sRGB."},
+  {"expect": {"query": {"query": "appearances"}, "tolerance": 1e-6,
+    "some": {"name": "Orange", "roughness": 0.4, "metalness": 0, "library": false}}},
+  {"expect": {"query": {"query": "appearances"}, "some": {"name": "Grey", "library": false}}}
+]

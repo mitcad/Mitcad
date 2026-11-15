@@ -12,12 +12,15 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLayout>
+#include <QPoint>
 #include <QAbstractButton>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOptionButton>
+#include <QStringList>
 #include <QTextDocumentFragment>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -113,6 +116,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     layout->setContentsMargins(4, 4, 4, 4); // the card has its own margins
   }
   m_title = new QLabel;
+  m_title->setObjectName(QStringLiteral("paletteTitle"));
   m_status = new QLabel;
   m_status->setObjectName(QStringLiteral("paletteStatus"));
   m_status->setWordWrap(true);
@@ -177,6 +181,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   });
 
   const Section options = makeSection(tr("Settings"));
+  options.box->setObjectName(QStringLiteral("paletteSettings"));
   auto* optionLayout = new QVBoxLayout(options.host);
   if (chromeStyle() == ChromeStyle::Floating) {
     optionLayout->setContentsMargins(0, 0, 0, 0);
@@ -202,6 +207,8 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     auto* label = new QLabel(tr("Dimension text"));
+    label->setObjectName(QStringLiteral("paletteDimensionTextLabel"));
+    m_dimensionLabel = label;
     m_dimensionText = new QComboBox;
     m_dimensionText->setObjectName(QStringLiteral("paletteDimensionText"));
     m_dimensionText->addItems({tr("Value"), tr("Name"), tr("Name = value")});
@@ -294,6 +301,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   layout->addWidget(createBox.box);
 
   const Section constraintBox = makeSection(tr("Constraints"));
+  constraintBox.box->setObjectName(QStringLiteral("paletteConstraintSection"));
   QGridLayout* grid = buttonGrid(constraintBox.host);
   int index = 0;
   for (const QString& id : constraints) {
@@ -364,6 +372,7 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   connect(&m_c, &SketchController::autoConstraintsChanged, this, &SketchPalette::refreshAuto);
 
   m_tool = new QLabel;
+  m_tool->setObjectName(QStringLiteral("paletteTool"));
   m_tool->setWordWrap(true);
   layout->addWidget(m_tool);
 
@@ -419,7 +428,9 @@ QToolButton* SketchPalette::commandButton(const QString& id, const QString& name
   button->setFocusPolicy(Qt::NoFocus);
   if (chromeStyle() == ChromeStyle::Floating) {
     setFlatCardButton(button);
-    button->setFixedSize(34, 34);
+    // Around its icon at this run's Icon size (mitcad#1846: a fixed 34 px
+    // cut the 44 px icon at 200 %).
+    button->setFixedSize(uiIconSize(34, 34));
     styleButton(button);
   }
   button->setObjectName(name);
@@ -542,7 +553,9 @@ void SketchPalette::logButtons() const {
             << QStringLiteral("Palette %1 at %2,%3").arg(button->objectName()).arg(center.x()).arg(center.y());
       }
       const QPoint corner = button->mapTo(view, QPoint(0, 0));
-      if (corner.x() < 0 || corner.x() + button->width() > view->width()) {
+      // Beyond the view's width, or smaller than its icon (mitcad#1846).
+      if (corner.x() < 0 || corner.x() + button->width() > view->width() ||
+          button->width() < button->iconSize().width() || button->height() < button->iconSize().height()) {
         clipped.append(button->objectName());
       }
       const int top = button->mapTo(this, QPoint(0, 0)).y();
@@ -853,8 +866,69 @@ void SketchPalette::logLayout() const {
                             .arg(minimumSizeHint().width())
                             .arg(minimumSizeHint().height());
   logButtons();
+  logRows();
   m_warnings->logLayout();
   logCleanUp();
+}
+
+void SketchPalette::logRows() const {
+  // The widget the palette is shown in (a scroll area's viewport).
+  const QWidget* view = parentWidget();
+  if (view == nullptr) {
+    view = this;
+  }
+  QStringList cut;
+  int count = 0;
+  // A row is whole when it lies within its place (`host`) and is at least as
+  // wide as it asks for: a label or a box narrower than its size hint is cut
+  // at the right, one left of the place's edge at the left (the palette
+  // scrolled sideways). A word-wrapped label only has to lie within it; a
+  // section at least its minimum size hint.
+  const auto check = [&cut, &count](const QWidget* row, const QWidget* host) {
+    if (row == nullptr || !row->isVisible()) {
+      return;
+    }
+    ++count;
+    const int left = row->mapTo(host, QPoint(0, 0)).x();
+    const int right = left + row->width();
+    int needs = 0;
+    const auto* label = qobject_cast<const QLabel*>(row);
+    if (label != nullptr) {
+      needs = label->wordWrap() ? 0 : label->sizeHint().width();
+    } else if (qobject_cast<const QAbstractButton*>(row) != nullptr || qobject_cast<const QComboBox*>(row) != nullptr) {
+      needs = row->sizeHint().width();
+    } else {
+      needs = row->minimumSizeHint().width(); // a section, the warnings
+    }
+    if (left < 0 || right > host->width() || row->width() < needs) {
+      const QString name = row->objectName().isEmpty() ? QString::fromLatin1(row->metaObject()->className())
+                                                       : row->objectName();
+      cut << QStringLiteral("%1 %2..%3 of %4 (needs %5)").arg(name).arg(left).arg(right).arg(host->width()).arg(needs);
+    }
+  };
+  if (QLayout* column = layout()) {
+    for (int i = 0; i < column->count(); ++i) {
+      check(column->itemAt(i)->widget(), view);
+    }
+  }
+  for (const QWidget* row : std::initializer_list<const QWidget*>{
+           m_construction, m_signed, m_grid, m_dimensions, m_constraints, m_points, m_profiles, m_hideAbove, m_spatial,
+           m_dimensionLabel, m_dimensionText, m_lookAt, m_projectAgain, m_cleanUp, m_autoFirst, m_autoLast}) {
+    check(row, view);
+  }
+  for (const QCheckBox* box : std::as_const(m_autoChecks)) {
+    check(box, view);
+  }
+  // Finish Sketch under the scroll area (wrapPalette), within the page.
+  if (m_finish != nullptr && m_finish->parentWidget() != nullptr && m_finish->parentWidget() != this) {
+    check(m_finish, m_finish->parentWidget());
+  }
+  // "Palette rows cut: none (24 rows within 586 px)", for UI tests
+  // (mitcad#1825).
+  qDebug().noquote() << QStringLiteral("Palette rows cut: %1 (%2 rows within %3 px)")
+                            .arg(cut.isEmpty() ? QStringLiteral("none") : cut.join(QStringLiteral(", ")))
+                            .arg(count)
+                            .arg(view->width());
 }
 
 void SketchPalette::selectWarning(int index) {

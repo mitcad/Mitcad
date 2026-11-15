@@ -114,6 +114,12 @@ QPointF unit(const QPointF& p) {
 // no number (NaN) draws nothing.
 bool onScreen(const QPointF& p) { return std::isfinite(p.x()) && std::isfinite(p.y()); }
 
+// A ring's factor: radians per unit of its value (1 when unset).
+double ringFactor(const Manipulator& m) { return std::abs(m.factor) > 1e-12 ? m.factor : 1.0; }
+
+// The angle a ring's value turns its knob by (Manipulator::factor).
+double ringTurn(const Manipulator& m, double value) { return (value - m.base) * ringFactor(m); }
+
 double distanceToSegment(const QPointF& p, const QPointF& a, const QPointF& b) {
   const QPointF ab = b - a;
   const double length2 = QPointF::dotProduct(ab, ab);
@@ -457,18 +463,21 @@ ManipulatorOverlay::Drawn ManipulatorOverlay::draw(const Handle& handle) const {
     drawn.ring << at(2.0 * kPi * i / 64.0);
   }
   drawn.origin = m_viewer.toWidgetF(m.origin);
-  drawn.handle = at(handle.value);
+  // The angle the value turns the knob by: the value itself, or a length
+  // along an arc (Press Pull along a turn, mitcad#1850) times its factor.
+  const double turned = ringTurn(m, handle.value);
+  drawn.handle = at(turned);
   drawn.tip = drawn.handle;
   if (boxed) {
     // An angle's dimension (mitcad#656): its zero line along the
     // reference it is measured from, out past the ring, and the arc from
     // there to the knob; the value beyond the arc's middle.
     drawn.zero = m_viewer.toWidgetF(m.origin.Translated(gp_Vec(m.reference) * radius * 1.35));
-    const int steps = std::max(2, static_cast<int>(std::abs(handle.value) / (2.0 * kPi) * 64.0) + 2);
+    const int steps = std::max(2, static_cast<int>(std::abs(turned) / (2.0 * kPi) * 64.0) + 2);
     for (int i = 0; i <= steps; ++i) {
-      drawn.arc << at(handle.value * i / steps);
+      drawn.arc << at(turned * i / steps);
     }
-    const QPointF arcMiddle = at(handle.value / 2.0);
+    const QPointF arcMiddle = at(turned / 2.0);
     drawn.box = around(arcMiddle + unit(arcMiddle - drawn.origin) * 26.0);
   }
   drawn.valid = onScreen(drawn.origin) && onScreen(drawn.handle) && onScreen(drawn.tip);
@@ -573,8 +582,14 @@ ManipulatorOverlay::DragValue ManipulatorOverlay::valueAt(const Handle& handle, 
   }
   m_angleLast = angle;
   m_turned += turn;
+  const double factor = ringFactor(m);
+  const double raw = m_dragStart + m_turned / factor;
+  if (std::abs(factor - 1.0) > 1e-12) {
+    // A length along an arc (mitcad#1850): by the zoom's step at the ring.
+    const double step = niceHandleStep(3.0 * pixelSize(m.origin));
+    return {step > 0.0 ? std::round(raw / step) * step : raw, raw};
+  }
   const double degree = kPi / 180.0;
-  const double raw = m_dragStart + m_turned;
   return {std::round(raw / degree) * degree, raw};
 }
 
@@ -624,6 +639,10 @@ void ManipulatorOverlay::setHandlesShown(bool shown) {
   publishBoxes(); // none while hidden
   if (shown) {
     logPlaces();
+  } else {
+    // Shown again, the places are logged again, also where they were
+    // (mitcad#1844: a set-aside command's handles back).
+    m_logged.clear();
   }
 }
 

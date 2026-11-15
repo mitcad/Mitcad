@@ -98,8 +98,9 @@ const char* const kUsage = R"(usage:
       <part> is a design (.mitcad) or a script (.json) that builds one.
   mitcad-cli import <file> [--unit-mm N] [--structure components|base] [--open <file.mitcad>]
                     [--save <out.mitcad>] [--json]
-      Imports a STEP, IGES, BRep, STL or OBJ file as a base feature (bodies
-      without history; STL and OBJ give mesh bodies) into a new or opened
+      Imports a STEP, IGES, BRep, STL, OBJ or glTF (.glb, .gltf) file as a
+      base feature (bodies without history; STL, OBJ and glTF give mesh
+      bodies, a glTF file's node tree components) into a new or opened
       design and prints the report. --unit-mm is the length of one STL or
       OBJ unit in millimetres (default 1). A STEP assembly comes in as a
       component per distinct part with an occurrence per instance, unless
@@ -300,7 +301,8 @@ const char* const kUsage = R"(usage:
       test drawing in a version; --case adds a case of an import test
       (empty-solid: a solid none of whose faces can be built).
   mitcad-cli import-3dm <file.3dm> [--save <out.mitcad>] [--report <report.json>] [--json] [--check]
-  mitcad-cli import-3dm --write-test <out.3dm> [--case block-in-itself|plane-surfaces]
+  mitcad-cli import-3dm --write-test <out.3dm>
+                        [--case block-in-itself|plane-surfaces|block-hidden-layer|block-scaled]
       Imports a .3dm model (format versions 5 to 8): its B-reps, extrusions and
       surfaces as bodies built by OCCT, its meshes as mesh bodies; each
       block a component placed by an occurrence per instance, instances
@@ -314,7 +316,9 @@ const char* const kUsage = R"(usage:
       the reader's sample model; --case writes a case of an import test
       instead (block-in-itself: a block that holds an instance of itself;
       plane-surfaces: three plane surfaces drawn facing up, each kept in
-      another of the file's forms).
+      another of the file's forms; block-hidden-layer: a block with a member
+      on a switched-off layer, placed twice; block-scaled: a block placed
+      once at scale 2).
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]

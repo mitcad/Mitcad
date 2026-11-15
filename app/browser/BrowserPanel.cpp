@@ -46,6 +46,7 @@
 #include "../framework/Theme.hpp"
 #include "../framework/WindowStyle.hpp"
 #include "Bindings.hpp"
+#include "ComponentColors.hpp"
 #include "FeatureStatus.hpp"
 #include "../view/CenterOfMass.hpp"
 #include "../framework/UiSizes.hpp"
@@ -101,13 +102,17 @@ constexpr int kEyeIsolatedRole = Qt::UserRole + 14;
 // A row marked as the owner of what is selected in the view (mitcad#1704):
 // its body, sketch or occurrence; true, else none.
 constexpr int kOwnerMarkRole = Qt::UserRole + 15;
+// The colour of the bar at a row's left (mitcad#1876): its component's, as
+// the timeline's band under the component's features (ComponentColors.hpp);
+// none for a row of no component.
+constexpr int kComponentColorRole = Qt::UserRole + 16;
 // Every item data role of the rows, each a number of its own: two features
 // that once shared one (mitcad#1143) misread each other's values, a
 // transparent row's name painted red. A new role goes in this block and in
 // this list.
 constexpr int kRowRoles[] = {kEyeRole,      kRadioRole, kLinkedRole,         kBindingsRole, kEyeTipRole,
                              kEyeBoundRole, kMakeRole,  kEyeTransparentRole, kTextRole,     kSharedRole,
-                             kEyeIsolatedRole, kOwnerMarkRole};
+                             kEyeIsolatedRole, kOwnerMarkRole, kComponentColorRole};
 constexpr bool rowRolesDistinct() {
   for (std::size_t i = 0; i < std::size(kRowRoles); ++i) {
     for (std::size_t j = i + 1; j < std::size(kRowRoles); ++j) {
@@ -158,6 +163,15 @@ constexpr int kBoxPadding = 8;
 // The indentation per level, which is also the width the style centres a
 // branch's arrow in: the side panels' common one (framework/PanelTree.hpp).
 constexpr int kIndentation = panel::kTreeIndentation;
+// The component's colour bar at a row's left (mitcad#1876): as thick as the
+// timeline's band under a feature (TimelineWidget's kBand, drawn 2.5 px), at
+// the left edge of the room the style centres the row's arrow in (its 9 px
+// arrow starts 3.5 px in), so before the arrow, the light bulb and the icon;
+// a little shorter than the row, so that the bars of rows one under another
+// read as one per row.
+constexpr qreal kComponentBarLeft = 0.75;
+constexpr qreal kComponentBarWidth = 2.5;
+constexpr int kComponentBarInset = 3;
 
 // A row's name in a state's or a level's colour: a hidden row's, a failed
 // one's, a warned one's (the roles of mitcad#1041: the old fixed grey and
@@ -1011,6 +1025,7 @@ protected:
       paintRowBox(painter, option, index);
     }
     QTreeWidget::drawRow(painter, option, index);
+    paintComponentBar(painter, index);
   }
 
   // A row's fx badge has its bindings card (mitcad#862,
@@ -1201,6 +1216,30 @@ private:
       painter->setBrush(tint);
       painter->drawRoundedRect(outline, radius, radius);
     }
+    painter->restore();
+  }
+
+  // The bar of the row's component (mitcad#1876, kComponentColorRole): at
+  // the left of the row's arrow place, over the selection's band and the
+  // Rows background's box, in the same colour in either theme and layout,
+  // as the timeline's band.
+  void paintComponentBar(QPainter* painter, const QModelIndex& index) const {
+    const QVariant barColour = index.data(kComponentColorRole);
+    if (!barColour.isValid()) {
+      return;
+    }
+    const QColor colour = barColour.value<QColor>();
+    const QRect cell = visualRect(index);
+    if (!colour.isValid() || cell.isEmpty()) {
+      return;
+    }
+    const QRectF bar(cell.left() - indentation() + kComponentBarLeft, cell.top() + kComponentBarInset,
+                     kComponentBarWidth, std::max(0, cell.height() - 2 * kComponentBarInset));
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(colour);
+    painter->drawRoundedRect(bar, 1.25, 1.25);
     painter->restore();
   }
 
@@ -1693,6 +1732,8 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("cam-setup:") + node.uid;
   case BrowserNode::Type::CamOperation:
     return QStringLiteral("cam-operation:") + node.uid;
+  case BrowserNode::Type::BodyFolder: // mitcad#1802
+    return QStringLiteral("body-folder:") + node.uid + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -1824,6 +1865,14 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
   if (!tooltip.isEmpty()) {
     item->setToolTip(kName, tooltip);
   }
+  // Its component's bar (mitcad#1876): every row of a component (folders,
+  // bodies, sketches, joints, the occurrences in it) takes its component's;
+  // the design's own rows (Design Settings, Named Views) have none.
+  const bool designRow = node.type == BrowserNode::Type::Settings || node.type == BrowserNode::Type::Units ||
+                         node.type == BrowserNode::Type::NamedViews || node.type == BrowserNode::Type::NamedView;
+  if (const QColor bar = designRow ? QColor() : m_componentColors.value(node.component); bar.isValid()) {
+    item->setData(kName, kComponentColorRole, QVariant::fromValue(bar));
+  }
   const bool renamable = node.type == BrowserNode::Type::Component ||
                          node.type == BrowserNode::Type::Body ||
                          node.type == BrowserNode::Type::Sketch ||
@@ -1892,8 +1941,41 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
     QTreeWidgetItem* bodies = addRow(parent, folder, QStringLiteral("folder"));
     folder.isolatedOut = false; // the other folders follow no isolation
     gray(bodies, shown && anyShown && folderOn);
+    // The folders of the Bodies folder (mitcad#1802: an imported design's),
+    // in the order their first bodies come, each before the bodies in no
+    // folder; its eye shows whether a body in it is shown and shows or
+    // hides them all.
+    QHash<QString, QTreeWidgetItem*> bodyFolders;
     for (const QString& uid : def->bodies) {
       const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
+      if (body.folder.isEmpty() || bodyFolders.contains(body.folder)) {
+        continue;
+      }
+      BrowserNode bodyFolder;
+      bodyFolder.type = BrowserNode::Type::BodyFolder;
+      bodyFolder.uid = body.folder;
+      bodyFolder.name = body.folder;
+      bodyFolder.occurrence = occurrence;
+      bodyFolder.component = component;
+      bodyFolder.hasEye = true;
+      bool inShown = false;
+      bool inIsolated = false;
+      for (const QString& other : def->bodies) {
+        const DocumentSnapshot::Body b = snapshot.bodies.value(other);
+        if (b.folder == body.folder) {
+          inShown = inShown || b.visible;
+          inIsolated = inIsolated || DocumentSnapshot::isolationShows(snapshot.isolation, other, occurrence);
+        }
+      }
+      bodyFolder.visible = inShown;
+      bodyFolder.isolatedOut = !inIsolated;
+      QTreeWidgetItem* row = addRow(bodies, bodyFolder, QStringLiteral("folder"));
+      gray(row, shown && folderOn && inShown && inIsolated);
+      bodyFolders.insert(body.folder, row);
+    }
+    for (const QString& uid : def->bodies) {
+      const DocumentSnapshot::Body body = snapshot.bodies.value(uid);
+      QTreeWidgetItem* const into = bodyFolders.value(body.folder, bodies);
       BrowserNode node;
       node.type = BrowserNode::Type::Body;
       node.uid = uid;
@@ -1916,7 +1998,7 @@ void BrowserPanel::addComponentRows(QTreeWidgetItem* parent, const DocumentSnaps
       if (!body.printBedFace.isEmpty()) {
         tip += QLatin1Char('\n') + tr("Print bed face: %1").arg(printBedText(snapshot, body));
       }
-      QTreeWidgetItem* row = addRow(bodies, node, QStringLiteral("body"), tip);
+      QTreeWidgetItem* row = addRow(into, node, QStringLiteral("body"), tip);
       gray(row, drawn);
       // Bindings (mitcad#809).
       if (body.bound()) {
@@ -2433,6 +2515,14 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   m_building = true;
   m_tree->clear();
   m_nodes.clear();
+  // The components' bars (mitcad#1876), by component uid: the timeline's
+  // colours, the root's orange; an occurrence's rows take its component's,
+  // so that every placement of a component has the same.
+  m_componentColors.clear();
+  m_componentColors.insert(QStringLiteral("C0"), componentRowColor(snapshot.components, QStringLiteral("C0")));
+  for (const DocumentSnapshot::Component& component : snapshot.components) {
+    m_componentColors.insert(component.uid, componentRowColor(snapshot.components, component.uid));
+  }
 
   // The root component.
   const QString root = snapshot.components.isEmpty()
@@ -2552,6 +2642,10 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
           QString tip = tr("Occurrence %1 of %2").arg(occurrence.name, snapshot.componentName(occurrence.component));
           if (occurrence.grounded) {
             tip += tr(", grounded");
+          }
+          // Its own joints move in its parent (mitcad#1793).
+          if (occurrence.flexible) {
+            tip += tr(", flexible");
           }
           // What its joints leave it (mitcad#55), with the others held.
           if (const int dof = snapshot.occurrenceDof(occurrence.uid); dof >= 0) {
@@ -2824,6 +2918,7 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
   applyMakeMarkers(); // the new rows' markers (mitcad#1049)
   applyOwnerMarks();  // and the owners' marks (mitcad#1704)
   logRowColours();    // mitcad#1104
+  logComponentColors(); // mitcad#1876
   m_tree->verticalScrollBar()->setValue(scroll);
   emit contentHeightChanged();
   QTimer::singleShot(0, this, &BrowserPanel::logLayout);
@@ -2989,6 +3084,26 @@ void BrowserPanel::logRowColours() {
                                 groups.isEmpty() ? QStringLiteral("none") : groups.join(QStringLiteral("; ")));
   if (line != m_loggedRowColours) {
     m_loggedRowColours = line;
+    qDebug().noquote() << line;
+  }
+}
+
+void BrowserPanel::logComponentColors() {
+  // In the tree's order: the component and occurrence rows and the body
+  // rows, each with its bar's colour.
+  QStringList rows;
+  for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
+    const BrowserNode node = m_nodes.value(*it);
+    if (node.type != BrowserNode::Type::Component && node.type != BrowserNode::Type::Body) {
+      continue;
+    }
+    const QColor bar = (*it)->data(kName, kComponentColorRole).value<QColor>();
+    rows << QStringLiteral("%1 %2").arg(node.path, bar.isValid() ? bar.name() : QStringLiteral("none"));
+  }
+  const QString line = QStringLiteral("Browser colors: %1")
+                           .arg(rows.isEmpty() ? QStringLiteral("none") : rows.join(QStringLiteral(", ")));
+  if (line != m_loggedComponentColors) {
+    m_loggedComponentColors = line;
     qDebug().noquote() << line;
   }
 }

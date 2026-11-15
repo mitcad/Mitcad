@@ -68,6 +68,15 @@ std::optional<double> pickSnap(const QString& key, const CommandState& state);
 // Where the input's first item was picked, in the design: the click kept,
 // else the middle of the item (an item given otherwise, as live MCP does).
 std::optional<gp_Pnt> pickPoint(const QString& key, const CommandState& state, const CommandContext& context);
+// The two faces an edge's name says it lies between ("E{<face>|<face>}"):
+// the name split at its bar outside brackets; none for another name.
+QStringList edgeFaces(const QString& name);
+// The straight edge of a face nearest to where the face was picked (the
+// input `key`'s click; mitcad#1814: a face picked first offers it): of its
+// body's straight edges (the `edges` query) that bound it, the one that
+// passes nearest the click; none when the face has no straight edge.
+std::optional<SelectionItem> nearestStraightEdge(const SelectionItem& face, const QString& key,
+                                                 const CommandState& state, const CommandContext& context);
 // `at` of build_place and build_panel for the input's first item:
 // `occurrence` (from the BUILD host), `geometry`, `point` (in the
 // host's coordinates). None, with the reason, when it cannot

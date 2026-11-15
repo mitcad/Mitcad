@@ -521,6 +521,8 @@ gp_Pnt Frame::point(const gp_Pnt2d& p) const {
   return origin.Translated(gp_Vec(x_axis) * p.X() + gp_Vec(y_axis) * p.Y());
 }
 
+TopoDS_Edge segment_edge(const Frame& frame, const Segment& segment) { return make_edge(frame, segment); }
+
 namespace {
 
 ProfileFace profile_with_gap(const Frame& frame, const Region& region, double max_gap, bool strict) {

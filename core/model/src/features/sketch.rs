@@ -34,7 +34,7 @@ impl FeatureInfo for SketchDef {
     fn references(&self) -> References {
         let mut references = References::default();
         match &self.plane {
-            SketchPlane::Face { face, body } => {
+            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
                 references.features.extend(face.features());
                 if let Some(body) = body {
                     references.body(*body);
@@ -61,7 +61,7 @@ impl FeatureInfo for SketchDef {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         self.check_definition()?;
         match &self.plane {
-            SketchPlane::Face { face, body } => {
+            SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
                 for feature in face.features() {
                     ctx.feature(feature)
                         .map_err(|e| format!("plane {face}: {e}"))?;
@@ -145,7 +145,7 @@ impl LinkedReferences for SketchDef {
         if let Some(link) = &self.plane_link {
             let mut references = References::default();
             match &self.plane {
-                SketchPlane::Face { face, body } => {
+                SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
                     references.features.extend(face.features());
                     if let Some(body) = body {
                         references.body(*body);
@@ -332,7 +332,16 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
         &self,
         ctx: &mut super::EvalContext<'_, K>,
     ) -> Result<FeatureOutput<K::Shape>, String> {
+        // A sketch on a cylindrical or conical face (mitcad#1768): the
+        // face's development, found again at every evaluation; its carrier
+        // plane is the sketch's plane.
+        let development = if self.plane.is_developed() {
+            Some(super::developed::development(&self.plane, ctx)?)
+        } else {
+            None
+        };
         let plane = match (&self.plane_link, &self.plane, self.plane.origin_frame()) {
+            _ if development.is_some() => development.as_ref().expect("developed").frame,
             (Some(link), _, _) => linked_frame(&self.plane, link, ctx)?,
             (None, _, Some(frame)) => frame,
             (None, SketchPlane::Construction(uid), None) => ctx.datum_plane(*uid)?.frame(),
@@ -348,14 +357,30 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             def: followed,
             reports: follow,
         } = crate::sketch::project::follow_links_with(self, &frame, &mut |projection| {
-            let curves = source_curves(projection, &frame, ctx)?;
+            let mut curves = source_curves(projection, &frame, ctx)?;
             // A source edge that is gone: the edges that may have taken its
             // place (mitcad#1784).
-            let successors = if curves.is_empty() {
+            let mut successors = if curves.is_empty() {
                 successor_curves(projection, ctx)
             } else {
                 Vec::new()
             };
+            // On a curved face, the curves' development on the carrier
+            // plane, which the planar projection then takes as they are
+            // (mitcad#1768).
+            if let Some(development) = &development {
+                curves = curves
+                    .iter()
+                    .filter_map(|c| development.flattened(c))
+                    .collect();
+                for successor in &mut successors {
+                    successor.curves = successor
+                        .curves
+                        .iter()
+                        .filter_map(|c| development.flattened(c))
+                        .collect();
+                }
+            }
             Ok(project::Found { curves, successors })
         })?;
         // Linked projections that could not follow say so (mitcad#232);
@@ -472,6 +497,7 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 follow: Arc::new(follow),
                 own: Arc::new(own),
                 retrimmed,
+                developed: development.map(Arc::new),
             }),
             ..FeatureOutput::default()
         })
@@ -807,6 +833,21 @@ pub(crate) fn sketch_entity_curve(
     output: &SketchOutput,
     entity: crate::sketch::Ref,
 ) -> Option<Curve3> {
+    // A sketch on a curved face's: on the face (mitcad#1768).
+    if let Some(development) = &output.developed {
+        return match entity {
+            crate::sketch::Ref::Point(id) => output
+                .solved
+                .points
+                .get(&id)
+                .map(|p| Curve3::Point(development.point(*p))),
+            crate::sketch::Ref::Curve(id) => output
+                .solved
+                .curves
+                .get(&id)
+                .map(|c| super::developed::curve3(development, c)),
+        };
+    }
     match entity {
         crate::sketch::Ref::Point(id) => output
             .solved
@@ -827,7 +868,9 @@ pub(crate) fn face_frame<K: Kernel>(
     ctx: &mut super::EvalContext<'_, K>,
 ) -> Result<SketchFrame, String> {
     let SketchPlane::Face { face, body } = plane else {
-        unreachable!("only a face plane is found on the bodies");
+        // A curved face's sketch has its development (mitcad#1768), a 3D
+        // sketch's support is a plane.
+        return Err("the sketch plane must be a plane or a planar face".to_owned());
     };
     let shapes = match body {
         Some(body) => vec![(*body, ctx.body(*body)?)],
@@ -850,7 +893,7 @@ pub(crate) fn face_frame<K: Kernel>(
 /// The body among `shapes` that has the face: exactly one must. A face a
 /// sketch change renamed is found again (`renamed.rs`, mitcad#272): then
 /// also the name it has now.
-fn face_body<K: Kernel>(
+pub(crate) fn face_body<K: Kernel>(
     kernel: &K,
     face: &FaceName,
     shapes: Vec<(BodyUid, K::Shape)>,
@@ -947,6 +990,9 @@ pub(crate) fn linked_frame<K: Kernel>(
                     other.kind()
                 )),
             }
+        }
+        SketchPlane::Developed { .. } => {
+            Err("a sketch on a curved face lies on a face of its own component".to_owned())
         }
         SketchPlane::Xy | SketchPlane::Xz | SketchPlane::Yz => {
             unreachable!("origin planes have a frame")

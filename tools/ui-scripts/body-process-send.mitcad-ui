@@ -11,9 +11,14 @@
 #      both bodies shows Per body, each process with its bodies logged.
 #   3. Fixture Fine chosen in the panel's Process picker is set on both
 #      bodies (not on the root), one undo step, and the row shows it; Send
-#      writes the 3MF (a fixture slicer that does nothing), which the
-#      wrappers read: Fixture Fine for both bodies.
+#      writes the 3MF (a fixture slicer that does nothing).
 #   4. Undo gives Body2 its Fixture Draft again: the panel shows Per body.
+#   5. Two plates, Left with Body1 and Right with Body2 (mitcad#1807): Send
+#      to Slicer with only Body1 selected sends the design's plates, and
+#      the row shows what the plates' bodies print with, Per body; Fixture
+#      Fine chosen there is set on both bodies (not on the root), one undo
+#      step; Send writes the plates' 3MF over step 3's, which the wrappers
+#      read: two plates, Fixture Fine for both bodies.
 wait-idle
 window-resize 1280 860
 focus-main
@@ -119,4 +124,55 @@ wait-log '^3D Print process per body: .*Fixture Draft: Body2'
 wait-log '^Panel Send to Slicer input process shows: Per body$'
 key Escape
 wait-log '^Command Send to Slicer cancelled$'
+wait-idle
+
+# 5. Two plates, one body on each (mitcad#1807).
+mark
+model-command '{"cmd":"add_print_plate","name":"Left"}'
+model-command '{"cmd":"add_print_plate","name":"Right"}'
+model-command '{"cmd":"place_on_plate","plate":"Left","items":[{"body":"Body1"}]}'
+model-command '{"cmd":"place_on_plate","plate":"Right","items":[{"body":"Body2"}]}'
+wait-idle
+
+# Only Body1 selected: the plates are sent, and the Process row shows what
+# the plates' bodies print with, Per body.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Make card: Body1: .*; process Fixture Fine \(body Body1\); '
+wait-idle
+mark
+command make.print3d
+wait-log '^Command Send to Slicer started'
+wait-log '^3D Print plates: 2$'
+wait-log '^3D Print panel: 1 selected: Body1; format 3mf'
+wait-log '^3D Print process per body: .*Fixture Fine: Body1'
+wait-log '^3D Print process per body: .*Fixture Draft: Body2'
+wait-log '^Panel Send to Slicer input process shows: Per body$'
+wait-log '^Panel Send to Slicer input process at '
+
+# Fixture Fine chosen in the panel: set on both bodies, one undo step.
+capture-undo-depth plates
+mark
+click-logged '^Panel Send to Slicer input process at '
+wait-log '^Process picker opened: '
+focus-dialog '^Process Picker$'
+mark
+type 'Fixture Fine'
+wait-log '^Process picker search: Fixture Fine, first Fixture Fine$'
+key Return
+wait-log '^Process picker chose: Fixture Fine$'
+focus-main
+wait-log '^3D Print process set on: (Body1, Body2|Body2, Body1)$'
+wait-log '^3D Print process: design/fixture-fine$'
+wait-log '^Panel Send to Slicer input process shows: Fixture Fine$'
+expect-no-log '^3D Print process set on: .*the design'
+expect-undo-depth ${plates} 1
+
+# Send writes the plates' 3MF, both in one file, with Fixture Fine.
+mark
+key Return
+wait-log '^3D Print plate Left: 1 pieces in body-process\.3mf'
+wait-log '^3D Print plate Right: 1 pieces in body-process\.3mf'
+wait-log '^3D Print: plates one_file for bambu_studio: '
+wait-idle
 expect-never 'TestDriver: FAIL'

@@ -427,6 +427,12 @@ public:
   // notice cleared".
   void setActivationNotice(const QString& text);
   const QString& activationNotice() const { return m_activationNotice; }
+  // A text of the inputs the panel does not show (a hidden input's), set
+  // by the host while a pick comes (mitcad#1856: the component Joint goes
+  // into, after the question CommandHost::pickComing asks): the pick that
+  // follows computes the preview with it. Logged "Panel <command> <key>:
+  // <text>" (`none` for an empty text) when it changes.
+  void setHiddenText(const QString& key, const QString& text);
   // The component the panel offers to activate (CommandHost::activationOffer),
   // empty when none: also the `activate` of the script state (MCP ui_state).
   const QJsonObject& activationOffer() const { return m_activationOffer; }
@@ -442,6 +448,11 @@ public:
   bool runParameter(const QJsonObject& command, QString& refusal);
   // The feature the session edits (its uid), empty for a new one.
   const QString& editUid() const { return m_editUid; }
+  // The `edit_feature` command an edit previews `def` with: once the edit
+  // rolled the marker back, with `through` the marker it was at, so that
+  // the joints and rigid groups right after the feature hold in the
+  // preview and an assembly does not come apart (mitcad#1860).
+  QJsonObject editPreviewCommand(const QJsonObject& def) const;
   // An application command asks for a pick before it goes on (mitcad#857:
   // 3D Print's print bed face, from its `accept`): the panel shows its
   // inputs again, the selection input `key` (shown now, emptied) becomes
@@ -553,6 +564,8 @@ private:
 
   // Every input (shown only: those shown now) in the panel's order.
   QVector<Slot> slotsOf(bool shownOnly) const;
+  // As above, of another state of the same inputs (rowsLeftOut).
+  QVector<Slot> slotsOf(const CommandState& state, bool shownOnly) const;
   std::optional<Slot> slotOf(const QString& key) const;
   CommandState scopeOf(const Slot& slot) const;
   bool isShown(const Slot& slot) const;
@@ -595,7 +608,13 @@ private:
   void setDefaults(const InputDef& input, const QString& key);
   void setRowDefaults();
   void inputsChanged();
-  void numericInputAction(const QString& key, std::function<void()> action);
+  // A value of the input changed (typed: `typed`, also a step of the
+  // field; else a handle's drag): taken once the model is idle, the
+  // preview computing kept as useful work (mitcad#636), unless it was
+  // typed and that preview has computed longer than kDropPreviewAfterMs
+  // (mitcad#1788): then it is dropped, so that the new value is previewed
+  // without waiting for the old one.
+  void numericInputAction(const QString& key, std::function<void()> action, bool typed = false);
   void inputAction(std::function<void()> action, bool invalidatesPreview = true,
                    std::function<void()> rejected = {});
   void structuralInputAction(const QString& key, std::function<void()> action);
@@ -606,7 +625,11 @@ private:
   // (by default the host's last preview: previewBodyShape).
   Preview previewFromReport(const QJsonObject& report,
                             const std::function<std::shared_ptr<geometry::Shape>(const std::string&)>& shapeOf = {});
-  void acceptFeaturePreview(const QByteArray& key, const Built& built, const Preview& preview, bool cache);
+  // `leftOutMessage` and `leftOutRows`: what the rows the preview leaves
+  // out need and which they are (rowsLeftOut); empty for a preview of all
+  // the inputs.
+  void acceptFeaturePreview(const QByteArray& key, const Built& built, const Preview& preview, bool cache,
+                            const QString& leftOutMessage = QString(), const QString& leftOutRows = QString());
   // A good preview's message: the command's note, then the report's warnings.
   QString okMessage(const QJsonObject& report);
   // The inputs' row notes (InputDef::rowNote) read again and shown; true
@@ -636,7 +659,19 @@ private:
   void toggleElement(const QString& key, int element);
   void schedulePreview(int delay = 150);
   void runPreview();
-  bool previewReady(QString& message, bool& error);
+  bool previewReady(QString& message, bool& error) const;
+  bool previewReady(const CommandState& state, QString& message, bool& error) const;
+  // The rows a preview leaves out (InputDef::previewCompleteRows,
+  // mitcad#1813): the inputs without the rows that wait for a pick, what
+  // those rows need (the panel's hint) and which they are ("rows row 2");
+  // none when no row waits, when a list would be left without its rows or
+  // when the rest is not ready either.
+  struct RowsLeftOut {
+    CommandState state;
+    QString message;
+    QString rows;
+  };
+  std::optional<RowsLeftOut> rowsLeftOut() const;
   void showPreview(const Preview& preview, const QString& operation);
   // Section Analysis or Hide Above Sketch over a preview (mitcad#943):
   // the clips of its bodies `targets` started, each showing until they are
@@ -673,6 +708,14 @@ private:
   void measureInspection(const Inspection& result);
   quint64 m_measurements = 0; // the latest measurement asked for
   void clearPreview();
+  // Whether a preview that cannot be shown now leaves the last good one
+  // drawn (mitcad#1860): while a value being typed is empty or no value
+  // yet (`typing`), and for anything an edit's preview fails on or waits
+  // for when the one drawn places occurrences, so that the view moves
+  // nothing and an edit's rolled-back assembly is never drawn apart. A
+  // feature's preview only (not a sketch command's or an application
+  // panel's), once one is drawn.
+  bool keepsDrawnPreview(bool typing) const;
   void updateHighlights();
   // The occurrences the inputs' items name as ghosts (InputDef::ghosts),
   // those of the active input left out, to the view (mitcad#147).
@@ -819,6 +862,10 @@ private:
   void refinePreview();
   bool m_refining = false; // a refinement job runs
   bool m_previewOk = false;
+  // What the rows the shown preview leaves out need (mitcad#1813): its
+  // hint, shown in place of the preview's message; empty when it shows
+  // every row.
+  QString m_rowsLeftOut;
   QJsonObject m_shownReport; // the report of the preview shown (toggles)
   QString m_loggedPreviewBodies; // the bodies the last preview logged (mitcad#266)
   QString m_loggedPreviewTool;   // where it drew its tool, as logged (mitcad#636)
@@ -901,6 +948,9 @@ private:
   void supersedePendingNumbers(const QString& key);
   bool m_previewWaiting = false;
   bool m_asyncPending = false;
+  // Since the feature preview computing now (m_asyncPending) started;
+  // invalid while none computes (mitcad#1788).
+  QElapsedTimer m_previewClock;
   bool m_commitRequested = false;
   bool m_committing = false;
   bool m_cancelRequested = false;
@@ -921,9 +971,14 @@ private:
   // The size known now: when it is new and matches the kept settings', the
   // inputs not in `changed` start from them.
   void considerKeptSettings(const QSet<QString>& changed);
-  // Whether a value's text evaluates in the design for the input's kind.
-  bool evaluatesHere(const QString& text, const InputDef& input);
+  // A value's text evaluated in the design for the input's kind; none when it
+  // does not evaluate there.
+  std::optional<double> evaluateHere(const QString& text, const InputDef& input);
   PanelSettings m_startSettings;           // where the panel started
+  // A new feature's start() sets its first defaults: only then does a choice
+  // take a remembered option (mitcad#1868), never in an edit, a resumed
+  // panel or a row added later.
+  bool m_seedingChoices = false;
   std::optional<PanelSizeKey> m_settingsKey; // the size the faces give now
   QString m_consideredKey;                 // the size last compared
   std::optional<QSet<QString>> m_changedBeforePick; // the changes before a pick's own reaction
@@ -987,6 +1042,7 @@ private:
   // The inputs whose picks are not drawn while the command shows marks,
   // as last logged (mitcad#857 review: the green faces stand out).
   QString m_loggedUnmarked;
+  QString m_loggedMovedPicks; // the picks drawn where the preview moves them (mitcad#1813)
   // The point under the mouse moved (CommandDef::hoverPreview, mitcad#417):
   // the command's preview again when the command says so.
   void hoverMoved(const SelectionItem& item);

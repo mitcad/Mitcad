@@ -268,10 +268,10 @@ def make_scenario(group, frontend, theme, directory):
                       "native-pointer-click propertiesBody0_volume", "key Ctrl+a",
                       "expect-native-style propertiesBody0_volume selected")
             else:
-                s.add("expect-widget-property propertiesBody0_volume text '48000 mm³'",
-                      "expect-widget-property propertiesTotal_volume text '48000 mm³'",
-                      "focus-widget propertiesBody0_volume", "key Ctrl+a",
-                      "expect-widget-property propertiesBody0_volume selectedText '48000 mm³'")
+                # One body: its groups (mitcad#1816), the volume in cm³; the
+                # Place group's first value (Center of Mass) selectable.
+                s.add("expect-log '^Properties body: Body1: Physical: .*Volume 48 cm3, '",
+                      "focus-widget propertiesPlace_0", "key Ctrl+a")
             # Exercise selection without replacing the user's clipboard;
             # leave an unselected value for the comparison captures.
             s.add("key Right", "key Tab", "expect-model-bodies 1 48000")

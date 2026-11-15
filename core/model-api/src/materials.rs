@@ -755,7 +755,8 @@ pub(super) fn component_made_of<K: Kernel>(
         if doc.body_component(body.uid) != Some(component) {
             continue;
         }
-        let made_of = doc.body_material(body.uid, None).0;
+        // A body without a material makes none of the component's (mitcad#1817).
+        let made_of = doc.body_material_named(body.uid, None)?;
         match found {
             Some(other) if other.id != made_of.id => return None,
             _ => found = Some(made_of),

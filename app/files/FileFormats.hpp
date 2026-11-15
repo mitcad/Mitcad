@@ -20,6 +20,7 @@ enum class FileKind {
   Solidcraft, // .sc, .solidcraft: a new document with the design's history (mitcad#450, mitcad#1622)
   Dwg,     // .dwg: a new document with the drawing's 3D content (mitcad#453)
   ThreeDm, // .3dm: a new document with the model's bodies and blocks (mitcad#1715)
+  Gltf,    // .glb, .gltf: mesh bodies, the node tree as components (mitcad#1826)
 };
 
 FileKind fileKind(const QString& path);

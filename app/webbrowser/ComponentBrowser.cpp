@@ -257,7 +257,8 @@ void ComponentBrowser::showStartPage() {
   const QList<WebSite> sites = loadWebSites();
   if (sites.isEmpty()) {
     body += paragraph(tr("Add the sites you take parts and models from: a supplier, a model library, your own "
-                         "server. Type a site's address above, then choose Sites › Add This Page…."));
+                         "server. Type a site's address above and press Enter to open it, then choose Sites › Add This "
+                         "Page…."));
   } else {
     body += QStringLiteral("<h2>%1</h2><ul>").arg(tr("Your sites").toHtmlEscaped());
     for (const WebSite& site : sites) {
@@ -345,7 +346,8 @@ void ComponentBrowser::showSitesMenu() {
   }
   menu.addSeparator();
   QAction* add = menu.addAction(tr("Add This Page…"));
-  add->setEnabled(!m_address->text().isEmpty());
+  // The loaded page, or on the start page the typed address (mitcad#1844).
+  add->setEnabled(!webSiteToAdd(m_view->url(), m_view->title(), m_address->text()).url.isEmpty());
   QAction* edit = menu.addAction(tr("Edit Sites…"));
   menu.addSeparator();
   QAction* clear = menu.addAction(tr("Clear Browsing Data…"));
@@ -392,10 +394,10 @@ void ComponentBrowser::editSites(bool addThisPage) {
     addRow(site);
   }
   if (addThisPage) {
-    const QString title = m_view->title().trimmed();
-    const QString url = m_view->url().toString();
-    QTreeWidgetItem* item = addRow({title.isEmpty() ? m_view->url().host() : title, url});
-    list->setCurrentItem(item);
+    const WebSite site = webSiteToAdd(m_view->url(), m_view->title(), m_address->text());
+    if (!site.url.isEmpty()) {
+      list->setCurrentItem(addRow(site));
+    }
   }
   list->resizeColumnToContents(0);
   layout->addWidget(list, 1);

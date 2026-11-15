@@ -426,6 +426,9 @@ private:
   void assignMaterialFromMenu(const LibraryItem& item, const QStringList& bodies, const QString& component,
                               const QString& appearance = QString());
   const DocumentSnapshot::Occurrence* occurrence(const QString& path) const;
+  // Whether a component has joints or constraint sets of its own, which a
+  // flexible occurrence of it moves in its parent (mitcad#1793).
+  bool hasOwnJoints(const QString& component) const;
   int undoDepth() const;
 
   DocumentHost& m_host;

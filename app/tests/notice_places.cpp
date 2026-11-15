@@ -58,6 +58,13 @@ void readTests() {
        "places": [{"kind": "region", "sketch": "F1", "name": "r{c1,c2}"}, {"kind": "region", "name": "r{c3}"}]}]})json");
   CHECK(placesText(noticePlaces(regions.value(QStringLiteral("notices")).toArray())) ==
         QStringLiteral("region r{c1,c2} of F1, region r{c3}"));
+  // Whole bodies (mitcad#1816: a Properties row's), where an occurrence
+  // places them.
+  const QJsonArray bodies = parsed(R"json({"places": [{"kind": "body", "body": "F2.b0"},
+      {"kind": "body", "body": "F4.b0", "occurrence": "O1/O3"}]})json")
+                                .value(QStringLiteral("places"))
+                                .toArray();
+  CHECK(placesText(bodies) == QStringLiteral("body F2.b0, body F4.b0 at O1/O3"));
   // The panel's message: the warnings' plain words, not the model's text.
   const QStringList warnings = noticeMessages(preview, QStringLiteral("warning"));
   CHECK(warnings.size() == 2);

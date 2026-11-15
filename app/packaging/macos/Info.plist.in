@@ -191,6 +191,23 @@
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
+      <string>glTF Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.gltf</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>glb</string>
+        <string>gltf</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
       <string>DXF Drawing</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
@@ -579,6 +596,30 @@
         <key>public.filename-extension</key>
         <array>
           <string>dwg</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.gltf</string>
+      <key>UTTypeDescription</key>
+      <string>glTF Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>glb</string>
+          <string>gltf</string>
+        </array>
+        <key>public.mime-type</key>
+        <array>
+          <string>model/gltf-binary</string>
+          <string>model/gltf+json</string>
         </array>
       </dict>
     </dict>

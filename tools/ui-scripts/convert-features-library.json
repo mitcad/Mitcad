@@ -1,0 +1,17 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-timber", "name": "Test timber",
+  "description": "A synthetic BUILD part of the Convert to Features UI test.", "library_version": "1.0.0", "license": "MIT",
+  "authors": ["Mitcad UI test"], "units": "mm",
+  "categories": [{"id": "dimensioned-timber", "name": "Dimensioned timber"}],
+  "components": [
+    {"id": "timber-convert-test", "path": "dimensioned-timber/timber-convert-test.mitcad", "name": "Timber convert test",
+     "category": "dimensioned-timber", "designation": "Timber convert test L={L}",
+     "build": {"role": "profile", "kind": "timber",
+       "material": {"species": "spruce", "finish": "dimensioned", "grade": "C24", "density": 450, "moisture": 20},
+       "availability": "standard",
+       "section": {"width": "98 mm", "height": "48 mm"}, "nominal": {"width": "98 mm", "height": "48 mm"},
+       "length": {"parameter": "L", "min": "100 mm", "max": "6000 mm", "default": "600 mm",
+                  "stock": ["3000 mm", "3600 mm", "4200 mm"]},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"}]}}
+  ]
+}

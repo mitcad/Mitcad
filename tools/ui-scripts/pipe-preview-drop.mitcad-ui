@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# A value typed while a slow preview of the value before computes drops
+# that preview (mitcad#1788), on pipe-preview-drop.json (Sketch1, F1: a
+# 50 mm line, c1): Pipe, the path picked first, so that the default size's
+# preview (8 mm) starts at once; the test's worker gate holds it, as a Pipe
+# along a helix whose turns pass through each other once computed for
+# minutes. After more than two seconds the size 2 is typed: the panel drops
+# the preview computing ("Preview Pipe: dropped after ... ms for a typed
+# value", the job asked to stop), and previews the 2 mm pipe as soon as the
+# gate lets it; the 8 mm preview is never shown as the preview of the
+# inputs. OK makes the 2 mm pipe (pi 1 x 1 x 50 mm3). A value typed within
+# two seconds keeps the preview computing (tools/ui-scripts/
+# fillet-wheel-busy.mitcad-ui, edit-auto-operation-early.mitcad-ui).
+# Run by tools/ui-pipe-preview-drop-test.sh (Linux) and
+# tools/ui-windows-pipe-preview-drop-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Pipe: its size field, and the line to pick.
+mark
+command solid.pipe
+wait-log '^Command Pipe started'
+wait-log '^Panel Pipe input size at ' 20
+wait-log '^Sketch entity F1/c1 at ' 20
+wait-idle
+expect-input-text size '^8 mm$'
+
+# The path first: the default size's preview starts and is held. While
+# the gate holds a job only steps that do not wait for the model run
+# (mark, wait-log, sleep, expect-model-busy, qt-type-now, the gate).
+mark
+hold-model-preview true
+click-logged '^Sketch entity F1/c1 at '
+wait-log '^Pipe Path: 1 sketch curve' 30
+wait-log '^Computing preview started' 30
+expect-model-busy true
+sleep 2500
+expect-model-busy true
+
+# The size typed: the slow preview is dropped, the job asked to stop and
+# cancelled; the typed size is taken ("Panel field size: 2", evaluated)
+# and its preview starts, held in turn.
+mark
+qt-type-now input_size '2'
+wait-log '^Preview Pipe: dropped after [0-9]+ ms for a typed value$' 30
+wait-log '^Computing preview: cancel requested after ' 30
+wait-log '^Computing preview cancelled after ' 30
+wait-log '^Panel field size: 2$' 30
+wait-log '^Pipe Section Size: 2 = 2 mm$' 30
+wait-log '^Computing preview started' 30
+expect-model-busy true
+
+# The 2 mm preview, once the gate lets it run: the preview of the inputs,
+# never the dropped 8 mm one shown in between.
+hold-model-preview false
+wait-log '^Preview Pipe: ok' 30
+wait-idle 30
+expect-no-log '^Preview Pipe: intermediate numeric result'
+expect-input-text size '^2'
+
+# OK: the 2 mm pipe along the 50 mm line.
+mark
+key Return
+wait-log '^Added [Pp]ipe' 30
+wait-idle 30
+capture piped 'New body \S+ [(]F2[.]b0[)]: volume ([0-9.]+) mm3' 30
+expect-near ${piped} 157.079633 1e-6 0.01
+expect-never 'The document was read while a job computes it|Recompute failed|TestDriver: FAIL'

@@ -4,6 +4,8 @@
 #include <array>
 #include <stdexcept>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -146,6 +148,38 @@ rust::Vec<DatumEdgeEntry> datum_edge_geometries(const geometry::Shape& shape) {
     entry.name = rust::String(shape.edge_name(static_cast<int>(i)));
     entry.curve = curve(curves[i]);
     result.push_back(std::move(entry));
+  }
+  return result;
+}
+
+namespace {
+
+std::vector<int> item_indices(rust::Slice<const std::uint32_t> items) {
+  std::vector<int> result;
+  result.reserve(items.size());
+  for (const std::uint32_t i : items) {
+    // An index past int's range is out of range, as a negative one.
+    result.push_back(i > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ? -1 : static_cast<int>(i));
+  }
+  return result;
+}
+
+} // namespace
+
+rust::Vec<DatumSurface> datum_recognised_face_geometries(const geometry::Shape& shape,
+                                                         rust::Slice<const std::uint32_t> faces) {
+  rust::Vec<DatumSurface> result;
+  for (const geometry::SurfaceDescription& found : geometry::recognised_face_geometries(shape, item_indices(faces))) {
+    result.push_back(surface(found));
+  }
+  return result;
+}
+
+rust::Vec<DatumCurve> datum_recognised_edge_geometries(const geometry::Shape& shape,
+                                                       rust::Slice<const std::uint32_t> edges) {
+  rust::Vec<DatumCurve> result;
+  for (const geometry::CurveDescription& found : geometry::recognised_edge_geometries(shape, item_indices(edges))) {
+    result.push_back(curve(found));
   }
   return result;
 }

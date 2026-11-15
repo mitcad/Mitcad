@@ -23,11 +23,13 @@
 
 #include "browser/Bindings.hpp"
 #include "browser/BrowserController.hpp"
+#include "browser/ConvertToFeatures.hpp"
 #include "build/BuildModel.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/Icons.hpp"
 #include "mitcad/geometry/import.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "sketch/SketchSurface.hpp"
 
 namespace mitcad {
 namespace {
@@ -243,14 +245,35 @@ void MainWindow::fillModelContextMenu(QMenu& menu, QStringList& entries, const S
   addKind(Kind::Construct, tr("Construct"), QStringLiteral("Construct"));
   addKind(Kind::Make, tr("Make"), QStringLiteral("Make"));
   menu.addSeparator();
+  // A placed BUILD part to its library design's own features (mitcad#1815).
+  if (parts.size() == 1 && allParts) {
+    const QString component = parts.first().component;
+    const QString name = parts.first().name;
+    addCall(QStringLiteral("convert-mesh"), convertToFeaturesText(),
+            [this, component, name] { convertToFeatures(*this, this, component, name); });
+  }
 
-  if (selection.size() == 1 && isSketchPlane(first)) {
+  // Also on a cylindrical or conical face, in its developed coordinates
+  // (mitcad#1768).
+  if (selection.size() == 1 && (isSketchPlane(first) || mitcad::sketch::isDevelopedFace(first))) {
     add(m_registry->action(QStringLiteral("sketch.create")));
   }
   const QString feature = first.creatingFeature();
   QString name;
-  if (selection.size() == 1 && !feature.isEmpty() && editorOf(feature, &name) != nullptr) {
+  // A Form opens in Edit Form, which edits no definition (mitcad#1757).
+  const DocumentSnapshot::Feature* made = feature.isEmpty() ? nullptr : m_snapshot.feature(feature);
+  const bool form = made != nullptr && made->type == QStringLiteral("form");
+  if (form) {
+    name = made->name;
+  }
+  if (selection.size() == 1 && !feature.isEmpty() && (form || editorOf(feature, &name) != nullptr)) {
     addCall(QStringLiteral("edit"), tr("Edit %1").arg(name), [this, feature] { editFeature(feature); });
+  }
+  // An imported Form body's kept cage as an editable Form (mitcad#1757).
+  if (selection.size() == 1 && first.occurrence.isEmpty() &&
+      (first.kind == SelectKind::Face || first.kind == SelectKind::Body) && hasKeptCage(first.owner)) {
+    const QString body = first.owner;
+    addCall(QStringLiteral("form"), tr("Open Cage as Form"), [this, body] { openKeptCage(body); });
   }
   // Move/Copy for bodies and components (mitcad#735), started with the
   // selection as its own action is.

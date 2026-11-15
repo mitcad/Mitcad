@@ -317,6 +317,18 @@ public:
     addFlag(flags, 0, 1, tr("Reverse the zoom direction"), "preferencesReverseZoom", &NavigationSettings::reverseZoom);
     addFlag(flags, 1, 0, tr("Constrained orbit (Z stays up)"), "navigationConstrainedOrbit", &NavigationSettings::constrainedOrbit);
     addFlag(flags, 1, 1, tr("Smooth view transitions"), "navigationAnimate", &NavigationSettings::animate);
+    // The two-finger trackpad scroll's directions (mitcad#1873, GitHub
+    // mitcad/Mitcad#340), beside Reverse the zoom direction in two more
+    // columns, so that the page grows no taller (mitcad#1751's limit).
+    addFlag(flags, 0, 2, tr("Reverse horizontal pan"), "navigationReversePanHorizontal",
+            &NavigationSettings::reversePanHorizontal,
+            tr("A two-finger trackpad scroll pans the view left and right the other way"));
+    addFlag(flags, 0, 3, tr("Reverse vertical pan"), "navigationReversePanVertical",
+            &NavigationSettings::reversePanVertical,
+            tr("A two-finger trackpad scroll pans the view up and down the other way"));
+    addFlag(flags, 1, 2, tr("Reverse scroll orbit"), "navigationReverseScrollOrbit",
+            &NavigationSettings::reverseScrollOrbit,
+            tr("A two-finger trackpad scroll with the orbit key turns the view the other way"));
     layout->addLayout(flags);
     m_hint = new QLabel(tr("Constrained orbit keeps Z upright. Zoom follows the cursor when enabled. "
                            "The wheel zooms; pinch zooms, rotation rolls, and a two-finger double tap fits."));
@@ -461,9 +473,11 @@ private:
     });
     connect(reset, &QPushButton::clicked, slider, [slider] { slider->setValue(100); });
   }
-  void addFlag(QGridLayout* grid, int row, int column, const QString& title, const char* name, bool NavigationSettings::*field) {
+  void addFlag(QGridLayout* grid, int row, int column, const QString& title, const char* name, bool NavigationSettings::*field,
+               const QString& tip = QString()) {
     auto* box = new QCheckBox(title);
     box->setObjectName(QString::fromLatin1(name));
+    if (!tip.isEmpty()) box->setToolTip(tip);
     box->setChecked(m_settings.*field);
     grid->addWidget(box, row, column);
     connect(box, &QCheckBox::toggled, this, [this, field](bool value) { m_settings.*field = value; notify(); });

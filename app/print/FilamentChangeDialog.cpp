@@ -231,6 +231,23 @@ void FilamentChangeDialog::showRefusal(const QString& why) {
   qInfo().noquote() << QStringLiteral("Filament change dialog refused: %1").arg(why);
 }
 
+void FilamentChangeDialog::moveToRow(int row) {
+  if (m_row < 0 || row == m_row) {
+    return;
+  }
+  m_row = row;
+  qInfo().noquote() << QStringLiteral("Filament change dialog: now row %1").arg(row + 1);
+}
+
+void FilamentChangeDialog::eventRemoved() {
+  if (m_row < 0) {
+    return;
+  }
+  m_row = -1;
+  qInfo().noquote() << QStringLiteral("Filament change dialog closed: its event was removed");
+  hide();
+}
+
 void FilamentChangeDialog::kindChanged() {
   // Only a pause shows a message.
   m_message->setEnabled(isPause());

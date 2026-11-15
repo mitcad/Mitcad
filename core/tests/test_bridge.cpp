@@ -638,6 +638,12 @@ void test_datums_and_analysis_shapes() {
   CHECK(!above);
   CHECK(throws_with([&] { document->analysis_shape(R"({"shape": "datum", "uid": "F2"})"); },
                     "Extrude1 (F2) has no datum at the timeline marker"));
+  // A body without a material has no mass (mitcad#1817); steel as the
+  // design's default material gives it one.
+  const std::string bare(document->analysis(R"({"query": "properties"})", false));
+  CHECK(contains(bare, "Body1 (F2.b0): no material"));
+  CHECK(contains(bare, "no mass: 1 without a material"));
+  run(*document, R"({"cmd": "set_component_material", "component": "C0", "material": "steel"})");
   const std::string text(document->analysis(R"({"query": "properties"})", false));
   CHECK(contains(text, "Body1 (F2.b0): Steel, density 7.85 g/cm3"));
   CHECK(contains(text, "mass 0.376800 kg"));

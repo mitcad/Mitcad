@@ -190,6 +190,11 @@
 //                           while a button is held and Qt's macOS scroll
 //                           phases, the window deactivated during a drag
 //                           (mitcad#1571-#1573; synthetic)
+//   expect-drag-zoom          the drag bound to Zoom in the view's scheme:
+//                           straight up closer, straight down away, sideways
+//                           alone unchanged, an upward drag that wobbles
+//                           sideways closer at every step (mitcad#1867;
+//                           synthetic)
 //   view-navigation <scheme>  this process's view navigation, not saved:
 //                           middle-pan|alt-buttons|middle-pan-f4|middle-orbit|
 //                           right-orbit|trackpad|trackpad-shift
@@ -304,6 +309,7 @@
 //   qt-choice <id> <label> open a Qt combo (or a wrapper's child combo),
 //                           then click its displayed enabled popup row
 //   expect-input-text <id> <regex> check the actual Qt or AppKit field text
+//   expect-choice-text <id> <regex> check the option a Qt panel choice shows
 //   expect-model-parameter <name> <value|absent> [user|model|reference]
 //                           check a parameter in mm; kind defaults to user
 //   model-command <JSON object> send one synthetic model mutation through
@@ -327,6 +333,7 @@
 //   focus-document-window <name> activate that retained window through its host
 //   focus-document-path <path> activate the already open file's actual window
 //   capture-model-number <var> <query JSON> <dot.path> read a numeric result
+//                           (a number in the path indexes an array)
 //   expect-document-cache-sharing <total bytes> actual per-document budgets
 //   system-window-menu <entry> the owned macOS Window menu's actual action
 //   expect-document-windows <count> the actual process window registry's count
@@ -487,6 +494,10 @@
 //                           MITCAD_UI_REQUIRE_RETINA=1 additionally requires 2x
 //   capture-view-target <var> record actual OCCT camera target
 //   expect-view-pan <before> changed|unchanged compare target in mm
+//   expect-view-pan-along <from> <to> <since> same|opposite the target's
+//                           move since <since> goes the way of <from> to
+//                           <to> or the other way, within 45 degrees
+//                           (captured targets; mitcad#1873)
 //   space-mouse <tx> <ty> <tz> <rx> <ry> <rz> [ms] hold a 3D mouse's axes
 //                           (the view's frame, about ±1 at full deflection)
 //                           for ms (300), then release them (mitcad#951)
@@ -859,6 +870,7 @@ private:
                    QRegularExpressionMatch* match = nullptr) const;
   bool loggedPoint(const QRegularExpression& re, int from, QPoint& out) const;
   bool sketchPoint(double x, double y, QPoint& out) const;
+  bool drawingSheetPoint(double x, double y, QPoint& out) const;
   bool viewPoint(double xPercent, double yPercent, QPoint& out) const;
 
   // Events. Gestures and keys are queued, one event per tick.
@@ -891,6 +903,7 @@ private:
   void testNavigationRuntime();
   void testNavigationRelease();
   void testNavigationGestureState();
+  void testDragZoom();
   void setViewNavigation(const QString& scheme);
   void testNavigationControls(const QString& mode);
   void testAssistantSetup(const QString& mode);

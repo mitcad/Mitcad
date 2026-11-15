@@ -189,9 +189,11 @@ const StepSpec kSpecs[] = {
     {"trackpad-scroll", 5, 6, kInputOfMain},
     {"hover-logged", 1, 1, kInputOfMain},
     {"timeline-leave", 0, 0, kInputOfMain},
-    {"leave-widget", 1, 1, kInputOfMain},
-    {"hover-row", 2, 2, kInputOfMain},
-    {"click-row", 2, 2, kInputOfMain},
+    // In the window the script targets: the main window, or a modal dialog
+    // (mitcad#1816: the Properties window's table).
+    {"leave-widget", 1, 1, kInputOfTarget},
+    {"hover-row", 2, 2, kInputOfTarget},
+    {"click-row", 2, 2, kInputOfTarget},
     {"expect-timeline-hover", 1, 1, kIdle},
     {"expect-timeline-tooltip", 1, 1, kIdle},
     {"capture-view-image", 1, 1, kIdle},
@@ -215,6 +217,7 @@ const StepSpec kSpecs[] = {
     {"sketch-click", 2, 4, kInputOfMain},
     {"sketch-dblclick", 2, 4, kInputOfMain},
     {"sketch-move", 2, 2, kInputOfMain},
+    {"drawing-sheet-click", 2, 4, kInputOfMain}, // mitcad#1841
     {"expect-sketch-field-dimension", 3, 3, kIdle},
     {"expect-sketch-dimension-clear", 1, 1, kIdle},
     {"expect-sketch-dimensions-apart", 1, 1, kIdle},
@@ -284,6 +287,8 @@ const StepSpec kSpecs[] = {
     {"expect-view-stepped", 1, 1, kIdle},
     {"preview-back-faces", 1, 1, kIdle},
     {"expect-view-pan", 2, 2, kIdle},
+    // A pan's direction against an earlier one (mitcad#1873).
+    {"expect-view-pan-along", 4, 4, kIdle},
     {"expect-viewport", 0, 0, kIdle},
     {"window-state", 1, 1, kIdle},
     {"expect-window-state", 1, 1, kIdle},
@@ -295,6 +300,7 @@ const StepSpec kSpecs[] = {
     {"expect-navigation-runtime", 0, 0, kIdle},
     {"expect-navigation-release", 0, 0, kIdle},
     {"expect-navigation-gesture-state", 0, 0, kIdle},
+    {"expect-drag-zoom", 0, 0, kIdle},
     {"view-navigation", 1, 1, kIdle},
     {"expect-assistant-setup", 1, 1, kIdle},
     {"agent-menu", 2, 2, kIdle},
@@ -335,6 +341,8 @@ const StepSpec kSpecs[] = {
     // (mitcad#1284: the model's message in the interface language).
     {"model-command-refused", 1, 1, kIdle},
     {"expect-input-text", 2, 2, kIdle},
+    // A Qt choice's shown option (mitcad#1868: a remembered choice).
+    {"expect-choice-text", 2, 2, kIdle},
     {"expect-shown-body", 3, 9, kIdle},
     {"capture-shown-body", 3, 3, kIdle},
     {"expect-shown-body-meshes", 3, 3, kIdle},
@@ -1064,6 +1072,27 @@ bool TestDriver::loggedPoint(const QRegularExpression& re, int from, QPoint& out
 bool TestDriver::sketchPoint(double x, double y, QPoint& out) const {
   static const QRegularExpression view(QStringLiteral(
       "Sketch view ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+)"));
+  QRegularExpressionMatch match;
+  if (findLastLine(view, 0, nullptr, &match) < 0) {
+    return false;
+  }
+  const double ox = match.captured(1).toDouble();
+  const double oy = match.captured(2).toDouble();
+  const double ax = match.captured(3).toDouble();
+  const double ay = match.captured(4).toDouble();
+  const double bx = match.captured(5).toDouble();
+  const double by = match.captured(6).toDouble();
+  out = QPoint(qRound(ox + (ax - ox) * x / 100.0 + (bx - ox) * y / 100.0),
+               qRound(oy + (ay - oy) * x / 100.0 + (by - oy) * y / 100.0));
+  return true;
+}
+
+// A drawing sheet's point (mm) in window pixels, from "Drawing sheet view
+// x0,y0 x1,y1 x2,y2" (the sheet points (0, 0), (100, 0) and (0, 100);
+// mitcad#1841).
+bool TestDriver::drawingSheetPoint(double x, double y, QPoint& out) const {
+  static const QRegularExpression view(QStringLiteral(
+      "^Drawing sheet view ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+) ([-0-9.]+),([-0-9.]+)"));
   QRegularExpressionMatch match;
   if (findLastLine(view, 0, nullptr, &match) < 0) {
     return false;
@@ -1962,7 +1991,12 @@ void TestDriver::run(const Step& step) {
     const QJsonDocument query = QJsonDocument::fromJson(a.at(1).toUtf8());
     if (!window || !query.isObject()) { fail(line, QStringLiteral("capture-model-number requires a document and JSON query")); return; }
     QJsonValue value = window->query(query.object());
-    for (const QString& part : a.at(2).split(QLatin1Char('.'))) value = value.toObject().value(part);
+    // A number in the path indexes an array (`parts.0.length`, mitcad#1814).
+    for (const QString& part : a.at(2).split(QLatin1Char('.'))) {
+      bool isPathIndex = false;
+      const int pathIndex = part.toInt(&isPathIndex);
+      value = isPathIndex && value.isArray() ? value.toArray().at(pathIndex) : value.toObject().value(part);
+    }
     if (!value.isDouble() || !std::isfinite(value.toDouble())) {
       fail(line, QStringLiteral("model query path '%1' is not a finite number").arg(a.at(2))); return;
     }
@@ -2273,6 +2307,20 @@ void TestDriver::run(const Step& step) {
       const auto* input = window ? window->findChild<QLineEdit*>(id) : nullptr;
       return input && re.match(input->text()).hasMatch();
     }, 6, QStringLiteral("input %1 did not match %2").arg(a.at(0), a.at(1)));
+  } else if (name == QLatin1String("expect-choice-text")) {
+    // The option a panel's choice shows (its combo's text, or a wrapper's
+    // child combo's), as the user reads it (mitcad#1868).
+    QRegularExpression re;
+    if (!regex(a.at(1), re)) { return; }
+    const QString id = QStringLiteral("input_") + a.at(0);
+    whenReady([this, id, re] {
+      QWidget* window = m_main.data();
+      QWidget* field = window ? window->findChild<QWidget*>(id) : nullptr;
+      const QComboBox* combo = qobject_cast<QComboBox*>(field);
+      if (!combo && field) { combo = field->findChild<QComboBox*>(); }
+      if (combo) { m_waitDetail = QStringLiteral("shown '%1'").arg(combo->currentText()); }
+      return combo && re.match(combo->currentText()).hasMatch();
+    }, 6, QStringLiteral("choice %1 did not show %2").arg(a.at(0), a.at(1)));
   } else if (name == QLatin1String("capture-sketch")) {
     auto* window = qobject_cast<MainWindow*>(mainWindow);
     if (!window || window->modelBusy()) {
@@ -2965,6 +3013,8 @@ void TestDriver::run(const Step& step) {
     testNavigationRuntime();
   } else if (name == QLatin1String("expect-navigation-release")) {
     testNavigationRelease();
+  } else if (name == QLatin1String("expect-drag-zoom")) {
+    testDragZoom();
   } else if (name == QLatin1String("expect-navigation-gesture-state")) {
     testNavigationGestureState();
   } else if (name == QLatin1String("view-navigation")) {
@@ -3436,6 +3486,44 @@ void TestDriver::run(const Step& step) {
       m_waitDetail = QStringLiteral("camera target moved %1 mm").arg(distance, 0, 'g', 12);
       return std::isfinite(distance) && (changed ? distance > 1e-6 : distance <= 1e-6);
     }, 6, QStringLiteral("the camera pan did not remain %1").arg(a.at(1)));
+  } else if (name == QLatin1String("expect-view-pan-along")) {
+    // expect-view-pan-along <from> <to> <since> same|opposite (mitcad#1873):
+    // the camera target's move since <since> goes the way of the move from
+    // <from> to <to>, or the other way (within 45 degrees of it).
+    std::array<gp_Pnt, 3> points;
+    bool parsed = a.at(3) == QLatin1String("same") || a.at(3) == QLatin1String("opposite");
+    for (int i = 0; parsed && i < 3; ++i) {
+      const QStringList coordinates = a.at(i).split(QLatin1Char(','));
+      double px = 0, py = 0, pz = 0;
+      parsed = coordinates.size() == 3 && toNumber(coordinates.at(0), px) && toNumber(coordinates.at(1), py) &&
+               toNumber(coordinates.at(2), pz);
+      points[std::size_t(i)] = gp_Pnt(px, py, pz);
+    }
+    if (!parsed) {
+      fail(line, QStringLiteral("expect-view-pan-along <from-target> <to-target> <since-target> same|opposite")); return;
+    }
+    const gp_Vec reference(points[0], points[1]);
+    if (reference.Magnitude() <= 1e-6) {
+      fail(line, QStringLiteral("expect-view-pan-along: the reference pan did not move the camera target")); return;
+    }
+    const bool same = a.at(3) == QLatin1String("same");
+    const gp_Pnt since = points[2];
+    whenReady([this, reference, since, same] {
+      auto* view = qobject_cast<OcctViewer*>(viewer());
+      if (!view) return false;
+      const gp_Vec moved(since, view->camera().target);
+      if (moved.Magnitude() <= 1e-6) {
+        m_waitDetail = QStringLiteral("the camera target has not moved");
+        return false;
+      }
+      const double cosine = reference.Dot(moved) / (reference.Magnitude() * moved.Magnitude());
+      m_waitDetail = QStringLiteral("the cosine between the pans' directions is %1").arg(cosine, 0, 'f', 3);
+      return same ? cosine >= std::sqrt(0.5) : cosine <= -std::sqrt(0.5);
+    }, 6, QStringLiteral("the camera did not pan the %1 way").arg(same ? QStringLiteral("same") : QStringLiteral("opposite")),
+    [same] {
+      qInfo().noquote() << QStringLiteral("TestDriver: the view panned the %1 way")
+                               .arg(same ? QStringLiteral("same") : QStringLiteral("opposite"));
+    });
   } else if (name == QLatin1String("window-state") || name == QLatin1String("expect-window-state")) {
     const QString state = a.at(0);
     if (state != QLatin1String("normal") && state != QLatin1String("minimized") && state != QLatin1String("fullscreen") &&
@@ -5170,7 +5258,7 @@ void TestDriver::run(const Step& step) {
     auto dimension = value.dimension;
     dimension.text = *at;
     const sketch::Projection projection{[controller](const sketch::V2& p) { return controller->toScreen(p); },
-                                         controller->pixel()};
+                                         controller->pixel(), controller->faceBend()};
     const auto shape = sketch::dimensionShape(dimension, value.model, projection, QString());
     if (!shape.valid || shape.arrows.empty() || (shape.lines.empty() && shape.arcs.empty()) ||
         QLineF(shape.textAt, field.center()).length() > 1.0) {
@@ -5233,7 +5321,10 @@ void TestDriver::run(const Step& step) {
     }, mainWindow);
   } else if (name == QLatin1String("sketch-click") || name == QLatin1String("sketch-dblclick") ||
              name == QLatin1String("sketch-drag") ||
-             name == QLatin1String("sketch-move")) {
+             name == QLatin1String("sketch-move") || name == QLatin1String("drawing-sheet-click")) {
+    // drawing-sheet-click: a click at a drawing sheet's point (mm), as
+    // sketch-click at a sketch's (mitcad#1841).
+    const bool sheet = name == QLatin1String("drawing-sheet-click");
     const bool drag = name == QLatin1String("sketch-drag");
     const bool move = name == QLatin1String("sketch-move");
     const int clicks = name == QLatin1String("sketch-dblclick") ? 2 : 1;
@@ -5259,10 +5350,13 @@ void TestDriver::run(const Step& step) {
     const double x2 = c[2];
     const double y2 = c[3];
     whenReady(
-        [this, drag, x1, y1, x2, y2, from, to] {
+        [this, sheet, drag, x1, y1, x2, y2, from, to] {
+          if (sheet) {
+            return drawingSheetPoint(x1, y1, *from);
+          }
           return sketchPoint(x1, y1, *from) && (!drag || sketchPoint(x2, y2, *to));
         },
-        6, QStringLiteral("the app logged no sketch view"),
+        6, sheet ? QStringLiteral("the app logged no drawing sheet view") : QStringLiteral("the app logged no sketch view"),
         [this, drag, move, clicks, from, to, button, modifiers] {
           if (drag) {
             queueDrag(*from, *to, Qt::LeftButton, Qt::NoModifier);

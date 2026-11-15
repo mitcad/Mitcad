@@ -194,6 +194,24 @@ fn block_design(size: [f64; 3], corner: [f64; 2], frames: &[Frame<'_>]) -> Strin
     doc.to_json()
 }
 
+/// A block of a box primitive (no sketch, no extrusion) with frames given
+/// as (name, origin, z, x).
+fn primitive_design(size: [f64; 3], corner: [f64; 2], frames: &[Frame<'_>]) -> String {
+    let mut doc = Document::new(MockKernel::default());
+    doc.add_feature(
+        &def(json!({"type": "box", "plane": "xy", "corner": corner,
+                    "length": size[0], "width": size[1], "height": size[2],
+                    "operation": "new_body"})),
+        None,
+    )
+    .unwrap();
+    for (name, origin, z, x) in frames {
+        fixed_frame(&mut doc, name, *origin, *z, *x);
+    }
+    doc.recompute();
+    doc.to_json()
+}
+
 /// An angle bracket of two plates 4 mm thick and 20 wide, each a body of
 /// its own, so that the mock kernel's boxes keep its walls (mitcad#1115):
 /// arm a on z = 0 from x = 0 to 40, arm b on x = 0 from z = 0 to 40; its
@@ -622,6 +640,26 @@ impl TestLibrary {
         add("bound-rows", V1, bound_rows());
         // A profile without slots that is no timber: a steel tube.
         add("tube40", V1, tube40());
+        // A cap made of a box primitive, no section to extrude (mitcad#1815:
+        // Convert to Features makes it a plain body).
+        add(
+            "cap30-box",
+            V1,
+            Part {
+                text: primitive_design(
+                    [30.0, 30.0, 4.0],
+                    [-15.0, -15.0],
+                    &[("end", [0.0; 3], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0])],
+                ),
+                build: Some(
+                    json!({"role": "cap", "systems": [{"type": "B", "slot": 8, "grid": 30}],
+                           "frames": [{"name": "end", "kind": "end"}]}),
+                ),
+                part_number: "CAP30B".to_owned(),
+                name: "Box cap 30 B8".to_owned(),
+                designation: String::new(),
+            },
+        );
         Arc::new(library)
     }
 }

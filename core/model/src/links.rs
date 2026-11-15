@@ -89,6 +89,48 @@ impl OccurrenceLinkExt for OccurrenceLink {
     }
 }
 
+/// A link's transform (as [`OccurrenceLinkExt::transform`] with the
+/// `target` path it resolves to) with the occurrences inside flexible
+/// occurrences where `inside` places them (mitcad#1805; `inside(prefix,
+/// o)`, `joints::flexed_step` or a recorded read of it), as the design
+/// shows them: only after the part of the two paths both share, so that a
+/// feature of a component inside a flexible occurrence sees its
+/// component's own placements, as the component's other occurrences do.
+/// None when no step of either path is inside one (the plain transform
+/// then).
+pub(crate) fn flexed_transform(
+    source: &[OccurrenceUid],
+    target: &[OccurrenceUid],
+    placement: &mut dyn FnMut(OccurrenceUid) -> Transform,
+    inside: &mut dyn FnMut(&[OccurrenceUid], OccurrenceUid) -> Option<Transform>,
+) -> Option<Transform> {
+    let shared = source
+        .iter()
+        .zip(target)
+        .take_while(|(s, t)| s == t)
+        .count();
+    if source.len() <= shared + 1 && target.len() <= shared + 1 {
+        return None;
+    }
+    let mut flexed = false;
+    let mut along = |path: &[OccurrenceUid]| {
+        let mut t = Transform::IDENTITY;
+        for (i, o) in path.iter().enumerate() {
+            let placed = if i > shared {
+                inside(&path[shared..i], *o)
+            } else {
+                None
+            };
+            flexed |= placed.is_some();
+            t = t.after(&placed.unwrap_or_else(|| placement(*o)));
+        }
+        t
+    };
+    let source_at = along(source);
+    let target_at = along(target);
+    flexed.then(|| inverse(&target_at).after(&source_at))
+}
+
 /// `given` when it leads from the root to `component`, else the first path
 /// to it in a depth-first walk of the occurrence tree (where the
 /// application shows the component's sketches). Fails for a component

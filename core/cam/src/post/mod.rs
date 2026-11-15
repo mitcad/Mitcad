@@ -21,6 +21,7 @@ mod reprap;
 mod tests;
 
 use std::collections::VecDeque;
+use std::f64::consts::PI;
 
 use serde::{Deserialize, Serialize};
 
@@ -28,7 +29,7 @@ use crate::CamError;
 use crate::machine::{Machine, MacroChanger, RackSlot, ToolChanger};
 use crate::program::{Coolant, Program, SpindleDirection};
 use crate::tool::Tool;
-use crate::toolpath::{CycleKind, DrillCycle, Move, P3, move_points};
+use crate::toolpath::{CycleKind, DrillCycle, Move, P3, arc_sweep, move_points};
 
 pub use grbl::{Grbl, GrblHal};
 pub use linuxcnc::LinuxCnc;
@@ -493,6 +494,16 @@ impl Output {
                 "An arc starts where the tool's position is not known.",
             ));
         };
+        // An arc whose end is its start to the program's digits is a whole
+        // turn to the controller. Unless the arc is one (more than half a
+        // turn, at most a digit short of a whole one), the line between
+        // its ends stands for it, or nothing when Z stays too.
+        let lands_on_start =
+            (0..2).all(|k| self.words[k].as_deref() == Some(self.len(to[k]).as_str()));
+        if lands_on_start && arc_sweep([x, y], [to[0], to[1]], center, ccw).abs() < PI {
+            self.linear(to, feed);
+            return Ok(());
+        }
         let i = self.len(center[0] - x);
         let j = self.len(center[1] - y);
         let g = if ccw { "G3" } else { "G2" };

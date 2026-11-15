@@ -1134,3 +1134,302 @@ if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_
   set_tests_properties(app.ui-macos-preview-transparency PROPERTIES
     TIMEOUT 180 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
 endif()
+
+# Timber's Along an edge (mitcad#1814) in the Qt frontend: the shared steps
+# of tools/ui-timber-edge-test.sh (tools/ui-scripts/timber-edge.mitcad-ui), a
+# member along a plate's edge, flush, moved by its four offsets, following
+# the plate when it gets shorter; a round edge refused in words. The timber
+# library of tools/ui-timber-lib.sh, fetched from a local git repository.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-timber-edge
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-timber-edge-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-timber-edge")
+  set_tests_properties(app.ui-macos-timber-edge PROPERTIES
+    TIMEOUT 480 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# The edit panel of a derived part (mitcad#1812): the shared steps of
+# tools/ui-derived-part-edit-test.sh in the Qt frontend, with a synthetic
+# BUILD library fetched from a local git repository.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-derived-part-edit
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-derived-part-edit-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-derived-part-edit")
+  set_tests_properties(app.ui-macos-derived-part-edit PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Assembly Constraint's preview with more than one row (mitcad#1813): an
+# incomplete row left out of the preview, a moved part drawn once; the
+# shared steps of tools/ui-constraint-rows-preview-test.sh and
+# tools/ui-windows-constraint-rows-preview-test.ps1 in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-constraint-rows-preview
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-constraint-rows-preview-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-constraint-rows-preview")
+  set_tests_properties(app.ui-macos-constraint-rows-preview PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# The Properties window (mitcad#1816): the shared steps of
+# tools/ui-properties-window-test.sh in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-properties-window
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-properties-window-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-properties-window")
+  set_tests_properties(app.ui-macos-properties-window PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# A member placed with Timber is made of its library's wood (mitcad#1817):
+# the shared steps of tools/ui-timber-material-test.sh in the Qt frontend,
+# Physical Properties showing Spruce and the mass its density gives.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-timber-material
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-timber-material-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-timber-material")
+  set_tests_properties(app.ui-macos-timber-material PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Convert to Features (mitcad#1815): a timber member from a library made in
+# the test, joined to a plate, converted from its row's menu; its sketch
+# and extrusion in the timeline, the section's width changed, the joint
+# holding. The shared steps of tools/ui-convert-features-test.sh and
+# tools/ui-windows-convert-features-test.ps1 in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-convert-features
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-convert-features-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-convert-features")
+  set_tests_properties(app.ui-macos-convert-features PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Form and Edit Form (mitcad#1757, mitcad#1810): the shared steps of
+# tools/ui-form-test.sh and tools/ui-windows-form-test.ps1 in the Qt
+# frontend: a box cage's face moved and extruded, an edge creased
+# semi-sharp, symmetry about a picked plane, a vertex dragged in the view,
+# and a Form with Operation Cut cutting a box.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-form
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-form-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-form")
+  set_tests_properties(app.ui-macos-form PROPERTIES
+    TIMEOUT 480 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Open Cage as Form (mitcad#1757, mitcad#1810): the shared steps of
+# tools/ui-form-kept-cage-test.sh and
+# tools/ui-windows-form-kept-cage-test.ps1 in the Qt frontend: an imported
+# body that keeps a control cage opened from its Browser row as a Form, a
+# face moved, Close keeping it.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-form-kept-cage
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-form-kept-cage-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-form-kept-cage")
+  set_tests_properties(app.ui-macos-form-kept-cage PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# glTF export and import (mitcad#1826): the shared steps of
+# tools/ui-gltf-test.sh in the Qt frontend, File > Export to .glb and .gltf
+# read back by MitCad's own reader, File > Import and Open of both.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-gltf
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-gltf-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-gltf")
+  set_tests_properties(app.ui-macos-gltf PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Construction planes drawn at the size and shape of what they come from
+# (mitcad#1827): the shared steps of tools/ui-construction-size-test.sh in
+# the Qt frontend, a plane saved with a size opening unchanged, one off a
+# long narrow face a rectangle over it, a handle's drag and Reset Size.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-construction-size
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-construction-size-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-construction-size")
+  set_tests_properties(app.ui-macos-construction-size PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# 3D relations from the 3D Sketch Palette (mitcad#1661, #1836): the shared
+# steps of tools/ui-sketch3d-relations-test.sh and
+# tools/ui-windows-sketch3d-relations-test.ps1 in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-sketch3d-relations
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-sketch3d-relations-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-sketch3d-relations")
+  set_tests_properties(app.ui-macos-sketch3d-relations PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Repeat runs a value's reaction with the repeated value (mitcad#1844) and
+# keeps typed only what was typed (mitcad#1845): the shared steps of
+# tools/ui-hole-repeat-test.sh in the Qt frontend, a Hole with a custom
+# thread repeated, its sizes filled for the repeated diameter and its
+# countersink following a new one; a typed countersink kept after Repeat.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-hole-repeat
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-hole-repeat-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-hole-repeat")
+  set_tests_properties(app.ui-macos-hole-repeat PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# A command panel set aside hides its handles (mitcad#1844): the shared
+# steps of tools/ui-joint-suspended-handles-test.sh in the Qt frontend,
+# Joint's Animate with its handles hidden and a drag where one was moving
+# nothing, the handles back after Esc.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-joint-suspended-handles
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-joint-suspended-handles-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-joint-suspended-handles")
+  set_tests_properties(app.ui-macos-joint-suspended-handles PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# The Floating Command card at Text size and Icon size 200 % (mitcad#1846):
+# the shared steps of tools/ui-floating-command-width-test.sh in the Qt
+# frontend, the card at least 600 px wide and the Sketch Palette whole in it.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-floating-command-width
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-floating-command-width-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-floating-command-width")
+  set_tests_properties(app.ui-macos-floating-command-width PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Move to Component on a rigid group joined to a shaft (mitcad#1847): the
+# shared steps of tools/ui-move-occurrence-group-test.sh in the Qt
+# frontend, every unavailable parent's reasons under it and a rigid group
+# moved as one.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-move-occurrence-group
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-move-occurrence-group-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-move-occurrence-group")
+  set_tests_properties(app.ui-macos-move-occurrence-group PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Joint's picks under another component than the active one (mitcad#1856):
+# the shared steps of tools/ui-joint-holder-test.sh in the Qt frontend, the
+# question, Make it there mounting the sub-assembly whole, Don't ask again
+# and Preferences > Assembly back to Ask.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-joint-holder
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-joint-holder-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-joint-holder")
+  set_tests_properties(app.ui-macos-joint-holder PROPERTIES
+    TIMEOUT 420 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+# Delete Sheet while the title block is edited (mitcad#1841): the shared
+# steps of tools/ui-drawing-title-block-sheets-test.sh in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-drawing-title-block-sheets
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-drawing-title-block-sheets-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-drawing-title-block-sheets")
+  set_tests_properties(app.ui-macos-drawing-title-block-sheets PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# A widening taper that closes a slot (mitcad#1851): the shared steps of
+# tools/ui-taper-closes-slot-test.sh in the Qt frontend, Extrude
+# succeeding and Properties showing the body's volume.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-taper-closes-slot
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-taper-closes-slot-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-taper-closes-slot")
+  set_tests_properties(app.ui-macos-taper-closes-slot PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# A joint edited with its Offset emptied while typing (mitcad#1860): the
+# shared steps of tools/ui-joint-edit-empty-offset-test.sh in the Qt
+# frontend, the joint and the rigid group after it held in the edit's
+# preview and nothing moved while the Offset is empty.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-joint-edit-empty-offset
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-joint-edit-empty-offset-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-joint-edit-empty-offset")
+  set_tests_properties(app.ui-macos-joint-edit-empty-offset PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Edit Parameters sorted by a column (mitcad#1866): the shared steps of
+# tools/ui-parameters-sort-test.sh in the Qt frontend, Name's and Value's
+# headers both ways and back to the creation order, the choice kept, an
+# edited and an added row selected in their place.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-parameters-sort
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-parameters-sort-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-parameters-sort")
+  set_tests_properties(app.ui-macos-parameters-sort PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# A drag zoom follows the pointer's vertical motion (mitcad#1867): the shared
+# steps of tools/ui-navigation-drag-zoom-test.sh in the Qt frontend, Shift +
+# middle in the middle-orbit scheme, in the Floating and the Docked layout.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-navigation-drag-zoom
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-navigation-drag-zoom-test.sh"
+            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-navigation-drag-zoom")
+  set_tests_properties(app.ui-macos-navigation-drag-zoom PROPERTIES
+    TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Flange's remembered choices (mitcad#1868): the shared steps of
+# tools/ui-sheet-flange-remembered-test.sh in the Qt frontend, a new Flange
+# starting with the last OK's Measured and Position and an edit loading its
+# own.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-sheet-flange-remembered
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-sheet-flange-remembered-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-sheet-flange-remembered")
+  set_tests_properties(app.ui-macos-sheet-flange-remembered PROPERTIES
+    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Fill Cavity (mitcad#1818): the shared steps of tools/ui-fill-cavity-test.sh
+# in the Qt frontend, a blind slit filled up to a plane and an open groove
+# as the seed refused in words.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-fill-cavity
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-fill-cavity-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-fill-cavity")
+  set_tests_properties(app.ui-macos-fill-cavity PROPERTIES
+    TIMEOUT 660 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Press Pull on a face continued (mitcad#1850): a bent tube's end opens
+# Revolve1's edit, then goes Along the Walls with its ring dragged past the
+# walls' inner radius; a T-slot bar's end Straight with a Scale taper. The
+# shared steps of tools/ui-press-pull-continued-test.sh and
+# tools/ui-windows-press-pull-continued-test.ps1 in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-press-pull-continued
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-press-pull-continued-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-press-pull-continued")
+  set_tests_properties(app.ui-macos-press-pull-continued PROPERTIES
+    TIMEOUT 360 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()
+
+# Sketches on curved faces (mitcad#1768, mitcad#1853): the shared steps of
+# tools/ui-sketch-cylinder-face-test.sh (a rectangle typed on a cylinder's
+# side) and tools/ui-sketch-cone-face-test.sh (one on a cone's side, no
+# layout grid on the face, the dimensions' lines drawn on it, a picture in
+# files/) in the Qt frontend.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  foreach(face IN ITEMS cylinder cone)
+    add_test(NAME app.ui-macos-sketch-${face}-face
+      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-sketch-${face}-face-test.sh"
+              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-sketch-${face}-face")
+    set_tests_properties(app.ui-macos-sketch-${face}-face PROPERTIES
+      TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+  endforeach()
+endif()
+
+# The Browser's component color bars (mitcad#1876): the shared steps of
+# tools/ui-browser-component-colors-test.sh in the Qt frontend, every
+# component, occurrence and body row in its component's timeline color.
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET mitcad-cli AND BASH_EXECUTABLE)
+  add_test(NAME app.ui-macos-browser-component-colors
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-browser-component-colors-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-browser-component-colors")
+  set_tests_properties(app.ui-macos-browser-component-colors PROPERTIES
+    TIMEOUT 240 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()

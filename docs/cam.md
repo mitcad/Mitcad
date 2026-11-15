@@ -427,7 +427,13 @@ tool radius removes against a straight cut at that engagement
 count as much as a whole stretch of it.
 
 - **Pockets:** a helix opens the middle of each part (the point farthest
-  from its walls); fronts of equal distance from it *inside the pocket*
+  from its walls); with a plunge or a ramp entry (or a helix that does
+  not fit there), a spiral at the floor out from the plunge does, as far
+  as half the tool's radius, each turn out by `e rho / (rho + r)` (`rho`
+  its distance from the middle, `e` the front's depth), so that the
+  tool's sweep takes no more per length than a straight cut `e` deep;
+  rings straight round the plunge's hole would each take the tool's
+  radius per length. Fronts of equal distance from it *inside the pocket*
   (a distance field on a grid finer than the step, so that they go round
   islands and into side arms) clear outwards. Small rings round the
   middle grow by the step that keeps their larger outer sweep within the
@@ -531,10 +537,12 @@ flat, ball and bull nose end mills.
   exactly that). At a level the tool's center may be where the cylinder of
   its radius grown by the stock to leave, its end raised by it, rests no
   higher than the level, inside the boundary: those edges are found like
-  waterlines, grown by the cylinder's radius into the walls of a pocket,
-  and cleared by the offset pocket (or adaptive clearing) with the stock
-  to leave and one and a half tolerances kept from the walls, so that the
-  tool stays the stock to leave off the bodies to the side and below.
+  waterlines (the boundary's corners put back between two points on it),
+  and the area is cleared by the offset pocket (or adaptive clearing)
+  with the tool's center kept inside it, one and a half tolerances from
+  its edges, so that the tool stays the stock to leave off the bodies to
+  the side and below and its center inside the boundary, off islands
+  narrower than the tool and out of its inward corners too.
   Each level's pocket comes down from the level above, whose area holds
   it. Flat and bull nose end mills (a bull nose lies inside its
   cylinder).
@@ -581,6 +589,16 @@ G43.1 Z, M4000 R, G64 P, cycle Z, R and Q, the tool changer's lines and
 the park position) and every feed; spindle speeds, dwells and the
 tools' names in the comments stay as they are. Golden files of every
 dialect in inches are in `core/cam/src/post/golden/`.
+
+**Short arcs:** an arc with I and J whose end equals its start is a whole
+turn to every controller. An arc of less than half a turn whose end
+rounds to its start at the program's digits (3 decimals of a millimetre,
+4 of an inch) is therefore written as the line between its ends, or not
+at all when Z does not change either; a meant whole turn (a helix turn)
+stays one arc. The toolpaths keep such arcs out of the outlines they cut
+in the first place: an outline's arc with a chord under 0.01 mm is cut
+as a line (`PathBuilder::segment`, used by the offset pocket, 3D
+roughing and every cut along a path).
 
 **Canned drilling cycles:** a drilling toolpath records its holes as one
 `DrillCycle` (G81 in one go, G83 pecks out of the hole, G73 pecks that
@@ -765,7 +783,9 @@ operations and machines":
 Values are millimetres (mm/min, rpm, degrees) as JSON numbers, or
 expressions with units that the design's parameters evaluate (`"0.25
 in"`), so inch users enter inches; the program is written in inches with
-`post.units`. Errors follow the api's rules: a message in words.
+`post.units`. A parameter's rename rewrites the expressions that name it,
+and a parameter they use is not deleted (mitcad#1830). Errors follow the
+api's rules: a message in words.
 
 ## UI
 

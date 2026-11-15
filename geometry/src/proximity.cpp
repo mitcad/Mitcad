@@ -10,6 +10,13 @@
 #include <utility>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <IntCurvesFace_Intersector.hxx>
+#include <TopExp_Explorer.hxx>
+#include <gp_Ax3.hxx>
+#include <gp_Cone.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepTools.hxx>
 #include <BRepExtrema_DistanceSS.hxx>
@@ -43,6 +50,8 @@
 #include <gp.hxx>
 #include <gp_Lin.hxx>
 #include <gp_Vec.hxx>
+
+#include "content_cache.hpp"
 
 namespace mitcad::geometry::detail {
 namespace {
@@ -492,6 +501,500 @@ bool SurfaceProbe::holds(const std::vector<gp_Pnt>& points, double tolerance) {
 
 namespace {
 
+// The largest tolerance of a face, its edges and vertices.
+double largest_tolerance(const TopoDS_Face& face) {
+  double tolerance = BRep_Tool::Tolerance(face);
+  for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+    tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Edge(e.Current())));
+  }
+  for (TopExp_Explorer v(face, TopAbs_VERTEX); v.More(); v.Next()) {
+    tolerance = std::max(tolerance, BRep_Tool::Tolerance(TopoDS::Vertex(v.Current())));
+  }
+  return tolerance;
+}
+
+// Where the segment from `from` to `to` enters the box, as the fraction of
+// the segment (0 where it starts inside); none where it misses the box.
+std::optional<double> segment_enters(const Bnd_Box& box, const gp_Pnt& from, const gp_Pnt& to) {
+  if (box.IsVoid()) {
+    return std::nullopt;
+  }
+  if (box.IsOpen()) {
+    return 0.0;
+  }
+  double lo[3];
+  double hi[3];
+  box.Get(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+  const double start[3] = {from.X(), from.Y(), from.Z()};
+  const double step[3] = {to.X() - from.X(), to.Y() - from.Y(), to.Z() - from.Z()};
+  double t0 = 0.0;
+  double t1 = 1.0;
+  for (int k = 0; k < 3; ++k) {
+    if (step[k] == 0.0) {
+      if (start[k] < lo[k] || start[k] > hi[k]) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    double a = (lo[k] - start[k]) / step[k];
+    double b = (hi[k] - start[k]) / step[k];
+    if (a > b) {
+      std::swap(a, b);
+    }
+    t0 = std::max(t0, a);
+    t1 = std::min(t1, b);
+    if (t0 > t1) {
+      return std::nullopt;
+    }
+  }
+  return t0;
+}
+
+// A Bezier patch of a face's surface: its poles in homogeneous coordinates
+// (x w, y w, z w, w), moved to the face's place, `rows` along U by `cols`
+// along V. With positive weights the patch lies within the box of its
+// poles, and within the boxes of its halves' poles.
+struct Patch {
+  int rows = 0;
+  int cols = 0;
+  std::vector<std::array<double, 4>> poles;
+
+  std::array<double, 4>& at(int i, int j) { return poles[static_cast<std::size_t>(i * cols + j)]; }
+  const std::array<double, 4>& at(int i, int j) const { return poles[static_cast<std::size_t>(i * cols + j)]; }
+};
+
+Patch patch_of(const NCollection_Array2<gp_Pnt>& poles, const NCollection_Array2<double>* weights,
+               const TopLoc_Location& location) {
+  Patch patch;
+  patch.rows = poles.ColLength();
+  patch.cols = poles.RowLength();
+  const gp_Trsf move = location.Transformation();
+  for (int i = poles.LowerRow(); i <= poles.UpperRow(); ++i) {
+    for (int j = poles.LowerCol(); j <= poles.UpperCol(); ++j) {
+      const gp_Pnt p = location.IsIdentity() ? poles(i, j) : poles(i, j).Transformed(move);
+      const double w = weights != nullptr ? (*weights)(i, j) : 1.0;
+      if (!(w > 0.0)) {
+        return {};
+      }
+      patch.poles.push_back({p.X() * w, p.Y() * w, p.Z() * w, w});
+    }
+  }
+  return patch;
+}
+
+// The Bezier patches of a B-spline or Bezier face's surface within the
+// face's parameter bounds; none for another surface, bounds past the
+// surface's, or a weight that is not positive.
+std::vector<Patch> face_patches(const TopoDS_Face& face) {
+  std::vector<Patch> patches;
+  TopLoc_Location location;
+  occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+  while (const occ::handle<Geom_RectangularTrimmedSurface> trimmed =
+             occ::down_cast<Geom_RectangularTrimmedSurface>(surface)) {
+    surface = trimmed->BasisSurface();
+  }
+  const auto add = [&](const occ::handle<Geom_BezierSurface>& bezier) {
+    NCollection_Array2<double> weights(1, bezier->NbUPoles(), 1, bezier->NbVPoles());
+    weights.Init(1.0);
+    if (bezier->IsURational() || bezier->IsVRational()) {
+      for (int i = 1; i <= bezier->NbUPoles(); ++i) {
+        for (int j = 1; j <= bezier->NbVPoles(); ++j) {
+          weights(i, j) = bezier->Weight(i, j);
+        }
+      }
+    }
+    Patch patch = patch_of(bezier->Poles(), &weights, location);
+    if (patch.poles.empty()) {
+      return false;
+    }
+    patches.push_back(std::move(patch));
+    return true;
+  };
+  if (const occ::handle<Geom_BSplineSurface> spline = occ::down_cast<Geom_BSplineSurface>(surface)) {
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    double su0 = 0.0, su1 = 0.0, sv0 = 0.0, sv1 = 0.0;
+    spline->Bounds(su0, su1, sv0, sv1);
+    if (!(u0 < u1 && v0 < v1) || u0 < su0 || u1 > su1 || v0 < sv0 || v1 > sv1) {
+      return {};
+    }
+    GeomConvert_BSplineSurfaceToBezierSurface pieces(spline, u0, u1, v0, v1, Precision::PConfusion());
+    for (int i = 1; i <= pieces.NbUPatches(); ++i) {
+      for (int j = 1; j <= pieces.NbVPatches(); ++j) {
+        if (!add(pieces.Patch(i, j))) {
+          return {};
+        }
+      }
+    }
+  } else if (const occ::handle<Geom_BezierSurface> bezier = occ::down_cast<Geom_BezierSurface>(surface)) {
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    if (!(u0 >= 0.0 && u1 <= 1.0 && v0 >= 0.0 && v1 <= 1.0) || !add(bezier)) {
+      return {};
+    }
+  }
+  return patches;
+}
+
+Bnd_Box patch_box(const Patch& patch, double grow) {
+  Bnd_Box box;
+  for (const std::array<double, 4>& p : patch.poles) {
+    box.Add(gp_Pnt(p[0] / p[3], p[1] / p[3], p[2] / p[3]));
+  }
+  box.Enlarge(grow);
+  return box;
+}
+
+// The patch's two halves at the middle of U (`along_u`) or of V (de
+// Casteljau on each column or row, in homogeneous coordinates: the weights
+// stay positive).
+std::pair<Patch, Patch> halves(const Patch& patch, bool along_u) {
+  Patch low = patch;
+  Patch high = patch;
+  const int n = along_u ? patch.rows : patch.cols;
+  const int lines = along_u ? patch.cols : patch.rows;
+  std::vector<std::array<double, 4>> work(static_cast<std::size_t>(n));
+  for (int line = 0; line < lines; ++line) {
+    for (int k = 0; k < n; ++k) {
+      work[static_cast<std::size_t>(k)] = along_u ? patch.at(k, line) : patch.at(line, k);
+    }
+    for (int level = 0; level < n; ++level) {
+      const int last = n - 1 - level;
+      (along_u ? low.at(level, line) : low.at(line, level)) = work[0];
+      (along_u ? high.at(last, line) : high.at(line, last)) = work[static_cast<std::size_t>(last)];
+      for (int k = 0; k < last; ++k) {
+        for (std::size_t c = 0; c < 4; ++c) {
+          work[static_cast<std::size_t>(k)][c] =
+              0.5 * (work[static_cast<std::size_t>(k)][c] + work[static_cast<std::size_t>(k) + 1][c]);
+        }
+      }
+    }
+  }
+  return {std::move(low), std::move(high)};
+}
+
+// Where the segment enters the boxes of a patch's pieces, halved again and
+// again (the larger extent first) while they are larger than `small` across
+// and the budget lasts (then a box is taken as it is): none where it passes
+// through none of them. The patch lies within them, so a segment that
+// misses them meets no point of it within `grow`.
+constexpr int kPatchDepth = 24;
+
+std::optional<double> segment_enters_patch(const Patch& patch, const gp_Pnt& from, const gp_Pnt& to, double grow,
+                                           double small, int depth, int& budget) {
+  const Bnd_Box box = patch_box(patch, grow);
+  const std::optional<double> entered = segment_enters(box, from, to);
+  if (!entered || depth <= 0 || --budget <= 0 || box.SquareExtent() <= small * small) {
+    return entered;
+  }
+  if (patch.rows < 2 && patch.cols < 2) {
+    return entered;
+  }
+  // (Halved across U or V, whichever its poles' polygon runs longer along.)
+  const auto point = [](const std::array<double, 4>& p) { return gp_Pnt(p[0] / p[3], p[1] / p[3], p[2] / p[3]); };
+  double length_u = 0.0;
+  for (int j = 0; j < patch.cols; ++j) {
+    double length = 0.0;
+    for (int i = 0; i + 1 < patch.rows; ++i) {
+      length += point(patch.at(i, j)).Distance(point(patch.at(i + 1, j)));
+    }
+    length_u = std::max(length_u, length);
+  }
+  double length_v = 0.0;
+  for (int i = 0; i < patch.rows; ++i) {
+    double length = 0.0;
+    for (int j = 0; j + 1 < patch.cols; ++j) {
+      length += point(patch.at(i, j)).Distance(point(patch.at(i, j + 1)));
+    }
+    length_v = std::max(length_v, length);
+  }
+  const bool along_u = patch.cols < 2 || (patch.rows >= 2 && length_u >= length_v);
+  const std::pair<Patch, Patch> split = halves(patch, along_u);
+  const std::optional<double> a = segment_enters_patch(split.first, from, to, grow, small, depth - 1, budget);
+  const std::optional<double> b = segment_enters_patch(split.second, from, to, grow, small, depth - 1, budget);
+  if (a && b) {
+    return std::min(*a, *b);
+  }
+  return a ? a : b;
+}
+
+// The budget of boxes for one patch and segment, and the size below which
+// a piece's box is not halved, of the face's growth.
+constexpr int kPatchBudget = 256;
+constexpr double kPatchSmall = 20.0;
+
+// What BoundaryRays knows of a face: the box of its surface over the face's
+// parameter bounds (where IntCurvesFace_Intersector finds its points), and
+// a B-spline or Bezier surface's Bezier patches there, grown by the face's
+// tolerances (`grow`); no box where the surface's is not known to hold it
+// (always asked); and the face's searcher, made or found when first asked.
+struct FaceRays {
+  bool ready = true;
+  bool boxed = false;
+  Bnd_Box box;
+  std::vector<Patch> patches;
+  double grow = 0.0;
+  occ::handle<IntCurvesFace_Intersector> crossing;
+};
+
+FaceRays face_rays(const TopoDS_Face& face, double tolerance) {
+  FaceRays rays;
+  try {
+    OCC_CATCH_SIGNALS
+    const BRepAdaptor_Surface surface(face, true);
+    const double u0 = surface.FirstUParameter();
+    const double u1 = surface.LastUParameter();
+    const double v0 = surface.FirstVParameter();
+    const double v1 = surface.LastVParameter();
+    const GeomAbs_SurfaceType type = surface.GetType();
+    const bool elementary = type == GeomAbs_Plane || type == GeomAbs_Cylinder || type == GeomAbs_Cone ||
+                            type == GeomAbs_Sphere || type == GeomAbs_Torus;
+    // (IntCurvesFace_Intersector is not ready for a surface that does not
+    // extend in both directions, and the shape intersector is then never
+    // done.)
+    if (!elementary && !((u1 - u0) / surface.UResolution(1.0) > Precision::Confusion() &&
+                         (v1 - v0) / surface.VResolution(1.0) > Precision::Confusion())) {
+      rays.ready = false;
+    }
+    // Its points lie on the surface within its parameter bounds (to 1e-8
+    // in parameter) and on the line, as near as the intersection converges:
+    // the boxes grown by twice the face's largest tolerance, the
+    // intersection's and a micrometre.
+    rays.grow = 2.0 * largest_tolerance(face) + tolerance + 1.0e-3;
+    if (Precision::IsInfinite(u0) || Precision::IsInfinite(u1) || Precision::IsInfinite(v0) ||
+        Precision::IsInfinite(v1)) {
+      // (Unbounded: always asked.)
+    } else if (type == GeomAbs_Plane) {
+      for (const double u : {u0, u1}) {
+        for (const double v : {v0, v1}) {
+          rays.box.Add(surface.Value(u, v));
+        }
+      }
+      rays.boxed = true;
+    } else if (type == GeomAbs_Cylinder || type == GeomAbs_Cone) {
+      // (Every point within its largest radius of the axis between the
+      // bounds; the radius is linear in V, largest at a bound.)
+      const gp_Ax3 axes = type == GeomAbs_Cylinder ? surface.Cylinder().Position() : surface.Cone().Position();
+      const gp_Lin axis(axes.Axis());
+      const gp_Vec along(axes.Direction());
+      double radius = 0.0;
+      for (const double v : {v0, v1}) {
+        const gp_Pnt on = surface.Value(u0, v);
+        radius = std::max(radius, axis.Distance(on));
+        rays.box.Add(axes.Location().Translated(along * gp_Vec(axes.Location(), on).Dot(along)));
+      }
+      rays.box.Enlarge(radius);
+      rays.boxed = true;
+    } else if (type == GeomAbs_Sphere) {
+      const gp_Sphere sphere = surface.Sphere();
+      rays.box.Add(sphere.Location());
+      rays.box.Enlarge(sphere.Radius());
+      rays.boxed = true;
+    } else if (type == GeomAbs_Torus) {
+      const gp_Torus torus = surface.Torus();
+      rays.box.Add(torus.Location());
+      rays.box.Enlarge(torus.MajorRadius() + torus.MinorRadius());
+      rays.boxed = true;
+    } else if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
+      rays.patches = face_patches(face);
+      for (const Patch& patch : rays.patches) {
+        rays.box.Add(patch_box(patch, 0.0));
+      }
+      rays.boxed = !rays.patches.empty();
+    }
+    if (rays.boxed) {
+      rays.box.Enlarge(rays.grow);
+    }
+  } catch (const Standard_Failure&) {
+    rays.boxed = false;
+    rays.patches.clear();
+  }
+  return rays;
+}
+
+// The faces' searchers set up for earlier bodies, by the faces' bytes (and
+// the tolerance's): each dressup's check works on a copy of its input, and
+// setting up a searcher on a face of a modelled thread (its polyhedron, the
+// classifier of its boundary) costs more than most of its rays. A face's
+// crossings depend on its geometry, the tolerance and the line only.
+ContentCache<occ::handle<IntCurvesFace_Intersector>>& kept_searchers() {
+  static ContentCache<occ::handle<IntCurvesFace_Intersector>> kept(512, std::size_t(256) << 20);
+  return kept;
+}
+
+} // namespace
+
+struct BoundaryRays::Part {
+  TopoDS_Face face;
+  FaceRays rays;
+  // The face's bytes and the tolerance's, once asked (its searcher kept by
+  // them after).
+  std::string key;
+};
+
+BoundaryRays::BoundaryRays(const TopoDS_Shape& body, double tolerance) : tolerance_(tolerance) {
+  // (In IntCurvesFace_ShapeIntersector::Load's order: a face as often as
+  // the explorer meets it.)
+  for (TopExp_Explorer explorer(body, TopAbs_FACE); explorer.More(); explorer.Next()) {
+    Part part;
+    part.face = TopoDS::Face(explorer.Current());
+    part.rays = face_rays(part.face, tolerance);
+    ready_ = ready_ && part.rays.ready;
+    parts_.push_back(std::move(part));
+  }
+}
+
+BoundaryRays::~BoundaryRays() {
+  for (Part& part : parts_) {
+    if (!part.rays.crossing.IsNull() && !part.key.empty()) {
+      kept_searchers().keep(std::move(part.key), std::move(part.rays.crossing));
+    }
+  }
+}
+
+std::optional<double> BoundaryRays::enters(std::size_t i, const gp_Pnt& start, const gp_Pnt& end) const {
+  const FaceRays& rays = parts_[i].rays;
+  if (!rays.boxed) {
+    return 0.0;
+  }
+  const std::optional<double> entered = segment_enters(rays.box, start, end);
+  if (!entered || rays.patches.empty()) {
+    return entered;
+  }
+  std::optional<double> first;
+  for (const Patch& patch : rays.patches) {
+    int budget = kPatchBudget;
+    const std::optional<double> here =
+        segment_enters_patch(patch, start, end, rays.grow, kPatchSmall * rays.grow, kPatchDepth, budget);
+    if (here && (!first || *here < *first)) {
+      first = here;
+    }
+  }
+  return first;
+}
+
+bool BoundaryRays::ask(std::size_t i, const gp_Lin& line, double from, double to) {
+  Part& part = parts_[i];
+  occ::handle<IntCurvesFace_Intersector>& crossing = part.rays.crossing;
+  if (crossing.IsNull()) {
+    part.key = shape_bytes(part.face);
+    if (!part.key.empty()) {
+      part.key.append(reinterpret_cast<const char*>(&tolerance_), sizeof tolerance_);
+    }
+    if (part.key.empty() || !kept_searchers().take(part.key, crossing)) {
+      crossing = new IntCurvesFace_Intersector(part.face, tolerance_);
+    }
+  }
+  ++asked_;
+  crossing->Perform(line, from, to);
+  if (!crossing->IsDone()) {
+    return false;
+  }
+  // (Taken as they are: the searcher may serve another body next.)
+  for (int k = 1; k <= crossing->NbPnt(); ++k) {
+    hits_.push_back({i, k, crossing->WParameter(k), crossing->UParameter(k), crossing->VParameter(k),
+                     crossing->State(k), crossing->Pnt(k)});
+  }
+  return true;
+}
+
+
+void BoundaryRays::sort_hits() {
+  // (By W, ties in the faces' order and each face's, as the shape
+  // intersector sorts them.)
+  std::sort(hits_.begin(), hits_.end(), [](const Hit& a, const Hit& b) {
+    if (a.w != b.w) {
+      return a.w < b.w;
+    }
+    return a.part != b.part ? a.part < b.part : a.point < b.point;
+  });
+}
+
+void BoundaryRays::Perform(const gp_Lin& line, double from, double to) {
+  hits_.clear();
+  asked_ = 0;
+  done_ = ready_;
+  if (!done_) {
+    return;
+  }
+  const gp_Vec along(line.Direction());
+  const gp_Pnt start = line.Location().Translated(along * from);
+  const gp_Pnt end = line.Location().Translated(along * to);
+  for (std::size_t i = 0; i < parts_.size(); ++i) {
+    if (enters(i, start, end) && !ask(i, line, from, to)) {
+      done_ = false;
+      hits_.clear();
+      return;
+    }
+  }
+  sort_hits();
+}
+
+void BoundaryRays::PerformNearest(const gp_Lin& line, double from, double to) {
+  hits_.clear();
+  asked_ = 0;
+  done_ = ready_;
+  if (!done_) {
+    return;
+  }
+  const gp_Vec along(line.Direction());
+  const gp_Pnt start = line.Location().Translated(along * from);
+  const gp_Pnt end = line.Location().Translated(along * to);
+  // The faces whose boxes the segment enters, by where it enters them.
+  std::vector<std::pair<double, std::size_t>> order;
+  for (std::size_t i = 0; i < parts_.size(); ++i) {
+    if (const std::optional<double> entered = enters(i, start, end)) {
+      order.emplace_back(from + *entered * (to - from), i);
+    }
+  }
+  std::sort(order.begin(), order.end());
+  double nearest = Precision::Infinite();
+  for (const std::pair<double, std::size_t>& face : order) {
+    // (A face whose boxes the line enters past the nearest crossing found
+    // and its confusion has no crossing that near.)
+    if (face.first > nearest + 2.0 * Precision::Confusion()) {
+      break;
+    }
+    const std::size_t before = hits_.size();
+    if (!ask(face.second, line, from, to)) {
+      done_ = false;
+      hits_.clear();
+      return;
+    }
+    for (std::size_t k = before; k < hits_.size(); ++k) {
+      nearest = std::min(nearest, hits_[k].w);
+    }
+  }
+  sort_hits();
+}
+
+double BoundaryRays::WParameter(int i) const {
+  return hit(i).w;
+}
+
+double BoundaryRays::UParameter(int i) const {
+  return hit(i).u;
+}
+
+double BoundaryRays::VParameter(int i) const {
+  return hit(i).v;
+}
+
+TopAbs_State BoundaryRays::State(int i) const {
+  return hit(i).state;
+}
+
+const TopoDS_Face& BoundaryRays::Face(int i) const {
+  return parts_[hit(i).part].face;
+}
+
+const gp_Pnt& BoundaryRays::Pnt(int i) const {
+  return hit(i).pnt;
+}
+
+
+namespace {
+
 // The outward normal of a face at its parameters, none where its surface
 // is singular.
 std::optional<gp_Dir> outward_normal_at(const TopoDS_Face& face, double u, double v) {
@@ -519,9 +1022,9 @@ constexpr std::array<std::array<double, 3>, 6> kSkew{{{0.267, 0.535, 0.802},
 
 } // namespace
 
-std::optional<RaySide> ray_side(IntCurvesFace_ShapeIntersector& boundary, const gp_Pnt& point,
+std::optional<RaySide> ray_side(BoundaryRays& boundary, const gp_Pnt& point,
                                 const gp_Dir& direction, double close, double reach) {
-  boundary.Perform(gp_Lin(point, direction), -close, reach);
+  boundary.PerformNearest(gp_Lin(point, direction), -close, reach);
   if (!boundary.IsDone() || boundary.NbPnt() == 0) {
     return std::nullopt;
   }
@@ -557,7 +1060,7 @@ std::optional<RaySide> ray_side(IntCurvesFace_ShapeIntersector& boundary, const 
   return cosine > 0.0 ? RaySide::Inside : RaySide::Outside;
 }
 
-std::optional<RaySide> skew_ray_side(IntCurvesFace_ShapeIntersector& boundary, const gp_Pnt& point,
+std::optional<RaySide> skew_ray_side(BoundaryRays& boundary, const gp_Pnt& point,
                                      double tolerance, double through) {
   if (!(through > 0.0)) {
     return std::nullopt;
@@ -586,8 +1089,7 @@ PointSide::~PointSide() = default;
 
 TopAbs_State PointSide::state(const gp_Pnt& point, double tolerance) {
   if (!rays_) {
-    rays_ = std::make_unique<IntCurvesFace_ShapeIntersector>();
-    rays_->Load(body_, Precision::Confusion());
+    rays_ = std::make_unique<BoundaryRays>(body_, Precision::Confusion());
     through_ = length_through(body_);
   }
   const std::optional<RaySide> told = skew_ray_side(*rays_, point, tolerance, through_);

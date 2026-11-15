@@ -728,8 +728,13 @@ the body and of its faces.
   `coat_roughness`, `emission_color`, `emission`, `opacity` (linear
   colours; a missing member keeps the default), and `texture`: `{"path",
   "size", "rotation", "projection", "normal", "roughness", "metalness",
-  "occlusion"}` with the images' absolute paths, each when there is one
-  (`materialJson`). The mesh files carry no
+  "occlusion"}` with the images' absolute paths, each when there is one,
+  and `roughness_channel`, `metalness_channel`, `occlusion_channel` (0
+  red, 1 green, 2 blue) for a map packed into a channel of its image
+  (mitcad#1862), each when it has one, and `roughness_factor`,
+  `metalness_factor` for a map whose values are scaled (mitcad#1874),
+  each when it is not 1 (`materialJson`); `projection` is
+  `box`, `planar` or `uv`. The mesh files carry no
   materials (from mitcad#46 to mitcad#49 the scene was one glTF file with
   glTF's metallic-roughness material and the Khronos material extensions).
 - **Cycles** (`CyclesRenderer::addMaterial`): one Principled BSDF per
@@ -753,6 +758,26 @@ the body and of its faces.
   nodes choose, Mix Color nodes pick). Each projection's two coordinates
   go through a Mapping node of the texture type: turned by the rotation
   about the projection's axis and divided by the repeat's size.
+- **Texture coordinates** (mitcad#1862): a mesh body imported with them
+  (a glTF file's) keeps them as its triangulation's UV nodes (a mesh
+  body's face has no surface, so they are no surface parameters), which
+  the B-rep data of the design file and the result store keep.
+  `meshOf` gives them as `MeshData::uvs` (u to the image's right, v up
+  it; zeros for faces without), the mesh file as `TEXCOORD_0`, and Cycles
+  as the mesh's UV map (`ATTR_STD_UV`, per corner). An appearance whose
+  projection is `uv` (`MaterialData::textureUv`) reads the images at the
+  Texture Coordinate node's UV, without size or rotation, its normal map
+  through a Normal Map node in tangent space (Cycles works out the
+  tangents from the UV map); on a mesh without texture coordinates
+  `geometryOf` gives it a box-projected shader instead.
+- **Packed maps** (mitcad#1862): a map whose values are one channel of
+  its image (glTF's roughness in green, metalness in blue, occlusion in
+  red of one image) goes through a Separate Color node to that channel;
+  other grey maps are read as Cycles converts a colour to a value. A
+  roughness or metalness map with a factor (mitcad#1874: glTF's
+  `roughnessFactor` and `metallicFactor`, `MaterialData::roughnessFactor`
+  and `metalnessFactor`) is multiplied by it in a Math node; the glTF
+  export writes the factor as glTF's.
 - **Maps in Cycles** (mitcad#314): every map uses the base colour's
   projection (the same Mapping nodes; per box plane an Image Texture
   node, mixed as the base colour). The roughness, metalness and
@@ -879,7 +904,8 @@ Decisions and limits:
   so a body cut by a section analysis keeps its faces' colours where the
   cut shape keeps their names.
 - Texture coordinates come from Cycles' object coordinates rather than
-  UVs written by MitCad: a texture change does not change the mesh's
+  UVs written by MitCad (except a mesh's own, mitcad#1862, which it keeps
+  from its file): a texture change does not change the mesh's
   hash, and the worker stays free of B-rep knowledge. The price is that a
   projection can only use what a shader sees at a point (its position and
   normal): box chooses per point, not per face, so a curved face shows

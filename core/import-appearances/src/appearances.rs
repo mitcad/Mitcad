@@ -569,8 +569,21 @@ pub fn apply_with_meshes<K: Kernel>(
         (None, Some(blob), Some(record)) => Some(format!("{blob}#{record}")),
         _ => None,
     };
+    // The bodies' names and folders (mitcad#1802): (body, name, folder),
+    // and per body record its bodies and whether its name and folder count
+    // as set.
+    let mut organized: Vec<(BodyUid, Option<String>, Option<String>)> = Vec::new();
+    let mut counted: Vec<(Vec<BodyUid>, bool, bool)> = Vec::new();
     // Stored solids no body record names (itself or as one of its lumps).
-    for (s, _) in stored {
+    // Where the records name the bodies of their blobs (the stream
+    // decoder's), such a solid is no body of the design: a tool or a copy
+    // its blob keeps; the file shows it nowhere, so it is hidden
+    // (mitcad#1802: a reported design's one such solid was drawn where
+    // the file's display shows nothing).
+    let records_named = bodies
+        .iter()
+        .any(|b| b.blob.is_some() && b.record.is_some());
+    for (s, uid) in stored {
         if !bodies
             .iter()
             .any(|b| source(b).is_some_and(|n| names_stored(&n, s)))
@@ -579,6 +592,13 @@ pub fn apply_with_meshes<K: Kernel>(
             report
                 .gaps
                 .push(format!("stored body {s}: no body record names it"));
+            if records_named
+                && let Some(uid) = *uid
+                && doc.body_attributes(uid).visible
+                && doc.set_body_visible(uid, false).is_ok()
+            {
+                report.unnamed_hidden += 1;
+            }
         }
     }
     for b in bodies {
@@ -623,6 +643,41 @@ pub fn apply_with_meshes<K: Kernel>(
                 lumps.len() - uids.len(),
                 lumps.len()
             ));
+        }
+        // The body's name and its folder in the browser (mitcad#1802), set
+        // for all bodies at once below.
+        let name = b.name.clone().filter(|n| !n.trim().is_empty());
+        let folder = b.folder.clone().filter(|f| !f.trim().is_empty());
+        if name.is_some() {
+            report.named += 1;
+        }
+        if folder.is_some() {
+            report.in_folders += 1;
+        }
+        if (name.is_some() || folder.is_some()) && !uids.is_empty() {
+            for &uid in &uids {
+                organized.push((uid, name.clone(), folder.clone()));
+            }
+            counted.push((
+                uids.clone(),
+                whole && name.is_some(),
+                whole && folder.is_some(),
+            ));
+        }
+        // A body the file took out of the design (a removal the replay
+        // did not make, mitcad#1802): hidden, as the file does not show it.
+        if b.removed == Some(true) && !uids.is_empty() {
+            report.removed_left += 1;
+            report.gaps.push(format!(
+                "body {entity}: the file took it out of the design; its removal did not come in, so it is hidden"
+            ));
+            for &uid in &uids {
+                if doc.body_attributes(uid).visible
+                    && let Err(e) = doc.set_body_visible(uid, false)
+                {
+                    report.gaps.push(format!("body {entity}: hidden: {e}"));
+                }
+            }
         }
         // A body the file hides (its light bulb off, mitcad#1175): a
         // copy kept beside the body made from it would cover that
@@ -825,6 +880,24 @@ pub fn apply_with_meshes<K: Kernel>(
             if all {
                 report.faces_set += 1;
             }
+        }
+    }
+    // The names and folders, in one change (mitcad#1802).
+    if !organized.is_empty() {
+        match doc.name_bodies(&organized) {
+            Ok(named) => {
+                let named: HashMap<BodyUid, String> = named.into_iter().collect();
+                for (uids, name, folder) in &counted {
+                    let present = uids.iter().all(|u| doc.body_shape(*u).is_some());
+                    if *name && uids.iter().all(|u| named.contains_key(u)) {
+                        report.named_set += 1;
+                    }
+                    if *folder && present {
+                        report.in_folders_set += 1;
+                    }
+                }
+            }
+            Err(e) => report.gaps.push(format!("body names and folders: {e}")),
         }
     }
     // Overrides: a component's own (the root's) first, then the

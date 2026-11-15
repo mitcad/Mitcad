@@ -22,7 +22,14 @@
 #
 # Usage: tools/release-check-macos.sh [--build DIR] [--jobs N]
 #          [--disk-floor SIZE] [--only build,native,ctest,package]
+#          [--release-passed DIR --release-tag X.Y.Z-rcN [--all-geometry]]
 #          [-- extra mitcad-testrun arguments, e.g. -R REGEX]
+# --release-passed DIR and --release-tag (a release's check, mitcad#1822):
+# the test runner skips a geometry* ctest whose fingerprint passed in an
+# earlier release check on macOS (kept in DIR/macos/<test>) and keeps this
+# run's passes; --all-geometry runs them all (tools/testrun/README.md,
+# "Release fingerprints"). The build step asks for CMake's file API, which
+# the fingerprints read.
 # Environment: VCPKG_ROOT, QT_ROOT_DIR (as for the macos-release preset),
 # MITCAD_RENDER_DEPS (optional), MITCAD_SIGN_IDENTITY and
 # MITCAD_NOTARY_PROFILE (package-macos.sh). Logs: <build>/release-check/.
@@ -40,12 +47,16 @@ jobs=$(sysctl -n hw.ncpu)
 disk_floor=""
 only=build,native,ctest,package
 extra=()
+release=()
 while [ "$#" -gt 0 ]; do
   case $1 in
     --build) build=${2:?--build needs a directory}; shift ;;
     --jobs) jobs=${2:?--jobs needs a number}; shift ;;
     --disk-floor) disk_floor=${2:?--disk-floor needs a size}; shift ;;
     --only) only=${2:?--only needs steps}; shift ;;
+    --release-passed) release+=(--release-passed "${2:?--release-passed needs a directory}"); shift ;;
+    --release-tag) release+=(--release-tag "${2:?--release-tag needs X.Y.Z-rcN}"); shift ;;
+    --all-geometry) release+=(--all-geometry) ;;
     --) shift; extra=("$@"); break ;;
     *) echo "release-check-macos: unknown argument $1" >&2; exit 2 ;;
   esac
@@ -62,6 +73,10 @@ if wants build; then
   render=()
   [ -n "${MITCAD_RENDER_DEPS:-}" ] && render=(-DMITCAD_RENDER_DEPS="$MITCAD_RENDER_DEPS")
   export CMAKE_BUILD_PARALLEL_LEVEL=$jobs CARGO_BUILD_JOBS=$jobs VCPKG_MAX_CONCURRENCY=$jobs
+  # CMake's file API: the targets and the compiler that the release
+  # fingerprints of the geometry tests follow (mitcad#1822).
+  mkdir -p "$build/.cmake/api/v1/query"
+  touch "$build/.cmake/api/v1/query/codemodel-v2" "$build/.cmake/api/v1/query/toolchains-v1"
   if ! cmake --preset macos-release -B "$build" ${render[@]+"${render[@]}"} > "$logs/configure.log" 2>&1; then
     row configure FAIL; failed=1
   elif ! cmake --build "$build" --parallel "$jobs" > "$logs/build.log" 2>&1; then
@@ -97,12 +112,14 @@ if wants ctest; then
   floor=()
   [ -n "$disk_floor" ] && floor=(--disk-floor "$disk_floor")
   if tools/test-macos.sh --build "$build" -j "$jobs" ${floor[@]+"${floor[@]}"} \
-      ${extra[@]+"${extra[@]}"} > "$logs/ctest.log" 2>&1; then
+      ${release[@]+"${release[@]}"} ${extra[@]+"${extra[@]}"} > "$logs/ctest.log" 2>&1; then
     row ctest ok
   else
     row ctest FAIL; failed=1
   fi
   tail -40 "$logs/ctest.log"
+  # The geometry tests a release check skipped by their fingerprints.
+  grep '^Release fingerprints' "$build/testrun/report.txt" 2> /dev/null || true
 fi
 
 if wants package; then

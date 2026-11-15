@@ -26,8 +26,10 @@
 #   - BUILD > Timber on the lone member's face starts with the face as
 #     Place On, previewed on its side; Place makes a member there. BUILD >
 #     Panel starts with the face as its Frame Face.
-#   - Delete > Delete Member removes the lone member, Delete > Delete Body
-#     the ordinary body; one undo brings each back.
+#   - Delete > Delete Member removes the lone member, Delete > Delete
+#     Component on it removes it as a member too (build_remove,
+#     mitcad#1820), Delete > Delete Body the ordinary body; one undo
+#     brings each back.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-context-menu-test.sh
@@ -209,7 +211,7 @@ ui_step "Escape (clear the selection)"     ui_key Escape
 
 echo "--- A face of the lone timber member"
 right_click face "$member" O2 "${member%%.*}:part("
-has "" Solid Build Construct Delete Hide
+has "" Solid Build Construct Delete Hide "Convert to Features"
 has " Build" Length Ends Flip "Rotate 90°" Timber Wall Panel More
 has " Build More" Profile "Linear Component"
 lacks " Build" "Spacing Set" Profile "Linear Component"
@@ -262,6 +264,20 @@ echo "--- Delete > Delete Member"
 right_click face "$member" O2 "${member%%.*}:part("
 ui_step "Delete > Delete Member"           ui_menu_choose "Delete" "Delete Member"
 ui_expect_new "Deleted member Timber 200x300 test" "the member is deleted"
+ui_expect_new "Bodies shown: " "the bodies shown again"
+grep "^Bodies shown: " "$UI_LOG" | tail -1 | grep -qF "$member in O2" && ui_fail "the member is still shown"
+echo "ok   the member's body is gone"
+ui_mark
+ui_step "undo"                             ui_key ctrl+z
+ui_expect_new "Undo: " "undone"
+ui_expect_new "$shown" "one undo brings the member back"
+ui_step "Escape (clear the selection)"     ui_key Escape
+
+echo "--- Delete > Delete Component on the member"
+right_click face "$member" O2 "${member%%.*}:part("
+ui_step "Delete > Delete Component"        ui_menu_choose "Delete" "Delete Component"
+ui_expect_new "Delete as members: 1" "the member goes as a member (build_remove)"
+ui_expect_new "Deleted component " "the component is deleted"
 ui_expect_new "Bodies shown: " "the bodies shown again"
 grep "^Bodies shown: " "$UI_LOG" | tail -1 | grep -qF "$member in O2" && ui_fail "the member is still shown"
 echo "ok   the member's body is gone"

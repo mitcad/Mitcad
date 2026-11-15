@@ -22,7 +22,12 @@
   {"expect": {"query": {"query": "section", "plane": "F5", "bodies": ["F4.b0"]},
     "result": {"plane": {"origin": [0, 0, 10], "normal": [0, 0, 1]}, "area": 400}}},
 
-  {"comment": "Physical properties: steel by default, aluminium for Body2."},
+  {"comment": "Physical properties: no material, no mass (mitcad#1817); then steel as the design's default, aluminium for Body2."},
+  {"expect": {"query": {"query": "properties", "bodies": ["F2.b0"]}, "result": {
+    "bodies": [{"uid": "F2.b0", "material": null, "no_material": true, "volume": 48000,
+                "center_of_mass": [30, 20, 10]}],
+    "total": {"volume": 48000, "no_material": 1}}}},
+  {"cmd": "set_component_material", "component": "C0", "material": "steel"},
   {"cmd": "set_body_material", "uid": "F4.b0", "material": "aluminum"},
   {"expect": {"query": {"query": "properties"}, "result": {
     "bodies": [

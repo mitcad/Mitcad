@@ -34,3 +34,5 @@ mod envelope_source_tests;
 mod link_update_tests;
 // A design linked from outside the project, copied into it (mitcad#1719).
 mod link_copy_tests;
+// Folders of the Bodies folder (mitcad#1802).
+mod body_folder_tests;

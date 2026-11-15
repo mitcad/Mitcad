@@ -941,11 +941,27 @@ impl<K: Kernel> Document<K> {
         })?;
         let transform = match fixed {
             Some(transform) => transform,
-            None => link
-                .transform(&self.state.assembly, component, &mut |o| {
-                    self.placement(o).unwrap_or(Transform::IDENTITY)
-                })
-                .map_err(invalid)?,
+            None => {
+                let assembly = &self.state.assembly;
+                let mut placement = |o| self.placement(o).unwrap_or(Transform::IDENTITY);
+                let plain = link
+                    .transform(assembly, component, &mut placement)
+                    .map_err(invalid)?;
+                // Inside flexible occurrences where they have it, as the
+                // consumer's recompute sees it (mitcad#1805).
+                let flexed = &self.result.joints.flexed;
+                link.target_path(assembly, component)
+                    .ok()
+                    .and_then(|target| {
+                        crate::links::flexed_transform(
+                            &link.source.0,
+                            &target,
+                            &mut placement,
+                            &mut |prefix, o| crate::joints::flexed_step(flexed, prefix, o),
+                        )
+                    })
+                    .unwrap_or(plain)
+            }
         };
         let shape = if transform.is_identity() {
             shape.clone()

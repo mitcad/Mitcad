@@ -19,6 +19,8 @@ path = "src/bin/mitcad-3dm-inspect.rs"
 # The neutral B-rep model the bodies are converted to, which OCCT builds
 # (core/ffi `build_brep_body`), as the .f3d and .dwg imports' bodies.
 mitcad-asm = { path = "../asm" }
+# A SubD's control net as a Form's control cage (mitcad#1757).
+mitcad-subdiv = { path = "../subdiv" }
 # Vector helpers on [f64; 3].
 mitcad-vec3 = { path = "../vec3" }
 # The meshes' compressed buffers are zlib streams.

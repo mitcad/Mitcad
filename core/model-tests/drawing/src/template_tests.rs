@@ -131,9 +131,9 @@ fn a_templates_title_block_follows_the_design() {
     }
     assert!(!block.iter().any(|t| t == "MADE WITH"), "{block:?}");
 
-    // The material: the body's; it follows a change of it.
-    let before = field(&doc, 0, "MATERIAL");
-    assert!(!before.is_empty());
+    // The material: the body's; it follows a change of it. A body without
+    // a material names none (mitcad#1817), never steel.
+    assert_eq!(field(&doc, 0, "MATERIAL"), "");
     command(
         &mut doc,
         json!({"cmd": "set_body_material", "uid": "F2.b0", "material": "pla"}),
@@ -533,6 +533,13 @@ fn a_stored_mass_is_the_title_blocks_mass() {
     // mitcad#722: the title block's mass was always worked out from the
     // bodies, while its material honours a stored `Material`.
     let mut doc = templated();
+    // A body without a material has no mass (mitcad#1817): none worked
+    // out until the design names its default material.
+    assert_eq!(field(&doc, 0, "MASS"), "");
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
     let worked_out = field(&doc, 0, "MASS");
     assert!(worked_out.ends_with("kg"), "{worked_out}");
     command(

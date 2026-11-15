@@ -30,7 +30,7 @@ use crate::topo::{
 use crate::transform::Transform;
 
 /// Marks a parameter in the JSON form of a copied definition.
-const PARAM: char = '\u{1}';
+pub(super) const PARAM: char = '\u{1}';
 
 struct CopiedParameters {
     ids: HashMap<ParamId, ParamId>,
@@ -168,6 +168,22 @@ impl DocState {
         maker: Option<FeatureUid>,
         origin: CopySource<'_>,
     ) -> Result<(ComponentUid, ComponentCopy), ModelError> {
+        self.copy_component_overriding(source, source_path, into, maker, origin, &HashMap::new())
+    }
+
+    /// [`DocState::copy_component_mapped`] with `overrides`: parameters of
+    /// the source (by id) that are not copied but stand for parameters of
+    /// this design, which the copied features and expressions use instead
+    /// (Convert to Features, mitcad#1815: a derived part's length).
+    pub(crate) fn copy_component_overriding(
+        &mut self,
+        source: &DocState,
+        source_path: &[OccurrenceUid],
+        into: ComponentUid,
+        maker: Option<FeatureUid>,
+        origin: CopySource<'_>,
+        overrides: &HashMap<ParamId, ParamId>,
+    ) -> Result<(ComponentUid, ComponentCopy), ModelError> {
         let same_document = matches!(origin, CopySource::SameDocument);
         let a = &source.assembly;
         let from =
@@ -217,7 +233,7 @@ impl DocState {
         for f in &features {
             uids.insert(f.uid, self.new_uid());
         }
-        let params = self.copy_parameters(source, &features, &uids, same_document)?;
+        let params = self.copy_parameters(source, &features, &uids, same_document, overrides)?;
 
         let mut components: BTreeMap<ComponentUid, ComponentUid> = BTreeMap::new();
         components.insert(from, into);
@@ -239,6 +255,8 @@ impl DocState {
                 // A copy keeps the policy; another design's root gives its
                 // own (mitcad#220).
                 copy.policy = a.policy(*c);
+                // A part converted to features keeps its listing (mitcad#1815).
+                copy.listed = a.component(*c).and_then(|d| d.listed.clone());
             }
         }
         let mut occurrences: HashMap<OccurrenceUid, OccurrenceUid> = HashMap::new();
@@ -250,7 +268,14 @@ impl DocState {
             let target =
                 self.assembly
                     .place(components[&o.component], components[&o.parent], o.transform);
-            set_flags(self.assembly.occurrence_mut(target).expect("placed"), o);
+            let placed = self.assembly.occurrence_mut(target).expect("placed");
+            set_flags(placed, o);
+            // A flexible one stays flexible, its own joint values those of
+            // the copied joints (mitcad#1805).
+            placed.flexible = o
+                .flexible
+                .as_ref()
+                .map(|flex| flex.remapped(&|uid| uids.get(&uid).copied()));
             occurrences.insert(o.uid, target);
         }
         // Their properties, and the bodies' of the copied features
@@ -565,6 +590,7 @@ impl DocState {
         features: &[&FeatureEntry],
         uids: &HashMap<FeatureUid, FeatureUid>,
         same_document: bool,
+        overrides: &HashMap<ParamId, ParamId>,
     ) -> Result<CopiedParameters, ModelError> {
         let table = source.parameters.table();
         let binding_exprs: Vec<_> = source
@@ -616,6 +642,10 @@ impl DocState {
             .collect();
         let mut todo: Vec<ParamId> = needed.iter().copied().collect();
         while let Some(id) = todo.pop() {
+            // An overridden parameter is not copied, nor what it uses.
+            if overrides.contains_key(&id) {
+                continue;
+            }
             if let Some(p) = table.get(id) {
                 for d in p.dependencies() {
                     if needed.insert(*d) {
@@ -644,8 +674,14 @@ impl DocState {
         };
         let mut map: HashMap<ParamId, ParamId> = HashMap::new();
         let mut names: HashMap<String, String> = HashMap::new();
+        for (from, to) in overrides {
+            map.insert(*from, *to);
+            if let Some(p) = table.get(*from) {
+                names.insert(p.name().to_owned(), self.parameters.name(*to));
+            }
+        }
         for id in table.evaluation_order() {
-            if !needed.contains(&id) {
+            if !needed.contains(&id) || overrides.contains_key(&id) {
                 continue;
             }
             let p = table.get(id).expect("in the table");
@@ -1317,10 +1353,22 @@ fn copy_measurement_sides(
     original: &FeatureDef,
     uids: &HashMap<String, String>,
 ) {
+    keep_measurement_sides(copy, original, &|face| {
+        remap_reference(&face.to_string(), uids)
+    });
+}
+
+/// [`copy_measurement_sides`] for any renaming: `renamed` gives the text of
+/// an old face's new name (Convert to Features, mitcad#1815).
+pub(super) fn keep_measurement_sides(
+    copy: &mut FeatureDef,
+    original: &FeatureDef,
+    renamed: &dyn Fn(&FaceName) -> String,
+) {
     let edges = |old: &[EdgeName], new: &[EdgeName]| -> (Vec<EdgeName>, Vec<EdgeName>) {
         let (mut kept, mut swapped) = (Vec::new(), Vec::new());
         for (old, new) in old.iter().zip(new) {
-            if remap_reference(&old.faces()[0].to_string(), uids) == new.faces()[0].to_string() {
+            if renamed(&old.faces()[0]) == new.faces()[0].to_string() {
                 kept.push(new.clone());
             } else {
                 swapped.push(new.clone());
@@ -1450,8 +1498,8 @@ pub(super) fn remap_reference(text: &str, uids: &HashMap<String, String>) -> Str
 /// Text replacement followed by parsing is insufficient: changing feature
 /// ids can reverse both edge-face order and boundary neighbours in a
 /// segment end, whose parser deliberately requires canonical ordering.
-struct TopologyCopy<'a> {
-    uids: &'a HashMap<String, String>,
+pub(super) struct TopologyCopy<'a> {
+    pub(super) uids: &'a HashMap<String, String>,
 }
 
 impl TopologyCopy<'_> {
@@ -1494,7 +1542,7 @@ impl TopologyCopy<'_> {
         RegionKey::new(region.segments().map(|s| self.segment(s))).expect("a region has segments")
     }
 
-    fn face(&self, face: &FaceName) -> FaceName {
+    pub(super) fn face(&self, face: &FaceName) -> FaceName {
         let mut mapped = face.clone();
         mapped.feature = self.uid(face.feature);
         mapped.key = face.key.as_ref().map(|key| match key {

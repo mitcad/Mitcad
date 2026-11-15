@@ -459,7 +459,22 @@ public:
   // the view.
   QPointF toScreen(const V2& p, double height) const;
   QPolygonF bodyPath(const BodyItem& item) const;
-  // The sketch plane point under a view position.
+  // A polyline of sketch points in the view (`closed`: back to the first);
+  // on a sketch's curved face (mitcad#1768) with points put between them,
+  // so that it bends with the face.
+  QPolygonF screenPath(const std::vector<V2>& points, bool closed = false) const;
+  // The longest piece of a line the view draws straight on a sketch's
+  // curved face (SketchSurface::step: the dimensions' Projection::bend,
+  // mitcad#1853); 0 on a plane.
+  double faceBend() const;
+  // How far `length` mm from the sketch's origin along `direction` goes in
+  // the view: on a sketch's curved face (mitcad#1768) along the plane the
+  // face touches at the origin (the axes drawn across the view), so that a
+  // long step does not wrap round a small cylinder.
+  QPointF screenAlong(const V2& direction, double length) const;
+  // The sketch plane point under a view position. On a sketch's curved
+  // face (mitcad#1768) where the pointer's ray meets the face (the model's
+  // `sketch_surface` rays); none where it misses it.
   std::optional<V2> sketchAt(const QPointF& screen) const;
   // The unrounded inverse of toScreen, for dimension/editor layout.
   std::optional<V2> sketchAtF(const QPointF& screen) const;
@@ -988,6 +1003,14 @@ private:
   QString m_revision; // the document's, when the sketch was read
   int m_toolSession = 0;
   int m_modelRevision = 0;
+  // A sketch on a cylindrical or conical face (mitcad#1768): the placement
+  // of its component in the view (the pointer's rays go back by it), the
+  // sketch point of the last hit (the turn of the face the next ray is met
+  // on) and the hits asked for, by place, camera and sketch revision.
+  std::optional<V2> surfaceAt(const QPointF& screen) const;
+  gp_Trsf m_placement;
+  mutable std::optional<V2> m_surfaceAround;
+  mutable QHash<QString, std::optional<V2>> m_surfaceHits;
 };
 
 } // namespace sketch

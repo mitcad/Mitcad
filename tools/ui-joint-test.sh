@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/commands app/MainWindowJoints.cpp
+# check-all sources: app/commands app/MainWindowJoints.cpp app/framework/CommandSession.cpp
+# check-all sources: app/framework/CommandSessionHold.cpp app/framework/ManipulatorOverlay.cpp
 # Joints between components (mitcad#55) through the real UI, on a design
 # mitcad-cli makes: Plate:1 (a 40 x 40 x 10 block, grounded), Pin:1 (a
 # 10 x 10 x 20 block at x = 100) and Cap:1 (a 10 x 10 x 5 block at y = 100):
@@ -197,12 +198,25 @@ ui_step "play the turn"                  ui_click_logged "Panel Joint button_ani
 ui_expect_new "Animating Joint rz in its panel: back and forth from -90 deg to 90 deg, 36 frames a pass in 1440 ms, from 30 deg, frames as previews" \
   "the turn from its rest value through its limits, each frame the panel's joint previewed"
 ui_expect_new "Joint set aside while its motion is animated" "the panel waits while it plays"
+# Its handles go with its preview (mitcad#1844): the angle's ring no longer
+# takes the pointer where it was.
+ui_expect_new "Joint handles hidden while set aside" "the handles go while it plays"
+read -r hx hy <<< "$(ui_logged_at "Manipulator Joint angle")"
+ui_mark
+xdotool mousemove "$hx" "$hy"
+sleep 0.3
+xdotool mousemove $((hx + 2)) $((hy + 1))
+sleep 0.5
+grep -qE "Handle hover Joint (angle|offset)|Manipulator Joint (angle|offset) dragged" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") &&
+  ui_fail "a handle of the set-aside Joint took the pointer"
+echo "ok   the set-aside Joint's handles take no pointer"
 animation_passes "Joint"
 orbit_while_playing "Joint"
 ui_mark
 ui_step "stop (Esc)"                     ui_key Escape
 animation_stopped "Joint" some
 ui_expect_new "Joint resumed" "the panel goes on"
+ui_expect_new "Manipulator Joint angle at" "its handles back"
 ui_expect_new "Preview Joint: ok" "the panel's own preview again"
 grep -qF "Command Joint cancelled" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") && ui_fail "Esc cancelled the panel"
 echo "ok   Esc stopped the animation, not the panel"

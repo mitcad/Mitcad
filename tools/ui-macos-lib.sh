@@ -238,8 +238,8 @@ JSON
   # An empty design at the start, not the Start tab (mitcad#1258), as in
   # ui-test-lib.sh.
   export MITCAD_START_PAGE=0
-  # A new design in the isometric view with its origin hidden, not at Top
-  # with the origin shown (mitcad#1683), as in ui-test-lib.sh.
+  # A new design in the exact isometric view with its origin hidden, not in
+  # the default view with the origin shown (mitcad#1683), as in ui-test-lib.sh.
   export MITCAD_NEW_DESIGN_VIEW=0
   # The interface in English whatever the Mac's language (mitcad#1460), as
   # in ui-test-lib.sh.
@@ -421,7 +421,21 @@ ui_expect_log() {
 
 # ui_expect_no_log text description: the log does not contain the text.
 ui_expect_no_log() {
-  if grep -Fq -- "$1" "$UI_LOG_FILE"; then ui_fail "$2: '$1' in the log"; else ui_pass "$2"; fi
+  # The driver traces each input, including expect-never 'TestDriver: FAIL'.
+  # Only its actual diagnostic is a failure, with or without the caller's
+  # historical leading anchor. Other callers still ask for literal text.
+  case $1 in
+    'TestDriver: FAIL' | '^TestDriver: FAIL')
+      if grep -Eq '^TestDriver: FAIL([[:space:]]|$)' "$UI_LOG_FILE"; then
+        ui_fail "$2: driver failure in the log"
+      else
+        ui_pass "$2"
+      fi
+      ;;
+    *)
+      if grep -Fq -- "$1" "$UI_LOG_FILE"; then ui_fail "$2: '$1' in the log"; else ui_pass "$2"; fi
+      ;;
+  esac
 }
 
 # ui_log_value pattern: what the first line matching the regular expression

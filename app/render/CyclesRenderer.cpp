@@ -889,13 +889,24 @@ private:
     const auto vertices = static_cast<int>(data.positions.size() / 3);
     const auto triangles = static_cast<int>(data.indices.size() / 3);
     ccl::Mesh* mesh = scene.create_node<ccl::Mesh>();
+    // A material laid by texture coordinates (mitcad#1862) on a mesh
+    // without them is projected as box.
+    const bool hasUvs = !data.uvs.empty() && data.uvs.size() == data.positions.size() / 3 * 2;
+    const auto shaderFor = [&](const MaterialData& material, const std::string& key) {
+      if (material.textureUv && !hasUvs) {
+        MaterialData box = material;
+        box.textureUv = false;
+        return shaderOf(scene, box, key + "\nas box");
+      }
+      return shaderOf(scene, material, key);
+    };
     // The body's material first, then each face group's (mitcad#53); each
     // triangle the shader of its face.
     ccl::array<ccl::Node*> used;
-    used.push_back_slow(shaderOf(scene, body.material, body.materialKey));
+    used.push_back_slow(shaderFor(body.material, body.materialKey));
     std::vector<int> faceShader(data.faceTriangles.size(), 0);
     for (const FaceMaterial& group : body.faces) {
-      used.push_back_slow(shaderOf(scene, group.material, group.materialKey));
+      used.push_back_slow(shaderFor(group.material, group.materialKey));
       for (const std::uint32_t face : group.faces) {
         if (face < faceShader.size()) {
           faceShader[face] = static_cast<int>(used.size()) - 1;
@@ -934,6 +945,17 @@ private:
       for (int v = 0; v < vertices; ++v) {
         normals[v] = ccl::packed_normal(
             ccl::make_float3(data.normals[v * 3], data.normals[v * 3 + 1], data.normals[v * 3 + 2]));
+      }
+    }
+    if (hasUvs) {
+      // The mesh's texture coordinates (mitcad#1862) per corner, Cycles'
+      // default UV map: images laid by them read it, and Cycles works out
+      // a normal map's tangents from it.
+      ccl::Attribute* attribute = mesh->attributes.add(ccl::ATTR_STD_UV);
+      auto* corners = attribute->data_for_write<ccl::float2>();
+      for (std::size_t i = 0; i < data.indices.size(); ++i) {
+        const std::size_t v = data.indices[i];
+        corners[i] = ccl::make_float2(data.uvs[v * 2], data.uvs[v * 2 + 1]);
       }
     }
     // New nodes of a scene that is rendering: the managers must hear of them.
@@ -1043,9 +1065,19 @@ private:
     if (found.any()) {
       ccl::ShaderGraph& g = *graph;
       const Projection projection = projectionOf(g, m);
-      // Grey maps are data: no colour transform.
-      const auto grey = [&](const std::string& file) {
-        return blend(g, projection, images(g, projection, file, ccl::u_colorspace_data), false);
+      // Grey maps are data: no colour transform. A map packed into one
+      // channel of an image (mitcad#1862: glTF's roughness in green,
+      // metalness in blue, occlusion in red) takes that channel, others
+      // the grey value.
+      const auto grey = [&](const std::string& file, int channel) {
+        ccl::ShaderOutput* color =
+            blend(g, projection, images(g, projection, file, ccl::u_colorspace_data), false);
+        if (channel < 0 || channel > 2) {
+          return color;
+        }
+        auto* parts = g.create_node<ccl::SeparateColorNode>();
+        g.connect(color, parts->input("Color"));
+        return parts->output(channel == 0 ? "Red" : channel == 1 ? "Green" : "Blue");
       };
       // The colour image is sRGB: Cycles' scene linear (Rec.709) with the
       // sRGB transfer function, which the kernel decodes per lookup. Not
@@ -1063,17 +1095,29 @@ private:
         if (color != nullptr) {
           g.connect(color, occluded->input("A"));
         }
-        g.connect(grey(m.occlusionMap), occluded->input("B"));
+        g.connect(grey(m.occlusionMap, m.occlusionChannel), occluded->input("B"));
         color = occluded->output("Result");
       }
       if (color != nullptr) {
         g.connect(color, bsdf->input("Base Color"));
       }
+      // A map's values scaled by its factor (mitcad#1874: glTF's roughness
+      // and metalness factors), where it is not 1.
+      const auto scaled = [&](ccl::ShaderOutput* value, float factor) {
+        if (factor == 1.0f) {
+          return value;
+        }
+        auto* times = g.create_node<ccl::MathNode>();
+        times->set_math_type(ccl::NODE_MATH_MULTIPLY);
+        times->set_value2(factor);
+        g.connect(value, times->input("Value1"));
+        return times->output("Value");
+      };
       if (roughnessImage) {
-        g.connect(grey(m.roughnessMap), bsdf->input("Roughness"));
+        g.connect(scaled(grey(m.roughnessMap, m.roughnessChannel), m.roughnessFactor), bsdf->input("Roughness"));
       }
       if (metalnessImage) {
-        g.connect(grey(m.metalnessMap), bsdf->input("Metallic"));
+        g.connect(scaled(grey(m.metalnessMap, m.metalnessChannel), m.metalnessFactor), bsdf->input("Metallic"));
       }
       if (normalImage) {
         g.connect(textureNormal(g, projection, m.normalMap), bsdf->input("Normal"));
@@ -1124,7 +1168,10 @@ private:
   // projects X-facing surfaces from (y, z), Y-facing from (x, z) and
   // Z-facing from (x, y), each point from the axis its surface faces most
   // (by the object's normal there). Every image of the set (the base
-  // colour and the maps, mitcad#314) uses the same coordinates.
+  // colour and the maps, mitcad#314) uses the same coordinates. By texture
+  // coordinates (mitcad#1862, MaterialData::textureUv; geometryOf gives
+  // such a material only to a mesh that has them) the images read the
+  // mesh's UV map as it is, one plane.
   struct Projection {
     struct Plane {
       ccl::ShaderOutput* coordinates = nullptr; // the image's (u, v)
@@ -1139,14 +1186,24 @@ private:
     // Y less than Z.
     ccl::ShaderOutput* notX = nullptr;
     ccl::ShaderOutput* notY = nullptr;
+    // By the mesh's texture coordinates: a normal map's tangents are the
+    // UV map's.
+    bool uv = false;
   };
 
   static Projection projectionOf(ccl::ShaderGraph& graph, const MaterialData& m) {
     Projection projection;
     auto* coordinates = graph.create_node<ccl::TextureCoordinateNode>();
+    projection.normal = coordinates->output("Normal");
+    if (m.textureUv) {
+      projection.uv = true;
+      Projection::Plane byUv;
+      byUv.coordinates = coordinates->output("UV");
+      projection.planes = {byUv};
+      return projection;
+    }
     auto* position = graph.create_node<ccl::SeparateXYZNode>();
     graph.connect(coordinates->output("Object"), position->input("Vector"));
-    projection.normal = coordinates->output("Normal");
     const float cosine = std::cos(m.textureRotation);
     const float sine = std::sin(m.textureRotation);
     using Axis = std::array<float, 3>;
@@ -1241,6 +1298,15 @@ private:
   // seen through (y, z)) gives a mirrored frame, as its images are.
   static ccl::ShaderOutput* textureNormal(ccl::ShaderGraph& graph, const Projection& projection,
                                           const std::string& file) {
+    if (projection.uv) {
+      // By the mesh's texture coordinates (mitcad#1862): Cycles' Normal
+      // Map node in tangent space (OpenGL convention), its tangents worked
+      // out from the UV map; the normal it gives is in world coordinates.
+      auto* map = graph.create_node<ccl::NormalMapNode>();
+      map->set_space(ccl::NODE_NORMAL_MAP_TANGENT);
+      graph.connect(images(graph, projection, file, ccl::u_colorspace_data).front(), map->input("Color"));
+      return map->output("Normal");
+    }
     const auto vectorMath = [&graph](ccl::NodeVectorMathType type) {
       auto* node = graph.create_node<ccl::VectorMathNode>();
       node->set_math_type(type);

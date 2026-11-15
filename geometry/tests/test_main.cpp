@@ -248,6 +248,10 @@ const Part kParts[] = {
     // Outlines of faces seen along a direction: Project of a curved face
     // (mitcad#1265).
     {"face_outline", test::face_outline_tests},
+    // Tapers whose walls meet or vanish within the extrusion (mitcad#1851).
+    {"taper_events", test::taper_event_tests},
+    // Press Pull on a face continued Straight or Along the walls (mitcad#1850).
+    {"press_pull", test::press_pull_tests},
 };
 
 bool is_part(const std::string& name) {

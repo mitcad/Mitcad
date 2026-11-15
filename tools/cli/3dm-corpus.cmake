@@ -9,10 +9,14 @@
 # column `file` (the model's path relative to the index) is required. A
 # row whose column `check` says `no` is imported without --check (a model
 # with objects the import leaves out on purpose, e.g. subdivision
-# objects): it must still be read and imported. Other columns (its source,
-# its licence) are notes. Models are named by their content id (the first
-# 8 hex digits of their SHA-256). Each model's report and design go to
-# WORK. Skipped without the corpus.
+# objects): it must still be read and imported. A column `expect`, where
+# given, is a regular expression (no `;`, `[` or `]`) the import's text
+# must match (e.g. the Form line of a SubD object, mitcad#1810); a column
+# `edit`, where given, names a mitcad-cli script (relative to the index)
+# run on the imported design, which must pass (e.g. a Form's cage edited).
+# Other columns (its source, its licence) are notes. Models are named by
+# their content id (the first 8 hex digits of their SHA-256). Each
+# model's report and design go to WORK. Skipped without the corpus.
 #
 #   cmake -DCLI=<mitcad-cli> -DWORK=<dir> [-DRUNNER=<mitcad_run_parallel>]
 #         -P 3dm-corpus.cmake
@@ -31,28 +35,47 @@ foreach(var CLI WORK)
 endforeach()
 
 # Imports one model and prints its lines; `model_error` tells the caller
-# why it failed (empty when it passed).
-function(check_model model id check)
+# why it failed (empty when it passed). `expect` (a regular expression the
+# import's text must match) and `edit` (a mitcad-cli script run on the
+# imported design) are empty or "-" where the index gives none.
+function(check_model model id check expect edit)
   set(check_args --check)
   if(check STREQUAL "no")
     set(check_args "")
+  endif()
+  if(expect STREQUAL "-")
+    set(expect "")
+  endif()
+  if(edit STREQUAL "-")
+    set(edit "")
   endif()
   execute_process(
     COMMAND "${CLI}" import-3dm "${model}" ${check_args} --report "${WORK}/${id}.json" --save "${WORK}/${id}.mitcad"
     OUTPUT_VARIABLE out ERROR_VARIABLE err RESULT_VARIABLE status)
   message("== ${id}\n${out}")
-  set(model_error "" PARENT_SCOPE)
+  set(found "")
   if(NOT status EQUAL 0)
     if(err STREQUAL "")
       set(err "import-3dm exited with ${status}")
     endif()
-    set(model_error "${err}" PARENT_SCOPE)
+    set(found "${err}")
+  elseif(NOT expect STREQUAL "" AND NOT out MATCHES "${expect}")
+    set(found "the import does not say what its row expects: ${expect}")
+  elseif(NOT edit STREQUAL "")
+    execute_process(
+      COMMAND "${CLI}" run "${edit}" --open "${WORK}/${id}.mitcad"
+      OUTPUT_VARIABLE edit_out ERROR_VARIABLE edit_err RESULT_VARIABLE edit_status)
+    message("== ${id}: ${edit}\n${edit_out}")
+    if(NOT edit_status EQUAL 0)
+      set(found "its edit script fails: ${edit_err}${edit_out}")
+    endif()
   endif()
+  set(model_error "${found}" PARENT_SCOPE)
 endfunction()
 
 # A child of the parallel run: one model.
 if(DEFINED MODEL)
-  check_model("${MODEL}" "${ID}" "${CHECK}")
+  check_model("${MODEL}" "${ID}" "${CHECK}" "${EXPECT}" "${EDIT}")
   if(NOT model_error STREQUAL "")
     message(FATAL_ERROR "${ID}: ${model_error}")
   endif()
@@ -74,6 +97,8 @@ set(failed "")
 set(labels "")
 set(models "")
 set(checks "")
+set(expects "")
+set(edits "")
 foreach(index IN LISTS indexes)
   get_filename_component(dir "${index}" DIRECTORY)
   file(STRINGS "${index}" rows)
@@ -91,6 +116,8 @@ foreach(index IN LISTS indexes)
         message(FATAL_ERROR "${index}: the header has no column 'file'")
       endif()
       list(FIND header check check_column)
+      list(FIND header expect expect_column)
+      list(FIND header edit edit_column)
       continue()
     endif()
     list(LENGTH cells n)
@@ -111,6 +138,28 @@ foreach(index IN LISTS indexes)
         set(check "no")
       endif()
     endif()
+    # What the import must say and the script run on its design ("-" for
+    # none: a list keeps no empty first item).
+    set(expect "-")
+    if(expect_column GREATER_EQUAL 0 AND expect_column LESS n)
+      list(GET cells ${expect_column} value)
+      string(STRIP "${value}" value)
+      if(NOT value STREQUAL "")
+        set(expect "${value}")
+      endif()
+    endif()
+    set(edit "-")
+    if(edit_column GREATER_EQUAL 0 AND edit_column LESS n)
+      list(GET cells ${edit_column} value)
+      string(STRIP "${value}" value)
+      if(NOT value STREQUAL "")
+        set(edit "${dir}/${value}")
+        if(NOT EXISTS "${edit}")
+          list(APPEND failed "a listed edit script is missing (row ${count})")
+          continue()
+        endif()
+      endif()
+    endif()
     file(SHA256 "${model}" hash)
     string(SUBSTRING "${hash}" 0 8 id)
     math(EXPR count "${count} + 1")
@@ -122,6 +171,8 @@ foreach(index IN LISTS indexes)
     list(APPEND labels "${label}")
     list(APPEND models "${model}")
     list(APPEND checks "${check}")
+    list(APPEND expects "${expect}")
+    list(APPEND edits "${edit}")
   endforeach()
 endforeach()
 if(count EQUAL 0)
@@ -139,7 +190,9 @@ if(DEFINED RUNNER AND NOT jobs STREQUAL "1")
     list(GET labels ${i} label)
     list(GET models ${i} model)
     list(GET checks ${i} check)
-    file(APPEND "${list}" "${label}\t${CMAKE_COMMAND}\t-DCLI=${CLI}\t-DWORK=${WORK}\t-DMODEL=${model}\t-DID=${label}\t-DCHECK=${check}\t-P\t${CMAKE_CURRENT_LIST_FILE}\n")
+    list(GET expects ${i} expect)
+    list(GET edits ${i} edit)
+    file(APPEND "${list}" "${label}\t${CMAKE_COMMAND}\t-DCLI=${CLI}\t-DWORK=${WORK}\t-DMODEL=${model}\t-DID=${label}\t-DCHECK=${check}\t-DEXPECT=${expect}\t-DEDIT=${edit}\t-P\t${CMAKE_CURRENT_LIST_FILE}\n")
   endforeach()
   execute_process(COMMAND "${RUNNER}" "${list}" RESULT_VARIABLE status OUTPUT_VARIABLE out ERROR_VARIABLE out)
   # 0: every child passed, 1: some failed; anything else (the runner not
@@ -159,7 +212,9 @@ else()
     list(GET labels ${i} label)
     list(GET models ${i} model)
     list(GET checks ${i} check)
-    check_model("${model}" "${label}" "${check}")
+    list(GET expects ${i} expect)
+    list(GET edits ${i} edit)
+    check_model("${model}" "${label}" "${check}" "${expect}" "${edit}")
     if(NOT model_error STREQUAL "")
       list(APPEND failed "${label}: ${model_error}")
     endif()

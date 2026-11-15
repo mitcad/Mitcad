@@ -39,7 +39,9 @@ struct ToolPreview;
 // A dimension as drawn, in view pixels.
 struct DimensionShape {
   std::vector<QLineF> lines;              // extension and dimension lines
-  std::vector<QPolygonF> arcs;            // angle and arc length arcs
+  // Angle and arc length arcs; on a curved face (Projection::bend) every
+  // line too, bent with the face.
+  std::vector<QPolygonF> arcs;
   std::vector<std::pair<QPointF, QPointF>> arrows; // tip and the direction it points to
   QPointF textAt;
   QString text;
@@ -50,6 +52,12 @@ struct DimensionShape {
 struct Projection {
   std::function<QPointF(const V2&)> toScreen;
   double pixel = 0.1; // mm per pixel
+  // On a sketch's cylindrical or conical face (mitcad#1853, its
+  // SketchSurface::step): the longest piece of a dimension's line or arc
+  // drawn straight, so that its lines bend with the face as the sketch's
+  // curves do (each then one of the shape's `arcs`). 0 on a plane: lines
+  // drawn straight.
+  double bend = 0.0;
 };
 
 // Lays out a dimension of a sketch (a placed one, or one being placed).
@@ -150,6 +158,14 @@ public:
   // background's tone changes and when the sketch's edit starts: a session
   // without a desktop (Windows session 0) may never paint it.
   void logDimensionHalos();
+  // Logs "Sketch dimensions on its face: 2 drawn, 6 line(s) laid onto it,
+  // 0 straight, 2 bent with it" (laid pieces more than a pixel off the
+  // straight line between their ends) when it changes, for the UI tests
+  // (mitcad#1853): a sketch on a cylindrical or conical face draws its
+  // dimensions' lines on the face, as its curves. Nothing for a sketch on a
+  // plane. Called with the other logs of a reload and of the view, also
+  // where the view never paints (Windows session 0).
+  void logDimensionsOnFace();
   // Logs "Sketch axes drawn: origin at x,y in the view; x axis x,y to x,y;
   // y axis x,y to x,y" (window coordinates; "outside the view", "none")
   // when what paintAxes draws changes, for the UI tests (mitcad#739: the
@@ -287,6 +303,8 @@ private:
   QString m_loggedThrough;
   // The last "Sketch dimension halos:" line logged (for UI tests).
   QString m_loggedDimensionHalos;
+  // The last "Sketch dimensions on its face:" line logged (mitcad#1853).
+  QString m_loggedDimensionsOnFace;
   // The last "Sketch inactive drawn:" line logged (mitcad#721).
   QString m_loggedInactive;
   // The last "Sketch axes drawn:" line logged (mitcad#739); cleared when
@@ -296,6 +314,8 @@ private:
   QString m_loggedHighlights;
   // The last "Sketch overlay lines:" line logged (mitcad#1619).
   QString m_loggedHighlightLines;
+  // The last "Sketch overlay highlight look:" line logged (mitcad#1803).
+  QString m_loggedHighlightLook;
   // The last "Sketch badge" line logged (mitcad#1756); cleared when the
   // overlay hides.
   QString m_loggedBadge;

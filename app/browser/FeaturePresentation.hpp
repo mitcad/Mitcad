@@ -24,7 +24,8 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
     QJsonObject definition = model.queryObject({{QStringLiteral("query"), QStringLiteral("feature")},
                                                 {QStringLiteral("uid"), feature.uid}})
                                  .value(QStringLiteral("def")).toObject();
-    if (const CommandDef* editor = registry.editorOf(definition)) {
+    const CommandDef* editor = registry.editorOf(definition);
+    if (editor != nullptr && editor->loadForHover) {
       kind = editor->name;
       CommandState state;
       for (const InputDef& input : editor->inputs) {

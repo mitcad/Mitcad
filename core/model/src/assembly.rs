@@ -49,6 +49,10 @@ pub struct ComponentDef {
     /// What the BUILD tab made it of (mitcad#375); None for other
     /// components.
     pub build: Option<crate::build::BuildRecord>,
+    /// What a part converted to features (mitcad#1815) was listed as: its
+    /// cut list row and stock, kept by BUILD's cut list (opaque here; the
+    /// cut list writes and reads it). None for other components.
+    pub listed: Option<serde_json::Value>,
 }
 
 /// A component linked from another design file: its bodies are the
@@ -113,6 +117,42 @@ pub struct Occurrence {
     /// Owned by a timeline Pattern at Points. Its placement only exists
     /// after that feature succeeds; the source component stays shared.
     pub pattern: Option<crate::features::point_pattern::PatternInstance>,
+    /// Flexible (mitcad#1793): its component's own joints move it in its
+    /// parent's solve, for this occurrence alone, with its own values of
+    /// them; None: rigid there (the default).
+    pub flexible: Option<Flex>,
+}
+
+/// A flexible occurrence's own values of its component's joints
+/// (mitcad#1793), which the component's design does not have: per joint,
+/// the motions driven for this occurrence (`position`) and where its free
+/// motions are (`start`, kept by a drag), mm and radians.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Flex {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub position: BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub start: BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>,
+}
+
+impl Flex {
+    /// The values with their joints renamed by `map` (a copy of the
+    /// component with new feature uids, mitcad#1805); those of joints
+    /// `map` has no copy of are left out.
+    pub fn remapped(&self, map: &dyn Fn(FeatureUid) -> Option<FeatureUid>) -> Flex {
+        type Values = BTreeMap<FeatureUid, BTreeMap<crate::joints::Motion, f64>>;
+        let keyed = |values: &Values| -> Values {
+            values
+                .iter()
+                .filter_map(|(uid, motions)| Some((map(*uid)?, motions.clone())))
+                .collect()
+        };
+        Flex {
+            position: keyed(&self.position),
+            start: keyed(&self.start),
+        }
+    }
 }
 
 /// The components and occurrences of a design.
@@ -264,6 +304,7 @@ impl Assembly {
             library: None,
             policy: Policy::GENERAL,
             build: None,
+            listed: None,
         });
         uid
     }
@@ -318,6 +359,7 @@ impl Assembly {
             transparent: false,
             number,
             pattern: None,
+            flexible: None,
         });
         uid
     }
@@ -352,6 +394,17 @@ impl Assembly {
         placement: &dyn Fn(OccurrenceUid) -> Transform,
         bodies: &dyn Fn(ComponentUid) -> Vec<BodyUid>,
     ) -> Vec<Instance> {
+        self.instances_flexed(placement, &BTreeMap::new(), bodies)
+    }
+
+    /// [`Assembly::instances`] with the occurrences inside flexible ones
+    /// where `flexed` places them for those (mitcad#1793).
+    pub fn instances_flexed(
+        &self,
+        placement: &dyn Fn(OccurrenceUid) -> Transform,
+        flexed: &crate::joints::Flexed,
+        bodies: &dyn Fn(ComponentUid) -> Vec<BodyUid>,
+    ) -> Vec<Instance> {
         let mut out = Vec::new();
         let mut path = Vec::new();
         self.walk(
@@ -359,7 +412,9 @@ impl Assembly {
             Transform::IDENTITY,
             true,
             &mut path,
-            placement,
+            &|path: &[OccurrenceUid], o: OccurrenceUid| {
+                crate::joints::flexed_step(flexed, path, o).unwrap_or_else(|| placement(o))
+            },
             bodies,
             &mut out,
         );
@@ -373,7 +428,7 @@ impl Assembly {
         transform: Transform,
         visible: bool,
         path: &mut Vec<OccurrenceUid>,
-        placement: &dyn Fn(OccurrenceUid) -> Transform,
+        placement: &dyn Fn(&[OccurrenceUid], OccurrenceUid) -> Transform,
         bodies: &dyn Fn(ComponentUid) -> Vec<BodyUid>,
         out: &mut Vec<Instance>,
     ) {
@@ -393,8 +448,8 @@ impl Assembly {
             if path.contains(&o.uid) {
                 continue;
             }
+            let placed = transform.after(&placement(path, o.uid));
             path.push(o.uid);
-            let placed = transform.after(&placement(o.uid));
             self.walk(
                 o.component,
                 placed,

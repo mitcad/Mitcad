@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: MIT
+# Delete Sheet while the title block is edited (mitcad#1841) on
+# drawing-title-block-sheets.json: Drawing1 with three sheets of the ISO
+# template (its title block 230,10 to 410,46 on the A3 sheet). Three, so
+# that their tabs fit the bar in a small window (1024 x 768).
+#   1. Edit Title Block from the third sheet's tab menu, a field EDITED
+#      added; Delete Sheet from the first tab's menu: the editor stays on
+#      the sheet edited (now the second), Done writes the block onto that
+#      sheet, and the other (now the first) keeps its own.
+#   2. Edit Title Block on the second sheet, then Delete Sheet of that
+#      sheet: the editor ends, nothing is written.
+# Run by tools/ui-drawing-title-block-sheets-test.sh (Linux),
+# tools/ui-windows-drawing-title-block-sheets-test.ps1 (Windows) and
+# tools/ui-macos-drawing-title-block-sheets-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet [0-9] of 3'
+wait-log '^Drawing sheet view '
+wait-log '^Drawing Sheet tab 3 at '
+wait-idle
+
+# 1. The third sheet's block edited, the first sheet deleted, Done.
+mark
+context-menu-logged '^Drawing Sheet tab 3 at ' 'Edit Title Block'
+wait-log '^Title block editor: on, sheet 3: '
+wait-log '^Drawing panel titleBlockTool_field at '
+wait-idle
+click-logged '^Drawing panel titleBlockTool_field at '
+wait-log '^Title block tool: field'
+drawing-sheet-click 240 15
+drawing-sheet-click 290 20
+wait-log '^Title block field added: '
+wait-log '^Drawing panel titleBlockFieldLabel at '
+wait-idle
+click-logged '^Drawing panel titleBlockFieldLabel at '
+key Ctrl+a
+type EDITED
+key Return
+wait-idle
+click-logged '^Drawing panel titleBlockFieldText at '
+key Ctrl+a
+type yes
+key Return
+wait-log '^Title block field [0-9]+: label EDITED, text yes'
+wait-idle
+
+mark
+context-menu-logged '^Drawing Sheet tab 1 at ' 'Delete Sheet'
+wait-log '^Drawing command: .*"cmd":"delete_drawing_sheet"'
+wait-log '^Drawing sheet 2 shown'
+wait-idle
+expect-no-log '^Title block editor: cancelled'
+
+mark
+click-logged '^Drawing panel titleBlockDone at '
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_title_block")(?=.*"sheet":1,)'
+wait-log '^Title block editor: done '
+wait-log '^Drawing title block [(].*EDITED=yes'
+expect-no-log '^Drawing command refused'
+
+# The other sheet keeps its block: its title block, logged when it differs
+# from the one logged before it, has no EDITED.
+mark
+click-logged '^Drawing Sheet tab 1 at '
+wait-log '^Drawing sheet 1 shown'
+wait-log '^Drawing title block [(](?!.*EDITED)'
+wait-idle
+expect-no-log '^Drawing title block .*EDITED'
+
+# 2. The sheet edited deleted: the editor ends.
+mark
+context-menu-logged '^Drawing Sheet tab 2 at ' 'Edit Title Block'
+wait-log '^Title block editor: on, sheet 2: '
+wait-idle
+mark
+context-menu-logged '^Drawing Sheet tab 2 at ' 'Delete Sheet'
+wait-log '^Title block editor: cancelled'
+wait-log '^Drawing command: .*"cmd":"delete_drawing_sheet"'
+wait-log '^Drawing sheet 1 shown'
+wait-idle
+expect-no-log '^Drawing command: .*"cmd":"edit_drawing_title_block"'
+expect-no-log '^Drawing command refused'
+expect-never 'TestDriver: FAIL'

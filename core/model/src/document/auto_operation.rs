@@ -73,8 +73,20 @@ impl<K: Kernel> Document<K> {
         uid: FeatureUid,
         def: &FeatureDef<ValueInput>,
     ) -> Result<(PreviewReport, Option<AutoOperation>), ModelError> {
+        self.preview_edit_auto_through(uid, def, None)
+    }
+
+    /// As [`Self::preview_edit_auto`], with the occurrence-placing features
+    /// after the edited one computed up to `through`
+    /// ([`Document::preview_edit_through`], mitcad#1860).
+    pub fn preview_edit_auto_through(
+        &mut self,
+        uid: FeatureUid,
+        def: &FeatureDef<ValueInput>,
+        through: Option<usize>,
+    ) -> Result<(PreviewReport, Option<AutoOperation>), ModelError> {
         let FeatureDef::Extrude(extrude) = def else {
-            return Ok((self.preview_edit(uid, def)?, None));
+            return Ok((self.preview_edit_through(uid, def, through)?, None));
         };
         let mut before = self.state.clone();
         before.marker = before.require(uid)?;
@@ -90,7 +102,7 @@ impl<K: Kernel> Document<K> {
         plain.participants.clear();
         plain.cut_scope = None;
         let plain = FeatureDef::Extrude(plain);
-        let report = self.preview_edit(uid, &plain)?;
+        let report = self.preview_edit_through(uid, &plain, through)?;
         let choice = self.tool_operation(uid, &before);
         // Contact queries run after recompute too. A cancellation during
         // that query must not leave a successful tool-only preview behind.
@@ -101,7 +113,7 @@ impl<K: Kernel> Document<K> {
         if plain == *def {
             return Ok((report, choice));
         }
-        match self.preview_edit(uid, def) {
+        match self.preview_edit_through(uid, def, through) {
             Ok(report) => Ok((report, choice)),
             Err(error) => {
                 // Definition validation can fail before preview_state is

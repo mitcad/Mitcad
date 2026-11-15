@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: MIT
+# The edit panel of a derived part (mitcad#1812), on derived-part-edit.json:
+# a synthetic BUILD profile (two rows: Small 20 x 20, Large 30 x 30) placed
+# 500 mm long in Small, 200000 mm3; a Block component with a 10 mm cube and
+# its bounding solid, 1000 mm3 each.
+#   1. A double-click on the profile's timeline cell opens Derived
+#      Component with its rows, its row and its length; the timeline is
+#      not rolled back (the part stays, 3 bodies).
+#   2. Length 600 mm and the row Large, OK: one build_edit, the part
+#      30 x 30 x 600 = 540000 mm3, one undo step; Undo restores it.
+#   3. A double-click on the bounding solid (no edit panel): the plain
+#      message as information with Edit Parameters, no failure, no panel.
+#   4. The panel again: Open Source Design opens the library source the
+#      design keeps, read-only, in a window of its own (one body, the
+#      source's 20 x 20 x 500).
+# Run by tools/ui-derived-part-edit-test.sh (Linux),
+# tools/ui-windows-derived-part-edit-test.ps1 (Windows) and
+# tools/ui-macos-derived-part-edit-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-model-bodies 3 202000
+capture-document-window design
+capture-undo-depth start
+
+# 1. The profile's panel from its timeline cell, the design as it is.
+mark
+dblclick-logged '^Timeline DerivedComponent1 at '
+expect-log '^Editing F\d+ with Derived Component$'
+wait-log '^Inspect Derived Component: derived component .* [(]C\d+[)], BUILD, rows Small[|]Large, row Small, length 500(\.0+)? mm, parameters none, source opens read-only; changes: none$'
+wait-idle
+expect-model-bodies 3 202000
+
+# 2. Its length and row changed: one undo step.
+type-in '^Panel Derived Component input length at ' '600 mm'
+qt-choice input_config 'Large'
+wait-idle
+wait-log '^Inspect Derived Component: .*; changes: row Large, length 600 mm$'
+mark
+button '^OK$'
+wait-log '^Derived component C\d+ edited: row Large, length 600 mm$'
+expect-log '^Done Derived Component$'
+wait-idle
+expect-model-bodies 3 542000
+expect-undo-depth ${start} 1
+command edit.undo
+wait-idle
+expect-model-bodies 3 202000
+expect-undo-depth ${start} 0
+
+# 3. A feature type without an edit panel: plain words, information.
+mark
+dblclick-logged '^Timeline BoundingSolid1 at '
+wait-log '^Message band: info This feature has no edit panel yet[.] Its values can be changed in Edit Parameters[.]$'
+expect-log '^Message band action: Edit Parameters$'
+expect-log '^Edit of F\d+ [(]bounding_solid[)]: no edit panel; Edit Parameters offered$'
+expect-no-log '^Editing F\d+ with '
+expect-no-log '^Message band: error '
+expect-never 'cannot be edited in MitCad yet'
+expect-model-bodies 3 202000
+
+# 4. Open Source Design of the library part: its source, read-only.
+focus-document-window design
+mark
+dblclick-logged '^Timeline DerivedComponent1 at '
+expect-log '^Editing F\d+ with Derived Component$'
+wait-log '^Panel Derived Component note source: .* \[Open Source Design\]$'
+wait-log '^Panel Derived Component action source[.]0 at '
+click-logged '^Panel Derived Component action source[.]0 at '
+wait-log '^Open Source Design: .* [(]S\d+[)] read-only from .*[.]mitcad$'
+wait-log '^Open Read-Only: .*[.]mitcad$'
+expect-no-log '^Open Read-Only: .* failed$'
+wait-idle
+expect-document-windows 2
+expect-model-bodies 1 200000

@@ -9,6 +9,7 @@
 // in the band as "<file> changed" with Update. Nothing updates on its own.
 #include "../MainWindow.hpp"
 
+#include <exception>
 #include <optional>
 #include <utility>
 
@@ -18,6 +19,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPoint>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QToolButton>
 #include <QtLogging>
@@ -91,6 +95,43 @@ void MainWindow::openLinkedDesign(const QString& component) {
     }
   }
   showError(tr("%1 is not a linked design.").arg(component));
+}
+
+void MainWindow::openLibrarySource(const QString& source) {
+  QJsonObject answer;
+  try {
+    answer = queryObject({{QStringLiteral("query"), QStringLiteral("library_source")}, {QStringLiteral("source"), source}});
+  } catch (const std::exception& e) {
+    showError(tr("The source design cannot be opened: %1").arg(errorText(e)));
+    return;
+  }
+  const QString text = answer.value(QStringLiteral("text")).toString();
+  if (text.isEmpty()) {
+    showWarning(tr("The source design is not read yet: save and open this design again, then try once more."));
+    return;
+  }
+  // One file per version of the source (its SHA-256), named as the source
+  // so that its tab says what it is: written once, opened read-only.
+  QString name = answer.value(QStringLiteral("name")).toString().trimmed();
+  static const QRegularExpression unsafe(QStringLiteral("[^A-Za-z0-9 ._()-]+"));
+  name.replace(unsafe, QStringLiteral("_"));
+  if (name.isEmpty()) {
+    name = QStringLiteral("source");
+  }
+  const QString folder = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) +
+                         QStringLiteral("/library-sources/") +
+                         answer.value(QStringLiteral("sha256")).toString().left(16);
+  const QString file = folder + QLatin1Char('/') + name + QStringLiteral(".mitcad");
+  if (!QFileInfo::exists(file)) {
+    QSaveFile out(file);
+    if (!QDir().mkpath(folder) || !out.open(QIODevice::WriteOnly) || out.write(text.toUtf8()) < 0 || !out.commit()) {
+      showError(tr("The source design could not be written to %1.").arg(QDir::toNativeSeparators(folder)));
+      return;
+    }
+  }
+  qInfo().noquote() << QStringLiteral("Open Source Design: %1 (%2) read-only from %3")
+                           .arg(answer.value(QStringLiteral("name")).toString(), source, file);
+  openReadOnlyFile(file);
 }
 
 void MainWindow::openLinkedFile(const QString& path) {

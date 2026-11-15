@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <utility>
 #include <string>
 #include <vector>
@@ -44,6 +45,8 @@
 #include "../src/emboss_projection.hpp"
 #include "check.hpp"
 #include "mitcad/geometry/emboss.hpp"
+#include "mitcad/geometry/split.hpp"
+#include "mitcad/geometry/tool.hpp"
 #include "mitcad/geometry/text.hpp"
 
 namespace {
@@ -1027,6 +1030,241 @@ void test_taper_refusals() {
 }
 } // namespace
 
+// Sketch curves of a cylinder's development laid onto it as ruled bands
+// (mitcad#1768): a line once around it is a closed annulus, a line along it
+// a radial rectangle; the ring's band splits the rod's side in two.
+Segment line_segment(const std::string& name, double x0, double y0, double x1, double y1) {
+  Segment segment;
+  segment.name = name;
+  segment.kind = SegmentKind::Line;
+  segment.start = gp_Pnt2d(x0, y0);
+  segment.end = gp_Pnt2d(x1, y1);
+  return segment;
+}
+
+double area_of(const TopoDS_Shape& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  return props.Mass();
+}
+
+void test_curves_laid_onto_a_cylinder() {
+  WrappedCurvesSpec spec;
+  spec.feature = "F7";
+  spec.frame.origin = gp_Pnt(0.0, 10.0, 0.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = 10.0;
+  spec.inner = -0.5;
+  spec.outer = 0.5;
+  const double around = 10.0 * test::kPi;
+  spec.curves = {line_segment("c1", -around, 5.0, around, 5.0), line_segment("c2", 3.0, 2.0, 3.0, 8.0),
+                 line_segment("c3", 0.0, 1.0, 20.0, 4.0)};
+  const ShapePtr bands = wrapped_curves(spec);
+  CHECK(bands->face_count() == 3);
+  for (const char* name : {"F7:band(c1)", "F7:band(c2)", "F7:band(c3)"}) {
+    const std::vector<int> found = bands->find_faces(name);
+    CHECK(found.size() == 1);
+    if (found.empty()) {
+      continue;
+    }
+    CHECK(BRepCheck_Analyzer(bands->face(found.front())).IsValid());
+  }
+  // The ring: an annulus at z = 5 from radius 9.5 to 10.5; the line along
+  // the axis: 1 across and 6 long.
+  const std::vector<int> ring = bands->find_faces("F7:band(c1)");
+  if (!ring.empty()) {
+    CHECK_NEAR_TOL(area_of(bands->face(ring.front())), test::kPi * (10.5 * 10.5 - 9.5 * 9.5), 1e-6);
+    Bnd_Box box;
+    BRepBndLib::Add(bands->face(ring.front()), box);
+    double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    CHECK(std::abs(zmin - 5.0) < 1e-6 && std::abs(zmax - 5.0) < 1e-6);
+  }
+  const std::vector<int> along = bands->find_faces("F7:band(c2)");
+  if (!along.empty()) {
+    CHECK_NEAR_TOL(area_of(bands->face(along.front())), 6.0, 1e-6);
+  }
+  // The rod of radius 10 and height 20, its side split by the ring.
+  const TopoDS_Shape rod = BRepPrimAPI_MakeCylinder(10.0, 20.0).Shape();
+  std::vector<Shape::NamedFace> named;
+  for (TopExp_Explorer e(rod, TopAbs_FACE); e.More(); e.Next()) {
+    const BRepAdaptor_Surface surface(TopoDS::Face(e.Current()));
+    std::string name = "F1:side";
+    if (surface.GetType() == GeomAbs_Plane) {
+      name = surface.Plane().Location().Z() > 10.0 ? "F1:top" : "F1:bottom";
+    }
+    named.push_back({e.Current(), {name}});
+  }
+  const Shape body(rod, named);
+  spec.curves = {line_segment("c1", -around, 5.0, around, 5.0)};
+  const ShapePtr split = split_faces("F8", body, {"F1:side"}, Tool::of_body(wrapped_curves(spec)), false);
+  CHECK(split->face_count() == 4);
+  CHECK_NEAR(volume_of(split->occt()), test::kPi * 100.0 * 20.0);
+}
+
+// A square of a cylinder's development drawn across the side's seam
+// (mitcad#1853): Split Face makes one face of it, not the two halves on
+// either side of the seam OCCT's split leaves, and keeps the square's own
+// edges; a square off the seam splits the same way.
+void test_a_square_across_the_seam_splits_out_one_face() {
+  // The rod of radius 10 and height 20 (its seam at +X, angle 0).
+  const TopoDS_Shape rod = BRepPrimAPI_MakeCylinder(10.0, 20.0).Shape();
+  std::vector<Shape::NamedFace> named;
+  for (TopExp_Explorer e(rod, TopAbs_FACE); e.More(); e.Next()) {
+    const BRepAdaptor_Surface surface(TopoDS::Face(e.Current()));
+    std::string name = "F1:side";
+    if (surface.GetType() == GeomAbs_Plane) {
+      name = surface.Plane().Location().Z() > 10.0 ? "F1:top" : "F1:bottom";
+    }
+    named.push_back({e.Current(), {name}});
+  }
+  const Shape body(rod, named);
+  // The sketch's origin at +Y, its x axis round the rod to -X: the seam at
+  // x = -5 pi (a quarter turn back).
+  WrappedCurvesSpec spec;
+  spec.feature = "F7";
+  spec.frame.origin = gp_Pnt(0.0, 10.0, 0.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = 10.0;
+  spec.inner = -0.5;
+  spec.outer = 0.5;
+  const auto square = [](double x0, double y0, double side) {
+    return std::vector<Segment>{line_segment("c1", x0, y0, x0 + side, y0),
+                                line_segment("c2", x0 + side, y0, x0 + side, y0 + side),
+                                line_segment("c3", x0 + side, y0 + side, x0, y0 + side),
+                                line_segment("c4", x0, y0 + side, x0, y0)};
+  };
+  const double seam = -5.0 * test::kPi;
+  for (const double x0 : {seam - 2.0, 4.0}) {
+    spec.curves = square(x0, 8.0, 5.0);
+    const ShapePtr split = split_faces("F8", body, {"F1:side"}, Tool::of_body(wrapped_curves(spec)), false);
+    // The top, the bottom, the side round the square and the square.
+    CHECK(split->face_count() == 4);
+    CHECK_NEAR(volume_of(split->occt()), test::kPi * 100.0 * 20.0);
+    CHECK(BRepCheck_Analyzer(split->occt()).IsValid());
+    // The square's face: 25 mm^2 (a cylinder's development keeps areas),
+    // the side round it the rest.
+    std::vector<double> areas;
+    for (const int f : split->find_faces("F1:side")) {
+      areas.push_back(area_of(split->face(f)));
+    }
+    std::sort(areas.begin(), areas.end());
+    CHECK(areas.size() == 2);
+    if (areas.size() == 2) {
+      CHECK_NEAR_TOL(areas[0], 25.0, 1e-6);
+      CHECK_NEAR_TOL(areas[1], 2.0 * test::kPi * 10.0 * 20.0 - 25.0, 1e-6);
+    }
+  }
+}
+
+// A ring about a cone's apex in its development is a closed band around
+// the cone (mitcad#1768).
+void test_curves_laid_onto_a_cone() {
+  const double angle = test::kPi / 6.0;
+  const double r0 = 20.0 * std::tan(angle);
+  const double rho0 = 20.0 / std::cos(angle);
+  WrappedCurvesSpec spec;
+  spec.feature = "F7";
+  spec.frame.origin = gp_Pnt(0.0, r0, 20.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = r0;
+  spec.half_angle = angle;
+  spec.inner = -0.5;
+  spec.outer = 0.5;
+  // The arc about the apex's image (0, -rho0) through the origin: half a
+  // turn of the development, once around the cone.
+  Segment ring;
+  ring.name = "c1";
+  ring.kind = SegmentKind::Arc;
+  ring.center = gp_Pnt2d(0.0, -rho0);
+  ring.radius = rho0;
+  ring.start_angle = 0.0;
+  ring.end_angle = test::kPi;
+  // A generator: a line through the apex's image.
+  spec.curves = {ring, line_segment("c2", 0.0, -5.0, 0.0, 5.0)};
+  const ShapePtr bands = wrapped_curves(spec);
+  CHECK(bands->face_count() == 2);
+  for (const char* name : {"F7:band(c1)", "F7:band(c2)"}) {
+    const std::vector<int> found = bands->find_faces(name);
+    CHECK(found.size() == 1);
+    if (!found.empty()) {
+      CHECK(BRepCheck_Analyzer(bands->face(found.front())).IsValid());
+    }
+  }
+  // The generator's band: 10 along the cone, 1 across it.
+  const std::vector<int> generator = bands->find_faces("F7:band(c2)");
+  if (!generator.empty()) {
+    CHECK_NEAR_TOL(area_of(bands->face(generator.front())), 10.0, 1e-6);
+  }
+  // The ring's band passes through the sketch's origin, the cone's point
+  // at height 20, once around the cone: the points of its edges lie on the
+  // ring of radius r0 at height 20 moved 0.5 along the cone's normals
+  // either way. (Measured on the edges: the band's box, taken from its
+  // B-spline surface's poles, is wider.)
+  const std::vector<int> found = bands->find_faces("F7:band(c1)");
+  if (!found.empty()) {
+    double low = 1e9;
+    double high = -1e9;
+    double worst = 0.0;
+    for (TopExp_Explorer e(bands->face(found.front()), TopAbs_EDGE); e.More(); e.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+      for (int i = 0; i <= 64; ++i) {
+        const gp_Pnt p = curve.Value(curve.FirstParameter() +
+                                     (curve.LastParameter() - curve.FirstParameter()) * i / 64.0);
+        // Along the normal from the ring: (r - r0) cos + (z - 20) (-sin)
+        // is the offset, the part along the generator none.
+        const double dr = std::hypot(p.X(), p.Y()) - r0;
+        const double dz = p.Z() - 20.0;
+        const double along = dr * std::sin(angle) + dz * std::cos(angle);
+        worst = std::max(worst, std::abs(along));
+        const double offset = dr * std::cos(angle) - dz * std::sin(angle);
+        low = std::min(low, offset);
+        high = std::max(high, offset);
+      }
+    }
+    CHECK(worst < 1e-6);
+    CHECK(std::abs(low + 0.5) < 1e-6 && std::abs(high - 0.5) < 1e-6);
+    // Its area: the band of width 1 across a cone's normals about the ring,
+    // the circumference at its middle, 2 pi r0, by 1.
+    CHECK_NEAR_TOL(area_of(bands->face(found.front())), 2.0 * test::kPi * r0, 1e-6);
+  }
+}
+
+void test_curves_refused() {
+  WrappedCurvesSpec spec;
+  spec.feature = "F7";
+  spec.frame.origin = gp_Pnt(0.0, 10.0, 0.0);
+  spec.frame.x_axis = gp_Dir(-1.0, 0.0, 0.0);
+  spec.frame.y_axis = gp_Dir(0.0, 0.0, 1.0);
+  spec.axis = gp_Ax1(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0));
+  spec.radius = 10.0;
+  spec.inner = -0.5;
+  spec.outer = 0.5;
+  const auto refused = [](const WrappedCurvesSpec& s) {
+    try {
+      wrapped_curves(s);
+    } catch (const std::invalid_argument&) {
+      return true;
+    }
+    return false;
+  };
+  // No curves; a band of no width; one that reaches the axis.
+  CHECK(refused(spec));
+  spec.curves = {line_segment("c1", 0.0, 0.0, 1.0, 1.0)};
+  WrappedCurvesSpec flat = spec;
+  flat.outer = flat.inner;
+  CHECK(refused(flat));
+  WrappedCurvesSpec deep = spec;
+  deep.inner = -10.0;
+  CHECK(refused(deep));
+}
+
 int main() {
   test::guarded("a rectangle raised and sunk", test_a_rectangle_raised_and_sunk);
   test::guarded("curves, holes and a rotated axis", test_curves_holes_and_a_rotated_axis);
@@ -1048,6 +1286,10 @@ int main() {
   test::guarded("a tapered square projected onto a sphere", test_a_tapered_square_projected_onto_a_sphere);
   test::guarded("letters projected and tapered", test_letters_projected_and_tapered);
   test::guarded("taper refusals", test_taper_refusals);
+  test::guarded("curves laid onto a cylinder", test_curves_laid_onto_a_cylinder);
+  test::guarded("curves laid onto a cone", test_curves_laid_onto_a_cone);
+  test::guarded("curves refused", test_curves_refused);
+  test::guarded("a square across the seam splits out one face", test_a_square_across_the_seam_splits_out_one_face);
   if (test::failures == 0) {
     std::puts("test_emboss: all checks passed");
   }

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <QByteArray>
@@ -69,5 +70,53 @@ PageGlb pageGlb(const std::vector<PageBody>& bodies, double scale);
 // or below are left out (hidden ones).
 QJsonArray pageTree(const QString& rootName, const QJsonArray& occurrences, const std::vector<PageBody>& bodies,
                     const QStringList& nodes);
+
+// glTF files of their own (mitcad#1826, File › Export's glTF types,
+// web/GltfExport.hpp), written by the page's writer.
+
+// An occurrence of the component tree (the `components` query's): its path
+// of occurrence uids ("O1/O4", as PageBody::occurrence), its component's
+// name and uid, and its placement in its parent (a row-major 3 x 4 matrix,
+// mm).
+struct GltfOccurrence {
+  QString path;
+  QString name;
+  QString component;
+  QString occurrenceName; // "Arm:1"
+  std::array<double, 12> transform{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  std::vector<GltfOccurrence> children;
+};
+
+struct GltfFile {
+  // The .glb file, or the .gltf file's JSON.
+  QByteArray data;
+  // A .gltf file's files beside it, by name: its buffer (<stem>.bin) and
+  // its texture images (<stem>_texture<n>.png or .jpg).
+  std::vector<std::pair<QString, QByteArray>> files;
+  // The body nodes written (a body placed twice counts twice), all nodes,
+  // and their triangles.
+  int bodies = 0;
+  int nodes = 0;
+  qint64 triangles = 0;
+  // Texture images that could not be read (their materials keep their
+  // colours).
+  QStringList warnings;
+};
+
+// The bodies as a glTF 2.0 file: positions and placements in metres
+// (glTF's unit), Y up as glTF has it. One root node named `rootName`
+// turns the design's Z up into Y up; in it the component tree as nested
+// nodes, each occurrence a node named by its component with its placement
+// as its matrix and {"occurrence": path, "occurrence_name", "component":
+// uid} as its extras, and each body a node named by the body (its mesh in
+// the body's own coordinates, no matrix) with the page's extras {"body",
+// "body_name", "occurrence"}. Occurrences without a body in them or below
+// are left out; a body whose occurrence the tree does not have is placed
+// in the root by its own transform. Meshes, materials and textures as
+// pageGlb writes them. `binary`: a .glb file; else the JSON of a .gltf
+// file whose buffer and images are `files`, named after `stem` (the file
+// name without its extension) and referred to by percent-encoded URIs.
+GltfFile gltfFile(const QString& rootName, const std::vector<GltfOccurrence>& occurrences,
+                  const std::vector<PageBody>& bodies, bool binary, const QString& stem);
 
 } // namespace mitcad::web

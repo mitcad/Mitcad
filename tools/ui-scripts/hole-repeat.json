@@ -1,0 +1,10 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Repeat of a Hole with a custom thread (mitcad#1844, mitcad#1845, tools/ui-hole-repeat-test.sh): two boxes 40 x 40 x 20 apart, F1 and F2, whose top faces take the holes."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-20, -20],
+    "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"expect": {"bodies": 1, "body": "F1.b0", "volume": 32000, "has_face": "F1:top"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [40, -20],
+    "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"expect": {"bodies": 2, "body": "F2.b0", "volume": 32000, "has_face": "F2:top"}}
+]

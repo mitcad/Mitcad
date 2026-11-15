@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# A command panel set aside hides its handles (mitcad#1844), on
+# joint-suspended-handles.json: Plate:1 (grounded) and Pin:1.
+#   1. Joint from the pin's top face to the plate's top face, Revolute:
+#      its Offset arrow and Angle ring stand in the view.
+#   2. The panel's Animate plays the turn and sets the panel aside: its
+#      handles are hidden, and a drag where the Angle ring was moves no
+#      value, takes no pick and drags no part: the animation plays on.
+#   3. Esc stops the animation: the panel resumes with its handles, and a
+#      real drag of the Angle ring now turns the joint.
+#   4. Esc cancels the command.
+# Run by tools/ui-joint-suspended-handles-test.sh (Linux),
+# tools/ui-windows-joint-suspended-handles-test.ps1 (Windows) and
+# tools/ui-macos-joint-suspended-handles-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+
+# 1. Joint: the pin's top face onto the plate's top face, Revolute.
+mark
+command assemble.joint
+expect-log '^Command Joint started'
+wait-log '^Pick places:' 20
+wait-idle
+click-pick 'face F4[.]b0/F4:end[(]'
+wait-log '^Joint Origin A: 1 face' 30
+wait-idle 30
+click-pick 'face F2[.]b0/F2:end[(]'
+wait-log '^Joint Origin B: 1 face' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+mark
+qt-choice input_kind 'Revolute'
+wait-log '^Joint: Type = Revolute'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-ever '^Manipulator Joint angle at '
+expect-ever '^Manipulator Joint offset at '
+
+# 2. Animate: the panel set aside, its handles hidden and taking nothing.
+mark
+click-logged '^Panel Joint button_animate at '
+wait-log '^Animating Joint rz in its panel: ' 30
+wait-log '^Joint set aside while its motion is animated$'
+wait-log '^Joint handles hidden while set aside$'
+wait-log '^Animation of Joint: pass ' 30
+mark
+drag-from '^Manipulator Joint angle at ' 0 -40
+wait-log '^Animation of Joint: pass ' 30
+expect-no-log '^Manipulator Joint (angle|offset) (dragged|drag step|clicked)'
+expect-no-log '^Handle (hover|drag) Joint (angle|offset)'
+expect-no-log '^Animation of Joint stopped'
+expect-no-log '^Joint Origin [AB]: '
+expect-no-log '^Joint Angle: '
+
+# 3. Esc stops it: the panel and its handles back; a real drag turns it.
+mark
+key Escape
+wait-log '^Animation of Joint stopped: Esc' 30
+wait-log '^Joint resumed$'
+wait-log '^Manipulator Joint angle at ' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-no-log '^Command Joint cancelled'
+mark
+drag-from '^Manipulator Joint angle at ' 0 -40
+wait-log '^Manipulator Joint angle dragged to ' 30
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+
+# 4. Esc cancels the command.
+mark
+key Escape
+wait-log '^Command Joint cancelled'
+wait-idle
+expect-never 'TestDriver: FAIL'

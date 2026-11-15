@@ -13,25 +13,31 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
+#include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <Precision.hxx>
 #include <TopAbs_State.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp_Lin.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec2d.hxx>
 
 #include "check.hpp"
+#include "mitcad/geometry/user_error.hpp"
 
 namespace test {
 namespace {
@@ -166,7 +172,8 @@ void test_start() {
 // strips 2 wide at the bottom and the top and 3 wide at the right. Leaning
 // in by 45 degrees, the strips' walls move 1 mm in a millimetre: the bottom
 // and top strips close 1 mm up, before the end of an extrusion 3 mm long.
-// The error says so, naming the walls that meet; the same profile tapered
+// They end there and the right strip at 1.5 mm, so the whole profile
+// closes before the end (mitcad#1851): the error says so; the same profile tapered
 // less, or extruded less far, builds.
 Region c_profile() {
   const double pts[8][2] = {{0, 0}, {23, 0}, {23, 44}, {0, 44}, {0, 42}, {20, 42}, {20, 2}, {0, 2}};
@@ -199,15 +206,12 @@ void test_taper_closing_the_profile_partway() {
     message = error.what();
   }
   std::printf("test_taper_closing_the_profile_partway: %s\n", message.c_str());
-  // As before, the start the .f3d import knows a kernel failure by.
-  CHECK(message.rfind("the taper failed", 0) == 0);
-  CHECK(message.find("leaning by 45 degrees") != std::string::npos);
-  // The bottom strip's walls (c1 at y = 0, c7 at y = 2) and the top
-  // strip's (c3 at y = 44, c5 at y = 42), 2 apart, meet 1 mm up.
-  CHECK(message.find("F2:side(c1[c8,c2]) and F2:side(c7[c6,c8])") != std::string::npos);
-  CHECK(message.find("F2:side(c5[c4,c6])") != std::string::npos);
-  CHECK(message.find("2 mm apart in the profile, meet 1 mm from the sketch plane") != std::string::npos);
-  CHECK(message.find("before the extrusion's end 3 mm from it: the taper closes the profile there") !=
+  // The strips 2 wide end where their walls meet 1 mm up (mitcad#1851),
+  // the right one 3 wide 1.5 mm up: the whole profile closes before the
+  // end, which the failure says in words, the heights in its detail.
+  CHECK(error_message(message) ==
+        "the taper closes the whole profile before the end of the extrusion; make the angle or the distance smaller");
+  CHECK(message.find("closes 1.5 mm from the sketch plane, before the extrusion's end 3 mm from it") !=
         std::string::npos);
   // Nearby profiles that do not close build: 15 degrees over 3 mm (the
   // walls move 0.8 mm), and 45 degrees over 0.9 mm.
@@ -1105,6 +1109,301 @@ void test_taper_of_a_spline_profile() {
   }
 }
 
+// An extrusion from a curved face (mitcad#1848, GitHub #341).
+
+// A closed polygon of lines c<first>, c<first + 1>, ... through the points.
+Region polygon(int first, const std::vector<gp_Pnt2d>& points) {
+  const std::size_t count = points.size();
+  const auto curve = [first, count](std::size_t k) {
+    return "c" + std::to_string(first + static_cast<int>((k + count) % count));
+  };
+  Region region;
+  Loop loop;
+  std::string key = "r{";
+  for (std::size_t i = 0; i < count; ++i) {
+    Segment segment;
+    segment.kind = SegmentKind::Line;
+    segment.start = points[i];
+    segment.end = points[(i + 1) % count];
+    segment.name = curve(i) + "[" + curve(i + count - 1) + "," + curve(i + 1) + "]";
+    key += (i == 0 ? "" : ",") + segment.name;
+    loop.segments.push_back(segment);
+  }
+  region.loops.push_back(loop);
+  region.name = key + "}";
+  return region;
+}
+
+// Where the line along -y through (x, *, z) crosses the shape's faces, the
+// highest first.
+std::vector<double> crossings_along_y(const TopoDS_Shape& shape, double x, double z) {
+  IntCurvesFace_ShapeIntersector hits;
+  hits.Load(shape, Precision::Confusion());
+  hits.Perform(gp_Lin(gp_Pnt(x, 30.0, z), gp_Dir(0.0, -1.0, 0.0)), 0.0, 60.0);
+  std::vector<double> ys;
+  if (hits.IsDone()) {
+    for (int i = 1; i <= hits.NbPnt(); ++i) {
+      ys.push_back(hits.Pnt(i).Y());
+    }
+  }
+  std::sort(ys.begin(), ys.end(), [](double a, double b) { return a > b; });
+  return ys;
+}
+
+// The first and the last crossing are at `top` and `bottom` (within
+// 1e-6 mm).
+bool crossed_at(const TopoDS_Shape& shape, double x, double z, double top, double bottom) {
+  const std::vector<double> ys = crossings_along_y(shape, x, z);
+  const bool ok = !ys.empty() && std::abs(ys.front() - top) < 1e-6 && std::abs(ys.back() - bottom) < 1e-6;
+  if (!ok) {
+    // Every crossing, on stdout as well, so that a test run's report shows
+    // them.
+    std::string all;
+    for (const double y : ys) {
+      char text[32];
+      std::snprintf(text, sizeof text, " %.9g", y);
+      all += text;
+    }
+    std::fprintf(stderr, "crossed_at: at x = %g, z = %g: %zu crossings at y =%s; expected %.9g to %.9g\n", x, z,
+                 ys.size(), all.c_str(), top, bottom);
+    std::printf("crossed_at: at x = %g, z = %g: %zu crossings at y =%s; expected %.9g to %.9g\n", x, z, ys.size(),
+                all.c_str(), top, bottom);
+  }
+  return ok;
+}
+
+// Letters engraved into a cylinder of radius 10 about the z axis (z 0..40)
+// from a sketch on the plane y = 15, parallel to the axis (its x along -x,
+// its y along z): an I, an L and an O (a ring) along the axis around the
+// line where the cylinder is highest in y, cut 0.1 mm deep from the
+// cylinder's face. Every line along -y through a letter runs 0.1 mm in the
+// cut: its floor lies 0.1 mm below the face, at the radius minus 0.1 mm on
+// the top line; beside the letters and in the O's hole the face is left.
+// Also two sides, an offset, a join outwards from the face, and the
+// refusals: a letter the face does not lie under, a taper.
+void test_from_a_curved_face() {
+  const double r = 10.0;
+  const ShapePtr cylinder = extrude("F6", {circle(9, 0, 0, r)}, 0, 40);
+  Region ring = rectangle(20, -2, 27, 4, 8);
+  ring.loops.push_back(rectangle(30, -1, 28, 2, 6).loops[0]);
+  const std::vector<Region> letters{
+      rectangle(1, -0.5, 5, 1, 8),
+      polygon(5, {gp_Pnt2d(-2, 16), gp_Pnt2d(2, 16), gp_Pnt2d(2, 17), gp_Pnt2d(-1, 17), gp_Pnt2d(-1, 24),
+                  gp_Pnt2d(-2, 24)}),
+      ring};
+  const double area = 8.0 + 11.0 + (32.0 - 12.0);
+  ExtrudeFeatureSpec spec;
+  spec.feature = "F7";
+  spec.frame.origin = gp_Pnt(0, 15, 0);
+  spec.frame.x_axis = gp_Dir(-1, 0, 0);
+  spec.frame.y_axis = gp_Dir(0, 0, 1);
+  spec.regions = letters;
+  spec.direction = gp_Dir(0, -1, 0);
+  spec.side1 = distance(0.1);
+  Target face;
+  face.kind = Target::Kind::Face;
+  face.body = cylinder;
+  face.face = "F6:side(c9)";
+  spec.start = face;
+  // The face's height in y above the sketch's point (u, v), at x = -u.
+  const auto height = [r](double u) { return std::sqrt(r * r - u * u); };
+  // Points of the letters, and points beside them and in the O's hole.
+  const std::vector<gp_Pnt2d> in{gp_Pnt2d(0, 9),     gp_Pnt2d(0.3, 6),  gp_Pnt2d(-1.5, 20), gp_Pnt2d(1.5, 16.5),
+                                 gp_Pnt2d(-1.5, 31), gp_Pnt2d(1.5, 31), gp_Pnt2d(0, 27.5),  gp_Pnt2d(0, 34.5)};
+  const std::vector<gp_Pnt2d> out{gp_Pnt2d(0, 14.5), gp_Pnt2d(0, 31), gp_Pnt2d(0, 2)};
+
+  for (const bool extend : {true, false}) {
+    spec.start->extend = extend;
+    const ShapePtr cut = extrude_feature(spec);
+    CHECK(BRepCheck_Analyzer(cut->occt()).IsValid());
+    // The same length along every line: the letters' area times 0.1.
+    CHECK_NEAR(volume(*cut), area * 0.1);
+    for (const gp_Pnt2d& p : in) {
+      CHECK(crossed_at(cut->occt(), -p.X(), p.Y(), height(p.X()), height(p.X()) - 0.1));
+    }
+    CHECK(faces_named(*cut, start_cap("F7", 1)) == 1 && faces_named(*cut, end_cap("F7", 1)) == 1);
+    CHECK(!cut->find_faces(side("F7", 1, 0)).empty() && !cut->find_faces("F7:side(c30[c33,c31])").empty());
+    CHECK(!cut->find_faces("F7:start(" + letters[1].name + ")").empty());
+
+    // Cut from the cylinder: the floor 0.1 mm below the face under every
+    // letter, at the radius minus 0.1 mm on the top line.
+    const BooleanResult engraved = boolean(BooleanOp::Cut, {cylinder.get()}, *cut);
+    CHECK(engraved.pieces.size() == 1);
+    if (engraved.pieces.size() != 1) {
+      continue;
+    }
+    const ShapePtr body = engraved.pieces[0].shape;
+    CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+    CHECK_NEAR(volume(*body), kPi * r * r * 40 - area * 0.1);
+    for (const gp_Pnt2d& p : in) {
+      CHECK(crossed_at(body->occt(), -p.X(), p.Y(), height(p.X()) - 0.1, -height(p.X())));
+    }
+    CHECK(crossed_at(body->occt(), 0, 9, r - 0.1, -r));
+    for (const gp_Pnt2d& p : out) {
+      CHECK(crossed_at(body->occt(), -p.X(), p.Y(), height(p.X()), -height(p.X())));
+    }
+  }
+
+  // Two sides: 0.1 into the cylinder and 0.2 out of it.
+  spec.side2 = distance(0.2);
+  const ShapePtr both = extrude_feature(spec);
+  CHECK_NEAR(volume(*both), area * 0.3);
+  CHECK(crossed_at(both->occt(), 0, 9, r + 0.2, r - 0.1));
+  CHECK(faces_named(*both, start_cap("F7", 1)) == 1 && faces_named(*both, end_cap("F7", 1)) == 1);
+  spec.side2.reset();
+
+  // Offset 0.5 along the sketch normal: the face moved up before the cut.
+  spec.start->offset = 0.5;
+  const ShapePtr moved = extrude_feature(spec);
+  CHECK_NEAR(volume(*moved), area * 0.1);
+  CHECK(crossed_at(moved->occt(), 0, 9, r + 0.5, r + 0.4));
+  spec.start->offset = 0.0;
+
+  // Outwards (a join): 0.5 from the face along the sketch normal.
+  spec.direction = gp_Dir(0, 1, 0);
+  spec.side1 = distance(0.5);
+  const ShapePtr raised = extrude_feature(spec);
+  CHECK_NEAR(volume(*raised), area * 0.5);
+  // The L's sketch point (-1.5, 20) lies at x = 1.5 (the sketch's x runs
+  // along -x); x = -1.5 is the sketch's (1.5, 20), beside the L.
+  CHECK(crossed_at(raised->occt(), 1.5, 20, height(1.5) + 0.5, height(1.5)));
+  CHECK(faces_named(*raised, start_cap("F7", 1)) == 1 && faces_named(*raised, end_cap("F7", 1)) == 1);
+
+  // A letter partly past the cylinder's side, and a taper.
+  spec.direction = gp_Dir(0, -1, 0);
+  spec.side1 = distance(0.1);
+  spec.regions.push_back(rectangle(40, 9, 5, 2, 4));
+  CHECK(throws_with([&] { extrude_feature(spec); }, "does not lie under the whole profile"));
+  spec.regions = letters;
+  spec.side1.taper = 0.1;
+  CHECK(throws_with([&] { extrude_feature(spec); }, "cannot start from a curved face"));
+}
+
+// The parameters where the line from `from` along `along` crosses the
+// shape's faces, in order along the line.
+std::vector<double> crossings_along(const TopoDS_Shape& shape, const gp_Pnt& from, const gp_Dir& along) {
+  IntCurvesFace_ShapeIntersector hits;
+  hits.Load(shape, Precision::Confusion());
+  hits.Perform(gp_Lin(from, along), 0.0, 100.0);
+  std::vector<double> ts;
+  if (hits.IsDone()) {
+    for (int i = 1; i <= hits.NbPnt(); ++i) {
+      ts.push_back(hits.WParameter(i));
+    }
+  }
+  std::sort(ts.begin(), ts.end());
+  return ts;
+}
+
+// The line from `from` along `along` enters the shape at `first` and
+// leaves it at `last` (within 1e-6 mm), crossing nothing else.
+bool runs_in(const TopoDS_Shape& shape, const gp_Pnt& from, const gp_Dir& along, double first, double last) {
+  const std::vector<double> ts = crossings_along(shape, from, along);
+  const bool ok = ts.size() == 2 && std::abs(ts.front() - first) < 1e-6 && std::abs(ts.back() - last) < 1e-6;
+  if (!ok) {
+    std::fprintf(stderr, "from (%g, %g, %g): %zu crossings, from %.9g to %.9g; expected %.9g to %.9g\n", from.X(),
+                 from.Y(), from.Z(), ts.size(), ts.empty() ? 0.0 : ts.front(), ts.empty() ? 0.0 : ts.back(), first,
+                 last);
+  }
+  return ok;
+}
+
+// A whole cylinder's side, which every line through the profile crosses
+// twice (mitcad#1852): the extrusion starts where the line meets the face
+// on the profile's side, whichever side of the cylinder the sketch lies
+// on, whichever way the extrusion runs, and also along a direction off the
+// sketch normal whose sketch origin lies far along the axis from the
+// cylinder's middle (the side was once chosen by the direction from that
+// origin to the face, which then ran against the normal's and cut the far
+// side).
+void test_from_a_curved_face_crossed_twice() {
+  const double r = 10.0;
+  const ShapePtr cylinder = extrude("F6", {circle(9, 0, 0, r)}, 0, 40);
+  Target face;
+  face.kind = Target::Kind::Face;
+  face.body = cylinder;
+  face.face = "F6:side(c9)";
+  face.extend = true;
+  const auto height = [r](double x) { return std::sqrt(r * r - x * x); };
+  const auto cut_body = [&cylinder](const ShapePtr& cut) -> ShapePtr {
+    const BooleanResult engraved = boolean(BooleanOp::Cut, {cylinder.get()}, *cut);
+    CHECK(engraved.pieces.size() == 1);
+    return engraved.pieces.size() == 1 ? engraved.pieces[0].shape : nullptr;
+  };
+
+  // Below the cylinder: the sketch on y = -15 (its normal -y), a letter
+  // 1 x 8 at x 1..2, z 10..18, cut 0.1 towards the cylinder (+y): the
+  // floor 0.1 above the bottom of the face, the top untouched.
+  ExtrudeFeatureSpec below;
+  below.feature = "F7";
+  below.frame.origin = gp_Pnt(0, -15, 0);
+  below.frame.x_axis = gp_Dir(1, 0, 0);
+  below.frame.y_axis = gp_Dir(0, 0, 1);
+  below.regions = {rectangle(1, 1, 10, 1, 8)};
+  below.direction = gp_Dir(0, 1, 0);
+  below.side1 = distance(0.1);
+  below.start = face;
+  CHECK(below.frame.normal().IsEqual(gp_Dir(0, -1, 0), 1e-12));
+  for (const bool extend : {true, false}) {
+    below.start->extend = extend;
+    const ShapePtr cut = extrude_feature(below);
+    CHECK(BRepCheck_Analyzer(cut->occt()).IsValid());
+    CHECK_NEAR(volume(*cut), 8.0 * 0.1);
+    CHECK(runs_in(cut->occt(), gp_Pnt(1.5, -15, 14), gp_Dir(0, 1, 0), 15 - height(1.5), 15 - height(1.5) + 0.1));
+    if (const ShapePtr body = cut_body(cut)) {
+      CHECK_NEAR(volume(*body), kPi * r * r * 40 - 8.0 * 0.1);
+      CHECK(crossed_at(body->occt(), 1.5, 14, height(1.5), -height(1.5) + 0.1));
+    }
+  }
+
+  // The same sketch, joined 0.5 outwards (along its normal, away from the
+  // cylinder): from the bottom of the face down.
+  below.start->extend = true;
+  below.direction = gp_Dir(0, -1, 0);
+  below.side1 = distance(0.5);
+  const ShapePtr hung = extrude_feature(below);
+  CHECK_NEAR(volume(*hung), 8.0 * 0.5);
+  CHECK(runs_in(hung->occt(), gp_Pnt(1.5, -15, 14), gp_Dir(0, 1, 0), 15 - height(1.5) - 0.5, 15 - height(1.5)));
+
+  // Above the cylinder on y = 15 (its normal +y), its origin 40 below the
+  // cylinder's middle along the axis, cut 0.1 along a direction off the
+  // normal, (0, -1, -0.5): every line along it through the letter runs 0.1
+  // from where it meets the top of the face.
+  ExtrudeFeatureSpec above;
+  above.feature = "F8";
+  above.frame.origin = gp_Pnt(0, 15, -20);
+  above.frame.x_axis = gp_Dir(-1, 0, 0);
+  above.frame.y_axis = gp_Dir(0, 0, 1);
+  above.regions = {rectangle(1, -0.5, 36, 1, 8)};
+  const gp_Dir along(0, -1, -0.5);
+  above.direction = along;
+  above.side1 = distance(0.1);
+  above.start = face;
+  CHECK(above.frame.normal().IsEqual(gp_Dir(0, 1, 0), 1e-12));
+  for (const bool extend : {true, false}) {
+    above.start->extend = extend;
+    const ShapePtr cut = extrude_feature(above);
+    CHECK(BRepCheck_Analyzer(cut->occt()).IsValid());
+    Bnd_Box box;
+    BRepBndLib::Add(cut->occt(), box);
+    double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    // On the top of the cylinder, nowhere near its bottom (y = -10).
+    CHECK(y0 > r - 0.5 && y1 < r + 0.1);
+    // From the sketch point (u, v) = (0.25, 40), at x = -0.25, z = 20: the
+    // line meets the top of the face after (15 - h) / |y| of its length.
+    const double first = (15 - height(0.25)) / std::abs(along.Y());
+    CHECK(runs_in(cut->occt(), gp_Pnt(-0.25, 15, 20), along, first, first + 0.1));
+    if (const ShapePtr body = cut_body(cut)) {
+      CHECK(BRepCheck_Analyzer(body->occt()).IsValid());
+      CHECK_NEAR(volume(*body), kPi * r * r * 40 - volume(*cut));
+      // The bottom under the letter untouched.
+      const std::vector<double> ys = crossings_along_y(body->occt(), -0.25, 18);
+      CHECK(!ys.empty() && std::abs(ys.back() + height(0.25)) < 1e-6);
+    }
+  }
+}
+
 } // namespace
 
 // Along a direction off the sketch normal (mitcad#539): a 20 x 10 rectangle
@@ -1159,28 +1458,41 @@ void test_oblique() {
   CHECK(throws_with([&] { extrude_feature(spec); }, "unsupported: a taper up to an object"));
 }
 
+// Each test named on stdout before it runs, flushed, so that a crash
+// shows where it was (the suite crashed with no output in a scheduled run,
+// mitcad#1851).
+static void traced(const char* name, void (*test)()) {
+  std::printf("%s\n", name);
+  std::fflush(stdout);
+  guarded(name, test);
+}
+
 void extrude_feature_tests() {
-  guarded("test_two_sides_and_symmetric", test_two_sides_and_symmetric);
+  traced("test_two_sides_and_symmetric", test_two_sides_and_symmetric);
   // Along a direction off the sketch normal (mitcad#539).
-  guarded("test_oblique", test_oblique);
-  guarded("test_start", test_start);
-  guarded("test_taper", test_taper);
-  guarded("test_taper_closing_the_profile_partway", test_taper_closing_the_profile_partway);
-  guarded("test_taper_of_a_band_of_lines", test_taper_of_a_band_of_lines);
-  guarded("test_taper_closing_profile", test_taper_closing_profile);
-  guarded("test_taper_closing_ring", test_taper_closing_ring);
-  guarded("test_thin", test_thin);
-  guarded("test_to_planes", test_to_planes);
-  guarded("test_to_faces_and_bodies", test_to_faces_and_bodies);
-  guarded("test_to_body_from_inside", test_to_body_from_inside);
-  guarded("test_clockwise_loops", test_clockwise_loops);
-  guarded("test_circles_touching_at_a_point", test_circles_touching_at_a_point);
-  guarded("test_several_regions", test_several_regions);
-  guarded("test_thin_open_chains", test_thin_open_chains);
+  traced("test_oblique", test_oblique);
+  traced("test_start", test_start);
+  traced("test_taper", test_taper);
+  traced("test_taper_closing_the_profile_partway", test_taper_closing_the_profile_partway);
+  traced("test_taper_of_a_band_of_lines", test_taper_of_a_band_of_lines);
+  traced("test_taper_closing_profile", test_taper_closing_profile);
+  traced("test_taper_closing_ring", test_taper_closing_ring);
+  traced("test_thin", test_thin);
+  traced("test_to_planes", test_to_planes);
+  traced("test_to_faces_and_bodies", test_to_faces_and_bodies);
+  traced("test_to_body_from_inside", test_to_body_from_inside);
+  traced("test_clockwise_loops", test_clockwise_loops);
+  traced("test_circles_touching_at_a_point", test_circles_touching_at_a_point);
+  traced("test_several_regions", test_several_regions);
+  traced("test_thin_open_chains", test_thin_open_chains);
   // A negative side of two (mitcad#765).
-  guarded("test_negative_side", test_negative_side);
+  traced("test_negative_side", test_negative_side);
   // A taper on a closed B-spline profile (mitcad#1749).
-  guarded("test_taper_of_a_spline_profile", test_taper_of_a_spline_profile);
+  traced("test_taper_of_a_spline_profile", test_taper_of_a_spline_profile);
+  // An extrusion from a curved face (mitcad#1848).
+  traced("test_from_a_curved_face", test_from_a_curved_face);
+  // A curved start face crossed twice by the projection (mitcad#1852).
+  traced("test_from_a_curved_face_crossed_twice", test_from_a_curved_face_crossed_twice);
 }
 
 } // namespace test

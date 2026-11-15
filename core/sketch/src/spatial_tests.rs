@@ -1424,3 +1424,159 @@ fn texts_on_a_plane() {
             .any(|c| matches!(c.kind, SpatialConstraintKind::PlaneBound { .. }))
     );
 }
+
+/// The points a relation lists as kept in a plane.
+fn listed(def: &SpatialSketchDef, id: ConstraintUid) -> Vec<EntityUid> {
+    match &def.constraint(id).expect("the relation stays").kind {
+        SpatialConstraintKind::OnSketchPlane { points }
+        | SpatialConstraintKind::OnPlane { points, .. } => points.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// mitcad#1834: deleting one point of an On Sketch Plane relation, with
+/// what uses it, takes only that point out of the list; the others stay
+/// on the plane. A point only listed there is no use of it.
+#[test]
+fn deleting_a_point_keeps_the_others_on_the_sketch_plane() {
+    let mut params = Parameters::default();
+    let mut e = edit(SpatialSketchDef::default(), &mut params);
+    let p = points_at(
+        &mut e,
+        &[
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ],
+    );
+    let line = e
+        .add_line(Existing(p[1]), At([20.0, 0.0, 5.0]), false)
+        .unwrap();
+    let far = e.def.line(line).unwrap()[1];
+    let kept = e.keep_on_sketch_plane(&p).unwrap();
+    let (def, _, _) = e.finish().unwrap();
+    assert_eq!(listed(&def, kept), p);
+
+    let mut e = edit(def.clone(), &mut params);
+    e.delete_point(p[1], true).unwrap();
+    let (after, report, _) = e.finish().unwrap();
+    assert_eq!(listed(&after, kept), [p[0], p[2], p[3]]);
+    assert!(!report.removed.contains(&kept.to_string()), "{report:?}");
+    assert!(after.point(p[1]).is_none() && after.curve(line).is_none());
+    assert!(after.point(far).is_none(), "the line's other end goes too");
+    let solved = solve(&after, &params).unwrap();
+    for q in [p[0], p[2], p[3]] {
+        assert!(solved.points[&q][2].abs() <= TOL, "{solved:?}");
+    }
+
+    // A point the relation only lists is deleted without dependents.
+    let mut e = edit(def, &mut params);
+    e.delete_point(p[3], false).unwrap();
+    let (after, _, _) = e.finish().unwrap();
+    assert_eq!(listed(&after, kept), [p[0], p[1], p[2]]);
+}
+
+/// mitcad#1834: the same for an On Plane relation of several points; it
+/// goes only with its last point.
+#[test]
+fn deleting_a_point_keeps_the_others_on_another_plane() {
+    let mut params = Parameters::default();
+    let mut e = edit(SpatialSketchDef::default(), &mut params);
+    let p = points_at(
+        &mut e,
+        &[
+            [0.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 10.0, 10.0],
+            [0.0, 0.0, 10.0],
+        ],
+    );
+    let line = e
+        .add_line(Existing(p[1]), At([5.0, 20.0, 0.0]), false)
+        .unwrap();
+    let on = e
+        .add_constraint(SpatialConstraintKind::OnPlane {
+            points: p.clone(),
+            plane: SpatialPlaneRef::Frame(SpatialAxis::X),
+        })
+        .unwrap();
+    let (def, _, _) = e.finish().unwrap();
+
+    let mut e = edit(def, &mut params);
+    e.delete_point(p[1], true).unwrap();
+    let (after, report, _) = e.finish().unwrap();
+    assert_eq!(listed(&after, on), [p[0], p[2], p[3]]);
+    assert!(!report.removed.contains(&on.to_string()), "{report:?}");
+    assert!(after.curve(line).is_none());
+    let solved = solve(&after, &params).unwrap();
+    for q in [p[0], p[2], p[3]] {
+        assert!(solved.points[&q][0].abs() <= TOL, "{solved:?}");
+    }
+
+    let mut e = edit(after, &mut params);
+    for q in [p[0], p[2], p[3]] {
+        e.delete_point(q, false).unwrap();
+    }
+    let (after, report, _) = e.finish().unwrap();
+    assert!(after.constraint(on).is_none());
+    assert!(report.removed.contains(&on.to_string()), "{report:?}");
+}
+
+/// mitcad#1834: deleting a line whose ends are only listed in the On
+/// Sketch Plane relation deletes the ends too; the relation keeps its
+/// other points, and goes when none is left.
+#[test]
+fn deleting_a_line_takes_its_listed_ends() {
+    let mut params = Parameters::default();
+    let mut e = edit(SpatialSketchDef::default(), &mut params);
+    let line = e
+        .add_line(At([0.0, 0.0, 0.0]), At([10.0, 0.0, 0.0]), false)
+        .unwrap();
+    let ends = e.def.line(line).unwrap();
+    let other = e.add_point([0.0, 10.0, 0.0]).unwrap();
+    let kept = e.keep_on_sketch_plane(&[ends[0], ends[1], other]).unwrap();
+    let (def, _, _) = e.finish().unwrap();
+
+    let mut e = edit(def, &mut params);
+    e.delete_curve(line).unwrap();
+    let (after, report, _) = e.finish().unwrap();
+    assert!(after.point(ends[0]).is_none() && after.point(ends[1]).is_none());
+    assert!(
+        report.removed.contains(&format!("p{}", ends[0].0)),
+        "{report:?}"
+    );
+    assert_eq!(listed(&after, kept), [other]);
+
+    // A line alone in the relation takes it with its ends.
+    let mut e = edit(SpatialSketchDef::default(), &mut params);
+    let line = e
+        .add_line(At([0.0, 0.0, 0.0]), At([10.0, 0.0, 0.0]), false)
+        .unwrap();
+    let ends = e.def.line(line).unwrap();
+    let kept = e.keep_on_sketch_plane(&ends).unwrap();
+    e.delete_curve(line).unwrap();
+    let (after, _, _) = e.finish().unwrap();
+    assert!(after.points.is_empty() && after.constraint(kept).is_none());
+}
+
+/// mitcad#1834: the On Sketch Plane relation lists one point of each
+/// elevation group; when that point goes, a point its group leaves
+/// behind is listed in its place, so it stays on the plane.
+#[test]
+fn a_deleted_listed_point_hands_the_plane_on() {
+    let mut params = Parameters::default();
+    let mut e = edit(SpatialSketchDef::default(), &mut params);
+    let p = points_at(&mut e, &[[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);
+    e.coincident(p[0], p[1]).unwrap();
+    let kept = e.keep_on_sketch_plane(&p).unwrap();
+    let (def, _, _) = e.finish().unwrap();
+    assert_eq!(listed(&def, kept), [p[0]]);
+
+    let mut e = edit(def, &mut params);
+    e.delete_point(p[0], true).unwrap();
+    let (after, _, _) = e.finish().unwrap();
+    assert_eq!(listed(&after, kept), [p[1]]);
+    let solved = solve(&after, &params).unwrap();
+    assert!(solved.points[&p[1]][2].abs() <= TOL, "{solved:?}");
+}

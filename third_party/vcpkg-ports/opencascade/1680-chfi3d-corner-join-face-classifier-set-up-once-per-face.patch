@@ -1,0 +1,143 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the join of two stripes across a corner of the solid (0772,
+0820: ChFi3d_Builder::JoinAcrossCorner) finds where the contact on the
+side faces leaves the one face and comes onto the other by classifying
+points along it: 400 steps and two bisections of 50 steps each, every
+point with a new BRepClass_FaceClassifier(F, P, Tol). Each of those
+computed the face's parameter bounds again from its edges' p-curves, set
+up the projection on its surface again (for a B-spline surface, the grid
+of its samples: up to a thousand parameters a direction on a thread's
+face, evaluated for every point) and made the explorer of its edges
+again (mitcad#1806). Each face's bounds, projection and explorer are now
+set up once and asked for every point, with the same answers: the point is
+projected on the surface within the same bounds and with the same
+tolerances, its nearest projection classified against the face's edges
+by the same classifier, a point without a projection out as before.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
+index 7ef1dcd4..fa225835 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Gap.cxx
+@@ -13,6 +13,7 @@
+ #include <BRepAdaptor_Surface.hxx>
+ #include <BSplCLib.hxx>
+ #include <BRepClass_FaceClassifier.hxx>
++#include <BRepClass_FaceExplorer.hxx>
+ #include <BRepLib_MakeFace.hxx>
+ #include <BRepTools.hxx>
+ #include <BRepTopAdaptor_TopolTool.hxx>
+@@ -29,6 +30,7 @@
+ #include <ChFiDS_Stripe.hxx>
+ #include <ChFiDS_SurfData.hxx>
+ #include <ElCLib.hxx>
++#include <Extrema_ExtPS.hxx>
+ #include <Geom2dAPI_Interpolate.hxx>
+ #include <Geom2dConvert.hxx>
+ #include <Geom2d_BSplineCurve.hxx>
+@@ -494,6 +496,61 @@ bool gapCutBetween(const occ::handle<Geom_Surface>& S,
+   }
+   return false;
+ }
++// The states of 3D points on a face, as BRepClass_FaceClassifier(F, P, Tol)
++// gives them, with what that sets up for each point done once for the face:
++// the face's parameter bounds, the projection's setup on its surface (for a
++// B-spline surface, the grid of its samples) and the explorer of its edges.
++// Each point is projected on the surface within the bounds and its nearest
++// projection classified against the face's edges, as there.
++class gapFaceStates
++{
++public:
++  gapFaceStates(const TopoDS_Face& F, const double Tol)
++      : mySurf(F, false),
++        myExp(F),
++        myTol(Tol)
++  {
++    double aU1 = 0., aU2 = 0., aV1 = 0., aV2 = 0.;
++    BRepTools::UVBounds(F, aU1, aU2, aV1, aV2);
++    myExt.Initialize(mySurf, aU1, aU2, aV1, aV2, Tol, Tol);
++  }
++
++  gapFaceStates(const gapFaceStates&)            = delete;
++  gapFaceStates& operator=(const gapFaceStates&) = delete;
++
++  TopAbs_State State(const gp_Pnt& P)
++  {
++    myExt.Perform(P);
++    if (!myExt.IsDone() || myExt.NbExt() == 0)
++    {
++      return TopAbs_OUT;
++    }
++    double aMin = RealLast();
++    int    aBest = 0;
++    for (int i = 1; i <= myExt.NbExt(); ++i)
++    {
++      const double aD = myExt.SquareDistance(i);
++      if (aD < aMin)
++      {
++        aMin  = aD;
++        aBest = i;
++      }
++    }
++    if (aBest == 0)
++    {
++      return TopAbs_OUT;
++    }
++    double aU = 0., aV = 0.;
++    myExt.Point(aBest).Parameter(aU, aV);
++    return BRepClass_FaceClassifier(myExp, gp_Pnt2d(aU, aV), myTol).State();
++  }
++
++private:
++  BRepAdaptor_Surface    mySurf;
++  Extrema_ExtPS          myExt;
++  BRepClass_FaceExplorer myExp;
++  double                 myTol;
++};
+ } // namespace
+ 
+ //=================================================================================================
+@@ -885,10 +942,10 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+   const ChFiDS_FaceInterference& FiN = X->Interference(ons);
+   const ChFiDS_FaceInterference& FiO = X->Interference(opp);
+   const occ::handle<Geom_Curve>& CN  = DStr.Curve(FiN.LineIndex()).Curve();
+-  // Where the contact on N leaves NA and comes onto NB.
+-  const auto stateOn = [&](const TopoDS_Face& F, const double t) {
+-    return BRepClass_FaceClassifier(F, CN->Value(t), 1.e-6).State();
+-  };
++  // Where the contact on N leaves NA and comes onto NB (each face's
++  // classifier set up once for the hundreds of points asked).
++  gapFaceStates aStatesA(NA, 1.e-6), aStatesB(NB, 1.e-6);
++  const auto    stateOn = [&](gapFaceStates& F, const double t) { return F.State(CN->Value(t)); };
+   const double tZ = Forward ? X->LastSpineParam() : X->FirstSpineParam();
+   // (The walk's parameter of the section through the middle of A's base piece:
+   // the walk is parametrized along its guide through the balls' centres.)
+@@ -906,24 +963,24 @@ bool ChFi3d_Builder::JoinAcrossCorner(const occ::handle<ChFiDS_Stripe>& SA,
+     for (int i = 1; i <= nbs && !back; i++)
+     {
+       const double t = tM + (tZ - tM) * i / nbs;
+-      if (!out && stateOn(NA, t) == TopAbs_OUT)
++      if (!out && stateOn(aStatesA, t) == TopAbs_OUT)
+       {
+         double lo = tPrev, hi = t;
+         for (int it = 0; it < 50; it++)
+         {
+           const double m = 0.5 * (lo + hi);
+-          (stateOn(NA, m) == TopAbs_OUT ? hi : lo) = m;
++          (stateOn(aStatesA, m) == TopAbs_OUT ? hi : lo) = m;
+         }
+         tOut = 0.5 * (lo + hi);
+         out  = true;
+       }
+-      else if (out && stateOn(NB, t) == TopAbs_IN)
++      else if (out && stateOn(aStatesB, t) == TopAbs_IN)
+       {
+         double lo = tPrev, hi = t;
+         for (int it = 0; it < 50; it++)
+         {
+           const double m = 0.5 * (lo + hi);
+-          (stateOn(NB, m) == TopAbs_IN ? hi : lo) = m;
++          (stateOn(aStatesB, m) == TopAbs_IN ? hi : lo) = m;
+         }
+         tIn  = 0.5 * (lo + hi);
+         back = true;

@@ -78,7 +78,10 @@ impl<K: Kernel> Document<K> {
                 min[axis] = min[axis].min(bounds.min[axis]);
                 max[axis] = max[axis].max(bounds.max[axis]);
             }
-            materials.push(self.body_material(*body, None).0.id.clone());
+            // A body without a material lists none (mitcad#1817), never steel.
+            if let Some(material) = self.body_material_named(*body, None) {
+                materials.push(material.id.clone());
+            }
         }
         if !volume.is_finite() {
             return None;
@@ -279,7 +282,8 @@ impl<K: Kernel> Document<K> {
                 for instance in by_body.get(&body).into_iter().flatten() {
                     let mut material: Vec<String> = own_bodies
                         .iter()
-                        .map(|body| self.body_material(*body, Some(&instance.path)).0.id.clone())
+                        .filter_map(|body| self.body_material_named(*body, Some(&instance.path)))
+                        .map(|material| material.id.clone())
                         .collect();
                     material.sort();
                     material.dedup();
@@ -322,7 +326,8 @@ impl<K: Kernel> Document<K> {
                             materials: {
                                 let mut materials: Vec<String> = own_bodies
                                     .iter()
-                                    .map(|body| self.body_material(*body, None).0.id.clone())
+                                    .filter_map(|body| self.body_material_named(*body, None))
+                                    .map(|material| material.id.clone())
                                     .collect();
                                 materials.sort();
                                 materials.dedup();

@@ -63,7 +63,7 @@ pub struct Tree {
 }
 
 /// A path as it is compared: on Windows without case.
-fn key(path: &str) -> String {
+pub fn key(path: &str) -> String {
     if cfg!(windows) {
         path.to_ascii_lowercase()
     } else {

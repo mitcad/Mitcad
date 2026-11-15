@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Convert to Features (mitcad#1815), tools/ui-convert-features-test.sh and its Windows and macOS twins: the library's synthetic timber member, W (98 mm, along X) by T (48 mm, along Y) from the fixed corner (-49, -24), extruded by L from z = 0, with its end frames (docs/libraries.md, 'Timber parts')."},
+  {"cmd": "add_parameter", "name": "L", "expression": "600 mm"},
+  {"cmd": "add_parameter", "name": "W", "expression": "98 mm"},
+  {"cmd": "add_parameter", "name": "T", "expression": "48 mm"},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-49, -24], "width": "W", "height": "T"},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "mount:end_a", "def": {"type": "joint_origin", "geometry": "origin",
+    "frame_override": {"origin": [0, 0, 0], "z_axis": [0, 0, -1], "x_axis": [1, 0, 0]}}},
+  {"cmd": "add_feature", "name": "mount:end_b", "def": {"type": "joint_origin",
+    "geometry": {"body": "F2.b0", "face": "F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})"}}},
+  {"expect": {"bodies": 1}}
+]

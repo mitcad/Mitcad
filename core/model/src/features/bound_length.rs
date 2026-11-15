@@ -254,6 +254,12 @@ impl FeatureInfo for BoundLengthDef {
         from.check(ctx).map_err(|e| format!("from: {e}"))?;
         match &self.to.geometry {
             GeomRef::Face { .. } | GeomRef::Mount { .. } => {}
+            // A joint origin, as a derived part's frame (Convert to Features,
+            // mitcad#1815, rewrites a frame to the joint origin it copied).
+            GeomRef::Datum(uid)
+                if ctx
+                    .feature(*uid)
+                    .is_ok_and(|e| matches!(e.def, super::FeatureDef::JointOrigin(_))) => {}
             // To a face (mitcad#1630) also ends at a construction plane or
             // an origin plane.
             GeomRef::Origin(_) | GeomRef::Datum(_) | GeomRef::FixedPlane { .. }
@@ -276,9 +282,9 @@ impl FeatureInfo for BoundLengthDef {
 
 /// Resolves geometry of another component through an evaluation: its
 /// bodies at this point of the timeline.
-struct InComponent<'c, 'a, K: Kernel> {
-    ctx: &'c mut EvalContext<'a, K>,
-    component: ComponentUid,
+pub(crate) struct InComponent<'c, 'a, K: Kernel> {
+    pub(crate) ctx: &'c mut EvalContext<'a, K>,
+    pub(crate) component: ComponentUid,
 }
 
 impl<K: Kernel> Resolver for InComponent<'_, '_, K> {
@@ -307,11 +313,28 @@ impl<K: Kernel> Resolver for InComponent<'_, '_, K> {
     fn mount(&mut self, feature: FeatureUid, name: &str) -> Result<Transform, String> {
         self.ctx.mount(feature, name)
     }
+
+    // A 3D sketch's points and curves (mitcad#1832), in its component's
+    // coordinates as its planar sketches are.
+    fn spatial_path(
+        &mut self,
+        path: &super::spatial_path::SpatialPath,
+    ) -> Result<Vec<crate::sweeps::PathCurve>, String> {
+        path.resolve(self.ctx)
+    }
+
+    fn spatial_entity(
+        &mut self,
+        sketch: FeatureUid,
+        entity: crate::sketch::Ref,
+    ) -> Option<Result<crate::kernel::Curve3, String>> {
+        super::geom_ref::spatial_entity_in(self.ctx, sketch, entity)
+    }
 }
 
 /// The component an occurrence path from the feature's component ends in,
 /// and the transform from its coordinates into the feature's.
-fn path_placement<K: Kernel>(
+pub(crate) fn path_placement<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     path: &OccurrencePath,
 ) -> Result<(ComponentUid, Transform), String> {
@@ -357,6 +380,16 @@ pub fn measure_to<R: Resolver>(
                 .collect();
             (frame.translation, crate::build::z_axis(&frame), bodies)
         }
+        // A joint origin (mitcad#1815): its plane, the part the bodies of
+        // its component.
+        GeomRef::Datum(uid) => match resolver.datum(*uid).map_err(|e| format!("to: {e}"))? {
+            Datum::Plane(plane) => (
+                placement.apply_point(plane.origin),
+                placement.apply_vector(plane.normal()),
+                available_bodies.to_vec(),
+            ),
+            _ => return Err(format!("to: {geometry} is no frame")),
+        },
         GeomRef::Face { body, face } => {
             let shape = resolver.shape(*body).map_err(|e| format!("to: {e}"))?;
             match resolver.kernel().face_geometry(&shape, face) {
@@ -547,7 +580,7 @@ impl<K: Kernel> Evaluate<K> for BoundLengthDef {
             .ok_or("the direction is zero")?;
         // The plane the ray ends on, and the bodies of the part it is of.
         let (at, placement) = path_placement(ctx, &self.to.occurrence)?;
-        let bodies = if matches!(self.to.geometry, GeomRef::Mount { .. }) {
+        let bodies = if matches!(self.to.geometry, GeomRef::Mount { .. } | GeomRef::Datum(_)) {
             ctx.bodies_in(at)
                 .into_iter()
                 .map(|(uid, _)| uid)

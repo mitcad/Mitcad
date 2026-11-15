@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# The selection's look (mitcad#1803, GitHub mitcad/Mitcad#309) on
+# selection-look.json: a block (F1.b0) and Sketch1 (F3) with a line over it.
+# The widths are read from the view itself: "View highlight line: edge
+# <px> px (<logical> x ratio <r>), color <#rrggbb>; plain edges <px> px"
+# (OcctViewer::setSelectionLook, from the line aspect OCCT draws the
+# highlight with). The test checks the numbers: the width is the logical
+# width times the device pixel ratio, wider than a plain edge.
+#   1. A fresh profile: Selection color the selection blue, Selected line
+#      width Normal; a top edge of the block selected: its highlight 4
+#      logical pixels wide in the blue.
+#   2. Preferences › Display: Selection color #d02090 (the color dialog's
+#      HTML field): the selected edge drawn anew in it.
+#   3. Preferences › Display: Selected line width Thick: the edge's
+#      highlight 6 logical pixels wide.
+#   4. Sketch1 edited, its line selected: its highlight in the view and
+#      the overlay's in the chosen color and width.
+# Run by tools/ui-selection-look-test.sh (at device pixel ratio 1 and 2)
+# and, in the Windows build VM, tools/ui-windows-selection-look-test.ps1
+# (at 1 and 1.25: its 1024 x 768 screen leaves the Docked window no view
+# at 2).
+wait-idle
+expect-ever '^View selection look: color #1f7aff, line width normal; edges [0-9.]+ px \(4 x ratio [0-9.]+\)'
+command view.home
+command view.fit
+wait-idle
+
+# 1. A top edge selected, Normal, the selection blue.
+mark
+click-pick-offset 'edge F1[.]b0/E[{][^}]*F1:top[^}]*[}]' 0 0 '^edge E[{][^}]*F1:top[^}]*[}] of F1[.]b0$'
+wait-log '^Selected: 1 edge' 30
+wait-log '^View highlight line: edge [0-9.]+ px \(4 x ratio [0-9.]+\), color #1f7aff; plain edges 1 px$'
+wait-idle
+
+# 2. Selection color: the color dialog's HTML field, OK in both.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+focus-widget selectionColor
+key space
+focus-dialog '^Selection Color$'
+key alt+h
+type '#d02090'
+key Return
+focus-dialog '^Preferences$'
+wait-log '^Preferences selection color chosen: #d02090$'
+focus-widget selectedLineWidth
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: selection color #d02090, line width normal$'
+expect-setting view/selectionColor '#d02090'
+wait-log '^View selection look: color #d02090, line width normal; '
+wait-log '^View highlight line: edge [0-9.]+ px \(4 x ratio [0-9.]+\), color #d02090; plain edges 1 px$'
+wait-idle
+
+# 3. Selected line width: Thick.
+mark
+command tools.preferences.display
+focus-dialog '^Preferences$'
+qt-choice selectedLineWidth Thick
+key Return
+expect-dialog-gone '^Preferences$'
+focus-main
+wait-log '^Preferences: selection color #d02090, line width thick$'
+expect-setting view/selectedLineWidth thick
+wait-log '^View selection look: color #d02090, line width thick; edges [0-9.]+ px \(6 x ratio [0-9.]+\)'
+wait-log '^View highlight line: edge [0-9.]+ px \(6 x ratio [0-9.]+\), color #d02090; plain edges 1 px$'
+wait-idle
+key Escape
+wait-log '^Selected: nothing'
+wait-idle
+
+# 4. Sketch mode's selection.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F3 \(Sketch1\)' 30
+command view.look_at
+wait-log '^Look at sketch F3' 30
+command view.fit
+wait-log '^Fit: ' 30
+wait-idle
+mark
+sketch-click 30 10
+wait-log '^Selected: 1 ' 30
+wait-log '^View highlight line: sketch curve [0-9.]+ px \(6 x ratio [0-9.]+\), color #d02090; plain edges 1 px$'
+expect-ever '^Sketch overlay highlight look: 6 px, selection color #d02090$'
+wait-idle
+key Escape
+wait-idle
+expect-never 'TestDriver: FAIL'

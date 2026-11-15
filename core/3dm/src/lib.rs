@@ -12,6 +12,8 @@
 //!   curves and surfaces, meshes, block instances).
 //! - [`convert`]: B-reps, extrusions and surfaces as neutral bodies
 //!   ([`mitcad_asm::brep::Body`]) in millimetres, which OCCT builds.
+//! - [`subd`]: SubD objects' control nets, and a net as the control cage
+//!   of a Form (mitcad#1757).
 //! - [`testfile`]: a writer of small archives for the tests.
 //!
 //! The import (`core/ffi/src/import_3dm.rs`, `import_3dm`) builds the
@@ -22,6 +24,7 @@ pub mod convert;
 pub mod geom;
 pub mod model;
 pub mod nurbs;
+pub mod subd;
 pub mod testfile;
 
 #[cfg(test)]
@@ -42,6 +45,7 @@ pub fn kind_name(g: &geom::Geometry) -> String {
         geom::Geometry::Mesh(_) => "mesh".to_owned(),
         geom::Geometry::Curve(_) => "curve".to_owned(),
         geom::Geometry::Instance(_) => "block instance".to_owned(),
+        geom::Geometry::SubD(_) => "SubD".to_owned(),
         geom::Geometry::Other(name) => name.clone(),
     }
 }

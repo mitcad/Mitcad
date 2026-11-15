@@ -1,0 +1,113 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a blend's line (BRepBlend_Line) held its points in an
+NCollection_Sequence, whose access by index walks its linked list from the
+place read last. The approximation of a blend's surface
+(BRepBlend_AppFuncRoot::SearchPoint) finds the points around each parameter
+it evaluates by a bisection over the line, reads the line's middle point
+for a ball that stays put (mitcad#1412) and inserts the points that took
+long to solve: every evaluation walked the line several times over, and on
+a long line the approximation spent nearly all its time in those walks
+(mitcad#1823: a ring's window sills rounded away, 562 s, 90 % of the stack
+samples in NCollection_BaseSequence::Find). The points are now held in a
+deque of their own allocations, read by index in constant time; each
+point keeps its address while others are added or removed, as a
+sequence's node did, and the line's order, contents and range checks are
+those of the sequence, so every algorithm reads the same points.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx
+index 8fb698e5e..64af698df 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.cxx
+@@ -27,7 +27,7 @@ BRepBlend_Line::BRepBlend_Line()
+ 
+ void BRepBlend_Line::Clear()
+ {
+-  seqpt.Clear();
++  seqpt.clear();
+   hass1 = false;
+   hass2 = false;
+   tras1 = IntSurf_Undecided;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.hxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.hxx
+index f1c3a2a21..9b20ee239 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.hxx
+@@ -23,6 +23,9 @@
+ #include <Standard_Transient.hxx>
+ #include <Standard_Integer.hxx>
+ 
++#include <deque>
++#include <memory>
++
+ class Blend_Point;
+ 
+ class BRepBlend_Line : public Standard_Transient
+@@ -105,7 +108,13 @@ public:
+   DEFINE_STANDARD_RTTIEXT(BRepBlend_Line, Standard_Transient)
+ 
+ private:
+-  NCollection_Sequence<Blend_Point> seqpt;
++  // The points in their order, each at an address of its own (as in a
++  // sequence's node, so that a reference to a point stays valid while points
++  // are added or removed elsewhere), read by index in constant time: as an
++  // NCollection_Sequence, every read walked its list from the place read last,
++  // and the approximation of a long line read it by bisection at every
++  // evaluation.
++  std::deque<std::unique_ptr<Blend_Point>> seqpt;
+   IntSurf_TypeTrans                 tras1;
+   IntSurf_TypeTrans                 tras2;
+   BRepBlend_Extremity               stp1;
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.lxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.lxx
+index 44bbade63..ae90e79a1 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.lxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Line.lxx
+@@ -15,25 +15,29 @@
+ #include <Blend_Point.hxx>
+ #include <NCollection_Sequence.hxx>
+ #include <Standard_DomainError.hxx>
++#include <Standard_OutOfRange.hxx>
+ 
+ inline void BRepBlend_Line::Append(const Blend_Point& P)
+ {
+-  seqpt.Append(P);
++  seqpt.push_back(std::make_unique<Blend_Point>(P));
+ }
+ 
+ inline void BRepBlend_Line::Prepend(const Blend_Point& P)
+ {
+-  seqpt.Prepend(P);
++  seqpt.push_front(std::make_unique<Blend_Point>(P));
+ }
+ 
+ inline void BRepBlend_Line::InsertBefore(const int Index, const Blend_Point& P)
+ {
+-  seqpt.InsertBefore(Index, P);
++  Standard_OutOfRange_Raise_if(Index < 1 || Index > NbPoints() + 1, "BRepBlend_Line::InsertBefore");
++  seqpt.insert(seqpt.begin() + (Index - 1), std::make_unique<Blend_Point>(P));
+ }
+ 
+ inline void BRepBlend_Line::Remove(const int FromIndex, const int ToIndex)
+ {
+-  seqpt.Remove(FromIndex, ToIndex);
++  Standard_OutOfRange_Raise_if(FromIndex < 1 || ToIndex > NbPoints() || FromIndex > ToIndex,
++                               "BRepBlend_Line::Remove");
++  seqpt.erase(seqpt.begin() + (FromIndex - 1), seqpt.begin() + ToIndex);
+ }
+ 
+ inline void BRepBlend_Line::SetStartPoints(const BRepBlend_Extremity& StartPtOnS1,
+@@ -54,12 +58,13 @@ inline void BRepBlend_Line::SetEndPoints(const BRepBlend_Extremity& EndPtOnS1,
+ 
+ inline int BRepBlend_Line::NbPoints() const
+ {
+-  return seqpt.Length();
++  return static_cast<int>(seqpt.size());
+ }
+ 
+ inline const Blend_Point& BRepBlend_Line::Point(const int Index) const
+ {
+-  return seqpt(Index);
++  Standard_OutOfRange_Raise_if(Index < 1 || Index > NbPoints(), "BRepBlend_Line::Point");
++  return *seqpt[static_cast<size_t>(Index - 1)];
+ }
+ 
+ inline IntSurf_TypeTrans BRepBlend_Line::TransitionOnS1() const

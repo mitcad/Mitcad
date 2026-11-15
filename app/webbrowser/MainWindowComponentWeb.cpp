@@ -30,7 +30,9 @@
 #include <QObject>
 #include <QPalette>
 #include <QProgressDialog>
+#include <QScopeGuard>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QtLogging>
 
 #include "../files/FileFormats.hpp"
@@ -462,6 +464,15 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
     *error = changeBlockedReason();
     return false;
   }
+  // Move waits while a file comes in (startWebDownloadMove), and starts
+  // from the event loop after it, on this file or the last one brought in.
+  m_webImporting = true;
+  const auto moveAfter = qScopeGuard([this] {
+    m_webImporting = false;
+    if (m_webMovePending) {
+      QTimer::singleShot(0, this, [this] { startWebDownloadMove(); });
+    }
+  });
   leaveStartPage();
   const QString name = webComponentName(file);
   const QString partNumber = webPartNumber(name);
@@ -539,14 +550,35 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
                            .arg(bodies)
                            .arg(storedNumber.isEmpty() ? QStringLiteral("none") : storedNumber);
   m_viewer->fitAll();
-  // Placed with Move: the design's window in front, the new occurrence
-  // selected.
+  // Placed with Move, started from the event loop (mitcad#1839): a zip's
+  // Import brings in its checked files one after another, each refused
+  // while a command is open, so Move waits until the last is in and then
+  // starts once, on it.
+  m_webMoveComponent = component;
+  m_webMoveOccurrence = occurrence;
+  m_webMoveName = shownName;
+  m_webMovePending = true;
+  return true;
+}
+
+void MainWindow::startWebDownloadMove() {
+  // During a later file's import (should it turn the event loop), that
+  // import's own timer starts Move after it.
+  if (!m_webMovePending || m_webImporting) {
+    return;
+  }
+  m_webMovePending = false;
+  // The design's window in front, the new occurrence selected.
   SelectionItem item;
   item.kind = SelectKind::Component;
-  item.owner = component;
+  item.owner = m_webMoveComponent;
   item.occurrence = occurrencePath(
       queryObject({{QStringLiteral("query"), QStringLiteral("components")}}).value(QStringLiteral("occurrences")).toArray(),
-      occurrence);
+      m_webMoveOccurrence);
+  if (m_mode != Mode::Idle) {
+    qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1").arg(m_webMoveName);
+    return;
+  }
   QWidget* top = window();
   if (top->isMinimized()) {
     top->showNormal();
@@ -555,9 +587,8 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
   top->activateWindow();
   startCommand(QStringLiteral("solid.move"), {item}, nullptr);
   if (m_mode != Mode::Command) {
-    qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1").arg(shownName);
+    qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1").arg(m_webMoveName);
   }
-  return true;
 }
 
 } // namespace mitcad

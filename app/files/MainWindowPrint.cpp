@@ -8,7 +8,8 @@
 // the panel shows the design's Printer and Process (mitcad#655: chosen at
 // once, each an undo step; Edit… opens the profile editor; one another
 // design changed asked about once; the Process the bodies sent print
-// with, Per body when they differ, chosen where it comes from,
+// with (the plates' bodies with the plates sent, mitcad#1807), Per body
+// when they differ, chosen where it comes from,
 // mitcad#1799), and Import from Slicer… with its line
 // and Details…. Bed Face shows the face the bodies lie on (their print bed
 // face, else the automatic orientation's), drawn in the bed face's green;
@@ -588,13 +589,37 @@ CommandDef MainWindow::print3dCommand() {
   // occurrence as the 3MF export resolves it, by the model's
   // `print_settings` query (the body, then its occurrences and their
   // components, then the root). One process for all of them is the row's
-  // value, different ones Per body. With the design's plates sent, or no
-  // body, the design's own (the root's) as before.
+  // value, different ones Per body. With the design's plates sent, the
+  // bodies are every placement the plates print (mitcad#1807: the
+  // `print_plates` query's `bodies`, as the plates' export makes them);
+  // with no body, the design's own (the root's) as before.
   const auto readProcess = [this, chosenKey, threeMf](const CommandState& state) {
     SentProcess sent;
-    const Selection& items = state.items(QStringLiteral("bodies"));
-    const bool plates = threeMf(state) && state.checked(QStringLiteral("plates")) && printPlateCount() > 0;
-    if (plates || items.isEmpty()) {
+    // What is sent: each body (its uid) with the occurrence that places it.
+    QVector<QPair<QString, QString>> placements;
+    if (threeMf(state) && state.checked(QStringLiteral("plates")) && printPlateCount() > 0) {
+      QJsonObject answer;
+      try {
+        answer = queryObject({{QStringLiteral("query"), QStringLiteral("print_plates")}});
+      } catch (const std::exception&) {
+        // As plates that print nothing: the design's own.
+      }
+      for (const QJsonValue& plate : answer.value(QStringLiteral("plates")).toArray()) {
+        for (const QJsonValue& value : plate.toObject().value(QStringLiteral("bodies")).toArray()) {
+          const QJsonObject placed = value.toObject();
+          const QPair<QString, QString> placement(placed.value(QStringLiteral("body")).toString(),
+                                                  placed.value(QStringLiteral("occurrence")).toString());
+          if (!placement.first.isEmpty() && !placements.contains(placement)) {
+            placements.append(placement);
+          }
+        }
+      }
+    } else {
+      for (const SelectionItem& item : state.items(QStringLiteral("bodies"))) {
+        placements.append(qMakePair(item.owner, item.occurrence));
+      }
+    }
+    if (placements.isEmpty()) {
       sent.value = chosenKey(QStringLiteral("process"));
       sent.root = true;
       return sent;
@@ -603,11 +628,12 @@ CommandDef MainWindow::print3dCommand() {
     QStringList keys;
     // Per process (by its name, in the order of first use), its bodies.
     QVector<QPair<QString, QStringList>> groups;
-    for (const SelectionItem& item : items) {
+    for (const auto& placement : std::as_const(placements)) {
+      const QString& uid = placement.first;
       QJsonObject settingsQuery{{QStringLiteral("query"), QStringLiteral("print_settings")},
-                                {QStringLiteral("body"), item.owner}};
-      if (!item.occurrence.isEmpty()) {
-        settingsQuery.insert(QStringLiteral("occurrence"), item.occurrence);
+                                {QStringLiteral("body"), uid}};
+      if (!placement.second.isEmpty()) {
+        settingsQuery.insert(QStringLiteral("occurrence"), placement.second);
       }
       QJsonObject profile;
       try {
@@ -632,17 +658,17 @@ CommandDef MainWindow::print3dCommand() {
         keys << key;
       }
       if (!id.isEmpty() && owner != QLatin1String("C0")) {
-        if (!sent.below.contains(item.owner)) {
-          sent.below << item.owner;
+        if (!sent.below.contains(uid)) {
+          sent.below << uid;
         }
         if (profile.value(QStringLiteral("level")).toString() == QLatin1String("body") &&
-            !sent.own.contains(item.owner)) {
-          sent.own << item.owner;
+            !sent.own.contains(uid)) {
+          sent.own << uid;
         }
       } else {
         sent.root = true;
       }
-      const QString body = bodyName(item.owner);
+      const QString body = bodyName(uid);
       auto group = std::find_if(groups.begin(), groups.end(),
                                 [&name](const QPair<QString, QStringList>& g) { return g.first == name; });
       if (group == groups.end()) {
@@ -1526,8 +1552,8 @@ CommandDef MainWindow::print3dCommand() {
       checkInput(QStringLiteral("plates"), tr("Send the Design's Plates"), false)
           .withTextBeside()
           .withVisible([this, threeMf](const CommandState& state) { return threeMf(state) && printPlateCount() > 0; })
-          // With the plates sent, the Process row shows the design's
-          // process (mitcad#1799, readProcess).
+          // With the plates sent, the Process row shows what the plates'
+          // bodies print with (mitcad#1799, mitcad#1807, readProcess).
           .withOnChange([showProcess](CommandState& state, const CommandContext&) {
             showProcess(state, ProcessLog::Changed);
           }),

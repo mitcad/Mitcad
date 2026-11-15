@@ -13,14 +13,19 @@
 //!   the level, inside the boundary. The edges of that area are found
 //!   exactly at each crossing of the grid ([`super::zlevel`]); the grid is
 //!   fine enough that a chord between two of them stays within the
-//!   tolerance of the edge.
-//! - **The pocket of a level:** that area grown by the tool's radius is
-//!   the pocket's walls, cleared with the tolerance and a half (the chords
-//!   and the points left out) kept from them, so the tool's center stays
-//!   inside the area: the tool stays at least the stock to leave from the
-//!   bodies, to the side and below. (Grown by the whole cylinder's radius,
-//!   the area's chords round a body's corner, an arc of that radius, would
-//!   meet in spikes past the corner.)
+//!   tolerance of the edge. Where two of them lie on the boundary, the
+//!   boundary's corners between them are put back, so that the chord
+//!   does not cut an inward corner of the boundary or a corner of an
+//!   island.
+//! - **The pocket of a level:** the tool's center is kept inside that area
+//!   itself, the tolerance and a half (the chords and the points left out)
+//!   from its edges, so the tool stays at least the stock to leave from the
+//!   bodies, to the side and below, and its center inside the boundary,
+//!   off islands narrower than the tool too (mitcad#1829: grown by the
+//!   tool's radius into walls and kept the radius off them again, the
+//!   area was closed and those opened to the center). The material the
+//!   pocket clears, which adaptive clearing measures, is the area grown by
+//!   the tool's radius.
 //! - **Levels:** at most the step down apart from the top to the bottom,
 //!   and at each level floor of the bodies raised by the stock to leave,
 //!   so flat floors keep exactly the stock to leave. Each level's pocket
@@ -35,13 +40,13 @@ use serde::{Deserialize, Serialize};
 
 use super::adaptive::Adaptive;
 use super::entry::Entry;
-use super::path::Area;
-use super::pocket::{PocketOp, is_empty, pocket, region_shape};
+use super::path::{Area, dist2, seg_distance};
+use super::pocket::{PocketOp, Room, is_empty, pocket_in, region_shape};
 use super::surface::{Surface, SurfaceCutter};
 use super::zlevel::{Grid, TOLERANCE, check_surface_op, free_chains, grid_step, simplified_loop};
 use super::{Depths, Direction, Heights, check_mill};
 use crate::CamError;
-use crate::geom::{Contour, Region, Vertex};
+use crate::geom::{Contour, Region, Segment, Vertex};
 use crate::tool::{Cutting, Tool};
 use crate::toolpath::Toolpath;
 
@@ -144,6 +149,86 @@ fn regions_of(shape: &Shape<f64>) -> Vec<Region> {
     regions
 }
 
+/// The outline of `outlines` (each as its segments) that `p` lies on, no
+/// farther than `near`, and the segment nearest to it.
+fn on_outline(outlines: &[Vec<Segment>], p: [f64; 2], near: f64) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize, f64)> = None;
+    for (k, segments) in outlines.iter().enumerate() {
+        for (i, s) in segments.iter().enumerate() {
+            let d = seg_distance(s, p);
+            if d <= near && best.is_none_or(|b| d < b.2) {
+                best = Some((k, i, d));
+            }
+        }
+    }
+    best.map(|(k, i, _)| (k, i))
+}
+
+/// A loop of the free area with the boundary's corners put back: where
+/// two points next to each other lie on different segments of the same
+/// outline of the boundary (`outlines`), the area's edge runs along the
+/// outline between them, through the corners the straight way between
+/// them cuts (an inward corner of the boundary, a corner of an island).
+/// The shorter way round is taken when it is no longer than `reach` and
+/// its corners are `free`.
+fn along_boundary(
+    points: &[[f64; 2]],
+    outlines: &[Vec<Segment>],
+    free: &dyn Fn([f64; 2]) -> bool,
+    reach: f64,
+) -> Vec<[f64; 2]> {
+    let n = points.len();
+    let places: Vec<Option<(usize, usize)>> = points
+        .iter()
+        .map(|&p| on_outline(outlines, p, 1e-5))
+        .collect();
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(n);
+    for (i, (&a, &here)) in points.iter().zip(&places).enumerate() {
+        let b = points[(i + 1) % n];
+        out.push(a);
+        let (Some((ka, sa)), Some((kb, sb))) = (here, places[(i + 1) % n]) else {
+            continue;
+        };
+        if ka != kb || sa == sb {
+            continue;
+        }
+        let segments = &outlines[ka];
+        let m = segments.len();
+        // The corners from `a` to `b` forwards (the starts of the segments
+        // after a's up to b's) and backwards (a's segment's start down to
+        // the one after b's).
+        let forward: Vec<[f64; 2]> = (1..=(sb + m - sa) % m)
+            .map(|j| segments[(sa + j) % m].start)
+            .collect();
+        let backward: Vec<[f64; 2]> = (0..(sa + m - sb) % m)
+            .map(|j| segments[(sa + m - j) % m].start)
+            .collect();
+        let length = |via: &[[f64; 2]]| {
+            let mut at = a;
+            let mut total = 0.0;
+            for &q in via.iter().chain(std::iter::once(&b)) {
+                total += dist2(at, q);
+                at = q;
+            }
+            total
+        };
+        let via = if length(forward.as_slice()) <= length(backward.as_slice()) {
+            forward
+        } else {
+            backward
+        };
+        if length(via.as_slice()) > reach || !via.iter().all(|&q| free(q)) {
+            continue;
+        }
+        for q in via {
+            if out.last().is_none_or(|&last| dist2(last, q) > 1e-5) && dist2(q, b) > 1e-5 {
+                out.push(q);
+            }
+        }
+    }
+    out
+}
+
 /// The toolpath of a 3D roughing.
 pub fn roughing(op: &Roughing3dOp, surface: &Surface, tool: &Tool) -> Result<Toolpath, CamError> {
     check_mill(tool, &op.cutting, &op.depths)?;
@@ -174,7 +259,12 @@ pub fn roughing(op: &Roughing3dOp, surface: &Surface, tool: &Tool) -> Result<Too
     let (bmin, bmax) = area
         .bounds()
         .ok_or_else(|| CamError::new("The boundary encloses no area."))?;
-    let grid = Grid::covering(bmin, bmax, grid_step(envelope.radius, tolerance))?;
+    let step = grid_step(envelope.radius, tolerance);
+    let grid = Grid::covering(bmin, bmax, step)?;
+    let outlines: Vec<Vec<Segment>> = std::iter::once(&boundary.outer)
+        .chain(&boundary.islands)
+        .map(|c| c.segments())
+        .collect();
     // Where the cylinder rests at each node (above everything outside the
     // boundary).
     let rests: Vec<f64> = grid
@@ -211,36 +301,41 @@ pub fn roughing(op: &Roughing3dOp, surface: &Surface, tool: &Tool) -> Result<Too
             // Deeper levels have less room still.
             break;
         }
-        let test = |p: [f64; 2]| {
-            !area.contains(p)
-                || surface
-                    .drop_cutter(&envelope, p)
-                    .is_some_and(|c| c.z + lift > z + 1e-9)
+        let free = |p: [f64; 2]| {
+            surface
+                .drop_cutter(&envelope, p)
+                .is_none_or(|c| c.z + lift <= z + 1e-9)
         };
+        let test = |p: [f64; 2]| !area.contains(p) || !free(p);
         let loops: Vec<Polyline<f64>> = free_chains(&grid, &blocked, &test, 1e-6)
             .iter()
             .filter(|c| c.closed)
-            .filter_map(|c| outline(&c.points, &simplified_loop(&c.points, tolerance / 2.0)))
+            .map(|c| along_boundary(&c.points, &outlines, &free, 3.0 * step))
+            .filter_map(|points| outline(&points, &simplified_loop(&points, tolerance / 2.0)))
             .map(|c| c.to_pline())
             .collect();
         if loops.is_empty() {
             break;
         }
-        // The walls the tool's own radius out from where its center may
-        // go: a pocket keeps its center the radius and the margin inside
-        // them. Not grown by the whole envelope and kept the stock to leave
-        // off: round a body's corner the area's edge is an arc of the
-        // envelope's radius in chords, and grown by that radius its chords
-        // meet in spikes up to a quarter of a chord past the corner, which
-        // the pocket would follow into the stock to leave.
-        let walls = Shape::from_plines(loops).parallel_offset(-tool.radius(), &options);
-        for region in regions_of(&walls) {
+        // The pocket keeps the tool's center inside that area itself, the
+        // margin off its edges (mitcad#1829). Grown by the tool's radius
+        // into walls and kept the radius off them again, the area would be
+        // closed: an island of the boundary narrower than the tool and the
+        // boundary's inward corners would open to the center.
+        for region in regions_of(&Shape::from_plines(loops)) {
             // Room for the tool at all.
-            if is_empty(&region_shape(&region).parallel_offset(tool.radius() + margin, &options)) {
+            if is_empty(&region_shape(&region).parallel_offset(margin, &options)) {
                 continue;
             }
+            // The material the tool can reach from there, which adaptive
+            // clearing measures its engagement on.
+            let grown = region_shape(&region).parallel_offset(-tool.radius(), &options);
+            let material = regions_of(&grown)
+                .into_iter()
+                .max_by(|a, b| a.outer.area().abs().total_cmp(&b.outer.area().abs()))
+                .unwrap_or_else(|| region.clone());
             let level = PocketOp {
-                region,
+                region: material,
                 stepover: op.stepover,
                 direction: op.direction,
                 depths: Depths {
@@ -249,12 +344,17 @@ pub fn roughing(op: &Roughing3dOp, surface: &Surface, tool: &Tool) -> Result<Too
                     step_down: above - z,
                 },
                 heights: op.heights,
-                stock_to_leave: margin,
+                // The room keeps the margin.
+                stock_to_leave: 0.0,
                 cutting: op.cutting,
                 entry: op.entry,
                 adaptive: op.adaptive,
             };
-            path.moves.extend(pocket(&level, tool)?.moves);
+            let room = Room {
+                region: &region,
+                clear: margin,
+            };
+            path.moves.extend(pocket_in(&level, tool, room)?.moves);
         }
         above = z;
     }
@@ -457,5 +557,120 @@ mod tests {
         assert!(e.message.contains("nothing to clear"), "{e}");
         tool.shape = crate::tool::ToolShape::BallEndMill;
         assert!(roughing(&op, &surface, &tool).is_err());
+    }
+
+    /// A roughing inside `boundary` from 0 down to `bottom` in
+    /// 3 mm steps, nothing left on the bodies.
+    fn rough_in(boundary: Region, bottom: f64) -> Roughing3dOp {
+        Roughing3dOp {
+            boundary: Some(boundary),
+            stepover: None,
+            direction: Direction::Climb,
+            depths: Depths {
+                top: 0.0,
+                bottom,
+                step_down: 3.0,
+            },
+            heights: Heights {
+                clearance: 10.0,
+                retract: 2.0,
+            },
+            stock_to_leave: 0.0,
+            cutting: Cutting {
+                spindle_rpm: 18000.0,
+                feed: 1200.0,
+                plunge_feed: 300.0,
+            },
+            entry: Entry::Plunge,
+            adaptive: None,
+            tolerance: None,
+        }
+    }
+
+    /// A boundary with an island 4 mm wide, narrower than the 6 mm tool
+    /// (mitcad#1829): the tool's center never goes onto it at any level,
+    /// with the offset loops or adaptive clearing, and the stock on both
+    /// sides of it is cleared.
+    #[test]
+    fn roughing_keeps_the_center_off_an_island_narrower_than_the_tool() {
+        let mut mesh = TriMesh::default();
+        cuboid(&mut mesh, [0.0, 0.0, -20.0], [8.0, 8.0, -10.0]);
+        let surface = Surface::new(&mesh).unwrap();
+        let tool = Tool::flat_end_mill(1, 6.0);
+        let boundary = Region::new(
+            Contour::rectangle([-5.0, -5.0], [40.0, 30.0]),
+            vec![Contour::rectangle([20.0, 0.0], [24.0, 25.0])],
+        );
+        let on_island =
+            |p: &P3| p[0] > 20.0 + 1e-6 && p[0] < 24.0 - 1e-6 && p[1] > 1e-6 && p[1] < 25.0 - 1e-6;
+        let mut op = rough_in(boundary, -6.0);
+        for adaptive in [None, Some(Adaptive::default())] {
+            if adaptive.is_some() {
+                // One level is enough to follow the same room.
+                op.depths.bottom = -3.0;
+            }
+            op.adaptive = adaptive;
+            let path = roughing(&op, &surface, &tool).unwrap();
+            let points = cut_points(&path);
+            assert!(points.len() > 100);
+            for p in &points {
+                assert!(!on_island(p), "the center on the island at {p:?}");
+                assert!(
+                    p[0] >= -5.0 - 1e-6
+                        && p[0] <= 40.0 + 1e-6
+                        && p[1] >= -5.0 - 1e-6
+                        && p[1] <= 30.0 + 1e-6,
+                    "the center outside the boundary at {p:?}"
+                );
+            }
+            let floor = op.depths.bottom;
+            let left = points
+                .iter()
+                .any(|p| p[0] < 20.0 && p[1] > 5.0 && p[1] < 20.0 && (p[2] - floor).abs() < 1e-9);
+            let right = points
+                .iter()
+                .any(|p| p[0] > 24.0 && p[1] > 5.0 && p[1] < 20.0 && (p[2] - floor).abs() < 1e-9);
+            assert!(left && right, "both sides of the island cleared");
+        }
+    }
+
+    /// An L-shaped boundary round a block (mitcad#1829): the tool's center
+    /// never leaves the boundary, not at its inward corner either, and keeps
+    /// off the block.
+    #[test]
+    fn roughing_keeps_the_center_inside_an_l_shaped_boundary() {
+        let block = ([25.0, 3.0, -20.0], [35.0, 10.0, -2.0]);
+        let mut mesh = TriMesh::default();
+        cuboid(&mut mesh, block.0, block.1);
+        let surface = Surface::new(&mesh).unwrap();
+        let tool = Tool::flat_end_mill(1, 6.0);
+        let boundary = Region::new(
+            Contour::polygon(&[
+                [0.0, 0.0],
+                [40.0, 0.0],
+                [40.0, 15.0],
+                [15.0, 15.0],
+                [15.0, 40.0],
+                [0.0, 40.0],
+            ]),
+            Vec::new(),
+        );
+        let path = roughing(&rough_in(boundary, -6.0), &surface, &tool).unwrap();
+        let points = cut_points(&path);
+        assert!(points.len() > 100);
+        let mut nearest = f64::INFINITY;
+        for p in &points {
+            let inside = p[0] >= -1e-6
+                && p[0] <= 40.0 + 1e-6
+                && p[1] >= -1e-6
+                && p[1] <= 40.0 + 1e-6
+                && (p[0] <= 15.0 + 1e-6 || p[1] <= 15.0 + 1e-6);
+            assert!(inside, "the center outside the boundary at {p:?}");
+            let c = clearance(*p, 3.0, block.0, block.1);
+            assert!(c >= -1e-6, "the tool in the block at {p:?}");
+            nearest = nearest.min((p[0] - 15.0).hypot(p[1] - 15.0));
+        }
+        // The inward corner is cleared up to the tolerance and a half.
+        assert!(nearest < 0.1, "the center keeps {nearest} off the corner");
     }
 }

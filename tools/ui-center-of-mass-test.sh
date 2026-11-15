@@ -7,12 +7,13 @@
 # The Center of Mass marker (mitcad#1094) through the real UI, in the
 # Docked layout, on a design mitcad-cli makes: Body1 (F2.b0), a 30 x 20 x
 # 10 block of aluminum in the root, and Body2 (F3.b0), the same outline 4
-# deep below it in Component1:1 (O1), steel for lack of a material:
+# deep below it in Component1:1 (O1), of the design's default material,
+# steel (a body without a material would be left out, mitcad#1817):
 #   - Center of Mass (the command search) adds the marker: the view draws it
 #     at the total center of mass of the `properties` query (mitcad-cli
 #     info --properties, within 0.000001 mm), and the browser has the
 #     Center of Mass row under Origin, its tooltip with the coordinates, the
-#     mass and "1 body without a material counted as steel".
+#     mass and no note of bodies left out.
 #   - Component1:1 moved 20 mm along X with Move/Copy from its row's menu:
 #     the marker moves by 20 mm times Body2's share of the mass.
 #   - The row's light bulb hides the marker and shows it again; hidden,
@@ -44,7 +45,8 @@ cat > "$WORK/model.json" << EOF
     "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
   {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "$R"}],
     "extent": {"type": "distance", "distance": -4}, "operation": "new_component"}},
-  {"cmd": "set_body_material", "uid": "F2.b0", "material": "aluminum"}
+  {"cmd": "set_body_material", "uid": "F2.b0", "material": "aluminum"},
+  {"cmd": "set_component_material", "component": "C0", "material": "steel"}
 ]
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
@@ -96,11 +98,10 @@ ui_expect_new "Center of Mass added" "the marker added"
 ui_expect_new "Center of Mass: at " "its place worked out"
 expect_center "$PX" "$PY" "$PZ" "the marker at the properties query's total"
 ui_expect_new "Center of Mass drawn: " "drawn in the view"
-ui_expect_new ", 2 bodies, 1 without a material (shown)" "two bodies, Body2 steel by default"
-ui_expect_new "; 1 body without a material counted as steel" "the tooltip names the steel body"
+ui_expect_new ", 2 bodies, 0 without a material (shown)" "two bodies, Body2 of the design's default steel"
 tip=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "^Center of Mass: at " | tail -1 | sed 's/.*; tooltip: //')
-[[ $tip =~ ^\(-?[0-9.]+,\ -?[0-9.]+,\ -?[0-9.]+\)\ mm,\ [0-9.]+\ kg\;\ 1\ body ]] ||
-  ui_fail "the tooltip is not the coordinates, the mass and the steel note: '$tip'"
+[[ $tip =~ ^\(-?[0-9.]+,\ -?[0-9.]+,\ -?[0-9.]+\)\ mm,\ [0-9.]+\ kg$ ]] ||
+  ui_fail "the tooltip is not the coordinates and the mass alone: '$tip'"
 echo "ok   the tooltip: $tip"
 ui_expect_log "Browser Root/Center of Mass at" "the Center of Mass row in the browser"
 ui_expect_log "Browser eye Root/Center of Mass at" "with its light bulb"

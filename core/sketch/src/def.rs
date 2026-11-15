@@ -64,6 +64,20 @@ pub enum SketchPlane {
         face: Box<FaceName>,
         body: Option<BodyUid>,
     },
+    /// A cylindrical or conical face (mitcad#1768), written
+    /// `{"face": "F2:side(c1)", "body": "F2.b0", "developed": {"angle": 0.5}}`:
+    /// the sketch lies in the face's developed coordinates (the arc length
+    /// around a cylinder at its radius and the distance along its axis; a
+    /// cone's development), found again from the face at every evaluation
+    /// (`mitcad_model::developed`). `angle` (radians) turns the sketch's
+    /// origin about the face's axis from the reference direction across it
+    /// (the model X axis across the axis, else the Y axis), right-handed
+    /// about the sketch's y axis.
+    Developed {
+        face: Box<FaceName>,
+        body: Option<BodyUid>,
+        angle: f64,
+    },
 }
 
 impl SketchPlane {
@@ -73,12 +87,27 @@ impl SketchPlane {
             Self::Xy => OriginDatum::Xy,
             Self::Xz => OriginDatum::Xz,
             Self::Yz => OriginDatum::Yz,
-            Self::Construction(_) | Self::Face { .. } => return None,
+            Self::Construction(_) | Self::Face { .. } | Self::Developed { .. } => return None,
         };
         match origin.datum() {
             Datum::Plane(plane) => Some(plane.frame()),
             _ => None,
         }
+    }
+
+    /// The face of a sketch on a body's face, planar or developed
+    /// (mitcad#1768), with its body when named.
+    pub fn face(&self) -> Option<(&FaceName, Option<BodyUid>)> {
+        match self {
+            Self::Face { face, body } | Self::Developed { face, body, .. } => Some((face, *body)),
+            _ => None,
+        }
+    }
+
+    /// Whether the sketch lies on a cylindrical or conical face in its
+    /// developed coordinates (mitcad#1768).
+    pub fn is_developed(&self) -> bool {
+        matches!(self, Self::Developed { .. })
     }
 
     /// The frame of a plane through `point` with the outward `normal`, as
@@ -99,6 +128,19 @@ struct FacePlane {
     face: FaceName,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     body: Option<BodyUid>,
+    /// A sketch in a cylindrical or conical face's developed coordinates
+    /// (mitcad#1768).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    developed: Option<DevelopedPlane>,
+}
+
+/// The developed form of a face plane (mitcad#1768): the angle about the
+/// face's axis of the sketch's origin.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DevelopedPlane {
+    #[serde(default)]
+    angle: f64,
 }
 
 impl Serialize for SketchPlane {
@@ -111,6 +153,13 @@ impl Serialize for SketchPlane {
             Self::Face { face, body } => FacePlane {
                 face: (**face).clone(),
                 body: *body,
+                developed: None,
+            }
+            .serialize(serializer),
+            Self::Developed { face, body, angle } => FacePlane {
+                face: (**face).clone(),
+                body: *body,
+                developed: Some(DevelopedPlane { angle: *angle }),
             }
             .serialize(serializer),
         }
@@ -133,9 +182,21 @@ impl<'de> Deserialize<'de> for SketchPlane {
             },
             value @ serde_json::Value::Object(_) => {
                 let plane: FacePlane = serde_json::from_value(value).map_err(D::Error::custom)?;
-                Ok(Self::Face {
-                    face: Box::new(plane.face),
-                    body: plane.body,
+                Ok(match plane.developed {
+                    None => Self::Face {
+                        face: Box::new(plane.face),
+                        body: plane.body,
+                    },
+                    Some(developed) if developed.angle.is_finite() => Self::Developed {
+                        face: Box::new(plane.face),
+                        body: plane.body,
+                        angle: developed.angle,
+                    },
+                    Some(_) => {
+                        return Err(D::Error::custom(
+                            "a developed face plane's angle must be a number",
+                        ));
+                    }
                 })
             }
             _ => Err(D::Error::custom(
@@ -455,6 +516,11 @@ pub struct SketchOutput {
     /// was. Queries show it, and edits start from it, while the stored
     /// definition is the one it was made from.
     pub retrimmed: Option<Arc<RetrimmedDef>>,
+    /// The face of a sketch on a cylindrical or conical face (mitcad#1768):
+    /// the curves and regions lie on the carrier plane `frame` (its flat
+    /// coordinates) and go onto the face by this map. None for a sketch on
+    /// a plane.
+    pub developed: Option<Arc<mitcad_model_base::developed::Development>>,
 }
 
 /// A sketch's definition with its offsets made again at an evaluation
@@ -1218,6 +1284,21 @@ impl<P> SketchDef<P> {
 
     /// The consistency of entities, constraints and dimensions.
     pub fn check_definition(&self) -> Result<(), String> {
+        // A sketch on a curved face lies in its developed coordinates: no
+        // frame of its own, no placement on the plane, no other
+        // component's face (mitcad#1768).
+        if self.plane.is_developed() {
+            if self.frame.is_some() || self.placement.is_some() {
+                return Err(
+                    "a sketch on a curved face has no frame or placement of its own".to_owned(),
+                );
+            }
+            if self.plane_link.is_some() {
+                return Err(
+                    "a sketch on a curved face lies on a face of its own component".to_owned(),
+                );
+            }
+        }
         // Points, curves and texts share one id numbering (mitcad#1485):
         // the first one keeps its number and a later one is named with it.
         let mut ids: BTreeMap<EntityUid, String> = BTreeMap::new();

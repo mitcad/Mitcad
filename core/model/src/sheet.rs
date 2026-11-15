@@ -573,6 +573,10 @@ pub(crate) fn footprint<K: crate::kernel::Kernel>(
             bodies.push(d.body);
             None
         }
+        F::PressPull(d) => {
+            bodies.push(d.body);
+            None
+        }
         F::DeleteFace(d) => {
             bodies.push(d.body);
             None
@@ -732,6 +736,11 @@ pub(crate) fn footprint<K: crate::kernel::Kernel>(
             None
         }
         F::Groove(d) => {
+            bodies.push(d.body);
+            None
+        }
+        // Fill Cavity (mitcad#1818): material joined to its body.
+        F::FillCavity(d) => {
             bodies.push(d.body);
             None
         }

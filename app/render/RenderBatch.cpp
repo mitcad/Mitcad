@@ -64,16 +64,30 @@ MaterialData materialOf(const Appearance& a) {
     // The images that were found (mitcad#314): a missing one is left out.
     m.texture = a.texture.file.isEmpty() ? std::string() : fileOf(a.texture.file);
     std::string* const maps[kTextureMapCount] = {&m.normalMap, &m.roughnessMap, &m.metalnessMap, &m.occlusionMap};
+    // The channel of each grey map in an image that packs several
+    // (mitcad#1862); the normal map has none.
+    int* const channels[kTextureMapCount] = {nullptr, &m.roughnessChannel, &m.metalnessChannel, &m.occlusionChannel};
     for (std::size_t i = 0; i < a.texture.maps.size(); ++i) {
       const AppearanceMap& map = a.texture.maps[i];
       if (map.present && !map.file.isEmpty()) {
         *maps[i] = fileOf(map.file);
+        if (channels[i] != nullptr) {
+          *channels[i] = map.channel;
+        }
       }
+    }
+    // The roughness and metalness maps' factors (mitcad#1874).
+    if (!m.roughnessMap.empty()) {
+      m.roughnessFactor = static_cast<float>(a.texture.maps[1].factor);
+    }
+    if (!m.metalnessMap.empty()) {
+      m.metalnessFactor = static_cast<float>(a.texture.maps[2].factor);
     }
     if (!m.texture.empty() || m.hasMaps()) {
       m.textureSize = {static_cast<float>(a.texture.width), static_cast<float>(a.texture.height)};
       m.textureRotation = static_cast<float>(a.texture.rotation);
       m.texturePlanar = a.texture.planar;
+      m.textureUv = a.texture.uv;
     }
   }
   return m;

@@ -5,9 +5,13 @@
 // per family of the toolbar.
 
 #include <functional>
+#include <optional>
 
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
+
+#include <gp_Trsf.hxx>
 
 #include "../framework/Selection.hpp"
 
@@ -76,6 +80,12 @@ void registerSheetMetalCommands(CommandRegistry& registry, const CommandContext&
 void registerBuildCommands(CommandRegistry& registry, const CommandContext& context, DocumentHost& host,
                            QWidget* window, std::function<QString()> designName);
 
+// Derived Component (mitcad#1812, DerivedPartCommands.cpp): the edit panel
+// of a derived part (a BUILD part, a library part or a linked design
+// inserted with options), opened only by editing its feature; `host` runs
+// its build_edit or set_component_parameters and opens a linked source.
+void registerDerivedPartCommands(CommandRegistry& registry, DocumentHost& host);
+
 // Gear (mitcad#472, GearCommands.cpp), at the end of the SOLID tab's CREATE
 // group: `host` links the joints of gears it meshes.
 void registerGearCommands(CommandRegistry& registry, const CommandContext& context, DocumentHost& host);
@@ -107,5 +117,32 @@ void registerSurfaceCommands(CommandRegistry& registry, const CommandContext& co
 // context menus; in the sketch `controller` edits it always takes that
 // sketch.
 void registerSketchPlaneCommands(CommandRegistry& registry, sketch::SketchController& controller);
+
+// Forms (mitcad#1757, FormCommands.cpp; app/COMMANDS.md "Form"): Edit
+// Form, the panel a Form feature is edited in (its cage's faces, edges and
+// vertices picked in the view, moved, rotated and scaled with handles,
+// faces extruded, edge loops inserted and deleted, edges creased, symmetry
+// set; each edit one undo step), with what the main window gives it.
+struct FormEditHooks {
+  // The Form being edited (its uid, F3); empty while none is.
+  std::function<QString()> form;
+  // A `form.*` command with `preview` run on the model: its answer (the
+  // edited cage and its limit mesh); throws when the model refuses it.
+  std::function<QJsonObject(const QJsonObject&)> preview;
+  // Where the Form's component is seen in the design; none: the root's.
+  std::function<std::optional<gp_Trsf>()> placement;
+  // The cage drawn and picked over the view (the `form_cage` answer), the
+  // picks (FormCage.hpp's pickedText), the kind a click picks ("faces",
+  // "edges", "vertices") and whether clicks pick at all.
+  std::function<void(const QJsonObject& cage, const QString& picked, const QString& kind, bool picking)> show;
+  // The panel ended: the cage is no longer drawn.
+  std::function<void()> ended;
+};
+// Edit Form's id: the main window opens it for a Form feature
+// (MainWindow::editForm) and passes the view's picks to its hidden input
+// "picked" and a vertex's drag to "drag" (DocumentHost::chooseInCommand).
+inline const char* const kFormEditCommand = "solid.form_edit";
+void registerFormEditCommand(CommandRegistry& registry, const CommandContext& context, DocumentHost& host,
+                             FormEditHooks hooks);
 
 } // namespace mitcad

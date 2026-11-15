@@ -306,7 +306,7 @@ pub fn surface(srf: &Surface, s: f64) -> Result<(brep::Surface, bool), String> {
             let a = to_spline(&curves[0]).ok_or("a sum surface of an unknown curve")?;
             let b = to_spline(&curves[1]).ok_or("a sum surface of an unknown curve")?;
             Ok((
-                brep::Surface::BSpline(nurbs::sum_surface(&a, &b, *base, s)),
+                brep::Surface::BSpline(nurbs::sum_surface(&a, &b, *base, s)?),
                 false,
             ))
         }
@@ -334,7 +334,7 @@ fn whole_surface(srf: &Surface, s: f64) -> Result<(brep::Surface, bool), String>
             Ok((
                 brep::Surface::BSpline(nurbs::revolution_surface(
                     &profile, axis[0], dir, *angles, s,
-                )),
+                )?),
                 *transposed,
             ))
         }

@@ -3,7 +3,8 @@
 
 // A CEF browser shown in a Qt widget (mitcad#1579): windowless (off-screen)
 // rendering, CefRenderHandler::OnPaint's software buffer painted into the
-// widget (never a GPU texture: no GPU in VMs and test sessions), and the
+// widget (never a GPU texture: composited in software, with or without a
+// GPU; WebGL is drawn on the GPU where there is one, mitcad#1861), and the
 // widget's mouse, wheel, keys, input method, clipboard and cursor forwarded
 // to it. No native child window, so it needs no native embedding on any
 // platform (Wayland, macOS). Downloads go where the owner says

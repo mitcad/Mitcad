@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: MIT
+# Assembly Constraint's preview with more than one row (mitcad#1813,
+# app/COMMANDS.md "Assembly Constraint"), on constraint-rows-preview.json
+# (Base:1 grounded with a 40 x 20 x 10 box F1.b0 at the origin, Block:1
+# with a 10 x 10 x 10 box F2.b0 placed at (60, 40, 30)):
+#   1. Row 1: Block's top face onto Base's top face, Automatic (Align),
+#      Flip on: the preview puts Block on the floor, at (60, 40, 0).
+#   2. Add Constraint: the new, empty row is left out of the preview, which
+#      still places Block by row 1 (the log says so and names what the row
+#      needs); Block's side face as the row's Geometry 1: still row 1's
+#      preview, the row waiting for its Geometry 2.
+#   3. Row 2 complete (Block's +x side onto Base's +x side, Flip on): the
+#      preview places Block by both rows, at (30, 40, 0), drawn once: one
+#      body of Block in the preview's bodies, and the picks on Block drawn
+#      where the preview puts it, not also where the design has it.
+#   4. OK adds the set and Block stays where the preview showed it.
+# Run by tools/ui-constraint-rows-preview-test.sh (Linux),
+# tools/ui-windows-constraint-rows-preview-test.ps1 (Windows) and
+# tools/ui-macos-constraint-rows-preview-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Row 1 complete: Block on Base's top plane.
+mark
+command assemble.constraint
+expect-log '^Command Assembly Constraint started'
+wait-log '^Pick places:' 20
+# Keep the requested geometry clear of the command card at this window size.
+command view.fit
+wait-idle
+click-pick 'face F2[.]b0/F2:top'
+wait-log '^Assembly Constraint Geometry 1: 1 face'
+wait-log '^View ghosts: O2 [(]1 body[)]'
+wait-idle
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Assembly Constraint Geometry 2: 1 face'
+wait-log '^Preview Assembly Constraint: ok' 30
+wait-log '^Preview Assembly Constraint moves O2'
+wait-idle
+mark
+click-logged '^Panel Assembly Constraint input rows[.]0[.]flip at '
+wait-log '^Assembly Constraint: Flip = on'
+wait-log '^Preview Assembly Constraint: ok' 30
+wait-log '^Preview bodies: .*F2[.]b0 in O2 at 60,40,0' 30
+wait-idle
+expect-shown-body F2.b0 O2 1000 60 40 0 70 50 10
+
+# 2. A new row waits for its picks: row 1's preview stays.
+mark
+click-logged '^Panel Assembly Constraint add rows at '
+wait-log '^Assembly Constraint: added rows row 2$'
+wait-log '^Preview Assembly Constraint without its incomplete rows [(]rows row 2: Select geometry 1[.][)]: ok' 30
+expect-log '^Preview Assembly Constraint moves O2'
+wait-idle
+expect-no-log '^Preview Assembly Constraint: |^Preview bodies: .*F2[.]b0 in O2 at 60,40,30'
+expect-shown-body F2.b0 O2 1000 60 40 0 70 50 10
+mark
+click-pick 'face F2[.]b0/F2:side1'
+wait-log '^Assembly Constraint Geometry 1: 1 face'
+wait-log '^Preview Assembly Constraint without its incomplete rows [(]rows row 2: Select geometry 2[.][)]: ok' 30
+# Both picks on Block (row 1's top, row 2's side) where the preview puts
+# Block, none where the design has it.
+wait-log '^Assembly Constraint picks drawn where the preview places them: 2$' 30
+wait-idle
+expect-no-log '^Preview Assembly Constraint: |^Preview bodies: .*F2[.]b0 in O2 at 60,40,30'
+expect-shown-body F2.b0 O2 1000 60 40 0 70 50 10
+
+# 3. Row 2 complete: Block placed by both rows, drawn once.
+mark
+click-pick 'face F1[.]b0/F1:side1'
+wait-log '^Assembly Constraint Geometry 2: 1 face'
+wait-log '^Preview Assembly Constraint: ok' 30
+wait-idle
+mark
+click-logged '^Panel Assembly Constraint input rows[.]1[.]flip at '
+wait-log '^Assembly Constraint: Flip = on'
+wait-log '^Preview Assembly Constraint: ok' 30
+wait-log '^Preview bodies: .*F2[.]b0 in O2 at 30,40,0' 30
+wait-idle
+expect-no-log '^Preview bodies: .* in O2 at .* in O2 at |^Assembly Constraint picks drawn where the preview places them: [01]$'
+expect-shown-body F2.b0 O2 1000 30 40 0 40 50 10
+expect-shown-body F1.b0 O1 8000 0 0 0 40 20 10
+
+# 4. OK: the set as previewed.
+mark
+button '^OK$'
+wait-log '^Added constraint Constraint1: align, align placed, moved O2' 30
+wait-idle
+expect-shown-body F2.b0 O2 1000 30 40 0 40 50 10
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -18,9 +18,11 @@ use serde_json::{Value, json};
 
 use super::ApiError;
 use mitcad_model::analysis::PhysicalProperties;
+use mitcad_model::features::{FeatureDef, OccurrencePath};
 use mitcad_model::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use mitcad_model::internal::features::is_mesh;
 use mitcad_model::kernel::{BoundingBox, Kernel, KernelError, TopologyCounts};
+use mitcad_model::parameters::ParamId;
 use mitcad_model::transform::Transform;
 use mitcad_model::{BodyView, Document, InstanceView};
 
@@ -225,6 +227,69 @@ impl<'d, K: Kernel> PlacedProperties<'d, K> {
         };
         Ok(placed(&local, &placement.transform))
     }
+}
+
+/// What the Properties window names, groups and highlights a placed body
+/// by (mitcad#1816): its component (`component`, `component_name` and
+/// `component_bodies`, the component's own body count; none for the root's
+/// bodies), its occurrence path by uids (`path`, `O1/O4`; none for the
+/// root's), and `part`, a placed part's definition with its values (the
+/// source, row, parameters, ends and cuts) and the body's index as text,
+/// the same for bodies of equal parts.
+pub(super) struct BodyIdentities {
+    counts: BTreeMap<ComponentUid, usize>,
+}
+
+impl BodyIdentities {
+    pub fn new<K: Kernel>(doc: &Document<K>) -> Self {
+        let mut counts = BTreeMap::new();
+        for view in doc.bodies() {
+            if let Some(component) = doc.body_component(view.uid) {
+                *counts.entry(component).or_insert(0) += 1;
+            }
+        }
+        Self { counts }
+    }
+
+    pub fn write<K: Kernel>(
+        &self,
+        doc: &Document<K>,
+        uid: BodyUid,
+        placement: &Placement,
+        value: &mut Value,
+    ) {
+        if let Some(component) = doc.body_component(uid).filter(|c| !c.is_root()) {
+            value["component"] = json!(component);
+            value["component_name"] = json!(doc.assembly().name(component));
+            value["component_bodies"] = json!(self.counts.get(&component).copied().unwrap_or(1));
+        }
+        if !placement.path.is_empty() {
+            value["path"] = json!(OccurrencePath(placement.path.clone()).to_string());
+        }
+        if let Some(part) = part_key(doc, uid) {
+            value["part"] = json!(part);
+        }
+    }
+}
+
+/// A body of a placed part (`derived_part`): its definition with the
+/// parameters' values in place of their ids and without the joinery's
+/// partners, and the body's index; none for another body.
+fn part_key<K: Kernel>(doc: &Document<K>, uid: BodyUid) -> Option<String> {
+    let entry = doc.feature(uid.feature)?;
+    let FeatureDef::DerivedPart(def) = &entry.def else {
+        return None;
+    };
+    let params = doc.parameters();
+    let mut valued = def
+        .map_params(&mut |_: &str, id: &ParamId| params.value(*id).ok_or(()))
+        .ok()?;
+    for cut in &mut valued.cuts {
+        cut.with = None;
+        cut.junction = None;
+    }
+    let text = serde_json::to_string(&valued).ok()?;
+    Some(format!("{text}#{}", uid.index))
 }
 
 /// The box of the shape placed by `t`: the shape's own box moved when `t`

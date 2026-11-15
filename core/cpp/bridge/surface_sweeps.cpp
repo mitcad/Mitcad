@@ -113,10 +113,19 @@ std::shared_ptr<geometry::Shape> loft_sheet(rust::Str feature, rust::Slice<const
 
 std::shared_ptr<geometry::Shape> helix_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
                                              rust::Slice<const std::size_t> chains, rust::Slice<const double> axis,
-                                             double pitch, double revolutions, bool left_handed) {
+                                             double pitch, double revolutions, bool left_handed, double growth,
+                                             rust::Slice<const double> ends) {
   need(axis, 6, "the axis");
+  need(ends, 4, "the ends");
+  geometry::HelixSheetOptions options;
+  options.growth = growth;
+  options.start_flat = ends[0];
+  options.start_transition = ends[1];
+  options.end_transition = ends[2];
+  options.end_flat = ends[3];
   return geometry::helix_sheet(std::string(feature), chains_of(curves, chains),
-                               gp_Ax1(point(axis), direction(axis, 3, "the axis")), pitch, revolutions, left_handed);
+                               gp_Ax1(point(axis), direction(axis, 3, "the axis")), pitch, revolutions, left_handed,
+                               options);
 }
 
 } // namespace mitcad::bridge

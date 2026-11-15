@@ -1,0 +1,52 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The glTF files File > Export wrote in tools/ui-scripts/gltf.mitcad-ui (mitcad#1826), read back by MitCad's own reader (the import; no validator), run in the folder they were written to. The nodes in the order of a walk from the root: the design, then each component with its body; placements in mm, Z up, within 1e-6 m; 12 triangles a box."},
+  {"expect":{"query":{"query":"gltf_file","path":"robot.glb"},"tolerance":1e-5,"result":{
+    "triangles":24,"notes":[],
+    "nodes":[
+      {"name":"robot","path":"robot","triangles":0,"world":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Bar","path":"robot/Bar","triangles":0,"world":[[1,0,0,100],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Bar","path":"robot/Bar/Bar","triangles":12,"world":[[1,0,0,100],[0,1,0,0],[0,0,1,0]],
+        "transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Tile","path":"robot/Tile","triangles":0,"world":[[0,-1,0,0],[1,0,0,50],[0,0,1,10]]},
+      {"name":"Tile","path":"robot/Tile/Tile","triangles":12,"world":[[0,-1,0,0],[1,0,0,50],[0,0,1,10]],
+        "transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]}]}}},
+  {"expect":{"query":{"query":"gltf_file","path":"robot.gltf"},"tolerance":1e-5,"result":{
+    "triangles":24,"notes":[],
+    "nodes":[
+      {"name":"robot","path":"robot","triangles":0,"world":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Bar","path":"robot/Bar","triangles":0,"world":[[1,0,0,100],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Bar","path":"robot/Bar/Bar","triangles":12,"world":[[1,0,0,100],[0,1,0,0],[0,0,1,0]],
+        "transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Tile","path":"robot/Tile","triangles":0,"world":[[0,-1,0,0],[1,0,0,50],[0,0,1,10]]},
+      {"name":"Tile","path":"robot/Tile/Tile","triangles":12,"world":[[0,-1,0,0],[1,0,0,50],[0,0,1,10]],
+        "transform":[[1,0,0,0],[0,1,0,0],[0,0,1,0]]}]}}},
+  {"comment":"The colours, sRGB as the design has them; the textured body's white, its image the colour. Both files alike."},
+  {"expect":{"query":{"query":"gltf_file","path":"robot.glb"},"tolerance":1e-4,"result":{
+    "images":1,"nodes":[{},{},
+      {"materials":[{"name":"Signal red","base_color":[0.8,0.1,0.1],"roughness":0.4,"texture":false}]},
+      {},
+      {"materials":[{"name":"Oak board","base_color":[1,1,1],"texture":true}]}]}}},
+  {"expect":{"query":{"query":"gltf_file","path":"robot.gltf"},"tolerance":1e-4,"result":{
+    "images":1,"nodes":[{},{},
+      {"materials":[{"name":"Signal red","base_color":[0.8,0.1,0.1],"roughness":0.4,"texture":false}]},
+      {},
+      {"materials":[{"name":"Oak board","base_color":[1,1,1],"texture":true}]}]}}},
+  {"comment":"The .glb imported (the UI imports both): the components placed as in the design, the mesh bodies where they were, the appearances with the image embedded."},
+  {"cmd":"import_file","path":"robot.glb"},
+  {"expect":{"bodies":2}},
+  {"expect":{"query":{"query":"components"},"tolerance":1e-5,"result":{
+    "components":[{},{"name":"Bar"},{"name":"Tile"}],
+    "occurrences":[{"name":"Bar:1","transform":[[1,0,0,100],[0,1,0,0],[0,0,1,0]]},
+      {"name":"Tile:1","transform":[[0,-1,0,0],[1,0,0,50],[0,0,1,10]]}]}}},
+  {"expect":{"body":"Bar","faces":1,"volume":24000,"tolerance":1e-5}},
+  {"expect":{"occurrence":"Bar:1","body":"Bar","bbox":{"min":[100,0,0],"max":[140,30,20]},"tolerance":1e-5}},
+  {"expect":{"occurrence":"Tile:1","body":"Tile","volume":500,"bbox":{"min":[-10,50,10],"max":[0,60,15]},"tolerance":1e-5}},
+  {"expect":{"query":{"query":"appearances"},"tolerance":1e-4,
+    "some":{"name":"Signal red","base_color":[0.8,0.1,0.1],"library":false}}},
+  {"expect":{"query":{"query":"appearances"},"some":{"name":"Oak board","texture":{"embedded":true},"library":false}}},
+  {"comment":"The textured body's texture coordinates, which the export wrote as the design projects its image, come back with it (mitcad#1862): its appearance lays the image by them."},
+  {"expect":{"query":{"query":"gltf_file","path":"robot.glb"},"result":{
+    "nodes":[{},{},{"texture_coordinates":false},{},{"texture_coordinates":true}]}}},
+  {"expect":{"query":{"query":"appearances"},"some":{"name":"Oak board","texture":{"projection":"uv"},"library":false}}}
+]

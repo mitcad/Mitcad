@@ -615,6 +615,7 @@ fn changed_sketches_find_the_closest_region() {
         follow: Default::default(),
         own: Default::default(),
         retrimmed: None,
+        developed: None,
     };
     // Both pieces share three curves with the old key; the bigger one wins.
     // It carries the old key, so the faces made from it keep their names.

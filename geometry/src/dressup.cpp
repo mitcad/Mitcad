@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <initializer_list>
 #include <map>
@@ -142,6 +143,20 @@ void require_closed(const TopoDS_Shape& input, const TopoDS_Shape& result, const
                              " would leave the body open: the geometry kernel's result is not a closed solid");
   }
 }
+
+// A dressup of a closed solid whose result the geometry kernel left open
+// (mitcad#1819: a band that takes a narrow face away ends on that face's
+// continuation where the face beyond does not reach, and the kernel leaves
+// the gap): a failure like the kernel's own, so that the ways round it are
+// tried (the narrow faces continued, over_narrow_faces); where none builds
+// and a face beside the edges is narrower than the band, the error says so
+// in words instead of this text.
+class OpenResult : public std::runtime_error {
+public:
+  explicit OpenResult(const char* role)
+      : std::runtime_error(std::string("the ") + role +
+                           " would leave the body open: the geometry kernel's result is not a closed solid") {}
+};
 
 // Twice a face's area over the length of its boundary: a strip's width.
 double face_width(const TopoDS_Face& face) {
@@ -3023,10 +3038,19 @@ ShapePtr with_piece_names(const ShapePtr& result, const MergedEdges& merged, con
 // as well (merge_edge_pieces with faces), and last on the input with the
 // strips narrower than the import's tolerance at its vertices collapsed
 // (collapse_strips).
+// A result left open where the input is a closed solid is a failure of
+// its try (OpenResult, mitcad#1819).
 // Throws the first error when none builds.
 template <class Set, class Dressup>
 ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vector<int>& owner, double scale,
                const std::string& feature, const char* role, bool tighten, Dressup&& dressup) {
+  const bool closed_input = closed_solids(input.occt());
+  const auto closed = [&](ShapePtr result) {
+    if (closed_input && result && !closed_solids(result->occt())) {
+      throw OpenResult(role);
+    }
+    return result;
+  };
   std::exception_ptr first;
   try {
     OCC_CATCH_SIGNALS
@@ -3034,7 +3058,7 @@ ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vect
     // surfaces and wider tolerances (input_check.hpp): each try works on a
     // copy of its own.
     const ShapePtr copy = detail::working_copy(input);
-    return dressup(*copy, owner, scale, false);
+    return closed(dressup(*copy, owner, scale, false));
   } catch (const std::invalid_argument&) {
     throw;
   } catch (const Cancelled&) {
@@ -3073,7 +3097,7 @@ ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vect
       try {
         OCC_CATCH_SIGNALS
         const ShapePtr copy = detail::working_copy(input);
-        return dressup(*copy, owner, scale, true);
+        return closed(dressup(*copy, owner, scale, true));
       } catch (const Cancelled&) {
         throw;
       } catch (...) {
@@ -3088,7 +3112,8 @@ ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vect
       const std::optional<MergedEdges> merged = merge_edge_pieces(*copy, sets, owner);
       merges = merged.has_value();
       if (merged) {
-        return with_piece_names(dressup(*merged->body, merged->owner, scale, tight), *merged, feature, role);
+        return closed(
+            with_piece_names(dressup(*merged->body, merged->owner, scale, tight), *merged, feature, role));
       }
     } catch (const Cancelled&) {
       throw;
@@ -3105,7 +3130,7 @@ ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vect
     const ShapePtr copy = detail::working_copy(input);
     const std::optional<MergedEdges> merged = merge_edge_pieces(*copy, sets, owner, true);
     if (merged) {
-      return with_piece_names(dressup(*merged->body, merged->owner, scale, false), *merged, feature, role);
+      return closed(with_piece_names(dressup(*merged->body, merged->owner, scale, false), *merged, feature, role));
     }
   } catch (const Cancelled&) {
     throw;
@@ -3118,7 +3143,7 @@ ShapePtr dress(const Shape& input, const std::vector<Set>& sets, const std::vect
     const ShapePtr copy = detail::working_copy(input);
     const std::optional<MergedEdges> collapsed = collapse_strips(*copy, owner);
     if (collapsed) {
-      return dressup(*collapsed->body, collapsed->owner, scale, false);
+      return closed(dressup(*collapsed->body, collapsed->owner, scale, false));
     }
   } catch (const Cancelled&) {
     throw;
@@ -3273,24 +3298,157 @@ ShapePtr with_input_names(const ShapePtr& result, const Shape& built_on, const S
   return named;
 }
 
-// A chamfer wider than a narrow face beside its edges (mitcad#1232,
-// cutouts.hpp's fill_overflow): `build` bevels the body with the narrow
-// faces continued past their far edges, and the space filled there is cut
-// out again, the walls taken away put back: the chamfer at its full size,
-// cut by the faces beyond, the narrow faces gone where it is wider. Null
-// where no such face is found or the result is not one valid solid (never
-// throws but for cancelling); with `pieces_apart`, where only joining the
-// pieces of a face beyond on its surface makes it invalid, the result with
-// them apart (a chamfer reaching exactly to a far edge, mitcad#1613).
+// Whether a face of `shape` holds a name that starts with `prefix`.
+bool holds_made_face(const Shape& shape, const std::string& prefix) {
+  for (int f = 0; f < shape.face_count(); ++f) {
+    for (const std::string& name : shape.face_names(f)) {
+      if (name.compare(0, prefix.size(), prefix) == 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// The one path of a fillet or chamfer (`role`) wider than a narrow face
+// beside its edges, which it takes away (mitcad#1232, mitcad#1819;
+// cutouts.hpp's fill_overflow): `build` dresses the picked edges at their
+// full size, measured as picked, on the body with the narrow faces
+// continued along their own surfaces past their far edges, and the space
+// filled there is cut out again, the walls taken away put back: the faces
+// beyond grow out (or are cut back) along their own surfaces to meet the
+// dressup's boundary, and the narrow faces are gone where it is wider.
+// `contact` is how far from its edges the dressup touches its faces at
+// most, `depth_ratio` how deep it goes under a narrow face for each unit it
+// runs past its far edge (a chamfer's legs' ratio; 1 for a rounding). The
+// cases of mitcad#1232 (convex edges), mitcad#1260 (concave), mitcad#1238
+// (walls rising past the far edge, corners) and mitcad#1783 (faces ending
+// in a point) are this path's. Null where no such face is found or the
+// result is not one valid solid (never throws but for cancelling); with
+// `pieces_apart`, where only joining the pieces of a face beyond on its
+// surface makes it invalid, the result with them apart (a chamfer reaching
+// exactly to a far edge, mitcad#1613). `freeform`, where given, tells
+// whether a face beside the edges stays a B-spline surface that is no
+// plane, cylinder, cone, sphere or torus, which the path cannot continue
+// past its far edge (mitcad#1849: the failure then says so).
 template <class Build>
-ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const std::vector<ChamferSet>& sets,
-                           const std::vector<int>& owner, Build&& build, std::string* why = nullptr,
-                           bool pieces_apart = false) {
+ShapePtr over_narrow_faces(const std::string& feature, const char* role, const Shape& given,
+                           const std::vector<int>& picked, double contact, double depth_ratio, Build&& build,
+                           std::string* why = nullptr, bool pieces_apart = false,
+                           const detail::OverflowReach* reach = nullptr, bool* freeform = nullptr) {
+  // A face beside the edges that is a B-spline surface exactly a plane,
+  // cylinder, cone, sphere or torus (a body converted to B-splines) as that
+  // surface, which fill_overflow can continue past its far edge; the faces
+  // keep their names, the edges theirs (mitcad#1819). Where OCCT's
+  // confusion tolerance converts no face beside the edges, or leaves one a
+  // B-spline (a sweep's faces, approximated more loosely), the analytic
+  // form within a wider tolerance, up to the 1e-4 a sweep is approximated
+  // to (mitcad#1849).
+  ShapePtr analytic;
+  std::vector<int> analytic_owner;
+  if (freeform != nullptr) {
+    *freeform = false;
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    bool spline = false;
+    const detail::EdgeFaces edge_faces(given);
+    for (int e = 0; e < given.edge_count() && e < static_cast<int>(picked.size()) && !spline; ++e) {
+      if (picked[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      for (const int f : edge_faces.at(e)) {
+        spline = spline || BRepAdaptor_Surface(given.face(f), false).GetType() == GeomAbs_BSplineSurface;
+      }
+    }
+    // Whether every face beside the picked edges of `shape` (found by the
+    // edges' names) is no B-spline surface.
+    const auto beside_analytic = [&](const Shape& shape) {
+      const detail::EdgeFaces faces_of(shape);
+      for (int e = 0; e < given.edge_count() && e < static_cast<int>(picked.size()); ++e) {
+        if (picked[static_cast<std::size_t>(e)] < 0 || given.edge_name(e).empty()) {
+          continue;
+        }
+        const std::vector<int> found = shape.find_edges(given.edge_name(e));
+        if (found.empty()) {
+          return false;
+        }
+        for (const int i : found) {
+          for (const int f : faces_of.at(i)) {
+            const GeomAbs_SurfaceType type = BRepAdaptor_Surface(shape.face(f), false).GetType();
+            if (type == GeomAbs_BSplineSurface || type == GeomAbs_BezierSurface) {
+              return false;
+            }
+          }
+        }
+      }
+      return true;
+    };
+    if (spline) {
+      BRep_Builder builder;
+      TopoDS_Compound none;
+      builder.MakeCompound(none);
+      bool whole = false;
+      for (const double exact : {1e-7, 1e-6, 1e-5, 1e-4}) {
+        throw_if_cancelled();
+        // (The seams of the cylinders, cones, spheres and tori opposite
+        // their faces: fill_overflow's regions are bounded by the surfaces
+        // with their own seams.)
+        const ShapePtr tried = detail::canonical_dressup(Shape(none), given, exact, true);
+        if (tried && beside_analytic(*tried)) {
+          analytic = tried;
+          whole = true;
+          break;
+        }
+        // (Else the first that converts anything, as before mitcad#1849.)
+        if (tried && !analytic) {
+          analytic = tried;
+        }
+      }
+      if (freeform != nullptr) {
+        *freeform = !whole;
+      }
+    }
+    if (analytic) {
+      analytic_owner.assign(static_cast<std::size_t>(analytic->edge_count()), -1);
+      for (int e = 0; e < given.edge_count() && e < static_cast<int>(picked.size()); ++e) {
+        if (picked[static_cast<std::size_t>(e)] < 0 || given.edge_name(e).empty()) {
+          continue;
+        }
+        for (const int i : analytic->find_edges(given.edge_name(e))) {
+          analytic_owner[static_cast<std::size_t>(i)] = picked[static_cast<std::size_t>(e)];
+        }
+      }
+    }
+  } catch (const Standard_Failure&) {
+    analytic = nullptr;
+  }
+  const Shape& input = analytic ? *analytic : given;
+  const std::vector<int>& owner = analytic ? analytic_owner : picked;
   // First with only the space past the far edges filled, the geometry
   // kernel cutting the chamfer by a wall it meets there; then with the
   // walls rising past the far edges taken away and put back.
   // Last, where selected edges meet at a vertex, with each edge's regions
   // on its own (mitcad#1238: an overflowing chamfer meeting others there).
+  // A body converted from B-splines first tries each face's regions within
+  // its own part of the chain, between the planes that part it from the
+  // next faces at the chain's corners, the walls put back whole
+  // (fill_overflow's `sectors`, mitcad#1849: the frames swept round a
+  // closed chain, the step past the narrow face wholly within the regions'
+  // reach); a chain without such a corner (one edge) leaves that try out.
+  struct Mode {
+    bool walls;
+    bool at_corners;
+    bool sectors;
+  };
+  std::vector<Mode> modes;
+  if (analytic) {
+    modes.push_back({false, false, true});
+    modes.push_back({true, false, true});
+  }
+  for (int mode = 0; mode < 4; ++mode) {
+    modes.push_back({(mode & 1) != 0, mode >= 2, false});
+  }
   bool corner = false;
   {
     NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_at;
@@ -3304,17 +3462,19 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
       corner = count >= 2;
     }
   }
+  // (The dressup's own faces: "<feature>:chamfer(…" or "…:fillet(…".)
+  const std::string generated = feature + ":" + role + "(";
   ShapePtr unmerged;
-  for (int mode = 0; mode < 4; ++mode) {
-    const bool walls = (mode & 1) != 0;
-    const bool at_corners = mode >= 2;
+  for (const Mode& mode : modes) {
+    const bool walls = mode.walls;
+    const bool at_corners = mode.at_corners;
     if (at_corners && !corner) {
       continue;
     }
     try {
       const ShapePtr copy = detail::working_copy(input);
       const std::optional<detail::Cutouts> cleared =
-          detail::fill_overflow(*copy, owner, largest_size(sets), steepness(sets), walls, at_corners);
+          detail::fill_overflow(*copy, owner, contact, depth_ratio, walls, at_corners, reach, mode.sectors);
       if (!cleared) {
         continue;
       }
@@ -3323,17 +3483,23 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
       try {
         chamfered = build(*cutouts.body, cutouts.owner);
       } catch (const std::exception& error) {
-        // (Why the chamfer past the narrow faces failed at a corner.)
+        // (Why the dressup past the narrow faces failed at a corner.)
         if (at_corners && why != nullptr) {
           *why = error.what();
         }
         throw;
       }
-      if (!chamfered || !detail::put_walls_back(cutouts, *chamfered, feature + ":chamfer(", *copy)) {
+      if (!chamfered || !detail::put_walls_back(cutouts, *chamfered, generated, *copy)) {
         continue;
       }
       ShapePtr* const apart = pieces_apart ? &unmerged : nullptr;
-      if (ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy, apart)) {
+      // (Closed where the input is: never a gap where a face beyond does
+      // not reach; and with a face of the dressup left: where the faces
+      // beyond, grown out, cover all of it, the band reaches past them too
+      // and is not built, mitcad#1819.)
+      const ShapePtr result = detail::cut_out_again(chamfered, cutouts, *copy, apart);
+      if (result && (!closed_solids(copy->occt()) || closed_solids(result->occt())) &&
+          holds_made_face(*result, generated)) {
         return with_input_names(result, *cutouts.body, *copy);
       }
     } catch (const Cancelled&) {
@@ -3344,6 +3510,366 @@ ShapePtr over_narrow_faces(const std::string& feature, const Shape& input, const
   // (Else the first result valid with the pieces of a face beyond apart,
   // mitcad#1613.)
   return unmerged;
+}
+
+// The kernel's error `kernel` of a dressup wider than a face beside its
+// edge, with `where` (overflow_failure's words): where the kernel's text
+// says what it is in words of its own (a placed error: what a person reads
+// ends before its places), the person reads `where` after the kernel
+// error's opening clause ("fillet failed; ", "chamfer: ", which the import
+// reads) and the kernel's message goes to the detail (mitcad#1819: "no
+// ball of the radius touches both faces" where the rounding is wider than
+// the face); else the kernel's text, then `where`.
+std::string worded_failure(const std::string& kernel, const std::string& where) {
+  if (kernel.find(kPlacedTail) == std::string::npos) {
+    return kernel + "; " + where;
+  }
+  std::string start;
+  for (const char* opening : {"fillet failed; ", "fillet: ", "chamfer failed; ", "chamfer: "}) {
+    if (kernel.compare(0, std::strlen(opening), opening) == 0) {
+      start = opening;
+      break;
+    }
+  }
+  return with_detail(start + where, " (the geometry kernel: " + error_message(kernel).substr(start.size()) + ")");
+}
+
+// A rounding of the selected edges (`owner`) that the geometry kernel
+// failed to build at its exact size, or left open (OpenResult); called
+// while that error is handled. Where a face beside the edges is narrower
+// than the rounding reaches along it (`contact`, overflow_failure), it is
+// built as a chamfer is (over_narrow_faces, mitcad#1819): `build` rounds
+// the picked edges at their full size on the body with the narrow faces
+// continued, and the faces beyond grow out to meet the rounding; a strip
+// of a narrow face narrower than 0.1 % of the rounding left beside it is
+// taken away with it (as after the 0.1 % smaller retry). Where it cannot be
+// built so, the error says in words which face the rounding would take
+// away and that the faces beyond cannot meet it, the kernel's own error
+// before it; where no face is narrower, the kernel's error stands (the
+// 0.1 % smaller retry follows, mitcad#1106).
+template <class Build, class Rings>
+ShapePtr past_narrow_faces(const std::string& feature, const Shape& input, const std::vector<int>& owner,
+                           double contact, Build&& build, Rings&& rings) {
+  std::string where;
+  try {
+    where = detail::overflow_failure(*detail::working_copy(input), owner, contact, "fillet");
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    where.clear();
+  }
+  if (where.empty()) {
+    throw;
+  }
+  // A rounding of whole circles that runs over a neighbouring face is built
+  // as rings first, as before this path (`rings`, as or_rings builds them:
+  // a hole's rim running onto a front edge's rounding, mitcad#1327).
+  ShapePtr ringed;
+  try {
+    ringed = rings(*detail::working_copy(input));
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    ringed = nullptr;
+  }
+  if (ringed) {
+    return ringed;
+  }
+  ShapePtr over;
+  bool freeform = false;
+  try {
+    over = over_narrow_faces(feature, "fillet", input, owner, contact, 1.0, build, nullptr, false, nullptr,
+                             &freeform);
+  } catch (const Cancelled&) {
+    throw;
+  } catch (...) {
+    over = nullptr;
+  }
+  if (over) {
+    if (ShapePtr whole = detail::without_strips(*over, input, contact)) {
+      return whole;
+    }
+    return over;
+  }
+  // (A free-form B-spline face beside the edges, which cannot be continued
+  // past its far edge: the words say so, mitcad#1849.)
+  if (freeform) {
+    try {
+      const std::string worded =
+          detail::overflow_failure(*detail::working_copy(input), owner, contact, "fillet", nullptr,
+                                   detail::kFreeformCause);
+      if (!worded.empty()) {
+        where = worded;
+      }
+    } catch (const Cancelled&) {
+      throw;
+    } catch (...) {
+    }
+  }
+  // (Never that its result is not a closed solid where the rounding takes
+  // a narrow face away.)
+  std::string text = where;
+  try {
+    throw;
+  } catch (const OpenResult&) {
+  } catch (const std::exception& error) {
+    text = worded_failure(error.what(), where);
+  }
+  throw std::runtime_error(text);
+}
+
+// Whether the sets follow their own tangent chains (follow_own_chain), by
+// set.
+template <class Set>
+std::vector<char> chain_follows(const std::vector<Set>& sets) {
+  std::vector<char> follows;
+  for (const Set& set : sets) {
+    follows.push_back(follows_own_chain(set) ? 1 : 0);
+  }
+  return follows;
+}
+
+// The input's face a name of the result is or is a piece of: the name with
+// its pieces' suffixes ("#k") taken off one by one until it is one of the
+// input's names (`names`); empty where none is (a face the dressup made,
+// "<feature>:chamfer(E{…#0})" among them).
+std::string input_face_of(const std::string& name, const std::set<std::string>& names) {
+  std::string base = name;
+  for (;;) {
+    if (names.count(base) != 0) {
+      return base;
+    }
+    const std::size_t hash = base.rfind('#');
+    if (hash == std::string::npos || hash + 1 == base.size() ||
+        !std::all_of(base.begin() + static_cast<std::ptrdiff_t>(hash) + 1, base.end(),
+                     [](char c) { return c >= '0' && c <= '9'; })) {
+      return {};
+    }
+    base.erase(hash);
+  }
+}
+
+// The pieces of a face the dressup takes away that its result still has
+// (mitcad#1821): a chamfer along a chain over a corner's rounding left, at
+// each corner, a triangle of the old end face between the two neighbouring
+// bevels' faces (0.05 mm2 and 0.003 mm2 on a bent nut's opening), too wide
+// for the sliver removal of mitcad#1106 (a strip under 0.1 % of the size)
+// and a piece of a large face rather than a face of its own. Such a piece:
+// a face of the result that is a new piece of one of the input's faces
+// (its name the input face's with a piece's suffix), between faces the
+// dressup made (beside two or more of them, as the triangle between two
+// neighbouring bevels is; a piece beside one only lies where the band ends
+// against other faces, a rounding's end on an earlier rounding or chamfer,
+// which the stored designs' own results keep: removing those cost a
+// defeaturing of the whole body, 2 to 11 s each, and pushed a design's
+// fillets past the import's time, mitcad#1819), smaller than the dressup's
+// reach squared, and wholly within
+// the band (its vertices and its edges' points all nearer the chain's
+// edges, `chain` with the tangent chains the sets follow, than `contact`,
+// how far the dressup reaches along its faces): nothing of the old surface
+// stays there at the dressup's exact size. The pieces are removed by the
+// geometry kernel's defeaturing, the faces round them extended to meet (the
+// bevels' faces closing between them), where those faces are planes,
+// cylinders, cones, spheres or tori and that gives one valid solid of
+// nearly the same volume; else the result keeps them with a warning that
+// says so, the pieces as its places. The result itself where there is no
+// such piece.
+ShapePtr without_remnants(const ShapePtr& result, const Shape& input, std::vector<int> chain,
+                          const std::vector<char>& follows, double contact, const char* role) {
+  if (!result || !(contact > 0.0)) {
+    return result;
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    std::set<std::string> input_names;
+    for (int f = 0; f < input.face_count(); ++f) {
+      for (const std::string& name : input.face_names(f)) {
+        input_names.insert(name);
+      }
+    }
+    const int faces = result->face_count();
+    std::vector<char> made(static_cast<std::size_t>(faces), 0);
+    std::vector<int> candidates;
+    for (int f = 0; f < faces; ++f) {
+      const NameList& names = result->face_names(f);
+      if (names.empty() || input_names.count(names.front()) != 0) {
+        continue;
+      }
+      if (input_face_of(names.front(), input_names).empty()) {
+        made[static_cast<std::size_t>(f)] = 1;
+        continue;
+      }
+      GProp_GProps area;
+      BRepGProp::SurfaceProperties(result->face(f), area);
+      if (area.Mass() < contact * contact) {
+        candidates.push_back(f);
+      }
+    }
+    if (candidates.empty()) {
+      return result;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      detail::follow_tangent_chains(input, chain, follows);
+    } catch (const Standard_Failure&) {
+    }
+    BRep_Builder builder;
+    TopoDS_Compound edges;
+    builder.MakeCompound(edges);
+    bool any_edge = false;
+    for (int e = 0; e < input.edge_count() && e < static_cast<int>(chain.size()); ++e) {
+      if (chain[static_cast<std::size_t>(e)] >= 0) {
+        builder.Add(edges, input.edge(e));
+        any_edge = true;
+      }
+    }
+    if (!any_edge) {
+      return result;
+    }
+    // Only pieces of the faces of the chain's edges, the faces the dressup
+    // cuts: a face it runs onto beside them keeps its pieces (a hole's rim
+    // rounded as a ring over a front edge's rounding, mitcad#1327).
+    std::set<std::string> cut_faces;
+    for (int e = 0; e < input.edge_count() && e < static_cast<int>(chain.size()); ++e) {
+      if (chain[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      for (const int g : input.edge_faces(e)) {
+        if (g >= 0) {
+          for (const std::string& name : input.face_names(g)) {
+            cut_faces.insert(name);
+          }
+        }
+      }
+    }
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                    [&](int f) {
+                                      return cut_faces.count(
+                                                 input_face_of(result->face_names(f).front(), input_names)) == 0;
+                                    }),
+                     candidates.end());
+    if (candidates.empty()) {
+      return result;
+    }
+    const double within = contact * (1.0 - 1.0e-3);
+    const auto near_chain = [&](const gp_Pnt& p) {
+      BRepExtrema_DistShapeShape measured(BRepBuilderAPI_MakeVertex(p).Vertex(), edges);
+      return measured.IsDone() && measured.Value() < within;
+    };
+    const detail::EdgeFaces edge_faces(*result);
+    std::vector<int> remnants;
+    for (const int f : candidates) {
+      std::set<int> made_beside;
+      bool inside = true;
+      for (TopExp_Explorer ex(result->face(f), TopAbs_EDGE); ex.More() && inside; ex.Next()) {
+        const TopoDS_Edge& edge = TopoDS::Edge(ex.Current());
+        const int e = result->edge_index(edge);
+        if (e >= 0) {
+          for (const int g : edge_faces.at(e)) {
+            if (g != f && made[static_cast<std::size_t>(g)] != 0) {
+              made_beside.insert(g);
+            }
+          }
+        }
+        if (BRep_Tool::Degenerated(edge)) {
+          continue;
+        }
+        const BRepAdaptor_Curve curve(edge);
+        for (int k = 0; k <= 4 && inside; ++k) {
+          inside = near_chain(curve.Value(curve.FirstParameter() +
+                                          (curve.LastParameter() - curve.FirstParameter()) * k / 4.0));
+        }
+      }
+      if (made_beside.size() >= 2 && inside) {
+        remnants.push_back(f);
+      }
+    }
+    if (remnants.empty()) {
+      return result;
+    }
+    NCollection_List<TopoDS_Shape> pieces;
+    for (const int f : remnants) {
+      pieces.Append(result->face(f));
+    }
+    // The defeaturing extends the faces round the pieces to meet: tried only
+    // where they are all planes, cylinders, cones, spheres or tori (a
+    // chamfer's bevels and the faces it cuts, mitcad#1821's case). Beside a
+    // blend's B-spline faces it ran for minutes and failed (the owner's nut
+    // design: two roundings of 5 with 3 and 6 pieces, 155.6 s and 84.0 s,
+    // both left with their pieces, mitcad#1819): the pieces then stay, with
+    // the warning below. This removes none of those pieces: removing pieces
+    // between blend faces is still open.
+    bool analytic = true;
+    for (const int f : remnants) {
+      for (TopExp_Explorer ex(result->face(f), TopAbs_EDGE); ex.More() && analytic; ex.Next()) {
+        const int e = result->edge_index(TopoDS::Edge(ex.Current()));
+        if (e < 0) {
+          continue;
+        }
+        for (const int g : edge_faces.at(e)) {
+          if (g == f || std::find(remnants.begin(), remnants.end(), g) != remnants.end()) {
+            continue;
+          }
+          switch (BRepAdaptor_Surface(result->face(g), false).GetType()) {
+          case GeomAbs_Plane:
+          case GeomAbs_Cylinder:
+          case GeomAbs_Cone:
+          case GeomAbs_Sphere:
+          case GeomAbs_Torus:
+            break;
+          default:
+            analytic = false;
+          }
+        }
+      }
+    }
+    BRepAlgoAPI_Defeaturing defeaturing;
+    defeaturing.SetShape(result->occt());
+    defeaturing.AddFacesToRemove(pieces);
+    defeaturing.SetRunParallel(false);
+    defeaturing.SetToFillHistory(true);
+    bool removed = false;
+    try {
+      OCC_CATCH_SIGNALS
+      if (analytic) {
+        detail::build(defeaturing);
+        removed = defeaturing.IsDone() && !defeaturing.HasWarnings();
+      }
+    } catch (const Standard_Failure&) {
+      removed = false;
+    }
+    if (removed) {
+      const TopoDS_Shape whole = defeaturing.Shape();
+      int solids = 0;
+      for (TopExp_Explorer ex(whole, TopAbs_SOLID); ex.More(); ex.Next()) {
+        ++solids;
+      }
+      const double before = detail::volume_of(result->occt());
+      if (solids == 1 && closed_solids(whole) && BRepCheck_Analyzer(whole, true, true).IsValid() &&
+          std::abs(detail::volume_of(whole) - before) <= 1.0e-4 * std::abs(before)) {
+        detail::FaceNamer namer(whole);
+        namer.carry(*defeaturing.History(), *result);
+        namer.finish();
+        ShapePtr out = namer.shape();
+        out->copy_notes(*result);
+        return out;
+      }
+    }
+    // (Kept, with a warning: never silently, mitcad#1821.)
+    std::vector<Shape::NotePlace> places;
+    for (const int f : remnants) {
+      places.push_back(Shape::NotePlace::of(Shape::NotePlace::Kind::Face, result->face_names(f).front()));
+    }
+    const std::size_t count = remnants.size();
+    result->add_note(std::string("the ") + role + " leaves " +
+                         (count == 1 ? std::string("a small piece") : std::to_string(count) + " small pieces") +
+                         " of a face it takes away, which could not be removed: check the result",
+                     std::move(places));
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_Failure&) {
+  }
+  return result;
 }
 
 // The body with the pieces of one surface joined (detail::join_surface_pieces)
@@ -3462,9 +3988,24 @@ double largest_contact(const Shape& input, const std::vector<FilletSet>& sets, c
     try {
       OCC_CATCH_SIGNALS
       double largest_angle = 0.0;
+      bool measured = false;
       for (const double t : {0.0, 0.5, 1.0}) {
-        largest_angle = std::max(
-            largest_angle, detail::normal_angle(input.edge(e), input.face(faces[0]), input.face(faces[1]), t));
+        // A face whose normal is undefined at an end of the edge (a
+        // subdivision surface's patch at a corner where other than four
+        // patches meet, its derivatives parallel there) is measured a
+        // little inside the edge, where the normal tends to its limit.
+        for (const double at : {t, t + (0.5 - t) * 1.0e-3}) {
+          try {
+            largest_angle = std::max(
+                largest_angle, detail::normal_angle(input.edge(e), input.face(faces[0]), input.face(faces[1]), at));
+            measured = true;
+            break;
+          } catch (const std::runtime_error&) {
+          }
+        }
+      }
+      if (!measured) {
+        continue;
       }
       // Faces folding back on each other: no finite contact.
       if (!(largest_angle < 2.0 * kHalfPi - 1.0e-3)) {
@@ -3699,8 +4240,8 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
         return or_rings("fillet", target, [&] {
           const auto contact = [&] { return largest_contact(target, sets, own_edges); };
           return with_shrink_retry("fillet", target, contact, [&](double scale) {
-            const auto rounded = [&] {
-              return dress(target, sets, own_edges, scale, feature, "fillet", true,
+            const auto rounded_on = [&](const Shape& on, const std::vector<int>& edges) {
+              return dress(on, sets, edges, scale, feature, "fillet", true,
                            [&](const Shape& body, const std::vector<int>& own, double size_scale, bool tight) {
                              if (any_blended) {
                                return round_and_blend(feature, body, sets, own, blended, rolling_ball_corners,
@@ -3709,11 +4250,26 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
                              return round_edges(feature, body, sets, own, rolling_ball_corners, size_scale, tight);
                            });
             };
+            const auto rounded = [&] { return rounded_on(target, own_edges); };
             // At the exact size, before the 0.1 % smaller retry; not for
             // setback corners.
-            return scale == 1.0 && !any_blended && rolling_ball_corners
-                       ? or_mitred(feature, target, sets, own_edges, rounded)
-                       : rounded();
+            const auto at_size = [&] {
+              return scale == 1.0 && !any_blended && rolling_ball_corners
+                         ? or_mitred(feature, target, sets, own_edges, rounded)
+                         : rounded();
+            };
+            if (scale != 1.0) {
+              return at_size();
+            }
+            try {
+              return at_size();
+            } catch (const std::invalid_argument&) {
+              throw;
+            } catch (const Cancelled&) {
+              throw;
+            } catch (...) {
+              return past_narrow_faces(feature, target, own_edges, contact(), rounded_on, rings);
+            }
           });
         }, rings);
       };
@@ -3756,8 +4312,10 @@ ShapePtr fillet(const std::string& feature, const Shape& given, const std::vecto
   // A result whose made faces reach to the wrong side of the body (a folded
   // or spiked corner) gets a warning, never a refusal (mitcad#1253).
   const auto warned = [&](const ShapePtr& rounded) {
-    // (Faces of one surface joined, mitcad#1261.)
-    const ShapePtr built = detail::join_same_surfaces(rounded);
+    // (Faces of one surface joined, mitcad#1261; pieces of a face it takes
+    // away removed, mitcad#1821.)
+    const ShapePtr built = without_remnants(detail::join_same_surfaces(rounded), input, owner, chain_follows(sets),
+                                            largest_contact(input, sets, owner), "fillet");
     if (built) {
       if (const auto side = detail::dressup_side(input, owner)) {
         detail::DressupFinding warning =
@@ -3924,7 +4482,10 @@ ShapePtr chamfer(const std::string& feature, const Shape& input, const std::vect
                  ChamferCorner corner) {
   try {
     // (Faces of one surface joined, mitcad#1261.)
-    const ShapePtr result = detail::join_same_surfaces(detail::chamfer_unexplained(feature, input, sets, corner));
+    // (Pieces of a face it takes away removed, mitcad#1821.)
+    const ShapePtr result =
+        without_remnants(detail::join_same_surfaces(detail::chamfer_unexplained(feature, input, sets, corner)),
+                         input, select_edges(input, sets), chain_follows(sets), largest_size(sets), "chamfer");
     // A result whose made faces reach to the wrong side of the body gets a
     // warning, never a refusal (mitcad#1253).
     if (const auto side = detail::dressup_side(input, select_edges(input, sets))) {
@@ -4007,10 +4568,29 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
                          return bevel(feature, body, sets, own, corner, size_scale);
                        });
         };
+        // How far the chamfer reaches along each face of an edge: its leg
+        // on that face, not the longer of its two (mitcad#1819: a face
+        // narrower than a distance-and-angle chamfer's leg on the other face
+        // only is no narrow face, and its chamfer takes no path past it).
+        const detail::OverflowReach leg = [&](const Shape& body, int s, int e, int f) {
+          if (s < 0 || s >= static_cast<int>(sets.size())) {
+            return 0.0;
+          }
+          const ChamferSpec& spec = sets[static_cast<std::size_t>(s)].spec;
+          if (spec.type == ChamferType::EqualDistance) {
+            return spec.distance;
+          }
+          const bool measured = measured_face(body, e, spec.reference_face, spec.flip) == f;
+          if (spec.type == ChamferType::TwoDistances) {
+            return measured ? spec.distance : spec.distance2;
+          }
+          return measured ? spec.distance : spec.distance * std::tan(spec.angle);
+        };
         // Where the chamfer is wider than a face beside its edges, never
         // smaller than asked (mitcad#1232): no 0.1 % smaller retry.
         const auto overflows = [&] {
-          return detail::overflow_failure(*detail::working_copy(input), selected, largest_size(sets));
+          return detail::overflow_failure(*detail::working_copy(input), selected, largest_size(sets), "chamfer",
+                                          &leg);
         };
         if (scale != 1.0) {
           if (!overflows().empty()) {
@@ -4053,7 +4633,10 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
             });
           }
           std::string why;
-          if (ShapePtr over = over_narrow_faces(feature, input, sets, selected, bevelled, &why, !tangent.empty())) {
+          bool freeform = false;
+          if (ShapePtr over = over_narrow_faces(feature, "chamfer", input, selected, largest_size(sets),
+                                                steepness(sets), bevelled, &why, !tangent.empty(), &leg,
+                                                &freeform)) {
             if (tangent.empty() || sound_at_tangent(feature, input, *over, selected, largest_size(sets))) {
               // A strip of a narrow face narrower than 0.1 % of the chamfer
               // left beside it, where the chamfer is that little narrower
@@ -4071,7 +4654,13 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
           // Else the error says where, and at a corner why the chamfer past
           // the narrow face failed there and which corner types build it
           // (mitcad#1238).
-          const std::string where = overflows();
+          // (Where a face beside the edges is a free-form B-spline surface,
+          // the words say that it cannot be continued past its far edge,
+          // mitcad#1849.)
+          const std::string where =
+              freeform ? detail::overflow_failure(*detail::working_copy(input), selected, largest_size(sets),
+                                                  "chamfer", &leg, detail::kFreeformCause)
+                       : overflows();
           if (where.empty()) {
             throw;
           }
@@ -4106,10 +4695,15 @@ ShapePtr chamfer_unexplained(const std::string& feature, const Shape& input, con
           }
           try {
             throw;
+          } catch (const OpenResult&) {
+            // The kernel left a gap where the chamfer takes the narrow face
+            // away: the words say which face and why it cannot, never that
+            // the result is not a closed solid (mitcad#1819).
+            throw std::runtime_error(where + at_corner);
           } catch (const std::exception& error) {
             // (OCCT's failures, std::exceptions too, as "chamfer: …".)
             const bool kernel = dynamic_cast<const Standard_Failure*>(&error) != nullptr;
-            throw std::runtime_error((kernel ? "chamfer: " : "") + std::string(error.what()) + "; " + where +
+            throw std::runtime_error(worded_failure((kernel ? "chamfer: " : "") + std::string(error.what()), where) +
                                      at_corner);
           }
         }

@@ -29,7 +29,7 @@ struct CenterOfMassShown {
   std::optional<std::array<double, 3>> point;
   double mass = 0.0;    // kg
   int bodies = 0;       // counted, one per placement
-  int defaultMaterial = 0; // of them without a material, counted as steel
+  int withoutMaterial = 0; // placements of bodies without a material, left out (mitcad#1817)
   QString error;
 };
 

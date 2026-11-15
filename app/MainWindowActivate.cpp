@@ -107,6 +107,11 @@ void MainWindow::pickComing(const CommandDef& def, const InputDef& input, const 
   if (!m_session) {
     return;
   }
+  // Joint and the other assembly commands go into the component that
+  // holds their picks (mitcad#1856).
+  if (holderPickComing(def, input, item)) {
+    return;
+  }
   // A feature that changes the picked body goes only into the body's own
   // component (mitcad#1634): activated without a question.
   if (activatingInputs(def.id).contains(input.id)) {

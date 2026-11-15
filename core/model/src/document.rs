@@ -69,7 +69,7 @@ mod policy;
 pub use policy::{PolicyItem, PolicyReport};
 // Moving an occurrence to another parent (mitcad#219).
 mod reparent;
-pub use reparent::{Carried, ReparentPlan};
+pub use reparent::{Carried, MovedOccurrence, ReparentPlan};
 // Body edges and vertices in a sketch's plane (mitcad#256).
 mod plane_geometry;
 pub use plane_geometry::PlaneShape;
@@ -802,6 +802,13 @@ impl DocState {
         let mut used = used_params(&self.features);
         // Those that bindings use stay too (mitcad#800).
         used.extend(self.binding_param_ids());
+        // And those CAM's values use (mitcad#1830).
+        used.extend(
+            self.cam
+                .parameter_names()
+                .iter()
+                .filter_map(|name| self.parameters.find(name)),
+        );
         let exists = self.position(owner).is_some();
         self.parameters
             .release(owner, exists, &|id| used.contains(&id));
@@ -1104,8 +1111,11 @@ impl DocState {
             .filter(|f| f.def.params().contains(&id))
             .map(|f| f.name.clone())
             .collect();
-        // The bindings that use it (mitcad#800).
-        users.extend(self.binding_users(&self.parameters.name(id)));
+        // The bindings that use it (mitcad#800), and CAM's setups and
+        // operations (mitcad#1830).
+        let name = self.parameters.name(id);
+        users.extend(self.binding_users(&name));
+        users.extend(self.cam.parameter_users(&name));
         users
     }
 
@@ -2762,6 +2772,17 @@ impl<K: Kernel> Document<K> {
     ) -> Result<T, ModelError> {
         let mut next = self.state.clone();
         let (label, value, mut recompute) = edit(&mut next)?;
+        // Print-bridged holes take their layers from the design's layer
+        // height (mitcad#1516): every edit that changes it (a property set
+        // or removed, the chosen process profile edited, deleted or
+        // imported, mitcad#1831) evaluates them again; the cache keeps the
+        // rest.
+        if !recompute
+            && next.design_layer_height() != self.state.design_layer_height()
+            && next.has_print_bridging()
+        {
+            recompute = true;
+        }
         // Every placement the edit stores is a rotation and a translation
         // (mitcad#1664): one a little off (solver rounding) is straightened,
         // one far off refuses the edit, so no design is kept or saved that
@@ -2775,13 +2796,15 @@ impl<K: Kernel> Document<K> {
         next.prune_library_sources(&self.state);
         // Configurations follow renames, also those a value slot's
         // `name = expression` made (mitcad#231), and so do the comments
-        // pinned to a parameter (mitcad#1305).
+        // pinned to a parameter (mitcad#1305) and CAM's values
+        // (mitcad#1830).
         if next.parameters != self.state.parameters {
             let renames = renamed_parameters(&self.state.parameters, &next.parameters);
             for (old, new) in &renames {
                 next.configurations
                     .rename_parameter(old, new)
                     .map_err(invalid)?;
+                next.cam.rename_parameter(old, new);
             }
             next.rename_in_comments(&renames);
         }
@@ -3045,6 +3068,11 @@ impl<K: Kernel> Document<K> {
     /// Deletes a feature and the parameters it owned. Features that use it
     /// make the command fail, unless `with_dependents` deletes them too.
     /// Returns the deleted features in timeline order.
+    ///
+    /// A joint that goes as a dependent (one on a face, an edge or a frame
+    /// of what goes) leaves what it placed where it is (mitcad#1820), as
+    /// `build_remove` and `delete_occurrence` do (mitcad#1811); a joint
+    /// deleted itself lets its parts go back where they were placed.
     pub fn delete_feature(
         &mut self,
         uid: FeatureUid,
@@ -3053,6 +3081,19 @@ impl<K: Kernel> Document<K> {
         if let Some(entry) = self.state.entry(uid) {
             self.state.editable(entry.component)?;
         }
+        // The sides of every other joint, and where they are now.
+        let sides: BTreeMap<FeatureUid, Vec<OccurrenceUid>> = if with_dependents {
+            self.state
+                .features
+                .iter()
+                .filter(|f| f.uid != uid)
+                .map(|f| (f.uid, components::joint_sides(&f.def)))
+                .filter(|(_, s)| !s.is_empty())
+                .collect()
+        } else {
+            BTreeMap::new()
+        };
+        let held = self.held_placements(sides.values().flatten().copied());
         self.apply(|state| {
             let position = state.require(uid)?;
             let name = state.features[position].name.clone();
@@ -3065,6 +3106,10 @@ impl<K: Kernel> Document<K> {
             }
             let removed: BTreeSet<FeatureUid> = dependents.iter().copied().chain([uid]).collect();
             let order = state.remove_features(&removed);
+            // What the joints that went with it placed stays where it is
+            // (mitcad#1820).
+            let freed = order.iter().filter_map(|f| sides.get(f)).flatten().copied();
+            state.hold_placements(freed, &held);
             // What the deleted features made is no longer left alone
             // (mitcad#1236).
             state.drop_gone_exclusions();
@@ -3155,6 +3200,7 @@ impl<K: Kernel> Document<K> {
 
     pub fn rename_body(&mut self, uid: BodyUid, name: &str) -> Result<(), ModelError> {
         let names = display_names(&self.state, &self.result);
+        let owners = self.result.owners.clone();
         self.apply(|state| {
             if state.position(uid.feature).is_none() {
                 return Err(invalid(format!("body {uid} does not exist")));
@@ -3162,7 +3208,14 @@ impl<K: Kernel> Document<K> {
             if name.trim().is_empty() {
                 return Err(invalid("the body name is empty"));
             }
-            if names.iter().any(|(other, n)| n == name && *other != uid) {
+            // Unique within its component (mitcad#1802: the bodies of
+            // different components may share a name, as an imported
+            // design's do).
+            let component = owners.get(&uid);
+            if names
+                .iter()
+                .any(|(other, n)| n == name && *other != uid && owners.get(other) == component)
+            {
                 return Err(invalid(format!("a body is already named {name}")));
             }
             state.body_names.insert(uid, name.to_owned());
@@ -4211,8 +4264,25 @@ impl<K: Kernel> Document<K> {
                     })
                 };
                 let from = link.source_component(assembly);
-                let to_sketch = link.transform(assembly, component, &mut placement);
-                (from.map_err(error)?, Some(to_sketch.map_err(error)?))
+                let to_sketch = link
+                    .transform(assembly, component, &mut placement)
+                    .map_err(error)?;
+                // Inside flexible occurrences where they have it, as the
+                // sketch's recompute sees it (mitcad#1805).
+                let flexed = &self.result.joints.flexed;
+                let to_sketch = link
+                    .target_path(assembly, component)
+                    .ok()
+                    .and_then(|target| {
+                        crate::links::flexed_transform(
+                            &link.source.0,
+                            &target,
+                            &mut placement,
+                            &mut |prefix, o| crate::joints::flexed_step(flexed, prefix, o),
+                        )
+                    })
+                    .unwrap_or(to_sketch);
+                (from.map_err(error)?, Some(to_sketch))
             }
             None => (component, None),
         };
@@ -4661,10 +4731,31 @@ impl<K: Kernel> Document<K> {
         def: &FeatureDef<ValueInput>,
         name: Option<&str>,
     ) -> Result<PreviewReport, ModelError> {
+        self.preview_add_to(def, name, None)
+    }
+
+    /// Evaluates a feature added to a component (the active one when None)
+    /// without committing it, as [`Document::add_feature_to`] would add it
+    /// (mitcad#1856: a joint made in the component that holds its picks,
+    /// the active one staying active).
+    pub fn preview_add_to(
+        &mut self,
+        def: &FeatureDef<ValueInput>,
+        name: Option<&str>,
+        component: Option<ComponentUid>,
+    ) -> Result<PreviewReport, ModelError> {
+        // A component named is checked as add_feature_to checks it.
+        let component = match component {
+            Some(component) => {
+                self.state.editable(component)?;
+                component
+            }
+            None => self.state.assembly.active,
+        };
         self.check_profiles(def)?;
-        let beside = self.component_parent_beside(self.state.assembly.active);
+        let beside = self.component_parent_beside(component);
         let mut state = self.state.clone();
-        let added = state.add_feature(def, name)?;
+        let added = state.add_feature_in(def, name, component)?;
         state.place_made_beside(added.uid, None, beside);
         self.preview_state(state, added.uid)
     }
@@ -4674,6 +4765,23 @@ impl<K: Kernel> Document<K> {
         &mut self,
         uid: FeatureUid,
         def: &FeatureDef<ValueInput>,
+    ) -> Result<PreviewReport, ModelError> {
+        self.preview_edit_through(uid, def, None)
+    }
+
+    /// As [`Self::preview_edit`], for an editor that rolled the marker back
+    /// from `through` (mitcad#1860): the features right after the edited
+    /// one that only place occurrences (joints, as-built joints, rigid
+    /// groups, constraint sets, motion links, moves and captured positions
+    /// of occurrences), up to `through`, are computed too, so that an
+    /// assembly's later joints and rigid groups hold in the preview as in
+    /// the design. The first other feature and those after it stay rolled
+    /// back.
+    pub fn preview_edit_through(
+        &mut self,
+        uid: FeatureUid,
+        def: &FeatureDef<ValueInput>,
+        through: Option<usize>,
     ) -> Result<PreviewReport, ModelError> {
         self.check_profiles(def)?;
         let (made, beside) = self.made_and_beside(uid);
@@ -4686,6 +4794,12 @@ impl<K: Kernel> Document<K> {
         // (mitcad#309).
         if let Some(position) = state.features.iter().position(|f| f.uid == uid) {
             state.marker = state.marker.max(position + 1);
+            if let Some(through) = through {
+                let end = through.min(state.features.len());
+                while state.marker < end && places_only(&state.features[state.marker]) {
+                    state.marker += 1;
+                }
+            }
         }
         // The own parameters OK will keep as user parameters (mitcad#1536),
         // for the panel to say; the preview's state is a copy, so nothing
@@ -4735,7 +4849,7 @@ impl<K: Kernel> Document<K> {
             });
         let current = &self.result.bodies;
         let assembly = state.assembly.at_placements(&result.placements);
-        let mut preview_instances = assembly.instances(
+        let mut preview_instances = assembly.instances_flexed(
             &|o| {
                 result
                     .placements
@@ -4743,6 +4857,7 @@ impl<K: Kernel> Document<K> {
                     .copied()
                     .unwrap_or(crate::transform::Transform::IDENTITY)
             },
+            &result.joints.flexed,
             &|c| {
                 result
                     .owners
@@ -4875,22 +4990,25 @@ impl<K: Kernel> Document<K> {
         state: &DocState,
         result: &Recomputed<K::Shape>,
     ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
-        self.moved_placements(state, &result.placements)
+        self.moved_placements(state, &result.placements, &result.joints.flexed)
     }
 
     /// As [`Self::moved_occurrences`], for the occurrences' placements in
-    /// their parents (`placements`, else their own) without a recompute
-    /// (Animate Joint's frames, mitcad#1701).
-    fn moved_placements(
+    /// their parents (`placements`, else their own; inside flexible
+    /// occurrences `flexed`, mitcad#1793) without a recompute (Animate
+    /// Joint's frames, mitcad#1701; drags).
+    pub(crate) fn moved_placements(
         &self,
         state: &DocState,
         placements: &BTreeMap<OccurrenceUid, crate::transform::Transform>,
+        flexed: &crate::joints::Flexed,
     ) -> Vec<(Vec<OccurrenceUid>, crate::transform::Transform)> {
         use crate::transform::Transform;
         struct Walk<'a, K: Kernel> {
             doc: &'a Document<K>,
             state: &'a DocState,
             placements: &'a BTreeMap<OccurrenceUid, Transform>,
+            flexed: &'a crate::joints::Flexed,
             path: Vec<OccurrenceUid>,
             out: Vec<(Vec<OccurrenceUid>, Transform)>,
         }
@@ -4906,12 +5024,19 @@ impl<K: Kernel> Document<K> {
                     if o.pattern.is_some() && !self.placements.contains_key(&o.uid) {
                         continue;
                     }
-                    let placed = self.placements.get(&o.uid).copied().unwrap_or(o.transform);
+                    let placed = crate::joints::flexed_step(self.flexed, &self.path, o.uid)
+                        .or_else(|| self.placements.get(&o.uid).copied())
+                        .unwrap_or(o.transform);
                     let world = now.after(&placed);
                     let old = before.and_then(|b| {
                         let current = self.doc.state.assembly.occurrence(o.uid)?;
                         (current.parent == parent).then(|| {
-                            b.after(&self.doc.placement(o.uid).unwrap_or(current.transform))
+                            b.after(
+                                &self
+                                    .doc
+                                    .placement_after(&self.path, o.uid)
+                                    .unwrap_or(current.transform),
+                            )
                         })
                     });
                     self.path.push(o.uid);
@@ -4927,6 +5052,7 @@ impl<K: Kernel> Document<K> {
             doc: self,
             state,
             placements,
+            flexed,
             path: Vec::new(),
             out: Vec::new(),
         };
@@ -4974,6 +5100,19 @@ impl<K: Kernel> Document<K> {
         let preview = self.preview.as_ref()?;
         preview.state.entry(preview.uid)
     }
+}
+
+/// Whether a feature only places occurrences, so that an edit's preview
+/// computes it after the edited feature (mitcad#1860): a suppressed one, or
+/// a joint, an as-built joint, a rigid group, a constraint set, a motion
+/// link, a move or a captured position of occurrences.
+fn places_only(entry: &FeatureEntry) -> bool {
+    entry.suppressed
+        || crate::joints::applies(&entry.def)
+        || matches!(
+            entry.def,
+            FeatureDef::MoveOccurrence(_) | FeatureDef::CapturePosition(_)
+        )
 }
 
 /// Whether two placements are the same within rounding.
@@ -5123,10 +5262,23 @@ mod cam;
 // followed, and the file copied into the project to link (mitcad#1719).
 mod link_copies;
 pub use link_copies::{LINK_COPY_FOLDER, LinkCheck, LinkCopy, check_link, copy_link_into_project};
+// Forms: a Form's cage read and edited in one step, and the outline of a
+// face it starts from (mitcad#1757).
+mod forms;
+// The control cage kept with an imported Form body opened as a Form's cage
+// (mitcad#1757).
+mod kept_cages;
+// Flexible subassemblies: an occurrence whose component's joints move in
+// its parent's solve (mitcad#1793).
+mod flexible;
 // The design and the files it refers to packed into a zip for a report
 // (mitcad#1795).
 mod design_package;
 pub use design_package::{DesignPackage, PackageExtra, UNSAVED_DESIGN_NAME};
+// Convert to Features: a placed library part replaced by its source's
+// features, every reference to it rewritten (mitcad#1815).
+mod convert_derived;
+pub use convert_derived::{CONVERT_LABEL, ConvertedPart};
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

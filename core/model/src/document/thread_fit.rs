@@ -458,7 +458,7 @@ pub fn plan_fit(
                 let number = plain(params, param.unit(), value);
                 replace_references(&text, &expr, param.name(), &format!("({number})"))
             };
-            if value_of(params, &new, unit).is_none_or(|v| (v - target).abs() > 1e-6) {
+            if value_of(params, &new, unit).is_none_or(|v| (v - target).abs() > CLOSE) {
                 return Err(NoFit::Refused(
                     "the dimension's own value does not give the diameter".to_owned(),
                 ));

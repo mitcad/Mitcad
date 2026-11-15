@@ -234,6 +234,15 @@ impl SketchCurves {
         {
             return super::spatial_path::check_curves(def, &self.curves, &entry.name);
         }
+        // A sketch on a curved face's curves lie on the face (mitcad#1768).
+        if let Ok((entry, def)) = ctx.sketch(self.sketch)
+            && def.plane.is_developed()
+        {
+            return Err(format!(
+                "{} lies on a curved face: its curves lie in no plane",
+                entry.name
+            ));
+        }
         self.check(ctx)
     }
 
@@ -251,6 +260,12 @@ impl SketchCurves {
         ) {
             return super::spatial_path::curve_set(ctx, self.sketch, &self.curves, self.chain);
         }
+        // A sketch on a curved face's: its curves on the face (mitcad#1768).
+        let output = ctx.sketch(self.sketch)?;
+        if output.developed.is_some() {
+            let frame = output.frame;
+            return Ok((frame, self.curves_on(ctx, &frame)?));
+        }
         self.in_plane(ctx)
     }
 
@@ -263,7 +278,15 @@ impl SketchCurves {
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<(SketchFrame, Vec<PathCurve>), String> {
-        let frame = ctx.sketch(self.sketch)?.frame;
+        let output = ctx.sketch(self.sketch)?;
+        // A sketch on a curved face's curves lie in no plane (mitcad#1768).
+        if output.developed.is_some() {
+            return Err(format!(
+                "{} lies on a curved face: its curves lie in no plane",
+                ctx.feature_name(self.sketch)
+            ));
+        }
+        let frame = output.frame;
         Ok((frame, self.curves_on(ctx, &frame)?))
     }
 
@@ -285,16 +308,25 @@ impl SketchCurves {
         } else {
             BTreeSet::new()
         };
-        self.pieces_of(&output.solved, frame, &construction, &name)
+        self.pieces_of(
+            &output.solved,
+            frame,
+            output.developed.as_deref(),
+            &construction,
+            &name,
+        )
     }
 
     /// The pieces of [`Self::curves_on`] from a solved sketch: the listed
     /// curves first in their order, then those `chain` adds, `construction`
     /// left out; `name` is the sketch's, for messages.
+    /// A sketch on a curved face's curves (`developed`) lie on the face
+    /// (mitcad#1768).
     fn pieces_of(
         &self,
         solved: &crate::sketch::solve::Solved,
         frame: &SketchFrame,
+        developed: Option<&crate::developed::Development>,
         construction: &BTreeSet<EntityUid>,
         name: &str,
     ) -> Result<Vec<PathCurve>, String> {
@@ -342,7 +374,10 @@ impl SketchCurves {
             .iter()
             .map(|id| PathCurve {
                 name: id.curve_name(),
-                curve: curve3(frame, &solved.curves[id]),
+                curve: match developed {
+                    Some(development) => super::developed::curve3(development, &solved.curves[id]),
+                    None => curve3(frame, &solved.curves[id]),
+                },
             })
             .collect();
         Ok(pieces)
@@ -350,7 +385,7 @@ impl SketchCurves {
 }
 
 /// The construction curves of a sketch, which chained selection skips.
-fn construction_curves<K: Kernel>(
+pub(crate) fn construction_curves<K: Kernel>(
     ctx: &EvalContext<'_, K>,
     sketch: FeatureUid,
 ) -> BTreeSet<EntityUid> {
@@ -590,7 +625,7 @@ fn rewritten(
         .map(|e| e.id)
         .collect();
     let name = curves.sketch.to_string();
-    let pieces = curves.pieces_of(solved, &output.frame, &construction, &name)?;
+    let pieces = curves.pieces_of(solved, &output.frame, None, &construction, &name)?;
     let path = chain(pieces)?;
     let first = curves.curves[0];
     let along = path

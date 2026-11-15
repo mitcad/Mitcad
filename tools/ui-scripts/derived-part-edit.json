@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the derived part edit UI test (mitcad#1812, tools/ui-derived-part-edit-test.sh): the profile of the test's library (LIBRARY_URL, replaced by the test) placed by BUILD on the origin, 500 mm long in its default row Small (20 x 20 x 500 = 200000 mm3), its derived part DerivedComponent1; and a component Block with a 10 mm cube and its bounding solid BoundingSolid1 (a feature type without an edit panel), 1000 mm3 each."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-rows-test"},
+   "at": {"point": [0, 0, 0]}, "length": 500},
+  {"cmd": "create_component", "name": "Block", "transform": {"translation": [100, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "bounding_solid", "margin": 0}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"expect": {"bodies": 3}}
+]

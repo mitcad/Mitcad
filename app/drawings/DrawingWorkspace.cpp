@@ -153,6 +153,59 @@ private:
   int m_width = 0;
 };
 
+// A press on a text field of the panel gives it the keyboard (mitcad#1841),
+// as the system's click does: also where the press does not come from the
+// system (Qt gives a click's focus only for those; the UI tests' driver
+// sends its own presses), so that what is typed next goes into the field
+// and never to the drawing's or the window's single-key shortcuts (Shift+E
+// and the command search's S took a title block field's text on Windows).
+// fillPanel builds the fields again on every selection: they are watched
+// as they come into the panel.
+class PanelFieldFocus : public QObject {
+public:
+  explicit PanelFieldFocus(QWidget* panel) : QObject(panel), m_panel(panel) {
+    panel->installEventFilter(this);
+    watchFields();
+  }
+
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == m_panel) {
+      if (event->type() == QEvent::ChildAdded || event->type() == QEvent::LayoutRequest) {
+        watchFields();
+      }
+      return false;
+    }
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
+      auto* field = qobject_cast<QLineEdit*>(watched);
+      if (field != nullptr && field->isEnabled() && !field->hasFocus() &&
+          (field->focusPolicy() & Qt::ClickFocus) != 0 && m_panel->isAncestorOf(field)) {
+        field->setFocus(Qt::MouseFocusReason);
+        // A spin box's or a combo box's line edit: the box's name.
+        const QWidget* named = field;
+        while ((named->objectName().isEmpty() || named->objectName().startsWith(QLatin1String("qt_"))) &&
+               named->parentWidget() != nullptr && named->parentWidget() != m_panel) {
+          named = named->parentWidget();
+        }
+        qDebug().noquote() << QStringLiteral("Drawing panel %1 takes the keyboard (click)").arg(named->objectName());
+      }
+    }
+    return false;
+  }
+
+private:
+  // Every line edit of the panel, a spin box's and an editable combo
+  // box's too (installing again on one already watched keeps one filter).
+  void watchFields() {
+    const QList<QLineEdit*> fields = m_panel->findChildren<QLineEdit*>();
+    for (QLineEdit* field : fields) {
+      field->installEventFilter(this);
+    }
+  }
+
+  QWidget* m_panel;
+};
+
 // A base view's Shows row's body uid (empty for an occurrence) and its
 // occurrence path (mitcad#1293).
 constexpr int kShowsBody = Qt::UserRole;
@@ -398,6 +451,7 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
   bar->setSpacing(4);
   rows->addLayout(bar);
   m_barRow = bar;
+  m_bar->installEventFilter(this);
   // The tools in a row of their own, which a cut sheet's row replaces
   // (mitcad#853).
   m_toolRow = new QWidget;
@@ -582,6 +636,8 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
         qDebug().noquote() << QStringLiteral("Drawing panel width %1 remembered").arg(width);
         QTimer::singleShot(0, this, [this] { logButtons(); });
       });
+  // A click on a field of it gives the field the keys (mitcad#1841).
+  new PanelFieldFocus(m_panel);
   auto* panel = new QVBoxLayout(m_panel);
   panel->setContentsMargins(8, 8, 8, 8);
   m_panelTitle = new QLabel;
@@ -831,6 +887,7 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
     fewTabs += m_tabs->tabRect(i).width();
   }
   m_tabs->setMinimumWidth(std::min(fewTabs, m_tabs->sizeHint().width()));
+  fitBarRow();
   const QJsonObject sheet = sheets.at(m_sheet).toObject();
   m_sheetView->setSheet(sheet);
   showCornerDots();
@@ -3300,12 +3357,22 @@ void DrawingWorkspace::deleteSheet(int index) {
   } else if (index == shown) {
     after = std::min(shown, count - 2);
   }
+  // The title block edited (mitcad#1841): its sheet deleted, the editor
+  // goes, as with Cancel; a sheet before it deleted, its index moves up
+  // with it, so that Done writes the block onto the sheet edited.
+  const int blockSheet = m_blockSheet;
+  if (m_blockEditor && index == m_blockSheet) {
+    finishTitleBlock(false);
+  } else if (m_blockEditor && index < m_blockSheet) {
+    m_blockSheet = m_blockSheet - 1;
+  }
   // Before the command: the refresh after it asks for this sheet.
   m_sheet = std::max(0, after);
   if (!run({{QStringLiteral("cmd"), QStringLiteral("delete_drawing_sheet")},
             {QStringLiteral("drawing"), m_drawing},
             {QStringLiteral("sheet"), index}})) {
     m_sheet = shown;
+    m_blockSheet = blockSheet;
     refresh();
     return;
   }
@@ -3962,6 +4029,7 @@ void DrawingWorkspace::addBarAction(QAction* action) {
   b->setFocusPolicy(Qt::NoFocus);
   m_barRow->insertWidget(m_barRow->indexOf(m_addRevision) + 1 + int(m_barActions.size()), b);
   m_barActions.append(b);
+  fitBarRow();
   connect(b, &QToolButton::clicked, this,
           [action] { qDebug().noquote() << QStringLiteral("Drawing bar: %1").arg(loggedName(action)); });
 }
@@ -4064,6 +4132,9 @@ void DrawingWorkspace::keyPressEvent(QKeyEvent* event) {
 QWidget* DrawingWorkspace::sheetView() const { return m_sheetView; }
 
 bool DrawingWorkspace::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == m_bar && event->type() == QEvent::Resize) {
+    fitBarRow();
+  }
   if (watched == m_viewer && event->type() == QEvent::Resize && isVisible()) {
     place();
   }
@@ -4181,8 +4252,27 @@ void DrawingWorkspace::logButtons() {
       lines << QStringLiteral("Drawing group %1 at %2").arg(caption->text(), at(caption));
     }
   }
+  // A tab's place is the middle of what is seen of it: a bar too narrow for
+  // its tabs scrolls them, and its scroll buttons cover their ends
+  // (mitcad#1841: a third tab's middle under them in a small window).
+  QRect seen = m_tabs->rect();
+  for (const QToolButton* scroll : m_tabs->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+    if (scroll->isVisible()) {
+      const QRect covered = scroll->geometry();
+      if (covered.center().x() > seen.center().x()) {
+        seen.setRight(std::min(seen.right(), covered.left() - 1));
+      } else {
+        seen.setLeft(std::max(seen.left(), covered.right() + 1));
+      }
+    }
+  }
   for (int i = 0; i < m_tabs->count(); ++i) {
-    const QPoint p = m_tabs->mapTo(window(), m_tabs->tabRect(i).center());
+    const QRect shown = m_tabs->tabRect(i).intersected(seen);
+    if (shown.isEmpty()) {
+      lines << QStringLiteral("Drawing Sheet tab %1 out of sight").arg(i + 1);
+      continue;
+    }
+    const QPoint p = m_tabs->mapTo(window(), shown.center());
     lines << QStringLiteral("Drawing Sheet tab %1 at %2,%3").arg(i + 1).arg(p.x()).arg(p.y());
   }
   // The panel's edge toward the sheet and its width (mitcad#1692).
@@ -4494,6 +4584,28 @@ void DrawingWorkspace::fillPartPanel(int id) {
     said->setWordWrap(true);
     setWarningStyleSheet(said); // it is placed, but wrongly
     m_form->addRow(said);
+  }
+}
+
+// The first row's buttons right of the sheets' tabs show their icons only
+// when the row has no room for their words, so that they never cover the
+// tabs in a small window (mitcad#1841: Sheet… lay over the third tab on
+// Windows); their tooltips say what they are.
+void DrawingWorkspace::fitBarRow() {
+  if (m_barRow == nullptr || m_bar == nullptr || m_sheetButton == nullptr || m_addRevision == nullptr) {
+    return;
+  }
+  QList<QToolButton*> buttons{m_sheetButton, m_addRevision};
+  buttons.append(m_barActions);
+  for (QToolButton* b : std::as_const(buttons)) {
+    b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  }
+  const QMargins margins = m_bar->layout()->contentsMargins();
+  const int room = m_bar->width() - margins.left() - margins.right();
+  if (m_barRow->minimumSize().width() > room) {
+    for (QToolButton* b : std::as_const(buttons)) {
+      b->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    }
   }
 }
 

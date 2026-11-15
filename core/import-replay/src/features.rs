@@ -1750,7 +1750,9 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
         index: i64,
         item: &TimelineItem,
     ) -> Result<Vec<Candidate>, String> {
+        let outer = self.translating.replace(index);
         let translated = self.translate_item(index, item);
+        self.translating = outer;
         // The learning dump keeps them (mitcad#96), outside the item's time.
         self.learn_offered_paused(index, item, &translated);
         translated

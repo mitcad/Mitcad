@@ -213,7 +213,8 @@ the blob; `appearance` and `material` as `{"token", "library", "preset",
 "display", "asset"}`; `faces`: the faces with their own, each `guid`,
 `appearance`, `color`, `faces` (fingerprints in the stored design, cm) or
 `why`; `light_bulb`: false for a body the file hides, where its record
-gives it, mitcad#1175; `source`: the stored body as the replay names it,
+gives it, mitcad#1175; `folder`: the name of the browser folder the body
+is in, mitcad#1802; `source`: the stored body as the replay names it,
 where that is not `blob#record` — the `.ipt` decoder's bodies,
 `<B-rep record>/<ASM body record>`, mitcad#1367), `faces` (face references whose face the stored
 design does not have), `occurrences` (overrides: `object_id`, `component`, `appearance`),

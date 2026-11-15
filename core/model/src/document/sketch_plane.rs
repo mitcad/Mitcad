@@ -78,7 +78,7 @@ fn plain_zero(value: &ValueInput) -> bool {
 /// The features a plane is made by.
 fn plane_features(plane: &SketchPlane) -> BTreeSet<FeatureUid> {
     match plane {
-        SketchPlane::Face { face, body } => {
+        SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
             let mut features = face.features();
             if let Some(body) = body {
                 features.insert(body.feature);
@@ -139,6 +139,11 @@ impl<K: Kernel> Document<K> {
                 def.plane_link = link;
                 // The own frame belonged to the old plane.
                 def.frame = None;
+                // A curved face's sketch lies in its developed coordinates
+                // (mitcad#1768): the old plane's placement goes too.
+                if plane.is_developed() {
+                    def.placement = None;
+                }
             }
         }
         let mut placement: SketchPlacement<ValueInput> =
@@ -159,6 +164,11 @@ impl<K: Kernel> Document<K> {
             placement.flip = flip;
         }
         def.placement = (!placement.is_empty()).then(|| Box::new(placement));
+        if def.plane.is_developed() && def.placement.is_some() {
+            return Err(invalid(format!(
+                "{name} lies on a curved face: it takes no offset, move, rotation or flip"
+            )));
+        }
         let label = format!("Redefine Plane of {name}");
         let feature = FeatureDef::Sketch(def);
         let step = label.clone();

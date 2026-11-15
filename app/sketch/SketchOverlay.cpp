@@ -26,6 +26,7 @@
 #include "../framework/GlassCard.hpp"
 #include "../framework/TestSync.hpp"
 #include "../framework/UiSizes.hpp"
+#include "../view/SelectionLook.hpp"
 
 namespace mitcad::sketch {
 namespace {
@@ -52,7 +53,9 @@ const QColor kDrivenColorDark = sketchRole(ColorRole::SketchDriven, true);
 const QColor kInactiveColor = sketchRole(ColorRole::SketchInactive);
 const QColor kInactiveColorDark = sketchRole(ColorRole::SketchInactive, true);
 const QColor kInactiveFill = sketchRole(ColorRole::SketchInactiveFill);
-const QColor kSelectedColor = sketchRole(ColorRole::Select);
+// The selection's: Preferences › Display › Selection color (mitcad#1803),
+// the selection role's blue by default.
+QColor selectedColor() { return selectionColor(); }
 const QColor kHoverColor = sketchRole(ColorRole::Hover);
 const QColor kPreviewColor = sketchRole(ColorRole::SketchPreview);
 const QColor kConstructionPreview = sketchRole(ColorRole::SketchConstruction);
@@ -627,6 +630,25 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
   const auto arrow = [&](const V2& tip, const V2& towards) {
     shape.arrows.emplace_back(S(tip), S(tip + towards * px) - S(tip));
   };
+  // A polyline of sketch points in the view: on a sketch's curved face
+  // (mitcad#1853) with points put between them, so that it bends with the
+  // face as the sketch's curves do.
+  const auto path = [&](const std::vector<V2>& points) {
+    QPolygonF drawn;
+    for (const V2& p : projection.bend > 0.0 ? densified(points, projection.bend) : points) {
+      drawn << S(p);
+    }
+    return drawn;
+  };
+  // An extension or dimension line: straight on a plane, on a curved face
+  // laid onto the face (one of the arcs).
+  const auto segment = [&](const V2& from, const V2& to) {
+    if (projection.bend > 0.0) {
+      shape.arcs.push_back(path({from, to}));
+    } else {
+      shape.lines.emplace_back(S(from), S(to));
+    }
+  };
 
   if (const auto linear = linearOf(d, model, at)) {
     const V2 u = linear->u;
@@ -641,20 +663,20 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
         return;
       }
       const double sign = s > 0 ? 1.0 : -1.0;
-      shape.lines.emplace_back(S(from + n * (sign * 3.0 * px)), S(to + n * (sign * 5.0 * px)));
+      segment(from + n * (sign * 3.0 * px), to + n * (sign * 5.0 * px));
     };
     extension(linear->a, d1);
     extension(linear->lineB != nullptr ? linear->lineB->nearest(d2) : linear->b, d2);
-    shape.lines.emplace_back(S(d1), S(d2));
+    segment(d1, d2);
     // A value placed beyond the ends gets the dimension line to it.
     const double along = dot(at - d1, unit(d2 - d1));
     const double length = dist(d1, d2);
     if (length > 1e-9) {
       const V2 dir = unit(d2 - d1);
       if (along < 0.0) {
-        shape.lines.emplace_back(S(d1 + dir * along), S(d1));
+        segment(d1 + dir * along, d1);
       } else if (along > length) {
-        shape.lines.emplace_back(S(d2), S(d1 + dir * along));
+        segment(d2, d1 + dir * along);
       }
       arrow(d1, -dir);
       arrow(d2, dir);
@@ -670,11 +692,11 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     const double radius = std::max(dist(at, rays->corner), 12.0 * px);
     const double start = angleOf(rays->da);
     const double span = std::atan2(cross(rays->da, rays->db), dot(rays->da, rays->db));
-    QPolygonF arc;
+    std::vector<V2> arc;
     for (int i = 0; i <= 32; ++i) {
-      arc << S(rays->corner + polar(start + span * i / 32.0, radius));
+      arc.push_back(rays->corner + polar(start + span * i / 32.0, radius));
     }
-    shape.arcs.push_back(arc);
+    shape.arcs.push_back(path(arc));
     const double sign = span >= 0 ? 1.0 : -1.0;
     arrow(rays->corner + polar(start, radius), -perp(polar(start)) * sign);
     arrow(rays->corner + polar(start + span, radius), perp(polar(start + span)) * sign);
@@ -684,7 +706,7 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     for (const auto& [line, dir] : {std::pair{a, rays->da}, std::pair{b, rays->db}}) {
       const V2 end = rays->corner + dir * radius;
       if (line->axis.isEmpty() && line->curve.distanceTo(end) > 2.0 * px) {
-        shape.lines.emplace_back(S(line->curve.nearest(end)), S(end + dir * (4.0 * px)));
+        segment(line->curve.nearest(end), end + dir * (4.0 * px));
       }
     }
     shape.valid = true;
@@ -700,9 +722,9 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     const V2 dir = dist(at, center) > 1e-9 ? unit(at - center) : polar(kPi / 4.0);
     const V2 edge = center + dir * radius;
     const V2 from = t == QStringLiteral("diameter") ? center - dir * radius : center;
-    shape.lines.emplace_back(S(from), S(edge));
+    segment(from, edge);
     if (dist(at, center) > radius) {
-      shape.lines.emplace_back(S(edge), S(at));
+      segment(edge, at);
     }
     arrow(edge, dir);
     if (t == QStringLiteral("diameter")) {
@@ -710,7 +732,7 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     }
     if (c->isArc() && !c->curve.contains(angleOf(dir))) {
       // The arc's circle, dashed in spirit: a short extension to the value.
-      QPolygonF extension;
+      std::vector<V2> extension;
       const double startAngle = angleOf(dir);
       const double end = std::abs(normalizeAngle(c->curve.start - startAngle)) <
                                  std::abs(normalizeAngle(startAngle - c->curve.end))
@@ -718,9 +740,9 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
                              : c->curve.end;
       double delta = std::remainder(end - startAngle, kTwoPi);
       for (int i = 0; i <= 12; ++i) {
-        extension << S(center + polar(startAngle + delta * i / 12.0, radius));
+        extension.push_back(center + polar(startAngle + delta * i / 12.0, radius));
       }
-      shape.arcs.push_back(extension);
+      shape.arcs.push_back(path(extension));
     }
     shape.valid = true;
     return shape;
@@ -732,14 +754,13 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     }
     const double radius = std::max(dist(at, c->curve.center), 1e-6);
     const double span = d.previewSweep.value_or(sweep(c->curve.start, c->curve.end));
-    QPolygonF arc;
+    std::vector<V2> arc;
     for (int i = 0; i <= 32; ++i) {
-      arc << S(c->curve.center + polar(c->curve.start + span * i / 32.0, radius));
+      arc.push_back(c->curve.center + polar(c->curve.start + span * i / 32.0, radius));
     }
-    shape.arcs.push_back(arc);
+    shape.arcs.push_back(path(arc));
     for (const double angle : {c->curve.start, c->curve.start + span}) {
-      shape.lines.emplace_back(S(c->curve.center + polar(angle, c->curve.radius)),
-                               S(c->curve.center + polar(angle, radius)));
+      segment(c->curve.center + polar(angle, c->curve.radius), c->curve.center + polar(angle, radius));
     }
     const double sign = span >= 0.0 ? 1.0 : -1.0;
     arrow(c->curve.center + polar(c->curve.start, radius), -perp(polar(c->curve.start)) * sign);
@@ -755,7 +776,7 @@ DimensionShape dimensionShape(const DimensionData& d, const SketchModel& model,
     const bool minor = t == QStringLiteral("minor_radius");
     const V2 dir = polar(c->curve.rotation + (minor ? kPi / 2.0 : 0.0));
     const V2 end = c->curve.center + dir * (minor ? c->curve.minor : c->curve.radius);
-    shape.lines.emplace_back(S(c->curve.center), S(end));
+    segment(c->curve.center, end);
     arrow(end, dir);
     shape.valid = true;
     return shape;
@@ -832,7 +853,7 @@ bool SketchOverlay::behindBodies(const QString& key, const QPointF& at) {
   }
   bool behind = false;
   if (const std::optional<V2> point = m_c.sketchAtF(at)) {
-    behind = !m_c.viewer().inSight(toModel(m_c.model().frame, *point));
+    behind = !m_c.viewer().inSight(m_c.model().place(*point));
   }
   m_behind[key] = {at, behind};
   return behind;
@@ -862,8 +883,50 @@ void SketchOverlay::logDimensionHalos() {
   }
 }
 
+void SketchOverlay::logDimensionsOnFace() {
+  if (!m_c.isActive() || !m_c.model().surface || !m_c.showDimensions()) {
+    return;
+  }
+  // The lines laid onto the face (arcs of the shape), those still drawn
+  // straight, and those of the laid ones that bend more than a pixel away
+  // from the straight line between their ends (a count that changes with
+  // the zoom only now and then, unlike the bend itself).
+  const std::vector<DimensionLayout> layouts = dimensions();
+  int laid = 0;
+  int straight = 0;
+  int bent = 0;
+  for (const DimensionLayout& layout : layouts) {
+    straight += static_cast<int>(layout.shape.lines.size());
+    for (const QPolygonF& piece : layout.shape.arcs) {
+      ++laid;
+      if (piece.isEmpty()) {
+        continue;
+      }
+      const QLineF chord(piece.first(), piece.last());
+      const double length = chord.length();
+      double off = 0.0;
+      for (const QPointF& at : piece) {
+        const QPointF d = at - chord.p1();
+        off = std::max(off, length > 1e-9 ? std::abs(d.x() * chord.dy() - d.y() * chord.dx()) / length
+                                          : std::hypot(d.x(), d.y()));
+      }
+      bent += off > 1.0 ? 1 : 0;
+    }
+  }
+  const QString line = QStringLiteral("%1 drawn, %2 line(s) laid onto it, %3 straight, %4 bent with it")
+                           .arg(layouts.size())
+                           .arg(laid)
+                           .arg(straight)
+                           .arg(bent);
+  if (line != m_loggedDimensionsOnFace) {
+    m_loggedDimensionsOnFace = line;
+    qDebug().noquote() << QStringLiteral("Sketch dimensions on its face: %1").arg(line);
+  }
+}
+
 Projection SketchOverlay::projection() const {
-  return {[this](const V2& p) { return m_c.toScreen(p); }, m_c.pixel()};
+  // Bent with a curved face's sketch (mitcad#1853).
+  return {[this](const V2& p) { return m_c.toScreen(p); }, m_c.pixel(), m_c.faceBend()};
 }
 
 namespace {
@@ -1309,7 +1372,7 @@ void SketchOverlay::paintGlyph(QPainter& painter, const Glyph& glyph, bool selec
   painter.setPen(conflicted       ? QPen(kConflictColor, 2.0)
                  : glyph.inactive ? QPen(kInactiveColor, 1.0, Qt::DashLine)
                                   : QPen(kGuideColor, 1.0));
-  painter.setBrush(selected           ? kSelectedColor
+  painter.setBrush(selected           ? selectedColor()
                    : hovered          ? kHoverColor.lighter(150)
                    : conflicted       ? kConflictFill
                    : glyph.inactive   ? kInactiveFill
@@ -1446,14 +1509,14 @@ std::vector<std::pair<QString, QColor>> SketchOverlay::idleHighlights() const {
     for (const SelectionItem& item : m_c.host().selection()) {
       if (item.owner == m_c.uid() &&
           (item.kind == SelectKind::SketchCurve || item.kind == SelectKind::SketchPoint)) {
-        highlighted.emplace_back(item.name, kSelectedColor);
+        highlighted.emplace_back(item.name, selectedColor());
       }
     }
   }
   // The axes a command's input holds (Mirror's line, mitcad#876), which
   // the view's highlight cannot show.
   for (const QString& axis : m_c.host().sketchAxisPicks()) {
-    highlighted.emplace_back(axis, kSelectedColor);
+    highlighted.emplace_back(axis, selectedColor());
   }
   // What a refused edit's blocking constraints and dimensions are on
   // (mitcad#1566), in the hover's colour while the pointer is over its
@@ -1478,6 +1541,8 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
   // A body edge or vertex in the sketch plane (mitcad#256) as a sketch entity.
   const BodyGeometry& body = m_c.bodyGeometryShown();
   HighlightLayers layers;
+  // As wide as Preferences › Display › Selected line width says (mitcad#1803).
+  layers.strokeWidth = selectedEdgeWidth(savedSelectionLook().width);
   QStringList stroked;    // the entities drawn as strokes, once each
   QStringList balled;     // the entities drawn as balls, once each
   QStringList curves;     // the sketch curves among them, whose points get markers
@@ -1507,7 +1572,7 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
     if (const QString axis = onBody ? QString() : model.axisOf(entity); !axis.isEmpty()) {
       const QPointF origin = m_c.toScreen(V2{});
       const double step = 100.0 * m_c.pixel();
-      const QPointF along = m_c.toScreen(axis == QStringLiteral("x") ? V2{step, 0.0} : V2{0.0, step}) - origin;
+      const QPointF along = m_c.screenAlong(axis == QStringLiteral("x") ? V2{1.0, 0.0} : V2{0.0, 1.0}, step);
       if (std::hypot(along.x(), along.y()) >= 1.0) {
         if (const std::optional<QLineF> line = lineAcross(origin, along, rect())) {
           QPolygonF across;
@@ -1531,10 +1596,8 @@ HighlightLayers SketchOverlay::highlightLayers(const std::vector<std::pair<QStri
     }
     const CurveData* c = onBody ? nullptr : model.curve(entity);
     if (const Curve2* curve = onBody ? body.curve(entity) : c != nullptr ? &c->curve : nullptr) {
-      QPolygonF polyline;
-      for (const V2& at : curve->sample(2.0 * m_c.pixel())) {
-        polyline << m_c.toScreen(at);
-      }
+      // Bent with a curved face's sketch (mitcad#1768).
+      const QPolygonF polyline = m_c.screenPath(curve->sample(2.0 * m_c.pixel()));
       // A sketch curve's highlight in the curve's own line type
       // (mitcad#1619): a selected or hovered construction line stays
       // dashed, a centre line dash-dot; a body's edge solid.
@@ -1627,6 +1690,16 @@ void SketchOverlay::logHighlightSummary(const HighlightSummary& summary) {
     m_loggedHighlightLines = lines;
     qDebug().noquote() << QStringLiteral("Sketch overlay lines: %1").arg(lines);
   }
+  // "Sketch overlay highlight look: 4 px, selection color #1f7aff"
+  // (mitcad#1803): the width the highlighted curves are painted with and
+  // the selection's colour, as Preferences › Display says.
+  const QString look = QStringLiteral("%1 px, selection color %2")
+                           .arg(selectedEdgeWidth(savedSelectionLook().width))
+                           .arg(selectedColor().name());
+  if (look != m_loggedHighlightLook) {
+    m_loggedHighlightLook = look;
+    qDebug().noquote() << QStringLiteral("Sketch overlay highlight look: %1").arg(look);
+  }
 }
 
 void SketchOverlay::paintChain(QPainter& painter, const QStringList& anchors, const QColor& color) const {
@@ -1686,14 +1759,8 @@ void SketchOverlay::paintPreview(QPainter& painter, const ToolPreview& preview) 
     }
     painter.setPen(QPen(color, width, style, Qt::RoundCap, Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
-    QPolygonF polyline;
-    for (const V2& p : path.points) {
-      polyline << m_c.toScreen(p);
-    }
-    if (path.closed && !polyline.isEmpty()) {
-      polyline << polyline.first();
-    }
-    painter.drawPolyline(polyline);
+    // Bent with a curved face's sketch (mitcad#1768).
+    painter.drawPolyline(m_c.screenPath(path.points, path.closed));
   }
   painter.setPen(QPen(kPreviewColor, 1.2));
   painter.setBrush(Qt::white);
@@ -1824,7 +1891,7 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
     // copy, mitcad#1640), with its head at the tip; the part dragged in the
     // selection's color, a faint arrow (a hint only) thin and see-through.
     const auto arrow = [&painter](const QPointF& from, const QPointF& tip, bool dragged, bool faint) {
-      QColor color = dragged ? kSelectedColor : kSnapColor;
+      QColor color = dragged ? selectedColor() : kSnapColor;
       if (faint) {
         color.setAlpha(90);
       }
@@ -1848,7 +1915,7 @@ void SketchOverlay::paintCommandPicks(QPainter& painter) const {
     arrow(shape->xFrom, shape->xTip, shape->dragged == 'x' || shape->dragged == 'b', shape->faint[0]);
     arrow(shape->yFrom, shape->yTip, shape->dragged == 'y' || shape->dragged == 'b', shape->faint[1]);
     if (shape->square) {
-      const QColor square = shape->dragged == 'b' ? kSelectedColor : kSnapColor;
+      const QColor square = shape->dragged == 'b' ? selectedColor() : kSnapColor;
       painter.setPen(QPen(square, 1.5));
       painter.setBrush(shape->dragged == 'b' ? QBrush(square) : QBrush(labelBox(220)));
       painter.drawRect(QRectF(shape->center.x() - 5.0, shape->center.y() - 5.0, 10.0, 10.0));
@@ -1943,7 +2010,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
       const bool hovered = hover == layout.id || (conflicted && conflictHovered);
       const bool marked = selected || hovered || conflicted;
       painter.setOpacity(dimmed[i] ? kThroughOpacity : 1.0);
-      const QColor color = selected ? kSelectedColor
+      const QColor color = selected ? selectedColor()
                            : hovered ? kHoverColor
                            : conflicted ? kConflictColor
                            : inactive ? kInactiveColor
@@ -1989,7 +2056,7 @@ void SketchOverlay::paintEvent(QPaintEvent* event) {
     previewShown = previewShown || mine;
     const bool marked = m_c.showConstraints() && (isSelected(QStringLiteral("constraint"), k.id) || hover == k.id);
     if (mine || marked) {
-      paintChain(painter, k.refs, mine ? kPreviewColor : kSelectedColor);
+      paintChain(painter, k.refs, mine ? kPreviewColor : selectedColor());
     }
   }
   if (!previewShown && previewed.size() >= 2) {
@@ -2169,8 +2236,8 @@ SketchOverlay::AxesShape SketchOverlay::axesShape() const {
   const QRectF area = rect();
   // Each axis's direction in the view from a point about 100 pixels along it.
   const double step = 100.0 * m_c.pixel();
-  const QPointF alongX = m_c.toScreen(V2{step, 0.0}) - shape.origin;
-  const QPointF alongY = m_c.toScreen(V2{0.0, step}) - shape.origin;
+  const QPointF alongX = m_c.screenAlong(V2{1.0, 0.0}, step);
+  const QPointF alongY = m_c.screenAlong(V2{0.0, 1.0}, step);
   // None for the sketch plane seen edge on.
   if (std::hypot(alongX.x(), alongX.y()) >= 1.0) {
     shape.x = lineAcross(shape.origin, alongX, area);
@@ -2256,7 +2323,9 @@ void SketchOverlay::paintAxes(QPainter& painter) const {
   }
   const V2 design = toSketch(model.frame, gp_Pnt(0.0, 0.0, 0.0));
   const QPointF at = m_c.toScreen(design);
-  if (norm(design) > kOriginTolerance && area.adjusted(-10.0, -10.0, 10.0, 10.0).contains(at)) {
+  // Not on a curved face (mitcad#1768): the design origin lies on no
+  // normal of it that the view could show.
+  if (!model.surface && norm(design) > kOriginTolerance && area.adjusted(-10.0, -10.0, 10.0, 10.0).contains(at)) {
     painter.setPen(QPen(kAxisColor, 1.5));
     painter.drawEllipse(at, 5.0, 5.0);
     painter.drawLine(at - QPointF(8.0, 0.0), at + QPointF(8.0, 0.0));
@@ -2272,6 +2341,7 @@ void SketchOverlay::hideEvent(QHideEvent* event) {
   m_loggedHighlights.clear(); // and its highlights
   m_loggedBadge.clear();      // and its badge's place
   m_loggedThrough.clear();    // and what it draws dimmed (mitcad#1762)
+  m_loggedDimensionsOnFace.clear(); // and its dimensions on a curved face (mitcad#1853)
   m_behind.clear();
   if (auto* viewer = qobject_cast<OcctViewer*>(parentWidget())) {
     viewer->setBadgeWidth(0); // no badge: the status pill may use the corner

@@ -25,3 +25,5 @@ mod connector_corner_tests;
 mod side_gap_tests;
 // A length to a picked face plus an offset (mitcad#1630).
 mod to_face_tests;
+// Removing a profile others are placed on (mitcad#1811).
+mod remove_placed_on_tests;

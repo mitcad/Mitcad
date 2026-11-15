@@ -3,9 +3,10 @@
 """Insert > Component from Web (mitcad#1579) against a page of a small HTTP
 server of the test's own: a STEP file comes in as a component named after it
 with its part number and in Move; a zip of two STEP files lists both and
-brings in the one picked; a PDF is refused with its note; a download the
-server breaks off fails with its reason in words (mitcad#1716). The
-downloads' temporary folders are gone afterwards.
+brings in both checked, Move started once on the last (mitcad#1839); a PDF
+is refused with its note; a download the server breaks off fails with its
+reason in words (mitcad#1716). The downloads' temporary folders are gone
+afterwards.
 
 Usage: ui-component-web-test.py <app> <cli> <output folder> [<Qt's bin> [<the built web browser component>]]
        ui-component-web-test.py prepare <cli> <output folder>
@@ -163,8 +164,8 @@ def workflow(port):
         "focus-main",
         "key Escape",
         "expect-log '^Command Move/Copy cancelled$' 20",
-        # The zip: both STEP files listed (not its text file), the one picked
-        # brought in.
+        # The zip: both STEP files listed (not its text file), both checked
+        # brought in, and Move started once, after the last (mitcad#1839).
         "focus-dialog '^Component from Web$'",
         "mark",
         "invoke-widget componentBrowser clickLink 'Pins (zip)'",
@@ -173,17 +174,26 @@ def workflow(port):
         "focus-dialog '^Files in pins\\.zip$' 20",
         "expect-widget-property componentBrowserZipFiles topLevelItemCount 2",
         "focus-widget componentBrowserZipFiles",
+        "key space",
+        "expect-log '^Component browser zip picked: pins/PA100_pin\\.step$'",
         "key Down",
         "key space",
-        "expect-log '^Component browser zip picked: pins/PB200_pin\\.step$'",
+        "expect-log '^Component browser zip picked: pins/PA100_pin\\.step \\| pins/PB200_pin\\.step$'",
         "button '^Import$'",
+        "expect-log '^Component from Web: inserted PA100_pin\\.step as component PA100_pin \\(C[0-9]+, "
+        "occurrence O[0-9]+, 1 body\\(ies\\)\\), part number PA100$' 60",
         "expect-log '^Component from Web: inserted PB200_pin\\.step as component PB200_pin \\(C[0-9]+, "
         "occurrence O[0-9]+, 1 body\\(ies\\)\\), part number PB200$' 60",
-        "expect-no-log 'inserted PA100_pin'",
         "expect-log '^Command Move/Copy started$' 20",
         "expect-log '^Component browser removed the temporary files of pins\\.zip$' 20",
-        "expect-model-bodies 2 5000",
-        "expect-undo-depth ${before} 2",
+        "wait-idle",
+        # Neither file refused for the Move of the other, and Move on once:
+        # none of it ended (to start again) before Escape below.
+        "expect-no-log '^Component browser could not import'",
+        "expect-no-log '^Component from Web: Move did not start'",
+        "expect-no-log '^Command Move/Copy (?!started$)'",
+        "expect-model-bodies 3 6000",
+        "expect-undo-depth ${before} 3",
         "focus-main",
         "key Escape",
         "expect-log '^Command Move/Copy cancelled$' 20",
@@ -206,8 +216,8 @@ def workflow(port):
         "expect-log '^Component browser download of broken\\.step failed: [^0-9]+$' 30",
         "expect-no-log '^Component from Web: inserted broken'",
         "focus-main",
-        "expect-model-bodies 2 5000",
-        "expect-undo-depth ${before} 2",
+        "expect-model-bodies 3 6000",
+        "expect-undo-depth ${before} 3",
         "quit",
     ]
     return "\n".join(lines) + "\n"
@@ -281,7 +291,7 @@ def run(app, cli, directory, qt_bin=None, component=None):
     finally:
         server.shutdown()
     verify(directory)
-    print("PASS: Component from Web: a STEP as a numbered component in Move, a zip's picked file, "
+    print("PASS: Component from Web: a STEP as a numbered component in Move, a zip's two checked files with one Move, "
           "a PDF refused, a broken-off download failed with its reason in words, temporary files removed")
 
 

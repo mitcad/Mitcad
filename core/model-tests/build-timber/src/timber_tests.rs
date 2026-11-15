@@ -1034,3 +1034,193 @@ fn a_member_from_a_point_towards_another_runs_its_length_or_to_what_it_meets() {
     all_ok(&doc);
     assert!((length_of(&doc, free["component"].as_str().unwrap()) - 2451.0).abs() < 1e-6);
 }
+
+/// A planed 28 x 45 member of the timber library (as the parts library's
+/// planed timber: the wood's look in its design, its species and density
+/// only in its build block), and the test library's other parts.
+fn planed_library_design() -> Document<MockKernel> {
+    use mitcad_model_tests_support::test_library::{
+        Part, TestLibrary, V1, board_build, board_design,
+    };
+    let mut library = TestLibrary::default();
+    library.parts.insert(
+        ("planed45".to_owned(), V1.to_owned()),
+        Part {
+            text: board_design(45.0, 28.0, &[]),
+            build: Some(board_build(45.0, 28.0, "planed")),
+            part_number: String::new(),
+            name: "Planed 28x45".to_owned(),
+            designation: "Planed 28x45 L={L}".to_owned(),
+        },
+    );
+    let mut doc = Document::new(MockKernel::default());
+    doc.set_link_resolver(Some(std::sync::Arc::new(library)));
+    // The mock kernel's mass properties: of the bounding boxes.
+    doc.kernel().physical.set(true);
+    doc
+}
+
+/// mitcad#1817: a member placed from the library is made of its library's
+/// wood, Spruce at the block's 450 kg/m³, which gives its mass (28 x 45 x
+/// 1800 mm: 1.0206 kg, not steel's 17.8 kg); a design saved without it
+/// gets it on open; a body without a material has no mass and is never
+/// steel.
+#[test]
+fn a_member_is_made_of_its_librarys_wood_and_a_body_without_one_has_no_mass() {
+    let mut doc = planed_library_design();
+    let member = place(
+        &mut doc,
+        json!({"part": part("planed45"), "at": {"point": [0, 0, 0]}, "length": 1800}),
+    );
+    all_ok(&doc);
+    let body = mitcad_model::ids::BodyUid::new(derived(&doc, component(&member)), 0);
+    let attributes = doc.state().body_attributes[&body].clone();
+    assert_eq!(attributes.material.as_deref(), Some("spruce"));
+    assert_eq!(attributes.appearance.as_deref(), Some("wood_oak"));
+    let spruce = doc.material("spruce").unwrap().clone();
+    assert_eq!(spruce.name, "Spruce");
+    assert!((spruce.density - 0.45).abs() < 1e-12, "{}", spruce.density);
+    assert_eq!(
+        spruce.class,
+        Some(mitcad_model::material::MaterialClass::Wood)
+    );
+    // The wood's look is its material's: not set by hand.
+    assert!(!doc.appearance_set_by_hand(body));
+
+    // Physical Properties: Spruce and the mass its density gives.
+    let answer = query(
+        &doc,
+        json!({"query": "properties", "bodies": [body.to_string()]}),
+    );
+    let entry = &answer["bodies"][0];
+    assert_eq!(entry["material"], "spruce", "{answer}");
+    assert_eq!(entry["material_name"], "Spruce", "{answer}");
+    assert!((entry["density"].as_f64().unwrap() - 0.45).abs() < 1e-12);
+    let mass = entry["mass"].as_f64().unwrap();
+    assert!((mass - 1.0206).abs() < 1e-9, "{answer}");
+    // The cut list says the same wood.
+    let list = query(&doc, json!({"query": "build_cut_list"}));
+    let row = &list["rows"][0];
+    assert_eq!(row["material"]["species"], "spruce", "{list}");
+    assert!(
+        (row["mass"].as_f64().unwrap() - mass).abs() < 1e-9,
+        "{list}"
+    );
+
+    // The bill of materials says Spruce, never Steel.
+    let bom = query(
+        &doc,
+        json!({"query": "parts_list", "properties": ["Material"]}),
+    );
+    let member_row = bom["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["component"] == member["component"])
+        .unwrap_or_else(|| panic!("no row of the member: {bom}"));
+    assert_eq!(member_row["properties"]["Material"], "Spruce", "{bom}");
+
+    // A second member finds the same material again.
+    place(
+        &mut doc,
+        json!({"part": part("planed45"), "at": {"point": [200, 0, 0]}, "length": 900}),
+    );
+    let spruces = doc
+        .custom_materials()
+        .iter()
+        .filter(|m| m.name == "Spruce")
+        .count();
+    assert_eq!(spruces, 1);
+
+    // A design saved before the members had their material gets it on
+    // open, from the library source it keeps.
+    let mut file: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
+    for entry in file["bodies"].as_array_mut().unwrap() {
+        entry.as_object_mut().unwrap().remove("material");
+    }
+    file.as_object_mut().unwrap().remove("materials");
+    let opened = Document::from_json(&file.to_string(), MockKernel::default()).unwrap();
+    assert_eq!(
+        opened.state().body_attributes[&body].material.as_deref(),
+        Some("spruce")
+    );
+    assert!((opened.material("spruce").unwrap().density - 0.45).abs() < 1e-12);
+
+    // A body without a material anywhere: no mass, no hidden steel, and
+    // the total has none either.
+    doc.activate_component(mitcad_model::ids::ComponentUid::ROOT)
+        .unwrap();
+    let sketch = doc
+        .add_sketch(mitcad_model::features::SketchPlane::Xy)
+        .unwrap()
+        .uid;
+    let region = doc
+        .add_rectangle(
+            sketch,
+            [500.0, 500.0],
+            &mitcad_model::ValueInput::Number(20.0),
+            &mitcad_model::ValueInput::Number(20.0),
+        )
+        .unwrap()
+        .region;
+    let block = doc
+        .add_feature(
+            &mitcad_model::test_support::extrude(sketch, &[&region], 10.0, "new_body", &[]),
+            None,
+        )
+        .unwrap()
+        .uid;
+    let block = mitcad_model::ids::BodyUid::new(block, 0);
+    let plain = query(
+        &doc,
+        json!({"query": "properties", "bodies": [block.to_string()]}),
+    );
+    let entry = &plain["bodies"][0];
+    assert_eq!(entry["no_material"], true, "{plain}");
+    assert_eq!(entry["material"], serde_json::Value::Null, "{plain}");
+    assert!(entry.get("mass").is_none(), "{plain}");
+    assert!(entry.get("density").is_none(), "{plain}");
+    assert!(plain["total"].get("mass").is_none(), "{plain}");
+    assert_eq!(plain["total"]["no_material"], 1, "{plain}");
+    // The Center of Mass leaves it out and says so.
+    let center = query(&doc, json!({"query": "center_of_mass"}));
+    assert_eq!(center["without_material"], 1, "{center}");
+}
+
+/// mitcad#1817: a member's material follows its row (the pine row is
+/// pine, 520 kg/m³), and a material set by hand stays.
+#[test]
+fn a_members_material_follows_its_row() {
+    let mut doc = design();
+    let member = place(
+        &mut doc,
+        json!({"part": part("rows98"), "at": {"point": [0, 0, 0]}, "length": 1000}),
+    );
+    let body = mitcad_model::ids::BodyUid::new(derived(&doc, component(&member)), 0);
+    let material = |doc: &Document<MockKernel>| {
+        doc.state().body_attributes[&body]
+            .material
+            .clone()
+            .unwrap_or_default()
+    };
+    assert_eq!(material(&doc), "spruce");
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": component(&member), "config": "pine"}),
+    )
+    .unwrap();
+    assert_eq!(material(&doc), "pine");
+    assert!((doc.material("pine").unwrap().density - 0.52).abs() < 1e-12);
+    // By hand: it stays when the row changes back.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": body.to_string(), "material": "wood_oak"}),
+    )
+    .unwrap();
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": component(&member), "config": "spruce"}),
+    )
+    .unwrap();
+    assert_eq!(material(&doc), "wood_oak");
+}

@@ -325,6 +325,7 @@ enum StoredRead {
     PrintBed(BodyUid, Option<String>),
     PrintLayer(Option<u64>),
     WallFlange(FeatureUid, Option<Hex>),
+    Flexed(Vec<OccurrenceUid>, OccurrenceUid, Option<[u64; 12]>),
 }
 
 impl StoredRead {
@@ -354,6 +355,7 @@ impl StoredRead {
             Read::PrintBed(uid, face) => Self::PrintBed(*uid, face.clone()),
             Read::PrintLayer(bits) => Self::PrintLayer(*bits),
             Read::WallFlange(plane, key) => Self::WallFlange(*plane, hex(key)),
+            Read::Flexed((within, o), bits) => Self::Flexed(within.clone(), *o, *bits),
         }
     }
 
@@ -385,6 +387,7 @@ impl StoredRead {
             Self::PrintBed(uid, face) => Read::PrintBed(*uid, face.clone()),
             Self::PrintLayer(bits) => Read::PrintLayer(*bits),
             Self::WallFlange(plane, key) => Read::WallFlange(*plane, version(key)),
+            Self::Flexed(within, o, bits) => Read::Flexed((within.clone(), *o), *bits),
         })
     }
 }
@@ -510,6 +513,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::ConstraintSet(_) => false,
         // BUILD (mitcad#375): mount frames and measured lengths are not stored.
         FeatureDef::DerivedPart(_) | FeatureDef::BoundLength(_) => false,
+        // Edge frames (mitcad#1814): their frames are not stored either.
+        FeatureDef::EdgeFrame(_) => false,
         // Intersection curves (mitcad#1405): the curve is made again.
         FeatureDef::IntersectionCurve(_) => false,
         // Helix curves (mitcad#1777): likewise.
@@ -1305,6 +1310,8 @@ fn restore<K: Kernel>(
         curve: None,
         // Not stored: a 3D sketch is not storable (mitcad#1521).
         spatial: None,
+        // Not stored: construction features are not storable (mitcad#1827).
+        drawn: None,
     })
 }
 

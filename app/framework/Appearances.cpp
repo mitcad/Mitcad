@@ -207,6 +207,7 @@ Appearance appearanceOf(const QJsonObject& value) {
     a.texture.height = size.at(1).toDouble(100.0);
     a.texture.rotation = texture.value(QStringLiteral("rotation")).toDouble();
     a.texture.planar = texture.value(QStringLiteral("projection")).toString() == QLatin1String("planar");
+    a.texture.uv = texture.value(QStringLiteral("projection")).toString() == QLatin1String("uv");
     a.texture.embedded = texture.value(QStringLiteral("embedded")).toBool();
     a.texture.imageSha256 = texture.value(QStringLiteral("image_sha256")).toString();
     // The other maps of the set (mitcad#313).
@@ -219,6 +220,14 @@ Appearance appearanceOf(const QJsonObject& value) {
         map.path = object.value(QStringLiteral("path")).toString();
         map.embedded = object.value(QStringLiteral("embedded")).toBool();
         map.imageSha256 = object.value(QStringLiteral("image_sha256")).toString();
+        // A channel of an image that packs several maps (mitcad#1862).
+        const QString channel = object.value(QStringLiteral("channel")).toString();
+        map.channel = channel == QLatin1String("red")     ? 0
+                      : channel == QLatin1String("green") ? 1
+                      : channel == QLatin1String("blue")  ? 2
+                                                          : -1;
+        // Its values scaled (mitcad#1874).
+        map.factor = object.value(QStringLiteral("factor")).toDouble(1.0);
       }
     }
   }

@@ -131,7 +131,12 @@ impl Builder<'_> {
                 _ => face_input(seg, m),
             },
             ENTITY_REF => {
-                let target = super::decode::target_id(seg, m)?;
+                // A sketch curve or point by its tags, without a target
+                // object (mitcad#1808: a split's tool curves), as
+                // [`Builder::entity_target`] takes one.
+                let Some(target) = super::decode::target_id(seg, m) else {
+                    return self.input_entity(m);
+                };
                 if self.pos_of.contains_key(&target) {
                     return Some(self.feature_ref(target));
                 }

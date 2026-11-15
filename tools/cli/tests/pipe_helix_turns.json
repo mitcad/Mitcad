@@ -1,0 +1,9 @@
+[
+  {"comment": "A pipe along a helix whose turns lie closer than its section is wide (mitcad#1788): four turns of radius 10 about z rising 5 a turn (the turns 5 cos(a) = 4.984 mm apart, tan(a) = 5 / (20 pi)). The default section of 8 mm is refused at once, before the geometry (it joined the turns in pieces for about two minutes); 2 mm is a pipe of pi 1^2 L, L = 8 pi sqrt(100 + (5 / (2 pi))^2) = 252.1219 mm long."},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"helix": {"center": [0, 0, 0], "axis": [0, 0, 1], "x_axis": [1, 0, 0],
+    "radius": 10, "pitch": 5, "start_angle": 0, "end_angle": 25.132741228718345}}, "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "error", "error_contains": "the helix's turns lie 4.984 mm apart, so a section of 8 mm makes the pipe's turns pass through each other", "bodies": 0}},
+  {"cmd": "edit_feature", "uid": "F1", "def": {"type": "pipe", "path": {"helix": {"center": [0, 0, 0], "axis": [0, 0, 1], "x_axis": [1, 0, 0],
+    "radius": 10, "pitch": 5, "start_angle": 0, "end_angle": 25.132741228718345}}, "size": 2, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok", "body": "F1.b0", "volume": 792.0645, "tolerance": 1e-4}}
+]

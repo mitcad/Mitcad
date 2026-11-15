@@ -316,6 +316,23 @@ pub use helix_curve::HelixCurveDef;
 // The edges that may have taken a lost projection source's place
 // (mitcad#1784).
 pub(crate) mod projection_successors;
+// Form: subdivision surfaces from an editable control cage (mitcad#1757).
+pub mod form;
+pub use form::FormDef;
+// Edge frame: BUILD's frames along a straight edge on a face, for a member
+// along an edge (mitcad#1814).
+pub mod edge_frame;
+pub use edge_frame::EdgeFrameDef;
+// Fill Cavity: a closed pocket of a body filled up to a plane (mitcad#1818).
+pub mod fill_cavity;
+pub use fill_cavity::FillCavityDef;
+// Sketches on cylindrical and conical faces: their development, curves
+// and profiles on the face (mitcad#1768).
+pub(crate) mod developed;
+// Press Pull on a face continued Straight or Along the walls, tapered
+// (mitcad#1850).
+pub mod press_pull;
+pub use press_pull::{Continuation, PressPullDef, TaperType};
 
 use crate::assembly::Assembly;
 use crate::datum::Datum;
@@ -496,6 +513,14 @@ feature_types! {
     CoordinateSystem(CoordinateSystemDef),
     // Helix Curve (mitcad#1777).
     HelixCurve(HelixCurveDef),
+    // Form (mitcad#1757).
+    Form(FormDef),
+    // Edge frame: a member along an edge (mitcad#1814).
+    EdgeFrame(EdgeFrameDef),
+    // Fill Cavity (mitcad#1818).
+    FillCavity(FillCavityDef),
+    // Press Pull continued Straight or Along the walls (mitcad#1850).
+    PressPull(PressPullDef),
 }
 
 /// Brings a feature definition in an earlier form up to date before it is
@@ -716,6 +741,10 @@ pub struct FeatureOutput<S> {
     /// (mitcad#1777), in its component's coordinates: its pieces in order,
     /// each running along it.
     pub curve: Option<Vec<crate::sweeps::PathCurve>>,
+    /// Where a construction plane or axis is drawn when its resize handles
+    /// set no size (mitcad#1827): at the size and shape of what it is made
+    /// from; None when nothing measures.
+    pub drawn: Option<construction::DrawnExtent>,
 }
 
 impl<S> Default for FeatureOutput<S> {
@@ -735,6 +764,7 @@ impl<S> Default for FeatureOutput<S> {
             thread_fits: Vec::new(),
             inputs: None,
             curve: None,
+            drawn: None,
         }
     }
 }
@@ -888,6 +918,9 @@ pub(crate) struct Env<'a, S> {
     pub components: &'a BTreeMap<ComponentUid, Arc<BodyState<S>>>,
     /// Every occurrence's placement at this point of the timeline.
     pub placements: &'a BTreeMap<OccurrenceUid, Transform>,
+    /// Where the occurrences inside flexible occurrences are at this point
+    /// (mitcad#1793), read by linked geometry (mitcad#1805).
+    pub flexed: &'a crate::joints::Flexed,
     /// B-rep data of base features being added and the shapes it was
     /// written from (mitcad#244, `recompute::Cache::written_from`).
     pub written_from: &'a [(Brep, S)],
@@ -1349,7 +1382,38 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             }
         }
         let transform = link.transform(assembly, component, &mut |o| self.placement(o))?;
-        Ok((source, transform))
+        // Inside flexible occurrences (mitcad#1805): an occurrence where
+        // they have it, as the design shows it, after the part of the paths
+        // both share (`links::flexed_transform`); each placement looked for
+        // is recorded as read, like a placement.
+        let (placements, flexed) = (self.env.placements, self.env.flexed);
+        let reads = &mut self.reads;
+        let inside = crate::links::flexed_transform(
+            &link.source.0,
+            &target,
+            &mut |o| {
+                placements
+                    .get(&o)
+                    .copied()
+                    .or_else(|| assembly.occurrence(o).map(|o| o.transform))
+                    .unwrap_or(Transform::IDENTITY)
+            },
+            &mut |prefix, o| {
+                for i in 0..prefix.len() {
+                    let key = (prefix[i..].to_vec(), o);
+                    let placed = flexed.get(&key).copied();
+                    reads.push(Read::Flexed(
+                        key,
+                        placed.as_ref().map(crate::recompute::placement_bits),
+                    ));
+                    if placed.is_some() {
+                        return placed;
+                    }
+                }
+                None
+            },
+        );
+        Ok((source, inside.unwrap_or(transform)))
     }
 
     /// An occurrence's placement at this point of the timeline: its own

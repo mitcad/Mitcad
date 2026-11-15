@@ -4,6 +4,7 @@
 #include <functional>
 #include <utility>
 
+#include <QColor>
 #include <QHash>
 #include <QIcon>
 #include <QJsonObject>
@@ -90,6 +91,9 @@ struct BrowserNode {
     CamFolder,
     CamSetup,
     CamOperation,
+    // A folder of a component's Bodies folder (mitcad#1802: an imported
+    // design's folders): uid and name its name; its bodies under it.
+    BodyFolder,
   };
 
   Type type = Type::None;
@@ -125,7 +129,8 @@ struct BrowserNode {
     return type == Type::Bodies || type == Type::Sketches || type == Type::Construction ||
            type == Type::Origin || type == Type::Analyses || type == Type::Joints ||
            type == Type::MotionLinks || type == Type::Measurements || type == Type::Drawings ||
-           type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder;
+           type == Type::ImageReferences || type == Type::Features || type == Type::CamFolder ||
+           type == Type::BodyFolder;
   }
   // The selection item the row stands for; invalid for folders and settings.
   SelectionItem item() const;
@@ -135,7 +140,8 @@ struct BrowserNode {
 // views, the origin and the component tree with each occurrence's bodies,
 // sketches (each with the features that use it under it, mitcad#177),
 // construction geometry and joints, and the analyses kept in the document.
-// A row reads: expand arrow, light bulb (an eye; shows and hides), icon,
+// A row reads: its component's colour bar (mitcad#1876, as the timeline's
+// band), expand arrow, light bulb (an eye; shows and hides), icon,
 // name and, for a component, the radio button that activates it. Selecting
 // rows selects in the view and the timeline, and the other way round; a
 // slow second click on a selected row renames it in place, as F2 does.
@@ -472,6 +478,18 @@ private:
   // (mitcad#1143), so that a test sees a wrong role.
   void logRowColours();
   QString m_loggedRowColours; // its line, as last logged
+  // The components' bars (mitcad#1876): every row of a component has a bar
+  // of its component's colour at its left, before its arrow, light bulb and
+  // icon, the timeline's colour of that component (ComponentColors.hpp), the
+  // default orange for the root's rows; Design Settings and Named Views have
+  // none. By component uid, as the last rebuild took them from its snapshot.
+  QHash<QString, QColor> m_componentColors;
+  // Logs the component, occurrence and body rows' bars in the tree's order
+  // after a rebuild, when the line changed: "Browser colors: Root #f29e1a,
+  // Root/Bodies/Body1 #f29e1a, Root/Bolt:1 #e0892a, Root/Bolt:1/Bodies/Body2
+  // #e0892a, ..." (a row without one "none").
+  void logComponentColors();
+  QString m_loggedComponentColors; // its line, as last logged
   bool revealKeys(const QSet<QString>& keys);
   void selectionChanged();
   void itemEdited(QTreeWidgetItem* item, int column);

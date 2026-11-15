@@ -244,6 +244,15 @@ pub struct BodyReport {
     pub file_faces: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mitcad_faces: Option<usize>,
+    /// Where the Mitcad body lies against the file's, both in their
+    /// component's coordinates (mitcad#1802): the distance between their
+    /// centres of mass and the largest difference between their bounding
+    /// boxes' corners, mm. With the occurrence placements, which place both
+    /// alike, they give each body's placement in the design.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center_distance: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub box_distance: Option<f64>,
     /// The stored body's blob and record (`StoredBody::source`), and the
     /// Mitcad body matched to it: what the appearances join on
     /// (mitcad#228).
@@ -329,6 +338,26 @@ pub struct DesignReport {
     /// a design that derives them names (mitcad#324).
     #[serde(skip)]
     pub body_entities: BTreeMap<u64, mitcad_model::BodyUid>,
+    /// The control cages kept with Form bodies (mitcad#1365), each with
+    /// whether it opens as an editable Form (mitcad#1757: `form.create`
+    /// with the primitive `kept_cage`) and, where it does not, why in words.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub form_cages: Vec<FormCageReport>,
+}
+
+/// A control cage kept with a Form body (mitcad#1757).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct FormCageReport {
+    /// The file's cage entry (`TSpline.<uuid>.tsm`), for agents.
+    pub cage: String,
+    /// The body that keeps it, by its name where it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Whether it maps onto a Form's cage, so that it opens as a Form.
+    pub form: bool,
+    /// Why it does not, in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// A document a design refers to (mitcad#196; filled in by the caller that
@@ -790,6 +819,27 @@ impl DesignReport {
                     a.hidden_set, a.hidden
                 );
             }
+            if a.removed_left > 0 {
+                let _ = writeln!(
+                    out,
+                    "  bodies the file took out of the design: {} still in it, hidden (their removals did not come in)",
+                    a.removed_left
+                );
+            }
+            if a.unnamed_hidden > 0 {
+                let _ = writeln!(
+                    out,
+                    "  stored solids no body record names: {} hidden (no bodies of the design)",
+                    a.unnamed_hidden
+                );
+            }
+            if a.named + a.in_folders > 0 {
+                let _ = writeln!(
+                    out,
+                    "  body names: {}/{} of the file's names kept, {}/{} bodies in their folders",
+                    a.named_set, a.named, a.in_folders_set, a.in_folders
+                );
+            }
             for g in &a.gaps {
                 let _ = writeln!(out, "    {g}");
             }
@@ -930,6 +980,16 @@ impl DesignReport {
         }
         for extra in &self.extra_bodies {
             let _ = writeln!(out, "  extra body in the replay: {extra}");
+        }
+        for cage in &self.form_cages {
+            let body = cage.body.as_deref().unwrap_or("a Form body");
+            let _ = match &cage.why {
+                None => writeln!(out, "  control cage of {body}: opens as an editable Form"),
+                Some(why) => writeln!(
+                    out,
+                    "  control cage of {body}: does not open as a Form, the body stays as stored: {why}"
+                ),
+            };
         }
         for warning in &self.warnings {
             let _ = writeln!(out, "  warning: {warning}");

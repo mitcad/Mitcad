@@ -610,6 +610,7 @@ fn seeds_3dm() -> Seeds {
     vec![
         seed("sample", mitcad_3dm::testfile::sample()),
         seed("block-in-itself", mitcad_3dm::testfile::block_in_itself()),
+        seed("subd", mitcad_3dm::testfile::subd(80)),
     ]
 }
 

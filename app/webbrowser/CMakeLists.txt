@@ -200,6 +200,8 @@ set_property(GLOBAL PROPERTY MITCAD_BROWSER_COMPONENT_DIR "${MITCAD_BROWSER_COMP
 
 # --- The module ------------------------------------------------------------------
 add_library(mitcad-webbrowser MODULE
+  BrowserKeys.cpp
+  BrowserKeys.hpp
   ComponentBrowser.cpp
   ComponentBrowser.hpp
   ComponentBrowserHost.hpp

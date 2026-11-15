@@ -11,7 +11,9 @@
 # each; the view's print colours and ring, Remove, Undo and Redo, the
 # normal look after the panel, and Filament Change Here... on the plane's
 # and the face's context menu; the design saved keeps the changes at the
-# plane and the face by their references.
+# plane and the face by their references. Then (mitcad#1842) Filament
+# Change on an event while the panel removes the one above it stays on its
+# event, and closes when its own is removed.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-filament-changes-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(

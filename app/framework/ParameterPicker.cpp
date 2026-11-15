@@ -106,13 +106,16 @@ std::vector<ParameterPicker::Label> ParameterPicker::layout() const {
     const sketch::SketchModel& model = s.model;
     const gp_Trsf placement = s.placement;
     const OcctViewer& viewer = m_viewer;
+    // On the face of a sketch on a cylindrical or conical one, the lines
+    // bent with it (mitcad#1853).
     const auto toScreen = [&viewer, &model, placement](const sketch::V2& p) {
-      return viewer.toWidgetF(sketch::toModel(model.frame, p).Transformed(placement));
+      return viewer.toWidgetF(model.place(p).Transformed(placement));
     };
     const QPointF origin = toScreen(sketch::V2{0.0, 0.0});
     const double perMm = std::max(screenDistance(toScreen(sketch::V2{1.0, 0.0}), origin),
                                   screenDistance(toScreen(sketch::V2{0.0, 1.0}), origin));
-    const sketch::Projection projection{toScreen, perMm > 1e-9 ? 1.0 / perMm : 1.0};
+    const sketch::Projection projection{toScreen, perMm > 1e-9 ? 1.0 / perMm : 1.0,
+                                        model.surface ? model.surface->step() : 0.0};
     for (const sketch::DimensionData& d : model.dimensions) {
       if (d.parameter.isEmpty()) {
         continue;

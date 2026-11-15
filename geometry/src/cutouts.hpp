@@ -57,6 +57,9 @@ struct Cutouts {
     TopoDS_Shape continued; // with the body's material under it, its faces continued down
     int face = -1;          // the narrow face it rises from
     std::array<double, 6> within{}; // the box it was looked for in
+    // Put back whole (`continued`), never cut by the dressup: a wall found
+    // within its face's sector (fill_overflow's `sectors`, mitcad#1849).
+    bool whole = false;
   };
   std::vector<Wall> rising;
 };
@@ -110,16 +113,56 @@ std::optional<Cutouts> fill_cutouts(const Shape& body, const std::vector<int>& o
 // side of every other face at its ends; they may touch the other selected
 // edges' ends, and edges running on there past a region are merged. None
 // when no region is found.
-std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& owner, double contact,
-                                     double steepness, bool walls_too, bool at_corners = false);
+// How far a dressup reaches along a face of an edge: (body, the edge's set,
+// the edge, the face), each by index in `body` (mitcad#1819).
+using OverflowReach = std::function<double(const Shape&, int, int, int)>;
 
-// Where a chamfer of the selected edges (`owner`) reaching `contact` along
-// its faces is wider than a face beside an edge (a far edge of the face,
-// not at the selected edges' vertices, nearer the edge than `contact`):
-// "the chamfer of edge E{…} is wider than face F… and cannot meet face F…
-// beyond it" for the first such edge and face (with how many more), for an
-// error when the chamfer cannot be built so. Empty when there is none.
-std::string overflow_failure(const Shape& body, const std::vector<int>& owner, double contact);
+// With `reach`, a face counts as narrow only where its far edge is nearer
+// its edges than the dressup reaches along that face (a two-distance
+// chamfer's short leg on the face it lies on) rather than `contact`
+// (mitcad#1819: a face narrower than the long leg only is no narrow face);
+// the regions are looked for within `contact` as before.
+//
+// With `sectors` (mitcad#1849) each face's regions are looked for only in
+// its own part of the chain: on the face's side of a plane through each of
+// its edges that runs from a corner of the chain (a vertex where the face's
+// selected edge meets the next selected edge), the plane parting the two
+// edges' directions there (at a tangent corner the plane across the chain,
+// at a sharp one the mitre). A face round a corner of a rounded chain (a
+// cylinder segment) then finds the step past it within its own sector,
+// where its surface, continued, would take in the next faces' material too,
+// and the walls are put back whole, the faces beyond grown out to meet the
+// dressup (the step past the narrow face of a closed chain lies wholly
+// within the regions' reach, where put_walls_back would else cut it by the
+// dressup). A face without such a plane is left out; none when no face has
+// one.
+std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& owner, double contact,
+                                     double steepness, bool walls_too, bool at_corners = false,
+                                     const OverflowReach* reach = nullptr, bool sectors = false);
+
+// Where a chamfer (or a fillet: `role`) of the selected edges (`owner`)
+// reaching `contact` along its faces is wider than a face beside an edge (a
+// far edge of the face, not at the selected edges' vertices, nearer the
+// edge than `contact`): the face it would take away and the faces beyond
+// it, which it cannot meet, as placed_error() gives it: in words for the
+// person ("the chamfer is wider than the face beside its edge and would
+// take that face away, but cannot meet the face beyond it"), the edge and
+// faces as its places, "the chamfer of edge E{…} is wider than face F…,
+// which it would take away, and cannot meet face F… beyond it" for agents,
+// for the first such edge and face (with how many more), for an error when
+// the dressup cannot be built so (mitcad#1232, mitcad#1819). Empty when
+// there is none. `cause`, where given, follows in both texts: why the faces
+// beyond cannot meet it (kFreeformCause, mitcad#1849).
+std::string overflow_failure(const Shape& body, const std::vector<int>& owner, double contact,
+                             const char* role = "chamfer", const OverflowReach* reach = nullptr,
+                             const char* cause = nullptr);
+
+// overflow_failure's cause where a face beside the edges is a free-form
+// B-spline surface (no plane, cylinder, cone, sphere or torus within 1e-4),
+// which the dressup past narrow faces cannot continue past its far edge
+// (mitcad#1849). In words, no names.
+inline constexpr const char* kFreeformCause =
+    ": the face beside its edge is a free-form surface, which cannot be continued past its far edge";
 
 // Where a chamfer of the selected edges (`owner`) reaches exactly to a far
 // edge of a face beside them, its contact on the face touching that edge

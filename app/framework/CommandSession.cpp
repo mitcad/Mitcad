@@ -56,6 +56,11 @@ constexpr int kRefineDelayMs = 250;
 // A held drag of a motion's handle (CommandDef::dragMotion, mitcad#838)
 // that rests this long asks for the exact preview of where it is.
 constexpr int kMotionPauseMs = 250;
+// (mitcad#1788) A preview that has computed this long when a value is
+// typed is dropped for the new one: a quicker one is kept, so that values
+// stepped faster than it computes still show their intermediate result
+// (mitcad#1407), and a slow one would only hold the new value back.
+constexpr qint64 kDropPreviewAfterMs = 2000;
 constexpr double kDegreesPerRadian = 57.29577951308232;
 
 // A failed command's inputs: the error's ring colour (mitcad#1041).
@@ -247,18 +252,20 @@ CommandSession::~CommandSession() {
 // ---------------------------------------------------------------------------
 // Inputs
 
-QVector<CommandSession::Slot> CommandSession::slotsOf(bool shownOnly) const {
+QVector<CommandSession::Slot> CommandSession::slotsOf(bool shownOnly) const { return slotsOf(m_state, shownOnly); }
+
+QVector<CommandSession::Slot> CommandSession::slotsOf(const CommandState& state, bool shownOnly) const {
   QVector<Slot> result;
   for (const InputDef& input : m_def.inputs) {
-    if (shownOnly && input.visible && !input.visible(m_state)) {
+    if (shownOnly && input.visible && !input.visible(state)) {
       continue;
     }
     if (input.type != InputDef::Type::List) {
       result.append({input.id, &input, QString(), -1});
       continue;
     }
-    for (int i = 0; i < m_state.rows(input.id); ++i) {
-      const CommandState row = m_state.row(input.id, i);
+    for (int i = 0; i < state.rows(input.id); ++i) {
+      const CommandState row = state.row(input.id, i);
       for (const InputDef& child : input.children) {
         if (shownOnly && child.visible && !child.visible(row)) {
           continue;
@@ -345,7 +352,27 @@ void CommandSession::setDefaults(const InputDef& input, const QString& key) {
     break;
   case InputDef::Type::Choice:
     if (!m_state.hasChoice(key)) {
-      m_state.setChoice(key, input.defaultChoice);
+      QString initial = input.defaultChoice;
+      if (input.remembered && m_seedingChoices && !isEditing() && m_analysis.isEmpty() && panelValuesRemembered()) {
+        // A new feature's panel starts with the option chosen on the last
+        // OK (mitcad#1868: Flange's Measured and Position), when the choice
+        // offers it here; only at its start (m_seedingChoices).
+        QStringList offered;
+        const QVector<QPair<QString, QString>> options =
+            key == input.id ? input.choicesIn(m_state) : input.choices;
+        for (const QPair<QString, QString>& option : options) {
+          offered << option.first;
+        }
+        const PanelStart opening = panelStartChoice(m_def.id, input.id, initial, offered);
+        if (opening.fromMemory) {
+          qDebug().noquote() << QStringLiteral("Panel %1 %2: remembered %3").arg(m_def.name, input.id, opening.text);
+        } else if (!opening.remembered.isEmpty()) {
+          qDebug().noquote() << QStringLiteral("Panel %1 %2: remembered %3 is not offered here, %4 instead")
+                                    .arg(m_def.name, input.id, opening.remembered, initial);
+        }
+        initial = opening.text;
+      }
+      m_state.setChoice(key, initial);
     }
     break;
   case InputDef::Type::Check:
@@ -409,15 +436,16 @@ QSet<QString> CommandSession::changedSinceStart() const {
   return changed;
 }
 
-bool CommandSession::evaluatesHere(const QString& text, const InputDef& input) {
+std::optional<double> CommandSession::evaluateHere(const QString& text, const InputDef& input) {
   try {
     const QJsonObject answer = m_host.queryObject({{QStringLiteral("query"), QStringLiteral("evaluate")},
                                                    {QStringLiteral("expression"), text},
                                                    {QStringLiteral("printed_fits"), !input.printedFitFeature.isEmpty()},
                                                    {QStringLiteral("kind"), kindKey(input.valueKind)}});
-    return std::isfinite(answer.value(QStringLiteral("value")).toDouble(std::numeric_limits<double>::quiet_NaN()));
+    const double value = answer.value(QStringLiteral("value")).toDouble(std::numeric_limits<double>::quiet_NaN());
+    return std::isfinite(value) ? std::optional<double>(value) : std::nullopt;
   } catch (const std::exception&) {
-    return false;
+    return std::nullopt;
   }
 }
 
@@ -476,16 +504,19 @@ void CommandSession::restoreSettings(const PanelSettings& settings, const QSet<Q
       }
       if (changed.contains(id)) {
         left << id;
-      } else if (!evaluatesHere(text, input)) {
+      } else if (const std::optional<double> value = evaluateHere(text, input); !value) {
         qDebug().noquote()
             << QStringLiteral("Panel %1 %2: %3 %4 does not evaluate here").arg(m_def.name, id, source, text);
       } else {
         m_state.setText(id, text);
-        // (Before the panel is there, setPresenter evaluates every value.)
+        // Before the panel is there the value is stored as evaluated, so
+        // that the input's onChange below reads it (Repeat, mitcad#1844:
+        // Hole's thread sizes follow the repeated diameter); setPresenter
+        // evaluates every value again, with its hint and error.
         if (m_presenter) {
           evaluate(id);
         } else {
-          m_state.setValue(id, std::numeric_limits<double>::quiet_NaN());
+          m_state.setValue(id, *value);
         }
         restored << QStringLiteral("%1=%2").arg(id, text);
         set = true;
@@ -551,15 +582,37 @@ void CommandSession::applyRepeatSettings() {
   qDebug().noquote() << QStringLiteral("Panel %1 repeated: %2")
                             .arg(m_def.name, restored.isEmpty() ? QStringLiteral("as it starts")
                                                                 : restored.join(QStringLiteral(", ")));
+  // What was set by hand, as the OK left it (mitcad#1845): the reactions
+  // above took every restored value as set by hand (Hole's sizes as typed),
+  // so that a field that followed its driver would no longer follow it.
+  QStringList byHand;
+  for (const QString& key : m_def.repeatState) {
+    const QJsonObject object = settings.stateObjects.value(key);
+    if (!object.isEmpty() || !m_state.object(key).isEmpty()) {
+      m_state.setObject(key, object);
+      byHand << QStringLiteral("%1 [%2]").arg(key, object.keys().join(QStringLiteral(", ")));
+    }
+    const bool on = settings.stateChecks.value(key);
+    if (on || m_state.hasCheck(key)) {
+      m_state.setChecked(key, on);
+      byHand << QStringLiteral("%1 %2").arg(key, on ? QStringLiteral("on") : QStringLiteral("off"));
+    }
+  }
+  if (!byHand.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 repeated as set by hand: %2")
+                              .arg(m_def.name, byHand.join(QStringLiteral(", ")));
+  }
   // Where the panel starts now: what the user changes later is told from
   // it (mitcad#1298, changedSinceStart).
   m_startSettings = panelSettings(false);
 }
 
 bool CommandSession::start(const Selection& preselection, QString& error) {
+  m_seedingChoices = !isEditing() && m_analysis.isEmpty() && !m_suspended;
   for (const InputDef& input : m_def.inputs) {
     setDefaults(input, input.id);
   }
+  m_seedingChoices = false;
   setRowDefaults();
   // Where the panel starts: an input that differs from it later was changed
   // (mitcad#1298, considerKeptSettings).
@@ -629,7 +682,8 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
         position = i;
       }
     }
-    if (position >= 0 && marker > position) {
+    // An edit in place (mitcad#1812) keeps the design as it is.
+    if (position >= 0 && marker > position && !m_def.editInPlace) {
       // Show the model as the feature finds it.
       const QJsonObject rollback{{QStringLiteral("cmd"), QStringLiteral("set_marker")},
                                  {QStringLiteral("position"), position}};
@@ -1028,7 +1082,7 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
         // Typing takes over from a drag: nothing provisional of the drag
         // stays (mitcad#636).
         hideDragProxy(QStringLiteral("a value was typed"), true);
-        numericInputAction(key, [action, key, value] { action(key, value); });
+        numericInputAction(key, [action, key, value] { action(key, value); }, true);
       } else {
         inputAction([action, key, value] { action(key, value); });
       }
@@ -1515,7 +1569,9 @@ bool CommandSession::isReferable(const SelectionItem& item) const {
 }
 
 void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window) {
-  if (m_presenter && !m_presenter->inputEnabled(m_active)) { return; }
+  // Set aside, the panel takes no picks either (mitcad#1844: a drag where
+  // a hidden handle was).
+  if (m_suspended || (m_presenter && !m_presenter->inputEnabled(m_active))) { return; }
   if (m_host.modelBusy()) {
     inputAction([this, items, modifiers, window] { picked(items, modifiers, window); });
     return;
@@ -1703,6 +1759,11 @@ void CommandSession::selectionChanged(const QString& key) {
   // The picks moved or went: which are gone is known again from the next
   // preview (mitcad#1780).
   clearMissingPicks(key);
+  // Their words too, named again with the next gone pick (mitcad#1844); an
+  // ordered input's are listed again below (listItems).
+  if (const auto slot = slotOf(key); slot && !slot->def->ordered) {
+    m_state.setItemWords(key, {});
+  }
   // A new size from the picks (mitcad#1298): the last settings of the same
   // size, before the selection's own reaction (Thread's side keeps the
   // class on it).
@@ -1825,6 +1886,7 @@ void CommandSession::updateHighlights() {
   // Marks drawn beside the picks (CommandDef::marksAlone, mitcad#1109).
   const bool alone = !marks.empty() && (!m_def.marksAlone || m_def.marksAlone(m_state));
   QStringList unmarked;
+  int movedPicks = 0; // drawn where the preview places their component (pickMoved)
   for (const Slot& slot : slotsOf(true)) {
     if (slot.def->type != InputDef::Type::Selection) {
       continue;
@@ -1852,10 +1914,13 @@ void CommandSession::updateHighlights() {
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
         shown.body = m_host.bodyShape(item.owner);
       }
-      // On a component the preview moves, where the preview puts it.
-      if (m_def.pickMoved && !shown.shape.IsNull()) {
+      // On a component the preview moves, where the preview puts it, not
+      // also where the design has it (mitcad#1813); where the design has
+      // it while no preview is drawn.
+      if (m_def.pickMoved && m_drawnPreview && !shown.shape.IsNull()) {
         if (const auto by = m_def.pickMoved(item, m_state, m_host)) {
           shown.shape = shown.shape.Moved(TopLoc_Location(*by));
+          ++movedPicks;
         }
       }
       highlights.push_back(std::move(shown));
@@ -1905,6 +1970,15 @@ void CommandSession::updateHighlights() {
     qDebug().noquote() << QStringLiteral("%1 picks not drawn beside the marks: %2").arg(m_def.name, unmarkedText);
   }
   m_loggedUnmarked = unmarkedText;
+  // How many picks are drawn where the preview places their component, for
+  // UI tests (mitcad#1813: none of them also where the design has it).
+  if (m_def.pickMoved) {
+    const QString movedText = QString::number(movedPicks);
+    if (movedText != m_loggedMovedPicks && !(m_loggedMovedPicks.isEmpty() && movedPicks == 0)) {
+      qDebug().noquote() << QStringLiteral("%1 picks drawn where the preview places them: %2").arg(m_def.name, movedText);
+    }
+    m_loggedMovedPicks = movedText;
+  }
   // The places of a notice under the pointer (mitcad#1327).
   for (HighlightDisplay& place : m_host.noticeHighlights()) {
     highlights.push_back(std::move(place));
@@ -2311,7 +2385,9 @@ void CommandSession::closeValueBox(bool keep) {
 }
 
 void CommandSession::manipulatorDragged(const QString& key, double value) {
-  if (m_presenter && !m_presenter->inputEnabled(key)) { return; }
+  // Set aside, its handles take nothing (mitcad#1844), also a drag that
+  // began before.
+  if (m_suspended || (m_presenter && !m_presenter->inputEnabled(key))) { return; }
   // The provisional tool follows at once, also while the model computes
   // (mitcad#636).
   dragProxyMoved(key, value);
@@ -2361,7 +2437,7 @@ void CommandSession::manipulatorDragStarted(const QString& key, int element) {
 }
 
 void CommandSession::toggleElement(const QString& key, int element) {
-  if (m_presenter && !m_presenter->inputEnabled(key)) { return; }
+  if (m_suspended || (m_presenter && !m_presenter->inputEnabled(key))) { return; }
   if (m_host.modelBusy()) {
     inputAction([this, key, element] { toggleElement(key, element); });
     return;
@@ -2406,10 +2482,14 @@ void CommandSession::schedulePreview(int delay) {
   }
 }
 
-bool CommandSession::previewReady(QString& message, bool& error) {
-  for (const Slot& slot : slotsOf(true)) {
+bool CommandSession::previewReady(QString& message, bool& error) const {
+  return previewReady(m_state, message, error);
+}
+
+bool CommandSession::previewReady(const CommandState& state, QString& message, bool& error) const {
+  for (const Slot& slot : slotsOf(state, true)) {
     const InputDef& input = *slot.def;
-    if (input.type == InputDef::Type::Selection && m_state.items(slot.key).size() < input.min) {
+    if (input.type == InputDef::Type::Selection && state.items(slot.key).size() < input.min) {
       message = m_missingProfiles > 0 && input.id == QStringLiteral("profiles")
                     ? tr("%n profile(s) deleted from %1: select a new one.", nullptr, m_missingProfiles)
                           .arg(m_missingSketches)
@@ -2418,14 +2498,54 @@ bool CommandSession::previewReady(QString& message, bool& error) {
       return false;
     }
     // An empty Auto field is NaN on purpose: the model works it out.
-    if (input.type == InputDef::Type::Value && std::isnan(m_state.value(slot.key)) &&
-        !(input.autoText && m_state.text(slot.key).trimmed().isEmpty())) {
+    if (input.type == InputDef::Type::Value && std::isnan(state.value(slot.key)) &&
+        !(input.autoText && state.text(slot.key).trimmed().isEmpty())) {
       message = tr("%1: check the value.").arg(input.label);
       error = true;
       return false;
     }
   }
   return true;
+}
+
+std::optional<CommandSession::RowsLeftOut> CommandSession::rowsLeftOut() const {
+  RowsLeftOut out{m_state, QString(), QString()};
+  QStringList rows;
+  for (const InputDef& list : m_def.inputs) {
+    if (list.type != InputDef::Type::List || !list.previewCompleteRows || (list.visible && !list.visible(m_state))) {
+      continue;
+    }
+    // From the last row, so that the indices of those before stay.
+    for (int i = out.state.rows(list.id) - 1; i >= 0; --i) {
+      const CommandState row = out.state.row(list.id, i);
+      const bool waits = std::any_of(list.children.begin(), list.children.end(), [&row](const InputDef& child) {
+        return child.type == InputDef::Type::Selection && (!child.visible || child.visible(row)) &&
+               row.items(child.id).size() < child.min;
+      });
+      if (waits) {
+        out.state.removeRow(list.id, i);
+        rows.prepend(QStringLiteral("%1 row %2").arg(list.id).arg(i + 1));
+      }
+    }
+    if (out.state.rows(list.id) < std::max(1, list.minRows)) {
+      return std::nullopt; // nothing of the list to preview
+    }
+  }
+  if (rows.isEmpty()) {
+    return std::nullopt;
+  }
+  QString unused;
+  bool error = false;
+  if (!previewReady(out.state, unused, error)) {
+    return std::nullopt;
+  }
+  // What the first row left out needs, as the panel says it without the
+  // preview.
+  if (previewReady(m_state, out.message, error) || out.message.isEmpty()) {
+    return std::nullopt;
+  }
+  out.rows = rows.join(QStringLiteral(", "));
+  return out;
 }
 
 void CommandSession::runInspection() {
@@ -2624,8 +2744,21 @@ void CommandSession::runPreview() {
   QString message;
   bool error = false;
   Built built;
-  if (previewReady(message, error)) {
-    built = m_def.build(m_state, m_host);
+  const bool ready = previewReady(message, error);
+  // A value input that is empty or no value yet, as while it is typed
+  // (mitcad#1860).
+  const bool typing = !ready && error;
+  // A row that waits for a pick leaves the others' preview (mitcad#1813):
+  // the complete rows previewed, what the row needs said, OK waiting.
+  std::optional<RowsLeftOut> partial;
+  if (!ready && !error && !m_def.modelCommand && !m_def.accept && !m_def.sketchCommand) {
+    partial = rowsLeftOut();
+    if (partial) {
+      message.clear();
+    }
+  }
+  if (ready || partial) {
+    built = m_def.build(partial ? partial->state : m_state, m_host);
     if (!built.edit.isEmpty()) {
       // The inputs ask for another feature's edit (P6).
       const QString field = built.editInput.section(QLatin1Char('.'), -1);
@@ -2643,9 +2776,17 @@ void CommandSession::runPreview() {
   }
   if (!message.isEmpty()) {
     m_commitRequested = false;
-    clearPreview();
+    // The last good preview stays drawn while a value is typed, and in an
+    // edit (mitcad#1860): the view moves nothing until the inputs make a
+    // preview again.
+    if (keepsDrawnPreview(typing)) {
+      qDebug().noquote() << QStringLiteral("Preview %1: the last good preview kept").arg(m_def.name);
+    } else {
+      clearPreview();
+    }
     m_shownKey.clear();
     m_previewOk = false;
+    m_rowsLeftOut.clear();
     m_failed = error;
     showPanelMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
     m_presenter->setOkEnabled(false);
@@ -2707,9 +2848,7 @@ void CommandSession::runPreview() {
   // (mitcad#309); add_feature would put it in the active component.
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_feature")}, {QStringLiteral("def"), built.def}};
   if (isEditing()) {
-    command = {{QStringLiteral("cmd"), QStringLiteral("edit_feature")},
-               {QStringLiteral("uid"), m_editUid},
-               {QStringLiteral("def"), built.def}};
+    command = editPreviewCommand(built.def);
   } else if (m_def.addOptions) {
     // As OK sends it (mitcad#1632).
     m_def.addOptions(command, m_state);
@@ -2717,7 +2856,12 @@ void CommandSession::runPreview() {
   addAutoOperation(command);
   const QByteArray key = compactJson(command);
   const auto cached = m_cache.constFind(key);
-  if (key == m_shownKey && !m_previewCancelled && cached != m_cache.cend()) {
+  // The rows left out (mitcad#1813): when a row starts or stops waiting,
+  // the same preview is shown again with its own message and OK (a failed
+  // one says the same either way).
+  const QString leftOut = partial ? partial->message : QString();
+  const QString leftOutRows = partial ? partial->rows : QString();
+  if (key == m_shownKey && !m_previewCancelled && cached != m_cache.cend() && (leftOut == m_rowsLeftOut || m_failed)) {
     // No-op input actions still marked the checklist stale. Restore its
     // metadata from the accepted result on this delayed preview turn.
     m_presenter->setPreviewReport(cached.value().report);
@@ -2739,7 +2883,7 @@ void CommandSession::runPreview() {
   }
   m_previewCancelled = false;
   if (cached != m_cache.cend()) {
-    acceptFeaturePreview(key, built, cached.value(), false);
+    acceptFeaturePreview(key, built, cached.value(), false, leftOut, leftOutRows);
     resumePendingCommit();
     return;
   }
@@ -2773,10 +2917,13 @@ void CommandSession::runPreview() {
     const quint64 generation = m_generation;
     const quint64 structure = m_structureGeneration;
     m_asyncPending = true;
+    m_previewClock.start();
     showPanelMessage(tr("Computing preview…"), NoticeLevel::Progress);
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelPreviewAsync(key, m_def.name, this,
-        [this, generation, structure, key, built, computedFrom](const CommandHost::AsyncResult& result) {
+        [this, generation, structure, key, built, computedFrom, leftOut,
+         leftOutRows](const CommandHost::AsyncResult& result) {
+          m_previewClock.invalidate();
           if (!asyncPresenterAvailable()) { return; }
           m_asyncPending = false;
           if (m_cancelRequested) {
@@ -2804,12 +2951,13 @@ void CommandSession::runPreview() {
             const QJsonObject report = result.error.isEmpty() ? result.answer
                 : QJsonObject{{QStringLiteral("status"), QStringLiteral("error")},
                               {QStringLiteral("error"), result.error}};
-            acceptFeaturePreview(key, built, computedFrom(previewFromReport(report)), true);
+            acceptFeaturePreview(key, built, computedFrom(previewFromReport(report)), true, leftOut, leftOutRows);
           }
           resumePendingCommit();
         });
     if (!started) {
       m_asyncPending = false;
+      m_previewClock.invalidate();
       schedulePreview();
     }
     return;
@@ -2824,7 +2972,7 @@ void CommandSession::runPreview() {
     report = {{QStringLiteral("status"), QStringLiteral("error")},
               {QStringLiteral("error"), errorText(error)}};
   }
-  acceptFeaturePreview(key, built, computedFrom(previewFromReport(report)), true);
+  acceptFeaturePreview(key, built, computedFrom(previewFromReport(report)), true, leftOut, leftOutRows);
 }
 
 CommandSession::Preview CommandSession::previewFromReport(
@@ -2929,9 +3077,10 @@ CommandSession::Preview CommandSession::previewFromReport(
       // it is made in (mitcad#1029).
       preview.datum = placedDatum(preview.report.value(QStringLiteral("datum")).toObject(),
                                   m_host.datumPlacement(m_editUid));
-      // As large as the view draws the finished one: an edited plane's or
-      // axis's own display size when it has one (mitcad#1748), else 100 mm
-      // (MainWindow::kDefaultDatumSize).
+      // As the view draws the finished one: the preview's `drawn`, fitted to
+      // what it is made from or at its own display size (mitcad#1827); else
+      // an edited plane's or axis's own display size when it has one
+      // (mitcad#1748), else 100 mm (MainWindow::kDefaultDatumSize).
       double size = 100.0;
       if (!m_editUid.isEmpty()) {
         try {
@@ -2947,7 +3096,7 @@ CommandSession::Preview CommandSession::previewFromReport(
           // Not at the marker now (rolled back for the edit): the default.
         }
       }
-      preview.tool = datumShape(preview.datum, size);
+      preview.tool = drawnDatumShape(preview.datum, size);
     } else if (preview.report.contains(QStringLiteral("curve"))) {
       // An Intersection Curve's curve where the view draws the finished one
       // (MainWindow::showDatums): its polyline, in its component's
@@ -3263,7 +3412,8 @@ QString CommandSession::okMessage(const QJsonObject& report) {
 }
 
 void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& built,
-                                         const Preview& preview, bool cache) {
+                                         const Preview& preview, bool cache, const QString& leftOutMessage,
+                                         const QString& leftOutRows) {
   if (m_done || !m_presenter) { return; }
   if (cache) {
     if (m_cacheOrder.size() >= kCachedPreviews) {
@@ -3289,11 +3439,16 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
   }
   m_shownKey = key;
   const QString status = preview.report.value(QStringLiteral("status")).toString();
-  m_previewOk = status == QStringLiteral("ok");
+  bool drawable = status == QStringLiteral("ok");
+  bool kept = false; // the last good preview left drawn (mitcad#1860)
   const QJsonObject targets = preview.report.value(QStringLiteral("cut_targets")).toObject();
-  if (!targets.isEmpty()) { m_previewOk = m_previewOk && targets.value(QStringLiteral("can_commit")).toBool(); }
-  m_failed = !m_previewOk;
-  if (m_previewOk) {
+  if (!targets.isEmpty()) { drawable = drawable && targets.value(QStringLiteral("can_commit")).toBool(); }
+  // A preview of the complete rows only (mitcad#1813) is drawn, but OK
+  // waits for the rows it leaves out.
+  m_previewOk = drawable && leftOutMessage.isEmpty();
+  m_rowsLeftOut = drawable ? leftOutMessage : QString();
+  m_failed = !drawable;
+  if (drawable) {
     // No pick is gone (mitcad#1780).
     if (clearMissingPicks()) {
       m_presenter->refresh(m_state);
@@ -3302,12 +3457,23 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
     scheduleRefinement();
     // A feature that succeeds with a caveat says so (P9), not in red.
     const QStringList warnings = preview.report.value(QStringLiteral("warnings")).toVariant().toStringList();
-    m_presenter->setMessage(okMessage(preview.report), okLevel(preview.report));
-    m_host.showHint(selectionHint(tr("%1: Enter to confirm, Esc to cancel.").arg(m_def.name)));
+    if (leftOutMessage.isEmpty()) {
+      m_presenter->setMessage(okMessage(preview.report), okLevel(preview.report));
+      m_host.showHint(selectionHint(tr("%1: Enter to confirm, Esc to cancel.").arg(m_def.name)));
+    } else {
+      // What the rows left out need, as without the preview (mitcad#1813).
+      showPanelMessage(leftOutMessage, NoticeLevel::Hint);
+    }
     // (Then its infos, mitcad#1106.)
     const QStringList infos = preview.report.value(QStringLiteral("infos")).toVariant().toStringList();
-    qDebug().noquote() << QStringLiteral("Preview %1: ok%2%3")
-                              .arg(m_def.name,
+    // A preview of the complete rows only names the rows it leaves out and
+    // what the panel says they need (mitcad#1813), for UI tests.
+    const QString without =
+        leftOutMessage.isEmpty()
+            ? QString()
+            : QStringLiteral(" without its incomplete rows (%1: %2)").arg(leftOutRows, leftOutMessage);
+    qDebug().noquote() << QStringLiteral("Preview %1%2: ok%3%4")
+                              .arg(m_def.name, without,
                                    warnings.isEmpty() ? QString()
                                                       : QStringLiteral(", warning: ") + warnings.join(QStringLiteral("; ")),
                                    infos.isEmpty() ? QString()
@@ -3327,7 +3493,24 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
       qDebug().noquote() << QStringLiteral("Preview %1 elements: %2").arg(m_def.name).arg(elements.size());
     }
   } else {
-    clearPreview();
+    // An edit's failed preview leaves the last good one that places
+    // occurrences drawn (mitcad#1860).
+    const bool keptGood = keepsDrawnPreview(false);
+    kept = keptGood;
+    if (!kept) {
+      clearPreview();
+      if (isEditing() && status == QStringLiteral("error") && preview.report.contains(QStringLiteral("placements"))) {
+        // None drawn yet (the edited feature fails as the design has it):
+        // the occurrences where the failed state places them, the joints
+        // after it holding, not the rolled-back assembly drawn apart. It
+        // stays drawn as the last good one would.
+        QJsonObject placed = preview.report;
+        placed.insert(QStringLiteral("status"), QStringLiteral("ok"));
+        showPreview(previewFromReport(placed), QString());
+        qDebug().noquote() << QStringLiteral("Preview %1: the failed state's placements drawn").arg(m_def.name);
+        kept = true;
+      }
+    }
     const QString problem = preview.report.value(QStringLiteral("error")).toString();
     // In plain words where the model gave its notice (mitcad#1327); the
     // log keeps the model's own text.
@@ -3353,11 +3536,14 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
       });
     }
     qDebug().noquote() << QStringLiteral("Preview %1: failed: %2").arg(m_def.name, problem);
+    if (keptGood) {
+      qDebug().noquote() << QStringLiteral("Preview %1: the last good preview kept").arg(m_def.name);
+    }
   }
   // The places the message's notices name, and the bodies they are on
   // (mitcad#1327): painted while the pointer is over the message.
   m_messagePlaces = noticePlaces(preview.report.value(QStringLiteral("notices")).toArray());
-  m_messageBodies = m_previewOk ? preview.bodies : std::vector<BodyDisplay>();
+  m_messageBodies = drawable ? preview.bodies : std::vector<BodyDisplay>();
   if (m_messageHovered) {
     m_host.hoverNoticePlaces(QStringLiteral("panel"), m_messagePlaces, m_messageBodies);
   }
@@ -3366,8 +3552,9 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
   m_presenter->setPreviewReport(report);
   m_presenter->setOkEnabled(m_previewOk);
   updateHighlights();
-  // Toggles follow the shown preview (a pattern's instances, P9).
-  const QJsonObject shown = m_previewOk ? preview.report : QJsonObject();
+  // Toggles follow the shown preview (a pattern's instances, P9), the one
+  // kept too.
+  const QJsonObject shown = drawable ? preview.report : kept ? m_shownReport : QJsonObject();
   if (shown != m_shownReport) {
     m_shownReport = shown;
     updateManipulators();
@@ -3624,10 +3811,13 @@ void CommandSession::showCancelledPreview(const QByteArray& key) {
   clearPreview();
   m_shownKey = key;
   m_previewCancelled = true;
-  m_previewOk = true; // OK computes it, with a progress and a cancel of its own
+  // OK computes it, with a progress and a cancel of its own; not while a
+  // row the preview left out waits for a pick (mitcad#1813).
+  m_previewOk = !rowsLeftOut().has_value();
+  m_rowsLeftOut.clear();
   m_failed = false;
   showPanelMessage(tr("Preview canceled; change an input to preview again."), NoticeLevel::Information);
-  m_presenter->setOkEnabled(true);
+  m_presenter->setOkEnabled(m_previewOk);
   updateHighlights();
   if (!m_shownReport.isEmpty()) {
     m_shownReport = QJsonObject();
@@ -3715,24 +3905,32 @@ void CommandSession::showSketchPreview(const Built& built, bool keep) {
         made.push_back(body);
       }
     }
-    takeBackSketchPreview();
-    m_shownKey = key;
-    std::vector<BodyDisplay> shown = m_host.modelBodies();
-    Bnd_Box box;
-    for (const BodyDisplay& body : made) {
-      shown.push_back(body);
-      if (body.shape) {
-        BRepBndLib::Add(body.shape->occt().Moved(body.placement), box);
+    if (made.empty()) {
+      // Nothing new to draw (a Form that joins, cuts or intersects
+      // bodies, mitcad#1810): the bodies it changed are shown as the
+      // commands left them, applied as a sketch command's preview is,
+      // and OK keeps them as one undo step.
+      qDebug().noquote() << QStringLiteral("Preview %1: no new bodies, shown applied").arg(m_def.name);
+    } else {
+      takeBackSketchPreview();
+      m_shownKey = key;
+      std::vector<BodyDisplay> shown = m_host.modelBodies();
+      Bnd_Box box;
+      for (const BodyDisplay& body : made) {
+        shown.push_back(body);
+        if (body.shape) {
+          BRepBndLib::Add(body.shape->occt().Moved(body.placement), box);
+        }
       }
-    }
-    m_host.viewer().setBodies(shown);
-    qDebug().noquote() << QStringLiteral("Preview %1: %2 new bodies shown as a preview")
-                              .arg(m_def.name)
-                              .arg(static_cast<qlonglong>(made.size()));
-    if (!m_framedNew && !box.IsVoid()) {
-      // Both parts in the view's free area, the first time.
-      m_framedNew = true;
-      m_host.viewer().bringClearOfPanels(box, true);
+      m_host.viewer().setBodies(shown);
+      qDebug().noquote() << QStringLiteral("Preview %1: %2 new bodies shown as a preview")
+                                .arg(m_def.name)
+                                .arg(static_cast<qlonglong>(made.size()));
+      if (!m_framedNew && !box.IsVoid()) {
+        // Both parts in the view's free area, the first time.
+        m_framedNew = true;
+        m_host.viewer().bringClearOfPanels(box, true);
+      }
     }
   }
   if (m_previewOk) {
@@ -3835,6 +4033,28 @@ void CommandSession::clearPreview() {
     m_shownReport = {};
     updateManipulators();
   }
+}
+
+bool CommandSession::keepsDrawnPreview(bool typing) const {
+  if (m_def.sketchCommand || m_def.modelCommand || m_def.accept || !m_drawnPreview) {
+    return false;
+  }
+  // An edit's preview that places occurrences: without it the view would
+  // draw them where the rolled-back timeline has them.
+  return typing || (isEditing() && m_drawnPreview->preview.report.contains(QStringLiteral("placements")));
+}
+
+QJsonObject CommandSession::editPreviewCommand(const QJsonObject& def) const {
+  QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("edit_feature")},
+                      {QStringLiteral("uid"), m_editUid},
+                      {QStringLiteral("def"), def}};
+  // The model computes the features right after the edited one that only
+  // place occurrences up to the marker the edit rolled back from
+  // (commands.md, "Preview"); later geometry stays rolled back.
+  if (m_originalMarker > m_markerPosition) {
+    command.insert(QStringLiteral("through"), m_originalMarker);
+  }
+  return command;
 }
 
 void CommandSession::logPreviewCurve(const QString& curve) {
@@ -3945,7 +4165,7 @@ void CommandSession::inputAction(std::function<void()> action, bool invalidatesP
   action();
 }
 
-void CommandSession::numericInputAction(const QString& key, std::function<void()> action) {
+void CommandSession::numericInputAction(const QString& key, std::function<void()> action, bool typed) {
   if (m_done || m_cancelRequested || m_committing) { return; }
   ++m_generation;
   if (m_presenter) {
@@ -3960,6 +4180,17 @@ void CommandSession::numericInputAction(const QString& key, std::function<void()
   if (m_refining) {
     // A refinement would only hold the new value's preview back; the faces
     // it meshed are kept for the next one (mitcad#635).
+    m_host.cancelModelJob();
+  } else if (typed && m_asyncPending && m_previewClock.isValid() &&
+             m_previewClock.elapsed() >= kDropPreviewAfterMs && m_host.asynchronousPreviews()) {
+    // (mitcad#1788) A slow preview of the value before: dropped, so that
+    // the typed one is previewed without waiting for it (a Pipe along a
+    // helix computed minutes with the default size after the path was
+    // picked). Its completion sees the newer generation and previews again.
+    qDebug().noquote() << QStringLiteral("Preview %1: dropped after %2 ms for a typed value")
+                              .arg(m_def.name)
+                              .arg(m_previewClock.elapsed());
+    m_previewClock.invalidate(); // once
     m_host.cancelModelJob();
   }
   if (const auto pending = m_pendingNumbers.value(key)) {
@@ -5300,19 +5531,21 @@ void CommandSession::finish(bool committed) {
     return;
   }
   m_done = true;
-  // A new feature's OK keeps the values of its inputs marked to remember
-  // (mitcad#1028): the first row's of a list, those shown; an edit or
-  // Cancel keeps nothing.
+  // A new feature's OK keeps the values and choices of its inputs marked
+  // to remember (mitcad#1028, mitcad#1868): the first row's of a list,
+  // those shown; an edit or Cancel keeps nothing.
   if (committed && !isEditing() && m_analysis.isEmpty() && panelValuesRemembered()) {
     QVector<QPair<QString, QString>> kept;
     for (const Slot& slot : slotsOf(false)) {
       const InputDef& input = *slot.def;
-      if (!input.remembered || input.type != InputDef::Type::Value || !isShown(slot) ||
+      const bool value = input.type == InputDef::Type::Value;
+      if (!input.remembered || (!value && input.type != InputDef::Type::Choice) || !isShown(slot) ||
           std::any_of(kept.cbegin(), kept.cend(),
                       [&input](const QPair<QString, QString>& field) { return field.first == input.id; })) {
         continue;
       }
-      kept.append(qMakePair(input.id, rememberedText(m_state.text(slot.key), m_state.expression(slot.key))));
+      kept.append(qMakePair(input.id, value ? rememberedText(m_state.text(slot.key), m_state.expression(slot.key))
+                                            : m_state.choice(slot.key)));
     }
     rememberPanelValues(m_def.id, kept, committed, isEditing());
   }
@@ -5333,6 +5566,11 @@ void CommandSession::finish(bool committed) {
     PanelSettings settings = panelSettings(true);
     if (m_autoOperation.active()) {
       settings.choices.remove(QStringLiteral("operation"));
+    }
+    // And what was set by hand (mitcad#1845, CommandDef::repeatState).
+    for (const QString& key : m_def.repeatState) {
+      settings.stateObjects.insert(key, m_state.object(key));
+      settings.stateChecks.insert(key, m_state.checked(key));
     }
     m_committedSettings = settings;
   }
@@ -5453,6 +5691,12 @@ void CommandSession::suspend(const QString& why) {
   // when the inputs are as they were (mitcad#1790), not "already shown".
   m_shownKey.clear();
   qDebug().noquote() << QStringLiteral("%1 set aside %2").arg(m_def.name, why);
+  // Its handles go with the preview: neither drawn nor taking the mouse
+  // (mitcad#1844: Joint's Offset arrow and Angle ring during Animate).
+  if (m_manipulators) {
+    m_manipulators->setHandlesShown(false);
+    qDebug().noquote() << QStringLiteral("%1 handles hidden while set aside").arg(m_def.name);
+  }
 }
 
 void CommandSession::resume() {
@@ -5461,6 +5705,10 @@ void CommandSession::resume() {
   }
   m_suspended = false;
   qDebug().noquote() << QStringLiteral("%1 resumed").arg(m_def.name);
+  // The handles again, unless Ctrl still holds the preview hidden.
+  if (m_manipulators && !m_previewHidden) {
+    m_manipulators->setHandlesShown(true);
+  }
   refreshInputs();
   updateHighlights();
   schedulePreview(0);

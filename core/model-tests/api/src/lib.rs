@@ -89,3 +89,9 @@ mod folder_eye_tests;
 // Show Dimensions of a sketch's row: its dimensions drawn outside sketch
 // mode, kept as display state (mitcad#1772).
 mod sketch_dimensions_shown_tests;
+// Forms: a control cage made, queried and edited, symmetric, previewed,
+// saved and read back (mitcad#1757).
+mod form_tests;
+// Where construction planes and axes are drawn: fitted to what they are
+// made from, under the resize handles' size (mitcad#1827).
+mod datum_drawn_extent_tests;

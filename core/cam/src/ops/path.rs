@@ -343,7 +343,7 @@ impl Path {
     /// Cuts along the path from its start (where the tool is), Z going
     /// from `z0` to `z1` in proportion to the length. An arc too short to
     /// write as one (its end the same as its start to the program's
-    /// digits) is cut as a line.
+    /// digits) is cut as a line ([`PathBuilder::segment`]).
     pub(crate) fn cut(&self, b: &mut PathBuilder, z0: f64, z1: f64, feed: f64) {
         let total = self.length();
         let mut acc = 0.0;
@@ -355,11 +355,7 @@ impl Path {
             } else {
                 z0 + (z1 - z0) * acc / total
             };
-            let to = [s.end[0], s.end[1], z];
-            match s.arc {
-                Some((c, ccw)) if dist2(s.start, s.end) >= 0.01 => b.arc(to, c, ccw, feed),
-                _ => b.line(to, feed),
-            }
+            b.segment(s, [s.end[0], s.end[1], z], feed);
         }
     }
 }

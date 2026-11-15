@@ -316,6 +316,10 @@ vcpkg_from_github(
         1665-bopds-paves-of-an-edge-whose-blocks-do-not-chain.patch
         1666-brepfill-trim-shell-corner-round-along-the-bisector-plane-where-the-sides-intersection-breaks-up.patch
         1670-chfi3d-end-crossing-on-the-next-edge-of-the-faces-common-boundary.patch
+        1680-chfi3d-corner-join-face-classifier-set-up-once-per-face.patch
+        1690-brepblend-line-points-read-by-index-in-constant-time.patch
+        1691-intcurvesurface-surface-polyhedra-made-once-per-face.patch
+        1695-inttools-wline-decomposition-reads-no-point-past-the-line-ends.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

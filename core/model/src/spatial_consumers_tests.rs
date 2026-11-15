@@ -624,3 +624,124 @@ fn every_planar_path_is_rewritten_by_a_conversion() {
         other => panic!("{other:?}"),
     }
 }
+
+/// mitcad#1832: a Pattern at Points target on a 3D sketch's point in an
+/// occurrence resolves in 3D as it does without one: the route's end D
+/// (40, 30, 20), off the sketch's plane, where the occurrence places it.
+#[test]
+fn a_pattern_at_points_target_on_a_3d_sketch_point_in_an_occurrence() {
+    use crate::ids::{BodyUid, ComponentUid};
+    use crate::transform::Transform;
+
+    let mut doc = Document::new(MockKernel::default());
+    let (_, occurrence) = doc
+        .create_component(
+            Some("Route"),
+            Transform::translation([100.0, 20.0, 0.0]),
+            true,
+        )
+        .unwrap();
+    let (sketch, [_, _, cd], _) = route_abcd(&mut doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let block = add(
+        &mut doc,
+        json!({"type": "box", "plane": "xy", "corner": [0, 0], "length": 10,
+               "width": 10, "height": 10, "operation": "new_body"}),
+    );
+    let pattern = add(
+        &mut doc,
+        json!({"type": "pattern_at_points",
+               "objects": {"type": "bodies", "bodies": [BodyUid::new(block, 0)]},
+               "targets": [{"point": {"sketch": sketch, "point": format!("p{}", cd.end.0)},
+                            "occurrence": occurrence.to_string()}]}),
+    );
+    assert_eq!(status(&doc, pattern), FeatureStatus::Ok);
+    // The block's centre (5, 5, 5) at D placed: (140, 50, 20).
+    let bounds = doc
+        .body_shape(BodyUid::new(pattern, 0))
+        .and_then(|s| s.bounds)
+        .expect("the copy");
+    assert!(near(bounds.min, [135.0, 45.0, 15.0]), "{bounds:?}");
+}
+
+/// The route of [`route_abcd`] in a component of its own, its occurrence
+/// at (100, 20, 0) and grounded, the root active: the occurrence, the
+/// sketch and the route's end D (40, 30, 20), off the sketch's plane.
+fn route_in_an_occurrence(
+    doc: &mut Document<MockKernel>,
+) -> (crate::ids::OccurrenceUid, FeatureUid, EntityUid) {
+    use crate::ids::ComponentUid;
+    use crate::transform::Transform;
+
+    let (_, occurrence) = doc
+        .create_component(
+            Some("Route"),
+            Transform::translation([100.0, 20.0, 0.0]),
+            true,
+        )
+        .unwrap();
+    let (sketch, [_, _, cd], _) = route_abcd(doc);
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    doc.set_occurrence_grounded(occurrence, true).unwrap();
+    (occurrence, sketch, cd.end)
+}
+
+/// mitcad#1832: a Bound Length that starts at a 3D sketch's point in an
+/// occurrence (the start read through the occurrence's component)
+/// starts at D where the occurrence places it, (140, 50, 20): up to the
+/// plane z = 50 it is 30 long.
+#[test]
+fn a_bound_length_from_a_3d_sketch_point_in_an_occurrence() {
+    let mut doc = Document::new(MockKernel::default());
+    let (occurrence, sketch, d) = route_in_an_occurrence(&mut doc);
+    let bound = add(
+        &mut doc,
+        json!({"type": "bound_length", "parameter": 10,
+               "from": {"occurrence": occurrence.to_string(),
+                        "geometry": {"sketch": sketch, "point": format!("p{}", d.0)}},
+               "to": {"geometry": {"type": "plane", "origin": [0, 0, 50], "normal": [0, 0, 1]}},
+               "mode": "to_face"}),
+    );
+    assert_eq!(status(&doc, bound), FeatureStatus::Ok);
+    let Some(FeatureDef::BoundLength(def)) = doc.feature(bound).map(|f| &f.def) else {
+        panic!("no bound length");
+    };
+    let length = doc
+        .state()
+        .parameters
+        .value(def.parameter)
+        .expect("measured");
+    assert!((length - 30.0).abs() <= TOL, "{length}");
+}
+
+/// mitcad#1832: a joint whose origin is a 3D sketch's point in an
+/// occurrence (the origin read at the joint's step of the recompute)
+/// places the other side at D where the occurrence places it: a pin's
+/// point at its origin, rigidly on D, puts the pin at (140, 50, 20).
+#[test]
+fn a_joint_on_a_3d_sketch_point_in_an_occurrence() {
+    use crate::ids::ComponentUid;
+    use crate::transform::Transform;
+
+    let mut doc = Document::new(MockKernel::default());
+    let (route, sketch, d) = route_in_an_occurrence(&mut doc);
+    let (_, pin) = doc
+        .create_component(Some("Pin"), Transform::IDENTITY, true)
+        .unwrap();
+    let point = add(
+        &mut doc,
+        json!({"type": "construction_point",
+               "definition": {"type": "fixed", "point": [0, 0, 0]}}),
+    );
+    doc.activate_component(ComponentUid::ROOT).unwrap();
+    let joint = add(
+        &mut doc,
+        json!({"type": "joint", "kind": "rigid",
+               "a": {"occurrence": pin.to_string(), "geometry": point.to_string()},
+               "b": {"occurrence": route.to_string(),
+                     "geometry": {"sketch": sketch, "point": format!("p{}", d.0)}}}),
+    );
+    assert_eq!(status(&doc, joint), FeatureStatus::Ok);
+    let placed = doc.placement(pin).expect("placed");
+    assert!(near(placed.translation, [140.0, 50.0, 20.0]), "{placed:?}");
+}

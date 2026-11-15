@@ -123,6 +123,7 @@ fn has_origins(def: &FeatureDef) -> bool {
             | FeatureDef::AsBuiltJoint(_)
             | FeatureDef::ConstraintSet(_)
             | FeatureDef::BoundLength(_)
+            | FeatureDef::EdgeFrame(_)
     )
 }
 
@@ -1142,6 +1143,20 @@ fn follow_references(
                 bound.to.occurrence = to.occurrence;
                 bound.to.geometry = to.geometry;
             }
+            // An edge frame's edge and face (mitcad#1814): one path.
+            FeatureDef::EdgeFrame(edge) => {
+                let mut origin = JointOrigin {
+                    occurrence: edge.occurrence.clone(),
+                    geometry: edge.edge.clone(),
+                    frame_override: None,
+                };
+                follow_origin(&mut origin, component, &ends_in_source, moved, occurrence);
+                if origin.occurrence == edge.occurrence {
+                    origin.geometry = edge.face.clone();
+                    follow_origin(&mut origin, component, &ends_in_source, moved, occurrence);
+                }
+                edge.occurrence = origin.occurrence;
+            }
             FeatureDef::AsBuiltJoint(joint) => {
                 if let Some(origin) = joint.origin.as_mut() {
                     follow_origin(origin, component, &ends_in_source, moved, occurrence);
@@ -1234,7 +1249,7 @@ fn follow_origin(
 fn plane_features(plane: &SketchPlane) -> BTreeSet<FeatureUid> {
     let mut references = References::default();
     match plane {
-        SketchPlane::Face { face, body } => {
+        SketchPlane::Face { face, body } | SketchPlane::Developed { face, body, .. } => {
             references.features.extend(face.features());
             if let Some(body) = body {
                 references.body(*body);

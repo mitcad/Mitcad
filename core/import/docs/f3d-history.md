@@ -1099,7 +1099,11 @@ reached little of the design. Each cause and its fix, all general:
   every field after it was read 10 bytes early (the operation 0, the
   extents nonsense). It is read as `FromEntityStartDefinition` with the
   face and its `ProfileOffset`, which the face profiles' extrusions use
-  too.
+  too. A curved start face (text engraved into a cylinder's side,
+  mitcad#1848) replays as the extrusion from that face: the profile
+  projected onto it along the extrusion's direction, each side its
+  distance from there; before, the kernel refused a face that is not
+  planar and the extrusion fell back to the file's bodies.
 - **Sweep paths of a body's edges** whose ends meet within the model's
   chain tolerance (1e-6 of the path's size) but not within 1e-7 (the
   curves of edges of a face extruded from a sketch whose solve placed

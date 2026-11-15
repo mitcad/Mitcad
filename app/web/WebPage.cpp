@@ -127,22 +127,9 @@ bool boundsOf(const std::vector<PageBody>& bodies, std::array<double, 3>& low, s
   return any;
 }
 
-// The data of the design in `context` (WebPage.hpp), its bodies counted
-// and what is not as in the design in `result`.
-QJsonObject pageData(const CommandContext& context, const PageOptions& options, const QString& title,
-                     PageResult& result) {
-  // The document's unit: the viewer's own names, else millimetres.
-  const QString unitName = context.lengthUnit();
-  QString units = QStringLiteral("mm");
-  double unitMm = 1.0;
-  for (const Unit& unit : kUnits) {
-    if (unitName == QLatin1String(unit.name)) {
-      units = unitName;
-      unitMm = unit.millimetres;
-    }
-  }
-  const double scale = 1.0 / unitMm; // model units per mm
+} // namespace
 
+std::vector<PageBody> pageBodies(const CommandContext& context, const PageOptions& options, QStringList& warnings) {
   // The appearances with their textures' image files (as the view and the
   // final render find them).
   QHash<QString, Appearance> known = appearancesById(appearancesOf(context.queryArray(QStringLiteral("appearances"))));
@@ -183,7 +170,13 @@ QJsonObject pageData(const CommandContext& context, const PageOptions& options, 
   const auto materialOf = [&known](const QString& id) {
     // An unknown id (an imported one) or none: the default look.
     const auto appearance = known.constFind(id);
-    return render::materialOf(appearance != known.cend() ? appearance.value() : Appearance());
+    render::MaterialData material =
+        render::materialOf(appearance != known.cend() ? appearance.value() : Appearance());
+    // Named in the files that keep names (glTF, mitcad#1826).
+    if (appearance != known.cend()) {
+      material.name = appearance.value().name.toStdString();
+    }
+    return material;
   };
 
   // The visible bodies as placed; each body meshed once, on a copy of its
@@ -205,11 +198,11 @@ QJsonObject pageData(const CommandContext& context, const PageOptions& options, 
         try {
           made = std::make_shared<const render::MeshData>(render::meshOf(io::triangulate(shape->occt(), meshing)));
         } catch (const Standard_Failure& failure) {
-          result.warnings << QObject::tr("%1 is left out: it cannot be meshed (%2)")
-                                 .arg(nameOf.value(uid, uid), QString::fromUtf8(failure.what()));
+          warnings << QObject::tr("%1 is left out: it cannot be meshed (%2)")
+                          .arg(nameOf.value(uid, uid), QString::fromUtf8(failure.what()));
         } catch (const std::exception& e) {
-          result.warnings << QObject::tr("%1 is left out: it cannot be meshed (%2)")
-                                 .arg(nameOf.value(uid, uid), QString::fromUtf8(e.what()));
+          warnings << QObject::tr("%1 is left out: it cannot be meshed (%2)")
+                          .arg(nameOf.value(uid, uid), QString::fromUtf8(e.what()));
         }
         // The faces with appearances of their own by their names, grouped
         // by appearance (a face named twice takes the later one).
@@ -271,7 +264,29 @@ QJsonObject pageData(const CommandContext& context, const PageOptions& options, 
   for (const Appearance& look : looks) {
     lookPointers.push_back(&look);
   }
-  result.warnings += render::missingTextures(lookPointers);
+  warnings += render::missingTextures(lookPointers);
+  return bodies;
+}
+
+namespace {
+
+// The data of the design in `context` (WebPage.hpp), its bodies counted
+// and what is not as in the design in `result`.
+QJsonObject pageData(const CommandContext& context, const PageOptions& options, const QString& title,
+                     PageResult& result) {
+  // The document's unit: the viewer's own names, else millimetres.
+  const QString unitName = context.lengthUnit();
+  QString units = QStringLiteral("mm");
+  double unitMm = 1.0;
+  for (const Unit& unit : kUnits) {
+    if (unitName == QLatin1String(unit.name)) {
+      units = unitName;
+      unitMm = unit.millimetres;
+    }
+  }
+  const double scale = 1.0 / unitMm; // model units per mm
+
+  const std::vector<PageBody> bodies = pageBodies(context, options, result.warnings);
 
   const PageGlb glb = pageGlb(bodies, scale);
   result.warnings += glb.warnings;

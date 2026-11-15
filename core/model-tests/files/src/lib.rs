@@ -26,3 +26,5 @@ mod occurrence_placement_tests;
 mod design_preview_tests;
 // The design packed into a zip for a report (mitcad#1795).
 mod design_package_tests;
+// glTF files as mesh bodies and components (mitcad#1826).
+mod gltf_tests;

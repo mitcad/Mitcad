@@ -158,6 +158,23 @@ int navigationPreferencesTests() {
     orbitCenter->setCurrentIndex(orbitCenter->findData(int(OrbitCenter::Cursor)));
   }
   CHECK(form.chosen().orbitCenter == OrbitCenter::Cursor);
+  // The two-finger scroll's directions (mitcad#1873): off by default,
+  // each check box its own setting.
+  auto* reverseX = form.findChild<QCheckBox*>(QStringLiteral("navigationReversePanHorizontal"));
+  auto* reverseY = form.findChild<QCheckBox*>(QStringLiteral("navigationReversePanVertical"));
+  auto* reverseOrbit = form.findChild<QCheckBox*>(QStringLiteral("navigationReverseScrollOrbit"));
+  CHECK(reverseX && reverseY && reverseOrbit);
+  if (reverseX && reverseY && reverseOrbit) {
+    CHECK(!reverseX->isChecked() && !reverseY->isChecked() && !reverseOrbit->isChecked());
+    CHECK(reverseX->text() == QStringLiteral("Reverse horizontal pan") &&
+          reverseY->text() == QStringLiteral("Reverse vertical pan") &&
+          reverseOrbit->text() == QStringLiteral("Reverse scroll orbit"));
+    const int before = changes;
+    reverseY->setChecked(true);
+    CHECK(changes > before);
+    reverseOrbit->setChecked(true);
+  }
+  CHECK(!form.chosen().reversePanHorizontal && form.chosen().reversePanVertical && form.chosen().reverseScrollOrbit);
 
   // The 3D mouse's tab (mitcad#951): its speed, a reversed axis, an axis
   // off, a lock and a button's command go into the settings.
@@ -224,6 +241,11 @@ int navigationPreferencesTests() {
     CHECK(reopened.chosen().orbitCenter == OrbitCenter::Cursor);
     auto* reopenedCenter = reopened.findChild<QComboBox*>(QStringLiteral("navigationOrbitCenter"));
     CHECK(reopenedCenter && reopenedCenter->currentData().toInt() == int(OrbitCenter::Cursor));
+    CHECK(!reopened.chosen().reversePanHorizontal && reopened.chosen().reversePanVertical &&
+          reopened.chosen().reverseScrollOrbit);
+    auto* reopenedY = reopened.findChild<QCheckBox*>(QStringLiteral("navigationReversePanVertical"));
+    auto* reopenedX = reopened.findChild<QCheckBox*>(QStringLiteral("navigationReversePanHorizontal"));
+    CHECK(reopenedY && reopenedY->isChecked() && reopenedX && !reopenedX->isChecked());
     CHECK(reopened.chosen().spaceMouse.speed == 2.0 && reopened.chosen().spaceMouse.reversed[0] &&
           !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
     CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));

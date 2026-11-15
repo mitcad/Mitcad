@@ -69,6 +69,11 @@ const ExportType kTypes[] = {
     {"usdz", "", "usdz", QT_TRANSLATE_NOOP("Export", "USDZ for AR and 3D viewers (*.usdz)")},
     // One self-contained page with the web viewer and the design (mitcad#423).
     {"html", "", "html", QT_TRANSLATE_NOOP("Export", "Web page (*.html)")},
+    // glTF 2.0 for the web, catalogues and sharing (mitcad#1826): the web
+    // page's file of its own, binary and self-contained or as JSON with
+    // its buffer and images beside it.
+    {"glb", "", "glb", QT_TRANSLATE_NOOP("Export", "glTF binary (*.glb)")},
+    {"gltf", "", "gltf", QT_TRANSLATE_NOOP("Export", "glTF (*.gltf)")},
 };
 
 constexpr int kTypeCount = static_cast<int>(sizeof(kTypes) / sizeof(kTypes[0]));
@@ -77,7 +82,8 @@ const QStringList kRefinements{QStringLiteral("low"), QStringLiteral("medium"), 
 
 bool isMeshType(const QString& format) {
   return format == QStringLiteral("stl") || format == QStringLiteral("obj") || format == QStringLiteral("3mf") ||
-         format == QStringLiteral("usdz") || format == QStringLiteral("html");
+         format == QStringLiteral("usdz") || format == QStringLiteral("html") || format == QStringLiteral("glb") ||
+         format == QStringLiteral("gltf");
 }
 
 // The type a file's extension asks for (the first of a format), or -1.
@@ -117,6 +123,12 @@ int typeOfSuffix(const QString& suffix, int current) {
   }
   if (is({"html", "htm"})) {
     return 9;
+  }
+  if (is({"glb"})) {
+    return 10;
+  }
+  if (is({"gltf"})) {
+    return 11;
   }
   return -1;
 }
@@ -380,13 +392,16 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     // A web page shows the design as the view does: every visible body
     // where the design places it.
     const bool page = format == QStringLiteral("html");
+    // A glTF file keeps the component tree with its placements: the design's
+    // coordinates (mitcad#1826).
+    const bool gltf = format == QStringLiteral("glb") || format == QStringLiteral("gltf");
     // A 3MF file of the plates prints the whole design on the bed
     // (mitcad#1679); on the bed the bodies are where the design shows them.
     const bool threeMf = format == QStringLiteral("3mf");
     const bool platesChosen = threeMf && hasPlates && !plateBox->currentData().toString().isEmpty();
     const bool bed = platesChosen || (threeMf && onBed->isChecked());
     form->setRowVisible(bodies, format != QStringLiteral("dxf") && !page && !platesChosen);
-    form->setRowVisible(coordinates, chooseCoordinates && format != QStringLiteral("dxf") && !page && !bed);
+    form->setRowVisible(coordinates, chooseCoordinates && format != QStringLiteral("dxf") && !page && !gltf && !bed);
     form->setRowVisible(plateBox, threeMf && hasPlates);
     form->setRowVisible(slicerBox, threeMf);
     form->setRowVisible(onBed, threeMf && !platesChosen);

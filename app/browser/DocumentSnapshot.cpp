@@ -35,6 +35,7 @@ QVector<DocumentSnapshot::Occurrence> occurrencesOf(const QJsonArray& values) {
     occurrence.grounded = o.value(QStringLiteral("grounded")).toBool();
     occurrence.visible = o.value(QStringLiteral("visible")).toBool(true);
     occurrence.transparent = o.value(QStringLiteral("transparent")).toBool();
+    occurrence.flexible = o.value(QStringLiteral("flexible")).toBool();
     occurrence.world = o.value(QStringLiteral("world")).toArray();
     occurrence.children = occurrencesOf(o.value(QStringLiteral("children")).toArray());
     occurrence.name = text(o, "name");
@@ -322,6 +323,7 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     body.visible = b.value(QStringLiteral("visible")).toBool(true);
     body.transparent = b.value(QStringLiteral("transparent")).toBool();
     body.mesh = b.value(QStringLiteral("mesh")).toBool();
+    body.folder = b.value(QStringLiteral("folder")).toString(); // mitcad#1802
     body.lastFeature = b.value(QStringLiteral("last_feature")).toString(); // mitcad#1704
     // The print bed face (mitcad#731).
     const QJsonObject bed = b.value(QStringLiteral("print_bed_face")).toObject();
@@ -684,6 +686,7 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("shell"), QStringLiteral("shell")},
       {QStringLiteral("draft"), QStringLiteral("draft")},
       {QStringLiteral("offset_face"), QStringLiteral("press-pull")},
+      {QStringLiteral("press_pull"), QStringLiteral("press-pull")},
       {QStringLiteral("delete_face"), QStringLiteral("delete")},
       {QStringLiteral("remove_body"), QStringLiteral("delete")},
       {QStringLiteral("replace_face"), QStringLiteral("replace-face")},
@@ -777,6 +780,10 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("mesh_convert"), QStringLiteral("convert-mesh")},
       // Envelopes (mitcad#1271, mitcad#1276).
       {QStringLiteral("envelope"), QStringLiteral("envelope")},
+      // Forms (mitcad#1757).
+      {QStringLiteral("form"), QStringLiteral("form")},
+      // Fill Cavity (mitcad#1818).
+      {QStringLiteral("fill_cavity"), QStringLiteral("fill-cavity")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

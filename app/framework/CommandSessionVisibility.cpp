@@ -246,8 +246,8 @@ void CommandSession::visibilityChanged(bool sketchPreviewTakenBack) {
 
 bool CommandSession::redrawPreview() {
   if (m_def.sketchCommand || m_def.modelCommand || m_def.accept || m_def.inspect || m_shownKey.isEmpty() ||
-      !m_previewOk || m_previewCancelled) {
-    return true; // no feature preview drawn
+      (!m_previewOk && m_rowsLeftOut.isEmpty()) || m_previewCancelled) {
+    return true; // no feature preview drawn (one of the complete rows is, mitcad#1813)
   }
   const auto cached = m_cache.constFind(m_shownKey);
   if (cached == m_cache.cend()) {
@@ -378,6 +378,15 @@ void CommandSession::setActivationNotice(const QString& text) {
   logged.replace(QLatin1Char('\n'), QStringLiteral(" "));
   qDebug().noquote() << QStringLiteral("Panel %1 notice: %2").arg(m_def.name, logged);
   showPanelMessage(text, NoticeLevel::Information);
+}
+
+void CommandSession::setHiddenText(const QString& key, const QString& text) {
+  if (m_done || m_state.text(key) == text) {
+    return;
+  }
+  m_state.setText(key, text);
+  qDebug().noquote() << QStringLiteral("Panel %1 %2: %3")
+                            .arg(m_def.name, key, text.isEmpty() ? QStringLiteral("none") : text);
 }
 
 void CommandSession::updateActivationOffer() {

@@ -1,0 +1,14 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-profiles", "name": "Test profiles",
+  "description": "A synthetic BUILD profile with two rows, of the derived part edit UI test (mitcad#1812).",
+  "library_version": "1.0.0", "license": "MIT", "authors": ["Mitcad UI test"], "units": "mm",
+  "categories": [{"id": "profiles", "name": "Profiles"}],
+  "components": [
+    {"id": "p-rows-test", "path": "profiles/p-rows-test.mitcad", "name": "Profile rows test", "category": "profiles",
+     "designation": "Profile rows test L={L}",
+     "build": {"role": "profile", "system": {"type": "I", "slot": 5, "grid": 20},
+       "length": {"parameter": "L", "min": "10 mm", "max": "3000 mm", "default": "500 mm", "stock": ["1000 mm"]},
+       "section": {"width": "20 mm", "height": "20 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"}]}}
+  ]
+}

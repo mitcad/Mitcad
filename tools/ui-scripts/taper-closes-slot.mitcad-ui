@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: MIT
+# A widening taper that closes a slot (mitcad#1851), the shared input
+# script of tools/ui-taper-closes-slot-test.sh (Linux),
+# tools/ui-windows-taper-closes-slot-test.ps1 and
+# tools/ui-macos-taper-closes-slot-test.sh, on
+# tools/ui-scripts/taper-closes-slot.json (a 30 x 20 block with a slot 4
+# wide and 8 deep from its top side):
+#   1. Extrude on the profile, Distance 10 and Taper Angle 20 typed: the
+#      slot's walls lean into each other and meet 2 / tan 20 = 5.49 mm up;
+#      the preview builds and OK adds the body, the slot filled from there
+#      on: 6000 + 5000 t + 4000 t^2 / 3 - 32 / t = 7908.564 mm3 for
+#      t = tan 20 (geometry/tests/test_taper_events.cpp, the section's
+#      area integrated).
+#   2. Properties of the body shows that volume.
+wait-idle
+window-resize 1280 860
+focus-main
+command view.fit
+wait-idle
+
+# 1. Extrude with a widening taper.
+mark
+command solid.extrude
+wait-log '^Command Extrude started'
+wait-log '^Pick places:' 20
+capture p1 '^Pick profile (F1/\S+) at '
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+click-pick 'profile ${p1:re} at '
+wait-log '^Extrude Profiles: 1 profile'
+mark
+type-in '^Panel Extrude input distance at ' '10'
+wait-log '^Extrude Distance: 10( mm)? = 10 mm$'
+mark
+type-in '^Panel Extrude input taper at ' '20'
+wait-log '^Extrude Taper Angle: 20( deg)? = 20 deg$'
+wait-log '^Preview Extrude: ok' 60
+mark
+key Return
+wait-log '^Added extrude [(]New Body[)], distance 10' 60
+expect-model-bodies 1 7908.564335818
+
+# 2. The body's Properties: its volume.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+expect-selection 1 0
+mark
+command inspect.properties
+wait-log '^Properties body: Body1: Physical: .*Volume 7[.]9[0-9]* cm3' 30
+focus-dialog '^Properties$'
+screenshot '${MITCAD_TEST_WORK}/taper-closes-slot.png'
+key Escape
+expect-dialog-gone '^Properties$'
+focus-main
+expect-never 'Recompute failed|TestDriver: FAIL'

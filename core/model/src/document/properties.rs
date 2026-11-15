@@ -13,7 +13,7 @@
 
 use serde_json::{Value, json};
 
-use super::{DocState, Document, ModelError, PartsListRow, invalid};
+use super::{DocState, Document, MaterialSource, ModelError, PartsListRow, invalid};
 use crate::ids::ComponentUid;
 use crate::kernel::Kernel;
 use crate::properties::{
@@ -24,6 +24,10 @@ use crate::properties::{
 
 /// The keys the document works out (in [`COMPUTED_SET`]).
 const COMPUTED_KEYS: [&str; 5] = ["Volume", "Area", "Mass", "Length", "Material"];
+
+/// The computed `Material` of a body without a material anywhere
+/// (mitcad#1817): said so, never a default's name.
+pub(crate) const NO_MATERIAL: &str = "No material";
 
 /// A property as a level shows it: stored, inherited from the component
 /// or worked out.
@@ -572,7 +576,10 @@ impl<K: Kernel> Document<K> {
                 let Some(shape) = self.body_shape(b) else {
                     return out;
                 };
-                let material = self.body_material(b, None).0;
+                // A body without a material anywhere has none and no mass
+                // (mitcad#1817): never steel unasked.
+                let (material, source) = self.body_material(b, None);
+                let material = (source != MaterialSource::Default).then_some(material);
                 if let Ok(mass) = self.kernel().mass_properties(shape) {
                     let c = Source::Computed;
                     push(
@@ -583,14 +590,18 @@ impl<K: Kernel> Document<K> {
                         c,
                     );
                     push(COMPUTED_SET, "Area", BaseType::Area, number(mass.area), c);
-                    let kg = mass.volume * material.density * 1e-6;
-                    push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), c);
+                    if let Some(material) = material {
+                        let kg = mass.volume * material.density * 1e-6;
+                        push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), c);
+                    }
                 }
                 push(
                     COMPUTED_SET,
                     "Material",
                     BaseType::Text,
-                    PropertyValue::Text(material.name.to_owned()),
+                    PropertyValue::Text(
+                        material.map_or_else(|| NO_MATERIAL.to_owned(), |m| m.name.to_owned()),
+                    ),
                     Source::Computed,
                 );
             }
@@ -602,6 +613,7 @@ impl<K: Kernel> Document<K> {
                 let mut volume = 0.0;
                 let mut kg = 0.0;
                 let mut measured = 0;
+                let mut without_material = 0;
                 for body in self.bodies() {
                     if self.body_component(body.uid) != Some(c) {
                         continue;
@@ -609,15 +621,22 @@ impl<K: Kernel> Document<K> {
                     let Ok(mass) = self.kernel().mass_properties(body.shape) else {
                         continue;
                     };
-                    let density = self.body_material(body.uid, None).0.density;
+                    let (material, source) = self.body_material(body.uid, None);
                     volume += mass.volume;
-                    kg += mass.volume * density * 1e-6;
+                    if source == MaterialSource::Default {
+                        without_material += 1;
+                    } else {
+                        kg += mass.volume * material.density * 1e-6;
+                    }
                     measured += 1;
                 }
                 if measured > 0 {
                     let s = Source::Computed;
                     push(COMPUTED_SET, "Volume", BaseType::Volume, number(volume), s);
-                    push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), s);
+                    // No mass while a body has no material (mitcad#1817).
+                    if without_material == 0 {
+                        push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), s);
+                    }
                 }
                 if let Some(length) = self.part_info(c).and_then(|info| info.length) {
                     let s = Source::Computed;
@@ -1034,6 +1053,43 @@ impl<K: Kernel> Document<K> {
                     .unwrap_or("")
                     .to_owned()
             })
+    }
+
+    /// What a BUILD part's lists show of it, as properties to store in the
+    /// [`LIBRARY_SET`] (Convert to Features, mitcad#1815): its library data
+    /// (designation, supplier, part number, material, grade), its section
+    /// and its length, so that the parts list keeps it as it was listed
+    /// when it no longer follows its library.
+    pub(crate) fn library_snapshot(&self, component: ComponentUid) -> Vec<Property> {
+        let mut out: Vec<Property> = self
+            .derived_properties(PropertyOwner::Component(component), false, None)
+            .into_iter()
+            .filter(|shown| same_name(&shown.set, LIBRARY_SET))
+            .map(|shown| shown.property)
+            .collect();
+        if let Some(info) = self.part_info(component) {
+            if let Some([width, height]) = info.meta.section_size() {
+                out.push(Property::new(
+                    "Section",
+                    BaseType::Text,
+                    PropertyValue::Text(format!(
+                        "{} x {} mm",
+                        crate::build::round(width),
+                        crate::build::round(height)
+                    )),
+                    Source::Library,
+                ));
+            }
+            if let Some((_, length)) = info.length {
+                out.push(Property::new(
+                    "Length",
+                    BaseType::Length,
+                    PropertyValue::Number(length),
+                    Source::Library,
+                ));
+            }
+        }
+        out
     }
 }
 

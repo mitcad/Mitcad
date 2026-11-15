@@ -257,6 +257,7 @@ pub(crate) fn writes(
         | D::CapturePosition(_)
         | D::MoveOccurrence(_)
         | D::BoundLength(_)
+        | D::EdgeFrame(_)
         | D::Placeholder(_)
         | D::IntersectionCurve(_)
         | D::HelixCurve(_)
@@ -269,11 +270,13 @@ pub(crate) fn writes(
         D::Cylinder(p) => by_operation(p.operation, &p.participants),
         D::Sphere(p) => by_operation(p.operation, &p.participants),
         D::Torus(p) => by_operation(p.operation, &p.participants),
+        D::Form(f) => by_operation(f.operation, &f.participants),
         D::Base(b) => by_operation(b.operation, &b.participants)
             .union(Writes::bodies(b.replaces.iter().copied())),
         D::Fillet(f) => Writes::bodies([f.body]),
         D::Chamfer(c) => Writes::bodies([c.body]),
         D::OffsetFace(o) => Writes::bodies([o.body]),
+        D::PressPull(p) => Writes::bodies([p.body]),
         D::Thread(t) => Writes::bodies(t.faces.iter().map(|face| face.body)),
         D::Combine(c) => {
             Writes::bodies(std::iter::once(c.target).chain(c.tools.iter().map(|tool| tool.body)))

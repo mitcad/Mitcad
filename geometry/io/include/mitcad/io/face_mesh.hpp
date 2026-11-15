@@ -24,6 +24,11 @@ struct FaceMeshes {
   // Each face's number of triangles, in the order TopExp::MapShapes numbers
   // the faces (that of geometry::Shape::face).
   std::vector<std::uint32_t> face_triangles;
+  // A mesh body's texture coordinates (mitcad#1874): u, v per vertex (u to
+  // the image's right, v up it) where a face without a surface has UV
+  // nodes (mitcad#1862, a glTF file's); empty when no face has them, else
+  // one pair per vertex, zeros on the faces without.
+  std::vector<std::array<double, 2>> uvs;
 };
 
 // The shape triangulated with `options` on a copy (see triangulate), in the
@@ -31,8 +36,9 @@ struct FaceMeshes {
 // at each vertex, turned where the face is reversed (at a point where the
 // surface has no normal, such as a cone's apex, the normal of the face's
 // triangles around it); a face without a surface (a mesh body) is faceted:
-// each triangle with its own three vertices and its own normal. Throws
-// Error when a face has no triangulation.
+// each triangle with its own three vertices and its own normal, and its
+// UV nodes (texture coordinates) in `uvs`. Throws Error when a face has no
+// triangulation.
 FaceMeshes face_meshes(const TopoDS_Shape& shape, const MeshOptions& options);
 
 } // namespace mitcad::io

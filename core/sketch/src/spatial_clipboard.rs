@@ -166,7 +166,7 @@ pub fn copy(
             chosen_texts.insert(id);
             copied.extend(text.planar.frame.iter().copied());
             if base.is_none() {
-                base = Some(text.normal.place(text.planar.at, text.z));
+                base = Some(text.plane().place(text.planar.at, text.z));
             }
             continue;
         }
@@ -707,9 +707,12 @@ impl SpatialEdit<'_> {
             let mut text = t.clone();
             let id = self.def.next_entity();
             text.planar.id = id;
-            let shift = t.normal.planar(by);
+            // Along the plane the text lies on: a rotated one's own x, y and
+            // normal (mitcad#1836).
+            let plane = t.plane();
+            let shift = plane.planar(by);
             text.planar.at = [t.planar.at[0] + shift[0], t.planar.at[1] + shift[1]];
-            text.z += by[t.normal.index()];
+            text.z += plane.elevation(by);
             for p in &mut text.planar.frame {
                 *p = *map.get(p).ok_or_else(|| {
                     said(

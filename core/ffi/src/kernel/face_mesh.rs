@@ -8,12 +8,15 @@ pub mod ffi {
     /// each other (millimetres; unit normals out of the body), `triangles`
     /// three vertex indices each (counter-clockwise seen from outside,
     /// face by face), `face_triangles` each face's number of triangles in
-    /// the shape's face order.
+    /// the shape's face order; `uvs` a mesh body's texture coordinates
+    /// (mitcad#1874), u, v per vertex after each other, or empty when no
+    /// face has them.
     struct FaceMeshes {
         vertices: Vec<f64>,
         normals: Vec<f64>,
         triangles: Vec<u32>,
         face_triangles: Vec<u32>,
+        uvs: Vec<f64>,
     }
 
     unsafe extern "C++" {

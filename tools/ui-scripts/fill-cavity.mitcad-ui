@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Fill Cavity (mitcad#1818, app/COMMANDS.md "Fill Cavity") on the design
+# fill-cavity.json makes: a block with a wall on its right half, a blind
+# slit along the wall's foot (100 mm3) and a groove across the lower half
+# open at both ends; Plane1 (F5) on the lower half's top.
+#   1. Fill Cavity: Body1 picked in the browser, Plane1 as the cap, no
+#      seed: the preview, OK; the slit filled (13300 -> 13400 mm3), the
+#      open groove left; FillCavity1 in the timeline.
+#   2. Fill Cavity again with the groove's floor as the seed: the groove
+#      opens out of the body below the cap, the preview fails and the panel
+#      says so in words; Escape cancels and the body stays.
+# Run by tools/ui-fill-cavity-test.sh (Linux),
+# tools/ui-windows-fill-cavity-test.ps1 (Windows) and
+# tools/ui-macos-fill-cavity-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle 30
+
+# 1. The closed slit filled up to Plane1.
+mark
+command solid.fill_cavity
+wait-log '^Command Fill Cavity started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Fill Cavity Body: 1 body [[]body F1[.]b0[]]' 30
+click-logged '^Panel Fill Cavity input cap at '
+click-logged '^Datum F5 at '
+wait-log '^Fill Cavity Cap: 1 plane [[]plane F5[]]' 30
+wait-log '^Preview Fill Cavity: ok' 60
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/fill-cavity-preview.png'
+mark
+key Return
+wait-log '^Added fill cavity' 60
+wait-idle 60
+capture filled 'Body \S+ [(]F1[.]b0[)]: volume [0-9.]+ -> ([0-9.]+) mm3' 30
+expect-near ${filled} 13400 1e-6 0.01
+expect-ever '^Timeline FillCavity1 at ' 30
+
+# 2. The open groove as the seed: refused in words.
+mark
+command solid.fill_cavity
+wait-log '^Command Fill Cavity started' 30
+wait-idle
+click-logged '^Browser Root/Bodies/Body1 at '
+wait-log '^Fill Cavity Body: 1 body [[]body F1[.]b0[]]' 30
+click-logged '^Panel Fill Cavity input cap at '
+click-logged '^Datum F5 at '
+wait-log '^Fill Cavity Cap: 1 plane [[]plane F5[]]' 30
+# Without a seed nothing is closed below the cap any more (the slit is
+# filled, the groove open).
+wait-log '^Panel Fill Cavity error: found no closed cavity below the cap to fill' 60
+wait-idle 60
+mark
+click-logged '^Panel Fill Cavity input seed at '
+click-pick 'face F1[.]b0/F4:bottom'
+wait-log '^Fill Cavity Seed Face: 1 face' 30
+wait-log '^Preview Fill Cavity: failed: ' 60
+wait-log '^Panel Fill Cavity error: the cavity opens out of the body below the cap' 30
+wait-idle 60
+screenshot '${MITCAD_TEST_WORK}/fill-cavity-open.png'
+mark
+key Escape
+wait-log '^Command Fill Cavity cancelled' 30
+wait-idle 30
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

@@ -568,6 +568,9 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") &&
            s.checked(QStringLiteral("custom_root"));
   };
+  // Measured, Position, Corner, Hem and Width start a new flange with the
+  // choices of the last OK (mitcad#1868, app/COMMANDS.md "Remembered
+  // values"): a user's way of dimensioning flanges is set once.
   def.inputs = {
       selectionInput(QStringLiteral("edge"), QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 1, 1)
           .withTooltip(QObject::tr("A straight edge or side face of the sheet"))
@@ -579,14 +582,18 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("0 with no hem: the bend alone, without a wall (a rolled hem)"))
           .withVisible(rectangular),
       choiceInput(QStringLiteral("length_mode"), QObject::tr("Measured"), kLengthModes, QStringLiteral("tangent"))
+          .withRemembered()
           .withTooltip(QObject::tr("Where the length is measured from: tangent line, virtual sharp or outer surface"))
           .withVisible(measured),
       choiceInput(QStringLiteral("position"), QObject::tr("Position"), kFlangePositions, QStringLiteral("bend_line"))
+          .withRemembered()
           .withTooltip(QObject::tr("Where the edge ends up: bend line, a virtual sharp, bend start or outer surface")),
       choiceInput(QStringLiteral("corner"), QObject::tr("Corner"), kFlangeCorners, QStringLiteral("none"))
+          .withRemembered()
           .withTooltip(QObject::tr("Closing joint on another wall; Half Open laps half the thickness with a 0.00001 mm seam"))
           .withVisible(cornerShown),
       choiceInput(QStringLiteral("hem"), QObject::tr("Hem"), kHemForms, QStringLiteral("none"))
+          .withRemembered()
           .withTooltip(QObject::tr("A hem whose bends follow from its gap and length; Flip turns it to the other side"))
           .withVisible(noCorner),
       valueInput(QStringLiteral("hem_gap"), QObject::tr("Gap"), ValueKind::Length, QStringLiteral("1 mm"))
@@ -598,6 +605,7 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("How far the folded-back wall ends short of the hem's first wall"))
           .withVisible(doubleHem),
       choiceInput(QStringLiteral("width_type"), QObject::tr("Width"), kFlangeWidths, QStringLiteral("whole"))
+          .withRemembered()
           .withTooltip(QObject::tr("How much of the edge the flange covers; from the middle it may pass the "
                                    "edge's ends"))
           .withVisible(rectangular),

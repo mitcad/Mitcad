@@ -362,6 +362,10 @@ pub struct Output<S> {
     /// points and lines and status, or its failure without geometry. Not
     /// kept in the result store.
     pub spatial: Option<Arc<crate::features::SpatialSketchOutput>>,
+    /// Where a construction plane or axis is drawn without a size of its
+    /// own (mitcad#1827). Not kept in the result store (construction
+    /// features are not storable).
+    pub drawn: Option<crate::features::construction::DrawnExtent>,
 }
 
 pub struct FeatureResult<S> {
@@ -457,6 +461,10 @@ pub enum Read {
     /// uid and definition (`sheet::folded::wall_flange_key`), None without
     /// one (mitcad#1776): a definition later in the timeline.
     WallFlange(FeatureUid, Option<u128>),
+    /// A placement inside flexible occurrences (mitcad#1805): its key in
+    /// the joints' `flexed` placements and its matrix as bits, None when
+    /// there is none (the occurrence's own placement then).
+    Flexed(crate::joints::FlexKey, Option<[u64; 12]>),
 }
 
 /// A body's print bed face as it was assigned (mitcad#731), for
@@ -530,6 +538,7 @@ impl Read {
                 crate::sheet::folded::wall_flange_key(env.features, env.index, env.params, *plane)
                     == *key
             }
+            Self::Flexed(key, bits) => env.flexed.get(key).map(placement_bits) == *bits,
         }
     }
 
@@ -620,6 +629,17 @@ impl Read {
             Self::WallFlange(plane, key) => {
                 fingerprint.u8(17).u64(plane.0).option(*key, |f, k| {
                     f.u128(k);
+                });
+            }
+            Self::Flexed((within, o), bits) => {
+                fingerprint.u8(18).u64(within.len() as u64);
+                for f in within {
+                    fingerprint.u32(f.0);
+                }
+                fingerprint.u32(o.0).option(*bits, |f, bits| {
+                    for b in bits {
+                        f.u64(b);
+                    }
                 });
             }
         }
@@ -1850,6 +1870,7 @@ impl<'s, S> Walk<'s, S> {
             history: &self.done.results,
             components: &self.components,
             placements: &self.done.placements,
+            flexed: &self.done.joints.flexed,
             written_from,
             join_tolerance: state.join_tolerance,
             sources: &state.library_sources,
@@ -2366,6 +2387,7 @@ fn evaluate<K: Kernel>(
             inputs: produced.inputs,
             curve: produced.curve.map(Arc::new),
             spatial,
+            drawn: produced.drawn,
         },
         Err(message) => Output {
             sheet_rules: None,
@@ -2406,6 +2428,7 @@ fn evaluate<K: Kernel>(
             curve: None,
             // Its frame and failure, without geometry (mitcad#1521).
             spatial,
+            drawn: None,
         },
     };
     Arc::new(output)

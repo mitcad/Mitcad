@@ -81,6 +81,19 @@ impl Builder<'_> {
         Some((self.pos_of[&producer] as i64, index as i64))
     }
 
+    /// The body object (class `D3937028`) of a body input's record
+    /// (mitcad#1802): the record's first reference of that class.
+    fn body_entity(&self, input: u64) -> Option<u64> {
+        let seg = self.seg;
+        let record = seg
+            .ref_ids(seg.data_of(input))
+            .into_iter()
+            .find(|&r| seg.guid_of(r) == Some(BODY_RECORD))?;
+        seg.ref_ids(seg.data_of(record))
+            .into_iter()
+            .find(|&r| seg.guid_of(r) == Some(BODY))
+    }
+
     /// A body input as a reference: a body fingerprint with the body's
     /// names (`_f3d`, resolved by [`super::super::inputs`]) and the item
     /// that made it (`_f3d.producer`, `_f3d.body_index`). `None` when
@@ -88,7 +101,8 @@ impl Builder<'_> {
     pub(super) fn body_input(&self, input: u64) -> Option<Reference> {
         let recipe = recipe::of_input(self.seg, input).filter(|r| r.kind == "body");
         let producer = self.producer(input);
-        if recipe.is_none() && producer.is_none() {
+        let body_entity = self.body_entity(input);
+        if recipe.is_none() && producer.is_none() && body_entity.is_none() {
             return None;
         }
         let (kind, entities) = recipe.map(|r| (r.kind, r.entities)).unzip();
@@ -100,6 +114,7 @@ impl Builder<'_> {
                 entities,
                 producer: producer.map(|p| p.0),
                 body_index: producer.map(|p| p.1),
+                body_entity,
                 document: recipe::owner_guid(self.seg, input),
                 context: super::super::decode::slot_contexts(self.seg)
                     .get(&input)

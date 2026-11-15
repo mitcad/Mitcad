@@ -64,7 +64,7 @@ impl<K: Kernel> SketchPlaneOps<K> for Document<K> {
         let uid = command.sketch;
         let depth = self.undo_depth();
         let change = SketchPlaneChange {
-            plane: command.plane,
+            plane: command.plane.clone(),
             occurrence: command.occurrence.as_ref().map(|p| p.0.clone()),
             context: command.context.as_ref().map(|p| p.0.clone()),
             offset: command.offset,
@@ -75,7 +75,9 @@ impl<K: Kernel> SketchPlaneOps<K> for Document<K> {
         };
         let changed = self.redefine_sketch_plane(uid, &change)?;
         let mut created = changed.created;
-        if command.upright && changed.plane_changed {
+        // A sketch on a curved face is upright on it already (mitcad#1768).
+        let developed = command.plane.as_ref().is_some_and(|p| p.is_developed());
+        if command.upright && changed.plane_changed && !developed {
             let shown = command.context.as_ref().or(command.occurrence.as_ref());
             created.extend(self.stand_upright_on_plane(uid, shown)?);
             self.merge_undo(depth, &changed.label);

@@ -25,6 +25,11 @@
 //! into a new feature of the new parent right after it, the rest stay.
 //! See [`Carry`].
 //!
+//! Several occurrences of one parent move together in one step
+//! (mitcad#1847: the selected rows, or a rigid group's members): a feature
+//! that places only moved occurrences (a rigid group of them, a joint
+//! between two of them) goes into the new parent whole, as it is.
+//!
 //! [`Document::plan_reparent`] is the one place that decides whether a
 //! move is allowed: the destination list, the preview and the command use
 //! it (design policies, mitcad#220, add their checks there). It refuses,
@@ -96,35 +101,59 @@ pub struct Carried {
     pub split: Option<String>,
 }
 
-/// A validated move of one occurrence to another parent.
+/// One occurrence of a planned move.
 #[derive(Debug, Clone)]
-pub struct ReparentPlan {
+pub struct MovedOccurrence {
     pub occurrence: OccurrenceUid,
     /// The component it places.
     pub component: ComponentUid,
     /// Its path from the root before the move.
     pub source: Vec<OccurrenceUid>,
-    /// The component it is placed in before the move.
-    pub parent: ComponentUid,
-    /// The component it goes into, and the path to that component.
-    pub destination: ComponentUid,
-    pub destination_path: Vec<OccurrenceUid>,
     /// Its placement in the destination: the same place in the design.
     pub transform: Transform,
-    /// What follows it: the features, analyses and Isolate whose
-    /// occurrence paths lead through it.
+}
+
+/// A validated move of one occurrence, or of several of one parent
+/// (mitcad#1847), to another parent.
+#[derive(Debug, Clone)]
+pub struct ReparentPlan {
+    /// The occurrences that move, the first one first.
+    pub moved: Vec<MovedOccurrence>,
+    /// The component they are placed in before the move.
+    pub parent: ComponentUid,
+    /// The component they go into, and the path to that component.
+    pub destination: ComponentUid,
+    pub destination_path: Vec<OccurrenceUid>,
+    /// What follows them: the features, analyses and Isolate whose
+    /// occurrence paths lead through them.
     pub updates: Vec<String>,
-    /// The features that place it and go with it, in timeline order.
+    /// The features that place them and go with them, in timeline order.
     pub carried: Vec<Carried>,
     changes: Rewritten,
 }
 
 impl ReparentPlan {
-    /// Its path from the root after the move.
+    /// The first occurrence that moves.
+    pub fn first(&self) -> &MovedOccurrence {
+        &self.moved[0]
+    }
+
+    /// The first occurrence's path from the root after the move.
     pub fn path(&self) -> Vec<OccurrenceUid> {
+        self.path_of(self.first())
+    }
+
+    /// An occurrence's path from the root after the move.
+    pub fn path_of(&self, moved: &MovedOccurrence) -> Vec<OccurrenceUid> {
         let mut path = self.destination_path.clone();
-        path.push(self.occurrence);
+        path.push(moved.occurrence);
         path
+    }
+
+    /// The parent's path from the root before the move.
+    pub fn from_path(&self) -> &[OccurrenceUid] {
+        let source = &self.first().source;
+        &source[..source.len() - 1]
     }
 }
 
@@ -367,6 +396,10 @@ impl Rewrite<'_> {
                 changed |= self.unit(&mut b.from.occurrence.0)?;
                 changed |= self.unit(&mut b.to.occurrence.0)?;
             }
+            // An edge frame's path (mitcad#1814).
+            FeatureDef::EdgeFrame(e) => {
+                changed |= self.unit(&mut e.occurrence.0)?;
+            }
             FeatureDef::AsBuiltJoint(j) => {
                 changed |= self.unit(&mut j.a.0)?;
                 changed |= self.unit(&mut j.b.0)?;
@@ -419,37 +452,56 @@ impl Rewrite<'_> {
     }
 }
 
-/// The paths of the document's state that lead through the occurrence, as
-/// they become, with what follows and what blocks the move.
+/// A path from the root through one of the moved occurrences goes its new
+/// way (the paths through different siblings never meet).
+fn absolute_all(rewrites: &[Rewrite<'_>], path: &mut Vec<OccurrenceUid>) -> bool {
+    let mut moved = false;
+    for rewrite in rewrites {
+        moved |= rewrite.absolute(path);
+    }
+    moved
+}
+
+/// The paths of the document's state that lead through the moved
+/// occurrences, as they become, with what follows and what blocks the move.
 fn rewrite_references(
     state: &DocState,
-    rewrite: &Rewrite<'_>,
+    rewrites: &[Rewrite<'_>],
     carriers: &BTreeSet<usize>,
 ) -> (Rewritten, Vec<String>, Vec<String>) {
-    let o = rewrite.occurrence;
     let mut out = Rewritten::default();
     let mut updates = Vec::new();
     let mut blockers = Vec::new();
     for (i, entry) in state.features.iter().enumerate() {
-        // Dormant cut choices are editor metadata, not active occurrence
-        // references, but their saved paths must follow an assembly move.
-        let saved_cut_path = matches!(&entry.def, FeatureDef::Extrude(extrude)
-            if extrude.cut_scope.as_ref().is_some_and(|scope|
-                scope.paths().iter().any(|path| path.0.contains(&o))));
-        // The placing features go with it ([`Carry`]).
-        if carriers.contains(&i)
-            || (!saved_cut_path && !crate::joints::referenced_occurrences(&entry.def).contains(&o))
-        {
+        // The placing features go with them ([`Carry`]).
+        if carriers.contains(&i) {
             continue;
         }
         let mut def = entry.def.clone();
-        match rewrite.feature(&mut def) {
-            Ok(true) => {
-                updates.push(entry.name.clone());
-                out.features.push((i, def));
+        let mut changed = false;
+        let mut blocked = false;
+        for rewrite in rewrites {
+            let o = rewrite.occurrence;
+            // Dormant cut choices are editor metadata, not active occurrence
+            // references, but their saved paths must follow an assembly move.
+            let saved_cut_path = matches!(&def, FeatureDef::Extrude(extrude)
+                if extrude.cut_scope.as_ref().is_some_and(|scope|
+                    scope.paths().iter().any(|path| path.0.contains(&o))));
+            if !saved_cut_path && !crate::joints::referenced_occurrences(&def).contains(&o) {
+                continue;
             }
-            Ok(false) => {}
-            Err(why) => blockers.push(format!("{}: {why}", entry.name)),
+            match rewrite.feature(&mut def) {
+                Ok(moved) => changed |= moved,
+                Err(why) => {
+                    blockers.push(format!("{}: {why}", entry.name));
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        if changed && !blocked {
+            updates.push(entry.name.clone());
+            out.features.push((i, def));
         }
     }
     for (i, analysis) in state.analyses.iter().enumerate() {
@@ -462,7 +514,7 @@ fn rewrite_references(
                 ] {
                     if let Some(path) = path {
                         let mut moved = path.0.clone();
-                        if rewrite.absolute(&mut moved) {
+                        if absolute_all(rewrites, &mut moved) {
                             changed = true;
                             out.analyses.push((i, axis, OccurrencePath(moved)));
                         }
@@ -484,7 +536,7 @@ fn rewrite_references(
             .map(str::parse::<OccurrenceUid>)
             .collect();
         if let Ok(mut path) = uids
-            && rewrite.absolute(&mut path)
+            && absolute_all(rewrites, &mut path)
         {
             out.isolated.push((i, OccurrencePath(path).to_string()));
         }
@@ -497,7 +549,7 @@ fn rewrite_references(
         let mut moved = false;
         let mut paths = set.occurrences.clone();
         for path in &mut paths {
-            moved |= rewrite.absolute(&mut path.0);
+            moved |= absolute_all(rewrites, &mut path.0);
         }
         if moved {
             updates.push(set.name.clone());
@@ -514,7 +566,7 @@ fn rewrite_references(
             .filter_map(|(pick, p)| Some((pick, p?.occurrence.as_ref()?)))
         {
             let mut path = path.0.clone();
-            if rewrite.absolute(&mut path) {
+            if absolute_all(rewrites, &mut path) {
                 moved = true;
                 out.measurements.push((i, pick, OccurrencePath(path)));
             }
@@ -527,46 +579,47 @@ fn rewrite_references(
     // from the drawing's component: the root's go the new way; a placed
     // component's follow while the occurrence stays inside it.
     for (i, drawing) in state.drawings.iter().enumerate() {
-        let placed = rewrite.assembly.paths_to(drawing.component);
+        let placed = state.assembly.paths_to(drawing.component);
         let [at] = placed.as_slice() else {
             // Not placed once: no path of it leads through the occurrence,
             // whose parent is placed once.
             continue;
         };
-        // A drawing of the moved component or of one inside it keeps its
-        // paths: they are below the occurrence.
-        let Some(old) = rewrite
-            .old
-            .strip_prefix(at.as_slice())
-            .filter(|old| !old.is_empty())
-        else {
-            continue;
-        };
-        let new = rewrite.new.strip_prefix(at.as_slice());
         let mut changed = drawing.clone();
         let mut moved = false;
-        let mut stuck = false;
-        for path in changed.occurrence_paths_mut() {
-            if !path.0.starts_with(old) {
+        let mut stuck = None;
+        for rewrite in rewrites {
+            // A drawing of the moved component or of one inside it keeps
+            // its paths: they are below the occurrence.
+            let Some(old) = rewrite
+                .old
+                .strip_prefix(at.as_slice())
+                .filter(|old| !old.is_empty())
+            else {
                 continue;
-            }
-            match new {
-                Some(new) => {
-                    let rest = path.0.split_off(old.len());
-                    path.0 = new.to_vec();
-                    path.0.extend(rest);
-                    moved = true;
+            };
+            let new = rewrite.new.strip_prefix(at.as_slice());
+            for path in changed.occurrence_paths_mut() {
+                if !path.0.starts_with(old) {
+                    continue;
                 }
-                None => stuck = true,
+                match new {
+                    Some(new) => {
+                        let rest = path.0.split_off(old.len());
+                        path.0 = new.to_vec();
+                        path.0.extend(rest);
+                        moved = true;
+                    }
+                    None => stuck = Some(rewrite.name()),
+                }
             }
         }
-        if stuck {
+        if let Some(name) = stuck {
             blockers.push(format!(
-                "{} of {}: its views lead through {}, which would leave {}",
+                "{} of {}: its views lead through {name}, which would leave {}",
                 drawing.name,
-                rewrite.assembly.name(drawing.component),
-                rewrite.name(),
-                rewrite.assembly.name(drawing.component)
+                state.assembly.name(drawing.component),
+                state.assembly.name(drawing.component)
             ));
         } else if moved {
             updates.push(drawing.name.clone());
@@ -575,8 +628,9 @@ fn rewrite_references(
     }
     // Print plate items and comments follow it when it is taken
     // (`DocState::follow`, mitcad#1318).
+    let through_any = |path: &[OccurrenceUid]| rewrites.iter().any(|r| r.through(path));
     let through = |target: &PlateTarget| match target {
-        PlateTarget::Occurrence(path) => rewrite.through(path),
+        PlateTarget::Occurrence(path) => through_any(&path[..]),
         PlateTarget::Body(_) => false,
     };
     let plated = state
@@ -591,7 +645,7 @@ fn rewrite_references(
         c.target
             .occurrence
             .as_ref()
-            .is_some_and(|path| rewrite.through(&path.0))
+            .is_some_and(|path| through_any(&path.0[..]))
     });
     if commented {
         updates.push("Comments".to_owned());
@@ -599,19 +653,24 @@ fn rewrite_references(
     // Occurrences made by Pattern at Points keep the paths they were made
     // from.
     for made in &state.assembly.occurrences {
-        if let Some(pattern) = &made.pattern
-            && (pattern.source.0.contains(&o)
+        let Some(pattern) = &made.pattern else {
+            continue;
+        };
+        for rewrite in rewrites {
+            let o = rewrite.occurrence;
+            if pattern.source.0.contains(&o)
                 || pattern
                     .target
                     .occurrence
                     .as_ref()
-                    .is_some_and(|p| p.0.contains(&o)))
-        {
-            blockers.push(format!(
-                "{} is made by Pattern at Points from {}; moving it is not supported",
-                state.assembly.occurrence_name(made.uid),
-                rewrite.name()
-            ));
+                    .is_some_and(|p| p.0.contains(&o))
+            {
+                blockers.push(format!(
+                    "{} is made by Pattern at Points from {}; moving it is not supported",
+                    state.assembly.occurrence_name(made.uid),
+                    rewrite.name()
+                ));
+            }
         }
     }
     (out, updates, blockers)
@@ -725,10 +784,15 @@ fn same_place(a: &Transform, b: &Transform) -> bool {
 /// the carried ones); for a Move or Capture Position, by no later feature
 /// at all (it is in the parent's coordinates at its point of the
 /// timeline).
+///
+/// With several occurrences moving together (mitcad#1847) a feature that
+/// places only moved ones goes whole: their paths are the same in the new
+/// parent.
 struct Carry<'a> {
     state: &'a DocState,
-    occurrence: OccurrenceUid,
-    /// Its old parent and the path to it, the new parent and the path to it.
+    /// The occurrences that move.
+    moved: &'a [OccurrenceUid],
+    /// Their old parent and the path to it, the new parent and the path to it.
     parent: ComponentUid,
     parents: &'a [OccurrenceUid],
     target: ComponentUid,
@@ -756,6 +820,18 @@ struct CarriedChange {
 impl Carry<'_> {
     fn name(&self, uid: OccurrenceUid) -> String {
         self.state.assembly.occurrence_name(uid)
+    }
+
+    fn names(&self, uids: &[OccurrenceUid]) -> String {
+        uids.iter()
+            .map(|x| self.name(*x))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Whether an occurrence of the old parent moves.
+    fn mine(&self, uid: OccurrenceUid) -> bool {
+        self.moved.contains(&uid)
     }
 
     fn label(&self, path: &[OccurrenceUid]) -> String {
@@ -789,23 +865,56 @@ impl Carry<'_> {
             .map(|(_, f)| f.name.as_str())
     }
 
-    fn later(&self, x: OccurrenceUid, by: &str) -> String {
+    /// `subject`, a moved occurrence, would no longer follow `x`.
+    fn later(&self, x: OccurrenceUid, by: &str, subject: OccurrenceUid) -> String {
         format!(
             "{} is placed by {by} later in the timeline, which {} in {} would no longer follow",
             self.name(x),
-            self.name(self.occurrence),
+            self.name(subject),
             self.state.assembly.name(self.target)
         )
+    }
+
+    /// Why a joint's or constraint's side outside the new parent keeps
+    /// `subject` from going there, and what to do instead (mitcad#1847).
+    fn outside(&self, subject: OccurrenceUid, absolute: &[OccurrenceUid]) -> String {
+        let target = self.state.assembly.name(self.target);
+        let subject = self.name(subject);
+        let why = format!(
+            "it joins {subject} to {}, which is not in {target}; it places only occurrences placed \
+             directly in its component, so it could not place {subject} there",
+            self.label(absolute)
+        );
+        // The occurrence on the other side's way that is not in the new
+        // parent; moving it there too keeps the joint, unless it holds the
+        // moved occurrence itself (its old parent on the way).
+        let common = absolute
+            .iter()
+            .zip(self.destination)
+            .take_while(|(x, y)| x == y)
+            .count();
+        match absolute.get(common) {
+            Some(&away) if self.parents.get(common) != Some(&away) => format!(
+                "{why}. Move {} into {target} as well, or delete it and join {subject} again \
+                 inside {target}",
+                self.name(away)
+            ),
+            _ => format!("{why}. Delete it and join {subject} again inside {target}"),
+        }
     }
 
     /// The occurrence paths of a joint's or constraint's sides (relative
     /// to the old parent) relative to the new parent; Err when one of them
     /// is not in it, or what the feature depends on moves later.
     fn sides(&self, paths: Vec<&mut Vec<OccurrenceUid>>, index: usize) -> Result<(), String> {
+        let subject = paths
+            .iter()
+            .find_map(|p| p.first().copied().filter(|x| self.mine(*x)))
+            .unwrap_or(self.moved[0]);
         let mut tight = Vec::new();
         let mut loose = self.chain.clone();
         for path in paths {
-            let mine = path.first() == Some(&self.occurrence);
+            let mine = path.first().is_some_and(|x| self.mine(*x));
             let mut absolute = if mine {
                 self.destination.to_vec()
             } else {
@@ -813,14 +922,7 @@ impl Carry<'_> {
             };
             absolute.extend_from_slice(path);
             if !absolute.starts_with(self.destination) {
-                return Err(format!(
-                    "it joins {} to {}, which is not in {}; it places only occurrences placed \
-                     directly in its component, so it could not place {} there",
-                    self.name(self.occurrence),
-                    self.label(&absolute),
-                    self.state.assembly.name(self.target),
-                    self.name(self.occurrence)
-                ));
+                return Err(self.outside(subject, &absolute));
             }
             let relative = absolute.split_off(self.destination.len());
             if !mine && let Some((first, rest)) = relative.split_first() {
@@ -831,12 +933,12 @@ impl Carry<'_> {
         }
         for x in &tight {
             if let Some(by) = self.placed_later(*x, index, true) {
-                return Err(self.later(*x, by));
+                return Err(self.later(*x, by, subject));
             }
         }
         for x in loose.iter().filter(|x| !tight.contains(x)) {
             if let Some(by) = self.placed_later(*x, index, false) {
-                return Err(self.later(*x, by));
+                return Err(self.later(*x, by, subject));
             }
         }
         Ok(())
@@ -844,13 +946,13 @@ impl Carry<'_> {
 
     /// A Move or Capture Position works in the parent's coordinates at its
     /// point of the timeline: the parents on the way must stay after it.
-    fn steady(&self, index: usize) -> Result<(), String> {
+    fn steady(&self, index: usize, subject: OccurrenceUid) -> Result<(), String> {
         for x in &self.chain {
             if let Some(by) = self.placed_later(*x, index, true) {
                 return Err(format!(
                     "it places {} in {}'s coordinates, and {} is placed by {by} later in the \
                      timeline",
-                    self.name(self.occurrence),
+                    self.name(subject),
                     self.state.assembly.name(self.parent),
                     self.name(*x)
                 ));
@@ -860,7 +962,7 @@ impl Carry<'_> {
     }
 
     /// A Move's motion in the new parent's coordinates.
-    fn motion(&self, spec: &MoveSpec) -> Result<MoveSpec, String> {
+    fn motion(&self, spec: &MoveSpec, subject: OccurrenceUid) -> Result<MoveSpec, String> {
         let r = &self.relative;
         let parent = self.state.assembly.name(self.parent);
         match spec {
@@ -882,14 +984,14 @@ impl Carry<'_> {
                     Err(format!(
                         "it moves {} along the x, y and z axes of {parent}, which are turned in \
                          {}; its distances would mean another motion there",
-                        self.name(self.occurrence),
+                        self.name(subject),
                         self.state.assembly.name(self.target)
                     ))
                 }
             }
             _ => Err(format!(
                 "it moves {} by geometry of {parent}, which a feature of {} cannot use",
-                self.name(self.occurrence),
+                self.name(subject),
                 self.state.assembly.name(self.target)
             )),
         }
@@ -897,7 +999,6 @@ impl Carry<'_> {
 
     /// What the carried feature at `index` becomes; Err with the blocker.
     fn carry(&self, index: usize, def: &FeatureDef) -> Result<CarriedChange, String> {
-        let o = self.occurrence;
         let whole = |def: FeatureDef| CarriedChange {
             def,
             component: Some(self.target),
@@ -922,8 +1023,9 @@ impl Carry<'_> {
             FeatureDef::ConstraintSet(set) => {
                 let (mut moved, kept): (Vec<_>, Vec<_>) =
                     set.rows.iter().cloned().partition(|row| {
-                        row.origins()
-                            .any(|(_, origin)| origin.occurrence.0.first() == Some(&o))
+                        row.origins().any(|(_, origin)| {
+                            origin.occurrence.0.first().is_some_and(|x| self.mine(*x))
+                        })
                     });
                 for row in &mut moved {
                     let paths: Vec<&mut Vec<OccurrenceUid>> = [&mut row.a, &mut row.b]
@@ -946,8 +1048,19 @@ impl Carry<'_> {
                 })
             }
             FeatureDef::RigidGroup(g) => {
-                let others: Vec<OccurrenceUid> =
-                    g.occurrences.iter().copied().filter(|x| *x != o).collect();
+                let (mine, others): (Vec<OccurrenceUid>, Vec<OccurrenceUid>) =
+                    g.occurrences.iter().copied().partition(|x| self.mine(*x));
+                let subject = mine.first().copied().unwrap_or(self.moved[0]);
+                if others.is_empty() {
+                    // All its members move (mitcad#1847): it goes whole and
+                    // holds them together in the new parent as before.
+                    for x in &self.chain {
+                        if let Some(by) = self.placed_later(*x, index, false) {
+                            return Err(self.later(*x, by, subject));
+                        }
+                    }
+                    return Ok(whole(def.clone()));
+                }
                 // The other members stay in the old parent: the new one
                 // must hold it, and its occurrence there (`top`) stands for
                 // them.
@@ -957,13 +1070,10 @@ impl Carry<'_> {
                     .filter(|_| self.parents.starts_with(self.destination));
                 let Some(&top) = top else {
                     return Err(format!(
-                        "it holds {} rigidly to {}, which would not be in {}",
-                        self.name(o),
-                        others
-                            .iter()
-                            .map(|x| self.name(*x))
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                        "it holds {} rigidly to {}, which would not be in {}. Move the whole \
+                         group together",
+                        self.names(&mine),
+                        self.names(&others),
                         self.state.assembly.name(self.target)
                     ));
                 };
@@ -972,35 +1082,38 @@ impl Carry<'_> {
                     .chain(&others)
                 {
                     if let Some(by) = self.placed_later(*x, index, true) {
-                        return Err(self.later(*x, by));
+                        return Err(self.later(*x, by, subject));
                     }
                 }
                 if let Some(by) = self.placed_later(top, index, false) {
-                    return Err(self.later(top, by));
+                    return Err(self.later(top, by, subject));
                 }
                 if others.len() == 1 {
                     let members = g
                         .occurrences
                         .iter()
-                        .map(|x| if *x == o { o } else { top })
+                        .map(|x| if self.mine(*x) { *x } else { top })
                         .collect();
                     return Ok(whole(FeatureDef::RigidGroup(RigidGroupDef::new(members))));
                 }
+                let mut held = mine;
+                held.push(top);
                 Ok(CarriedChange {
                     def: FeatureDef::RigidGroup(RigidGroupDef::new(others)),
                     component: None,
-                    split: Some(FeatureDef::RigidGroup(RigidGroupDef::new(vec![o, top]))),
+                    split: Some(FeatureDef::RigidGroup(RigidGroupDef::new(held))),
                     params: Vec::new(),
                 })
             }
             FeatureDef::MoveOccurrence(m) => {
-                self.steady(index)?;
-                let transform = self.motion(&m.transform)?;
-                let others: Vec<OccurrenceUid> =
-                    m.occurrences.iter().copied().filter(|x| *x != o).collect();
+                let (mine, others): (Vec<OccurrenceUid>, Vec<OccurrenceUid>) =
+                    m.occurrences.iter().copied().partition(|x| self.mine(*x));
+                let subject = mine.first().copied().unwrap_or(self.moved[0]);
+                self.steady(index, subject)?;
+                let transform = self.motion(&m.transform, subject)?;
                 if others.is_empty() {
                     return Ok(whole(FeatureDef::MoveOccurrence(MoveOccurrenceDef {
-                        occurrences: vec![o],
+                        occurrences: mine,
                         transform,
                     })));
                 }
@@ -1008,12 +1121,8 @@ impl Carry<'_> {
                     return Err(format!(
                         "it also moves {}; a Move by values cannot be split (its parameters \
                          belong to it): edit it to move {} alone",
-                        others
-                            .iter()
-                            .map(|x| self.name(*x))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        self.name(o)
+                        self.names(&others),
+                        self.names(&mine)
                     ));
                 }
                 Ok(CarriedChange {
@@ -1023,16 +1132,20 @@ impl Carry<'_> {
                     }),
                     component: None,
                     split: Some(FeatureDef::MoveOccurrence(MoveOccurrenceDef {
-                        occurrences: vec![o],
+                        occurrences: mine,
                         transform,
                     })),
                     params: Vec::new(),
                 })
             }
             FeatureDef::CapturePosition(c) => {
-                self.steady(index)?;
-                let (mut mine, others): (Vec<_>, Vec<_>) =
-                    c.positions.iter().cloned().partition(|p| p.occurrence == o);
+                let (mut mine, others): (Vec<_>, Vec<_>) = c
+                    .positions
+                    .iter()
+                    .cloned()
+                    .partition(|p| self.mine(p.occurrence));
+                let subject = mine.first().map_or(self.moved[0], |p| p.occurrence);
+                self.steady(index, subject)?;
                 for p in &mut mine {
                     p.transform = self.relative.after(&p.transform);
                 }
@@ -1049,7 +1162,7 @@ impl Carry<'_> {
             }
             _ => Err(format!(
                 "it places {} in a way the move cannot carry",
-                self.name(o)
+                self.names(self.moved)
             )),
         }
     }
@@ -1073,9 +1186,11 @@ fn new_name(state: &DocState, base: &str, given: &[String]) -> String {
 
 /// Takes a planned move into a state.
 fn take(state: &mut DocState, plan: &ReparentPlan) {
-    if let Some(o) = state.assembly.occurrence_mut(plan.occurrence) {
-        o.parent = plan.destination;
-        o.transform = plan.transform;
+    for moved in &plan.moved {
+        if let Some(o) = state.assembly.occurrence_mut(moved.occurrence) {
+            o.parent = plan.destination;
+            o.transform = moved.transform;
+        }
     }
     for (i, def) in &plan.changes.features {
         Arc::make_mut(&mut state.features[*i]).def = def.clone();
@@ -1134,11 +1249,21 @@ fn take(state: &mut DocState, plan: &ReparentPlan) {
         state.drawings[*i].clone_from(drawing);
     }
     // Print plate items and comment targets (mitcad#1318).
-    let new = plan.path();
-    state.follow(&Follow::Moved {
-        old: &plan.source,
-        new: &new,
-    });
+    for moved in &plan.moved {
+        let new = plan.path_of(moved);
+        state.follow(&Follow::Moved {
+            old: &moved.source,
+            new: &new,
+        });
+    }
+}
+
+/// The occurrences' names, for messages.
+fn names_of(assembly: &Assembly, uids: impl IntoIterator<Item = OccurrenceUid>) -> String {
+    uids.into_iter()
+        .map(|uid| assembly.occurrence_name(uid))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl<K: Kernel> Document<K> {
@@ -1213,25 +1338,126 @@ impl<K: Kernel> Document<K> {
         source: &[OccurrenceUid],
         destination: &[OccurrenceUid],
     ) -> Result<ReparentPlan, Vec<String>> {
+        self.plan_reparent_all(&[source.to_vec()], destination)
+    }
+
+    /// The other members of the rigid groups that hold the occurrences at
+    /// `sources` (their paths from the root, in one parent), and of the
+    /// groups that hold those in turn, as paths from the root (mitcad#1847):
+    /// what Move to Component offers to move with them.
+    pub fn rigid_group_of(&self, sources: &[Vec<OccurrenceUid>]) -> Vec<Vec<OccurrenceUid>> {
+        let Some((&first, parents)) = sources.first().and_then(|s| s.split_last()) else {
+            return Vec::new();
+        };
+        let Some(parent) = self.state.assembly.occurrence(first).map(|o| o.parent) else {
+            return Vec::new();
+        };
+        let mut held: Vec<OccurrenceUid> = sources
+            .iter()
+            .filter_map(|s| s.split_last())
+            .filter(|(_, way)| *way == parents)
+            .map(|(uid, _)| *uid)
+            .collect();
+        let given = held.len();
+        loop {
+            let mut grew = false;
+            for f in &self.state.features {
+                let FeatureDef::RigidGroup(g) = &f.def else {
+                    continue;
+                };
+                if f.component != parent
+                    || f.suppressed
+                    || !g.occurrences.iter().any(|x| held.contains(x))
+                {
+                    continue;
+                }
+                for x in &g.occurrences {
+                    if !held.contains(x) {
+                        held.push(*x);
+                        grew = true;
+                    }
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        held[given..]
+            .iter()
+            .map(|x| {
+                let mut path = parents.to_vec();
+                path.push(*x);
+                path
+            })
+            .collect()
+    }
+
+    /// Whether the occurrences at `sources` (their paths from the root, all
+    /// placed in one component) can go together into the component placed
+    /// at `destination` (empty: the root), and what the move does
+    /// (mitcad#1847: several selected occurrences, or a rigid group's
+    /// members). Err lists the blockers.
+    pub fn plan_reparent_all(
+        &self,
+        sources: &[Vec<OccurrenceUid>],
+        destination: &[OccurrenceUid],
+    ) -> Result<ReparentPlan, Vec<String>> {
         let one = |e: ModelError| vec![e.to_string()];
-        let (uid, component, parent) = self.reparent_source(source).map_err(one)?;
         let a = &self.state.assembly;
-        let name = a.occurrence_name(uid);
+        let mut moving: Vec<MovedOccurrence> = Vec::new();
+        let mut from = None;
+        for source in sources {
+            let (uid, component, parent) = self.reparent_source(source).map_err(one)?;
+            if moving.iter().any(|m| m.occurrence == uid) {
+                continue;
+            }
+            match from {
+                Some(p) if p != parent => {
+                    return Err(vec![format!(
+                        "{} and {} are in different components; occurrences move together only \
+                         from one component",
+                        a.occurrence_name(moving[0].occurrence),
+                        a.occurrence_name(uid)
+                    )]);
+                }
+                _ => from = Some(parent),
+            }
+            moving.push(MovedOccurrence {
+                occurrence: uid,
+                component,
+                source: source.clone(),
+                transform: Transform::IDENTITY,
+            });
+        }
+        let Some(parent) = from else {
+            return Err(vec!["there is no occurrence to move".to_owned()]);
+        };
+        let uids: Vec<OccurrenceUid> = moving.iter().map(|m| m.occurrence).collect();
+        let name = names_of(a, uids.iter().copied());
         let target = crate::joints::path_component(a, ComponentUid::ROOT, destination)
             .map_err(|e| vec![e])?;
         if target == parent {
-            return Err(vec![format!("{name} is already in {}", a.name(target))]);
+            // (Two whole sentences, so that each is translated whole.)
+            let message = if uids.len() == 1 {
+                format!("{name} is already in {}", a.name(target))
+            } else {
+                format!("{name} are already in {}", a.name(target))
+            };
+            return Err(vec![message]);
         }
-        if a.contains(component, target) {
-            return Err(vec![format!(
-                "{name} cannot go into {}, which is {}",
-                a.name(target),
-                if target == component {
-                    "its own component"
-                } else {
-                    "placed in it"
-                }
-            )]);
+        for m in &moving {
+            if a.contains(m.component, target) {
+                return Err(vec![format!(
+                    "{} cannot go into {}, which is {}",
+                    a.occurrence_name(m.occurrence),
+                    a.name(target),
+                    if target == m.component {
+                        "its own component"
+                    } else {
+                        "placed in it"
+                    }
+                )]);
+            }
         }
         let placements = a.paths_to(target);
         if placements.len() != 1 {
@@ -1243,21 +1469,23 @@ impl<K: Kernel> Document<K> {
             )]);
         }
         self.state.editable(target).map_err(one)?;
-        // The placement that keeps it where it is: through the parents
+        // The placement that keeps each where it is: through the parents
         // the old and the new way do not share.
-        let parents = &source[..source.len() - 1];
+        let parents: Vec<OccurrenceUid> = moving[0].source[..moving[0].source.len() - 1].to_vec();
         let common = parents
             .iter()
             .zip(destination)
             .take_while(|(x, y)| x == y)
             .count();
-        let own = a
-            .occurrence(uid)
-            .map_or(Transform::IDENTITY, |o| o.transform);
         let relative = inverse(&self.path_transform(&destination[common..]))
             .after(&self.path_transform(&parents[common..]));
-        let transform = relative.after(&own);
-        check_transform(&transform).map_err(one)?;
+        for m in &mut moving {
+            let own = a
+                .occurrence(m.occurrence)
+                .map_or(Transform::IDENTITY, |o| o.transform);
+            m.transform = relative.after(&own);
+            check_transform(&m.transform).map_err(one)?;
+        }
         let varying = parents[common..]
             .iter()
             .chain(&destination[common..])
@@ -1269,31 +1497,37 @@ impl<K: Kernel> Document<K> {
                     a.occurrence_name(x)
                 )
             });
-        let mut new = destination.to_vec();
-        new.push(uid);
-        let rewrite = Rewrite {
-            assembly: a,
-            occurrence: uid,
-            old: source,
-            new,
-            varying,
-        };
-        // The features that place it go with it (mitcad#301).
+        let rewrites: Vec<Rewrite<'_>> = moving
+            .iter()
+            .map(|m| {
+                let mut new = destination.to_vec();
+                new.push(m.occurrence);
+                Rewrite {
+                    assembly: a,
+                    occurrence: m.occurrence,
+                    old: &m.source,
+                    new,
+                    varying: varying.clone(),
+                }
+            })
+            .collect();
+        // The features that place them go with them (mitcad#301).
         let carriers: BTreeSet<usize> = self
             .state
             .features
             .iter()
             .enumerate()
-            .filter(|(_, f)| f.component == parent && places(&f.def, uid))
+            .filter(|(_, f)| f.component == parent && uids.iter().any(|uid| places(&f.def, *uid)))
             .map(|(i, _)| i)
             .collect();
         let (mut changes, updates, mut blockers) =
-            rewrite_references(&self.state, &rewrite, &carriers);
+            rewrite_references(&self.state, &rewrites, &carriers);
+        drop(rewrites);
         let carry = Carry {
             state: &self.state,
-            occurrence: uid,
+            moved: &uids,
             parent,
-            parents,
+            parents: &parents,
             target,
             destination,
             relative,
@@ -1348,13 +1582,10 @@ impl<K: Kernel> Document<K> {
             return Err(blockers);
         }
         let plan = ReparentPlan {
-            occurrence: uid,
-            component,
-            source: source.to_vec(),
+            moved: moving,
             parent,
             destination: target,
             destination_path: destination.to_vec(),
-            transform,
             updates,
             carried,
             changes,
@@ -1396,6 +1627,18 @@ impl<K: Kernel> Document<K> {
         source: &[OccurrenceUid],
         destination: &[OccurrenceUid],
     ) -> Result<ReparentPlan, ModelError> {
+        self.reparent_occurrences(&[source.to_vec()], destination)
+    }
+
+    /// Moves the occurrences at `sources` (all placed in one component)
+    /// together into the component placed at `destination`, as
+    /// [`Document::reparent_occurrence`] moves one, in one undo step
+    /// (mitcad#1847); refused as [`Document::plan_reparent_all`] refuses it.
+    pub fn reparent_occurrences(
+        &mut self,
+        sources: &[Vec<OccurrenceUid>],
+        destination: &[OccurrenceUid],
+    ) -> Result<ReparentPlan, ModelError> {
         let stale = self.result.results.len() != self.state.features.len()
             || self
                 .result
@@ -1407,7 +1650,7 @@ impl<K: Kernel> Document<K> {
             self.try_recompute()?;
         }
         let plan = self
-            .plan_reparent(source, destination)
+            .plan_reparent_all(sources, destination)
             .map_err(|blockers| invalid(blockers.join("; ")))?;
         let built: BTreeSet<FeatureUid> = self
             .result
@@ -1417,15 +1660,18 @@ impl<K: Kernel> Document<K> {
             .map(|r| r.uid)
             .collect();
         // Where everything is in the design now, by the paths it will have.
-        let old = plan.source.clone();
-        let new = plan.path();
+        let ways: Vec<(Vec<OccurrenceUid>, Vec<OccurrenceUid>)> = plan
+            .moved
+            .iter()
+            .map(|m| (m.source.clone(), plan.path_of(m)))
+            .collect();
         let before: BTreeMap<Vec<OccurrenceUid>, Transform> =
             world_placements(&self.state.assembly, &self.result.placements)
                 .into_iter()
                 .map(|(mut path, placed)| {
-                    if path.starts_with(&old) {
+                    if let Some((old, new)) = ways.iter().find(|(old, _)| path.starts_with(old)) {
                         let rest = path.split_off(old.len());
-                        path.clone_from(&new);
+                        path.clone_from(new);
                         path.extend(rest);
                     }
                     (path, placed)
@@ -1435,7 +1681,7 @@ impl<K: Kernel> Document<K> {
             |state| {
                 let label = format!(
                     "Move {} to {}",
-                    state.assembly.occurrence_name(plan.occurrence),
+                    names_of(&state.assembly, plan.moved.iter().map(|m| m.occurrence)),
                     state.assembly.name(plan.destination)
                 );
                 take(state, &plan);

@@ -96,6 +96,11 @@ MeshData meshOf(const TopoDS_Shape& shape) {
   TopExp::MapShapes(shape, TopAbs_FACE, faces);
   mesh.faceTriangles.assign(static_cast<std::size_t>(faces.Extent()), 0);
   bool anySurface = false;
+  std::vector<float>& uvs = mesh.uvs;
+  // Whether a face had texture coordinates yet: from then on every face's
+  // vertices have a pair (an empty `uvs` cannot say so when the first such
+  // face is the shape's first).
+  bool anyUvs = false;
   for (int f = 1; f <= faces.Extent(); ++f) {
     const TopoDS_Face& face = TopoDS::Face(faces(f));
     TopLoc_Location location;
@@ -134,6 +139,21 @@ MeshData meshOf(const TopoDS_Shape& shape) {
     TopLoc_Location surfaceLocation;
     const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, surfaceLocation);
     anySurface = anySurface || !surface.IsNull();
+    // A mesh body's UV nodes are its texture coordinates (mitcad#1862; a
+    // face with a surface has its surface's parameters there instead).
+    // Faces before the first that has them get zeros, as faces after
+    // without them do.
+    const bool texcoords = surface.IsNull() && triangulation->HasUVNodes();
+    if (texcoords && !anyUvs) {
+      anyUvs = true;
+      uvs.assign(static_cast<std::size_t>(first) * 2, 0.0f);
+    }
+    if (anyUvs) {
+      for (int n = 1; n <= nodes; ++n) {
+        const gp_Pnt2d uv = texcoords ? triangulation->UVNode(n) : gp_Pnt2d(0.0, 0.0);
+        uvs.insert(uvs.end(), {static_cast<float>(uv.X()), static_cast<float>(uv.Y())});
+      }
+    }
     std::vector<gp_Vec> outward;
     if (!surface.IsNull() && triangulation->HasUVNodes()) {
       GeomLProp_SLProps props(surface, 1, 1e-9);

@@ -97,6 +97,10 @@ pub struct ExportedPlate {
 /// (None for a body not placed).
 type Placed = (Transform, Option<Vec<OccurrenceUid>>);
 
+/// A body and the occurrence path that places it (None for a body not
+/// placed): a placement a plate prints (`print_plates` query).
+pub(crate) type BodyPlacement = (BodyUid, Option<Vec<OccurrenceUid>>);
+
 /// What a plate prints: its bodies in order, each body's placements (the
 /// transform and the occurrence path, None for a body not placed) and its
 /// pieces, each a name, its members (index of the body, index of its
@@ -236,10 +240,26 @@ impl<K: Kernel> Document<K> {
         }
     }
 
-    /// The pieces plate `index` prints, as its export makes them
-    /// (`print_plates` query).
-    pub(crate) fn plate_piece_count(&self, index: usize, instances: &[InstanceView]) -> usize {
-        self.plate_content(index, instances).pieces.len()
+    /// The pieces plate `index` prints, as its export makes them, and
+    /// each placement it prints, once, in order: the body and its
+    /// occurrence path (None for a body not placed), whose settings the
+    /// export gives it (`print_plates` query; mitcad#1807).
+    pub(crate) fn plate_prints(
+        &self,
+        index: usize,
+        instances: &[InstanceView],
+    ) -> (usize, Vec<BodyPlacement>) {
+        let content = self.plate_content(index, instances);
+        let mut placements: Vec<BodyPlacement> = Vec::new();
+        for (uid, placed) in content.bodies.iter().zip(&content.placed) {
+            for (_, path) in placed {
+                let placement = (*uid, path.clone());
+                if !placements.contains(&placement) {
+                    placements.push(placement);
+                }
+            }
+        }
+        (content.pieces.len(), placements)
     }
 
     /// The files `"plates": "file_per_plate"` writes beside `path`

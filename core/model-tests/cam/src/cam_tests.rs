@@ -9,7 +9,8 @@
 //! words, the design file's `cam` section read back (and read tolerantly)
 //! and the machine library's files; a setup's eye kept in the design and
 //! undone; inputs picked in each placement of a component placed twice
-//! outlined where that placement puts them.
+//! outlined where that placement puts them; values that name a parameter
+//! follow its rename and refuse its delete.
 
 use serde_json::{Value, json};
 
@@ -1175,4 +1176,127 @@ fn three_axis_operations_machine_the_bodies_surfaces() {
     for (command, message) in cases {
         assert_eq!(refused(&mut doc, command.clone()), message, "{command}");
     }
+}
+
+#[test]
+fn values_follow_a_parameter_rename_and_its_undo() {
+    // mitcad#1830: the setup's safe height and the pocket's floor name
+    // the block's height.
+    let mut doc = machined();
+    command(
+        &mut doc,
+        json!({"cmd": "cam_setup_edit", "setup": 1, "changes": {"safe_height": "h + 5"}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "cam_operation_edit", "operation": 3,
+               "changes": {"depths": {"bottom": "-h / 4"}}}),
+    );
+    command(&mut doc, json!({"cmd": "cam_generate", "setup": 1}));
+    let paths = query(&doc, json!({"query": "cam_toolpaths", "setup": 1}));
+    let pocket = &paths["operations"][1];
+    assert_eq!(pocket["name"], json!("Pocket 1"));
+    assert!(
+        (pocket["bounds"][0][2].as_f64().unwrap() + 2.5).abs() < 1e-9,
+        "{pocket}"
+    );
+    let post = query(&doc, json!({"query": "cam_post", "setup": 1}));
+
+    command(
+        &mut doc,
+        json!({"cmd": "rename_parameter", "name": "h", "new_name": "height"}),
+    );
+    let setup = &query(&doc, json!({"query": "cam_setups"}))["setups"][0];
+    assert_eq!(setup["safe_height"], json!("height + 5"));
+    assert_eq!(
+        operations(&doc)[1]["depths"]["bottom"],
+        json!("-height / 4")
+    );
+    // The same toolpaths, still up to date, and the same program.
+    assert_eq!(
+        query(&doc, json!({"query": "cam_toolpaths", "setup": 1})),
+        paths
+    );
+    assert!(
+        states(&doc).iter().all(|s| s == "up_to_date"),
+        "{:?}",
+        states(&doc)
+    );
+    assert_eq!(query(&doc, json!({"query": "cam_post", "setup": 1})), post);
+    // A later edit of another field evaluates the renamed values.
+    command(
+        &mut doc,
+        json!({"cmd": "cam_operation_edit", "operation": 3, "changes": {"stepover": 2}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "cam_setup_edit", "setup": 1, "changes": {"work_offset": 2}}),
+    );
+    command(&mut doc, json!({"cmd": "undo"}));
+    command(&mut doc, json!({"cmd": "undo"}));
+
+    // Undo of the rename gives the texts back.
+    command(&mut doc, json!({"cmd": "undo"}));
+    let setup = &query(&doc, json!({"query": "cam_setups"}))["setups"][0];
+    assert_eq!(setup["safe_height"], json!("h + 5"));
+    assert_eq!(operations(&doc)[1]["depths"]["bottom"], json!("-h / 4"));
+    assert_eq!(
+        query(&doc, json!({"query": "cam_toolpaths", "setup": 1})),
+        paths
+    );
+}
+
+#[test]
+fn a_parameter_that_a_cam_value_uses_is_not_deleted() {
+    // mitcad#1830: `depth` is used by CAM only.
+    let mut doc = machined();
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "depth", "value": 3}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "cam_operation_edit", "operation": 3,
+               "changes": {"depths": {"bottom": "-depth"}}}),
+    );
+    let message = refused(
+        &mut doc,
+        json!({"cmd": "delete_parameter", "name": "depth"}),
+    );
+    assert!(
+        message.contains("the CAM operation Pocket 1 of Setup 1"),
+        "{message}"
+    );
+    assert!(!message.contains("CAM setup"), "{message}");
+    // The setup's own values count too.
+    command(
+        &mut doc,
+        json!({"cmd": "cam_setup_edit", "setup": 1,
+               "changes": {"stock": {"kind": "around_bodies", "top": "depth / 3"}}}),
+    );
+    let message = refused(
+        &mut doc,
+        json!({"cmd": "delete_parameter", "name": "depth"}),
+    );
+    assert!(message.contains("the CAM setup Setup 1"), "{message}");
+    assert!(
+        message.contains("the CAM operation Pocket 1 of Setup 1"),
+        "{message}"
+    );
+    // Without the uses the parameter goes.
+    command(
+        &mut doc,
+        json!({"cmd": "cam_setup_edit", "setup": 1,
+               "changes": {"stock": {"kind": "around_bodies", "top": 1}}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "cam_operation_edit", "operation": 3,
+               "changes": {"depths": {"bottom": -3}}}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "delete_parameter", "name": "depth"}),
+    );
+    assert_eq!(operations(&doc)[1]["depths"]["bottom"], json!(-3.0));
 }

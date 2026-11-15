@@ -1050,6 +1050,78 @@ impl CamOperation {
         }
         out
     }
+
+    /// Every value it has, as [`CamOperation::values`] lists them (the
+    /// same values in the same order), to be changed: a parameter's rename
+    /// rewrites the expressions (mitcad#1830).
+    pub fn values_mut(&mut self) -> Vec<(&mut CamValue, ValueKind)> {
+        use ValueKind::{Angle, Length, Number};
+        let mut out: Vec<(&mut CamValue, ValueKind)> = Vec::new();
+        for (value, kind) in [
+            (&mut self.depths.top, Length),
+            (&mut self.depths.bottom, Length),
+            (&mut self.depths.step_down, Length),
+            (&mut self.heights.clearance, Length),
+            (&mut self.heights.retract, Length),
+            (&mut self.cutting.spindle_rpm, Number),
+            (&mut self.cutting.feed, Length),
+            (&mut self.cutting.plunge_feed, Length),
+            (&mut self.stepover, Length),
+            (&mut self.stock_to_leave, Length),
+        ] {
+            if let Some(value) = value {
+                out.push((value, kind));
+            }
+        }
+        match &mut self.entry {
+            Some(Entry::Ramp { angle }) => out.push((angle, Angle)),
+            Some(Entry::Helix { radius, angle }) => {
+                if let Some(radius) = radius {
+                    out.push((radius, Length));
+                }
+                out.push((angle, Angle));
+            }
+            Some(Entry::Plunge) | None => {}
+        }
+        if let Some(tabs) = &mut self.tabs {
+            out.push((&mut tabs.width, Length));
+            out.push((&mut tabs.height, Length));
+        }
+        if let Some(lead) = &mut self.lead {
+            out.push((&mut lead.radius, Length));
+        }
+        match &mut self.kind {
+            OperationKind::RasterFinish { angle, slope } => {
+                out.extend([angle, slope].into_iter().flatten().map(|v| (v, Angle)));
+            }
+            OperationKind::WaterlineFinish { slope: Some(slope) } => out.push((slope, Angle)),
+            _ => {}
+        }
+        out
+    }
+}
+
+impl CamValue {
+    /// Whether it is an expression that names a parameter.
+    pub fn uses_parameter(&self, name: &str) -> bool {
+        match self {
+            CamValue::Number(_) => false,
+            CamValue::Expression(text) => {
+                crate::expr::Expr::parse(text).is_ok_and(|expr| expr.references().contains(&name))
+            }
+        }
+    }
+
+    /// Rewrites an expression's references to a renamed parameter
+    /// (mitcad#1830); a number, and a text that does not parse, stay.
+    pub fn rename_parameter(&mut self, old: &str, new: &str) {
+        if let CamValue::Expression(text) = self
+            && let Ok(expr) = crate::expr::Expr::parse(text)
+            && expr.references().contains(&old)
+        {
+            *text = crate::expr::replace_references(text, &expr, old, new);
+        }
+    }
 }
 
 impl CamSetup {
@@ -1057,6 +1129,20 @@ impl CamSetup {
     pub fn values(&self) -> Vec<(&CamValue, ValueKind)> {
         let mut out = vec![(&self.safe_height, ValueKind::Length)];
         if let Stock::AroundBodies { side, top, bottom } = &self.stock {
+            out.extend([
+                (side, ValueKind::Length),
+                (top, ValueKind::Length),
+                (bottom, ValueKind::Length),
+            ]);
+        }
+        out
+    }
+
+    /// Every value of the setup itself, as [`CamSetup::values`] lists
+    /// them, to be changed.
+    pub fn values_mut(&mut self) -> Vec<(&mut CamValue, ValueKind)> {
+        let mut out = vec![(&mut self.safe_height, ValueKind::Length)];
+        if let Stock::AroundBodies { side, top, bottom } = &mut self.stock {
             out.extend([
                 (side, ValueKind::Length),
                 (top, ValueKind::Length),
@@ -1140,6 +1226,62 @@ impl CamState {
         let id = self.next_id.max(self.largest_id() + 1);
         self.next_id = id + 1;
         id
+    }
+
+    /// Rewrites every setup's and operation's expressions that name a
+    /// renamed parameter (mitcad#1830), as the bindings follow a rename.
+    pub fn rename_parameter(&mut self, old: &str, new: &str) {
+        for setup in &mut self.setups {
+            for (value, _) in setup.values_mut() {
+                value.rename_parameter(old, new);
+            }
+            for op in &mut setup.operations {
+                for (value, _) in op.values_mut() {
+                    value.rename_parameter(old, new);
+                }
+            }
+        }
+    }
+
+    /// The names of the parameters its setups' and operations' values use.
+    pub fn parameter_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for setup in &self.setups {
+            let values = setup
+                .values()
+                .into_iter()
+                .chain(setup.operations.iter().flat_map(CamOperation::values));
+            for (value, _) in values {
+                if let CamValue::Expression(text) = value
+                    && let Ok(expr) = crate::expr::Expr::parse(text)
+                {
+                    for name in expr.references() {
+                        if !names.iter().any(|n| n == name) {
+                            names.push(name.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// The setups and operations whose values name a parameter, in words,
+    /// for refusing its delete (mitcad#1830): `the CAM setup Setup 1`,
+    /// `the CAM operation Pocket 1 of Setup 1`.
+    pub fn parameter_users(&self, name: &str) -> Vec<String> {
+        let mut users = Vec::new();
+        for setup in &self.setups {
+            if setup.values().iter().any(|(v, _)| v.uses_parameter(name)) {
+                users.push(format!("the CAM setup {}", setup.name));
+            }
+            for op in &setup.operations {
+                if op.values().iter().any(|(v, _)| v.uses_parameter(name)) {
+                    users.push(format!("the CAM operation {} of {}", op.name, setup.name));
+                }
+            }
+        }
+        users
     }
 
     /// What is wrong with the section as a whole: ids, names and machines
@@ -1604,5 +1746,79 @@ impl CamToolInput {
         }
         tool.check()?;
         Ok(tool)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An operation with every value it can have, each `gap + 1`.
+    fn every_value() -> CamOperation {
+        let v = "gap + 1";
+        serde_json::from_value(json!({
+            "id": 2, "name": "Raster", "tool": 1,
+            "kind": {"type": "raster_finish", "angle": v, "slope": v},
+            "depths": {"top": v, "bottom": v, "step_down": v},
+            "heights": {"clearance": v, "retract": v},
+            "cutting": {"spindle_rpm": v, "feed": v, "plunge_feed": v},
+            "stepover": v, "stock_to_leave": v,
+            "entry": {"kind": "helix", "radius": v, "angle": v},
+            "tabs": {"count": 2, "width": v, "height": v},
+            "lead": {"radius": v}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn values_mut_lists_what_values_lists() {
+        let mut op = every_value();
+        let kinds: Vec<ValueKind> = op.values().into_iter().map(|(_, k)| k).collect();
+        let kinds_mut: Vec<ValueKind> = op.values_mut().into_iter().map(|(_, k)| k).collect();
+        assert_eq!(kinds.len(), 17);
+        assert_eq!(kinds, kinds_mut);
+        let mut setup: CamSetup = serde_json::from_value(json!({
+            "id": 1, "name": "Setup 1", "safe_height": "gap + 1",
+            "stock": {"kind": "around_bodies", "side": "gap", "top": "gap", "bottom": "gap"}
+        }))
+        .unwrap();
+        let kinds: Vec<ValueKind> = setup.values().into_iter().map(|(_, k)| k).collect();
+        let kinds_mut: Vec<ValueKind> = setup.values_mut().into_iter().map(|(_, k)| k).collect();
+        assert_eq!(kinds.len(), 4);
+        assert_eq!(kinds, kinds_mut);
+    }
+
+    #[test]
+    fn a_rename_rewrites_every_value_and_the_users_are_named() {
+        let mut setup: CamSetup = serde_json::from_value(json!({
+            "id": 1, "name": "Setup 1", "safe_height": 15,
+            "stock": {"kind": "around_bodies", "top": "gaps * 2"}
+        }))
+        .unwrap();
+        setup.operations.push(every_value());
+        let mut cam = CamState {
+            setups: vec![setup],
+            ..CamState::default()
+        };
+        assert_eq!(cam.parameter_names(), ["gaps", "gap"]);
+        assert_eq!(
+            cam.parameter_users("gap"),
+            ["the CAM operation Raster of Setup 1"]
+        );
+        assert_eq!(cam.parameter_users("gaps"), ["the CAM setup Setup 1"]);
+        assert!(cam.parameter_users("gip").is_empty());
+
+        cam.rename_parameter("gap", "gip");
+        let op = &cam.setups[0].operations[0];
+        for (value, _) in op.values() {
+            assert_eq!(value, &CamValue::Expression("gip + 1".to_owned()));
+        }
+        // Another parameter whose name starts the same stays.
+        assert_eq!(
+            cam.setups[0].values()[2].0,
+            &CamValue::Expression("gaps * 2".to_owned())
+        );
+        assert_eq!(cam.setups[0].safe_height, CamValue::Number(15.0));
+        assert!(cam.parameter_users("gap").is_empty());
     }
 }

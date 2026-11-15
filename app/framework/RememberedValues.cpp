@@ -44,6 +44,12 @@ PanelStart panelStartText(const QString& command, const QString& input, const QS
   return start;
 }
 
+PanelStart panelStartChoice(const QString& command, const QString& input, const QString& defaultChoice,
+                            const QStringList& offered) {
+  return panelStartText(command, input, defaultChoice,
+                        [&offered](const QString& option) { return offered.contains(option); });
+}
+
 void rememberPanelValues(const QString& command, const QVector<QPair<QString, QString>>& fields,
                          bool committed, bool editing) {
   if (!committed || editing || command.isEmpty()) {

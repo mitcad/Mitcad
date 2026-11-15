@@ -90,3 +90,6 @@ mod sketch_offset_free_1755_tests;
 // between lines that are not parallel, arcs that keep their side, and
 // Offset's Corners: Round (mitcad#1774).
 mod sketch_rounded_offset_1774_tests;
+// Sketches on cylindrical and conical faces: developed coordinates, profiles
+// raised and sunk, Split Face, lengths on the face (mitcad#1768).
+mod sketch_curved_face_1768_tests;

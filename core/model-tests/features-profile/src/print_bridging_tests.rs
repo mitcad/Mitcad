@@ -265,3 +265,98 @@ fn bridging_needs_a_recess_at_the_start() {
     add(&mut b, hole(true, json!({})));
     assert!(!hole_spec(&b.doc).contains("bridging"));
 }
+
+/// How many holes the kernel was asked for so far.
+fn hole_specs(doc: &Document<MockKernel>) -> usize {
+    doc.kernel()
+        .specs
+        .borrow()
+        .iter()
+        .filter(|spec| spec.starts_with("hole "))
+        .count()
+}
+
+/// The bridged hole's layer in the last hole the kernel was asked for.
+fn assert_layer(doc: &Document<MockKernel>, layer: &str) {
+    let spec = hole_spec(doc);
+    assert!(
+        spec.contains(&format!("bridging Sacrificial layer {layer}")),
+        "{layer}: {spec}"
+    );
+}
+
+/// Runs `command` with the memory cache emptied first: the result cache can
+/// serve a layer height seen before, so the kernel's last request would not
+/// show it.
+fn uncached(doc: &mut Document<MockKernel>, value: Value) {
+    doc.clear_memory_cache();
+    command(doc, value);
+}
+
+/// mitcad#1831: every edit that changes the design's layer height cuts the
+/// bridged holes again in the same step, not only `set_property`; an edit
+/// of a profile the design does not use evaluates nothing.
+#[test]
+fn every_edit_of_the_layer_height_cuts_the_bridges_again() {
+    let mut b = block();
+    add(&mut b, hole(true, json!({"print_bridging": "sacrificial"})));
+    command(
+        &mut b.doc,
+        json!([
+            {"cmd": "create_print_profile", "kind": "process", "name": "Fine",
+             "values": {"layer_height": 0.12}},
+            {"cmd": "create_print_profile", "kind": "process", "name": "Coarse",
+             "values": {"layer_height": 0.3}},
+            {"cmd": "set_property", "owner": "C0", "set": "Print Process", "key": "profile",
+             "value": "fine"},
+            {"cmd": "set_property", "owner": "C0", "set": "Print Process",
+             "key": "layer_height", "value": 0.16},
+        ]),
+    );
+    assert_layer(&b.doc, "0.160000");
+
+    // The design's own layer height removed: its profile's again.
+    uncached(
+        &mut b.doc,
+        json!({"cmd": "remove_property", "owner": "C0", "set": "Print Process",
+               "key": "layer_height"}),
+    );
+    assert_layer(&b.doc, "0.120000");
+
+    // The chosen profile's layer height edited.
+    uncached(
+        &mut b.doc,
+        json!({"cmd": "edit_print_profile", "id": "fine", "values": {"layer_height": 0.28}}),
+    );
+    assert_layer(&b.doc, "0.280000");
+
+    // A profile the design does not choose: nothing is cut again.
+    let asked = hole_specs(&b.doc);
+    uncached(
+        &mut b.doc,
+        json!({"cmd": "edit_print_profile", "id": "coarse", "values": {"layer_height": 0.32}}),
+    );
+    assert_eq!(hole_specs(&b.doc), asked);
+    assert_layer(&b.doc, "0.280000");
+
+    // The chosen profile deleted: the standard printer's 0.2 mm layers.
+    uncached(
+        &mut b.doc,
+        json!({"cmd": "delete_print_profile", "id": "fine"}),
+    );
+    assert_layer(&b.doc, "0.200000");
+
+    // Imported settings the design chooses bring their layer height.
+    let bundle = "[print:0.24mm DRAFT]\nlayer_height = 0.24\nperimeters = 2\n\n\
+        [filament:Acme PLA]\nfilament_type = PLA\ntemperature = 210\n\n\
+        [printer:Bench MK]\nbed_shape = 0x0,200x0,200x200,0x200\nmax_print_height = 180\n\n\
+        [presets]\nprint = 0.24mm DRAFT\n";
+    let dir = mitcad_model::testing::unique_temp_dir("print-bridging-import");
+    let path = dir.join("draft.ini").to_str().unwrap().to_owned();
+    std::fs::write(&path, bundle).unwrap();
+    uncached(
+        &mut b.doc,
+        json!({"cmd": "import_print_profile", "path": path}),
+    );
+    assert_layer(&b.doc, "0.240000");
+}

@@ -832,6 +832,13 @@ impl<'g, S: Clone> Oracle<'g, S> {
         self.states.len().checked_sub(1)
     }
 
+    /// The solids of state `index` where it is built, without building it
+    /// (for lookups that cannot build: the state the replay stands for is
+    /// built).
+    pub fn built_state(&self, index: usize) -> Option<&[(StoredBody<S>, Sig)]> {
+        self.states.get(index)?.as_deref()
+    }
+
     pub fn final_bodies(&mut self) -> Result<Vec<StoredBody<S>>, String> {
         let mut bodies = self.geometry.final_bodies()?;
         bodies.retain(|b| !self.is_retired(usize::MAX, b.id));

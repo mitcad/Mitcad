@@ -447,6 +447,26 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("cam_generate", Model),
     ("cam_machine_from_library", FileIo),
     ("cam_machine_to_library", FileIo),
+    // Forms: control cages and their edits (mitcad#1757).
+    ("form.create", Model),
+    ("form.move", Model),
+    ("form.rotate", Model),
+    ("form.scale", Model),
+    ("form.set_positions", Model),
+    ("form.extrude", Model),
+    ("form.insert_loop", Model),
+    ("form.delete_loop", Model),
+    ("form.delete_faces", Model),
+    ("form.crease", Model),
+    ("form.symmetry", Model),
+    ("form.set_cage", Model),
+    // An occurrence whose component's joints move in its parent
+    // (mitcad#1793).
+    ("set_occurrence_flexible", Model),
+    // A body's folder in its component's Bodies folder (mitcad#1802).
+    ("set_body_folder", Model),
+    // Convert to Features (mitcad#1815).
+    ("convert_derived_part", Model),
 ];
 
 /// Every query (its `query`) with its class. A `cache` query with `disk`
@@ -689,9 +709,22 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // Whether a link to a file would be followed: it looks at the file
     // system (mitcad#1719).
     ("link_check", FileIo),
+    // Forms: the whole cage and the limit surface's mesh (mitcad#1757).
+    ("form_cage", Model),
+    ("form_limit", Model),
     // The design packed into a zip for a report: it reads the design's
     // files and writes the zip (mitcad#1795).
     ("design_package", FileIo),
+    // A library source's design as the design keeps it (mitcad#1812).
+    ("library_source", Model),
+    // A sketch's points on its face and back (mitcad#1768).
+    ("sketch_surface", Model),
+    // The component that holds a joint's picks (mitcad#1856).
+    ("joint_holder", Model),
+    // A glTF file as the import reads it, read by its path (mitcad#1826).
+    ("gltf_file", FileIo),
+    // How a face's walls continue, for Press Pull (mitcad#1850).
+    ("face_run", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

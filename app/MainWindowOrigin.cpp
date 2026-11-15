@@ -9,8 +9,11 @@
 #include "MainWindow.hpp"
 
 #include <exception>
+#include <optional>
 
 #include <QJsonObject>
+#include <QJsonValue>
+#include <QString>
 #include <QTimer>
 #include <QtLogging>
 
@@ -97,9 +100,22 @@ void MainWindow::updateDatumHandles() {
       DatumHandles::Target shown;
       shown.uid = item->owner;
       shown.size = datumDisplaySize(datum);
+      shown.height = shown.size;
+      shown.stored = datum.value(QStringLiteral("display_size")).toDouble(0.0) > 0.0;
       const gp_Trsf placement =
           item->occurrence.isEmpty() ? gp_Trsf() : placementOf(item->occurrence).Transformation();
-      if (datum.value(QStringLiteral("type")).toString() == QLatin1String("plane")) {
+      // Where it is drawn (mitcad#1827): its rectangle or line, fitted to
+      // what it is made from or at its own size.
+      const bool plane = datum.value(QStringLiteral("type")).toString() == QLatin1String("plane");
+      if (const std::optional<DrawnDatum> drawn = drawnDatum(datum); drawn && drawn->plane == plane) {
+        shown.plane = plane;
+        shown.centre = drawn->centre.Transformed(placement);
+        shown.xAxis = gp_Dir(drawn->xAxis).Transformed(placement);
+        shown.yAxis = plane ? gp_Dir(drawn->yAxis).Transformed(placement) : gp_Dir(0, 1, 0);
+        shown.size = drawn->width;
+        shown.height = plane ? drawn->height : drawn->width;
+        target = shown;
+      } else if (plane) {
         shown.plane = true;
         shown.centre = pointOf(datum.value(QStringLiteral("origin"))).Transformed(placement);
         shown.xAxis = gp_Dir(vectorOf(datum.value(QStringLiteral("x_axis")))).Transformed(placement);
@@ -127,8 +143,32 @@ void MainWindow::updateDatumHandles() {
                        {QStringLiteral("uid"), uid},
                        {QStringLiteral("size"), size}});
     });
+    connect(m_datumHandles, &DatumHandles::resetRequested, this, [this](const QString& uid) {
+      // Reset Size (mitcad#1827): drawn fitted to what it is made from
+      // again, one undo step.
+      runModelCommand({{QStringLiteral("cmd"), QStringLiteral("set_datum_display_size")},
+                       {QStringLiteral("uid"), uid},
+                       {QStringLiteral("size"), QJsonValue::Null}});
+    });
   }
   m_datumHandles->setTarget(target);
+}
+
+void MainWindow::logDrawnDatum(const QString& uid, const QJsonObject& datum) {
+  const std::optional<DrawnDatum> drawn = drawnDatum(datum);
+  if (!drawn) {
+    return;
+  }
+  const auto mm = [](double value) { return QString::number(value, 'g', 6); };
+  const QString line = drawn->plane ? QStringLiteral("Datum %1 drawn %2 x %3 mm (%4)")
+                                          .arg(uid, mm(drawn->width), mm(drawn->height), drawn->source)
+                                    : QStringLiteral("Datum %1 drawn %2 mm long (%3)")
+                                          .arg(uid, mm(drawn->width), drawn->source);
+  if (m_loggedDrawn.value(uid) == line) {
+    return;
+  }
+  m_loggedDrawn.insert(uid, line);
+  qDebug().noquote() << line;
 }
 
 } // namespace mitcad

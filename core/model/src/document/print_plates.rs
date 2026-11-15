@@ -478,7 +478,8 @@ impl<K: Kernel> Document<K> {
 
     /// The `print_plates` query: each plate with its items (their names,
     /// counts and whether they are in the design now), its own values and
-    /// the number of pieces it prints; and the placements on no plate,
+    /// the number of pieces it prints with each placement it prints
+    /// (mitcad#1807); and the placements on no plate,
     /// which print on the first.
     pub fn print_plates_json(&self) -> Value {
         let unplaced = self.unplaced();
@@ -515,8 +516,14 @@ impl<K: Kernel> Document<K> {
                     })
                     .collect();
                 // As the export makes them: an item whose bodies print on
-                // another plate adds none (mitcad#1310).
-                let pieces = self.plate_piece_count(index, &instances);
+                // another plate adds none (mitcad#1310). Each placement it
+                // prints, once (mitcad#1807: Send to Slicer's Process row
+                // reads their settings).
+                let (pieces, placements) = self.plate_prints(index, &instances);
+                let bodies: Vec<Value> = placements
+                    .iter()
+                    .map(|(uid, path)| self.placement_json(*uid, path.as_deref()))
+                    .collect();
                 json!({
                     "id": plate.id,
                     "name": plate.name,
@@ -524,23 +531,28 @@ impl<K: Kernel> Document<K> {
                     "items": items,
                     "values": values,
                     "pieces": pieces,
+                    "bodies": bodies,
                 })
             })
             .collect();
         let unplaced: Vec<Value> = unplaced
             .iter()
-            .map(|(uid, path)| {
-                json!({
-                    "body": uid,
-                    "name": self.body_name(*uid),
-                    "occurrence": path.as_deref().map(path_text).unwrap_or_default(),
-                    "occurrence_name": path
-                        .as_deref()
-                        .map(|p| self.assembly().path_name(p))
-                        .unwrap_or_default(),
-                })
-            })
+            .map(|(uid, path)| self.placement_json(*uid, path.as_deref()))
             .collect();
         json!({"plates": plates, "unplaced": unplaced})
+    }
+
+    /// A body's placement in the `print_plates` query: the body, its
+    /// name, its occurrence path and the path's names (empty for a body
+    /// not placed).
+    fn placement_json(&self, uid: BodyUid, path: Option<&[OccurrenceUid]>) -> Value {
+        json!({
+            "body": uid,
+            "name": self.body_name(uid),
+            "occurrence": path.map(path_text).unwrap_or_default(),
+            "occurrence_name": path
+                .map(|p| self.assembly().path_name(p))
+                .unwrap_or_default(),
+        })
     }
 }

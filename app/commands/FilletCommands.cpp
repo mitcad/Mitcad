@@ -1,22 +1,34 @@
 // SPDX-License-Identifier: MIT
 // Press Pull, Fillet and Chamfer (U4): fillets and chamfers with sets of
 // edges, each set its own size (commands.md, "fillet",
-// "chamfer"); Press Pull turns into the feature its selection asks for,
-// and on a fillet's face opens the fillet (P6).
+// "chamfer"); Press Pull turns into the feature its selection asks for
+// (a face continued Straight or Along the walls: press_pull, mitcad#1850),
+// on a fillet's face opens the fillet (P6) and on a feature's end may
+// open that feature.
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QRegularExpression>
+#include <QString>
+
+#include <TopoDS_Shape.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include "../framework/HandleStep.hpp"
+#include "../framework/ModelShapes.hpp"
 #include "ChamferHandles.hpp"
 #include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
@@ -870,6 +882,102 @@ CommandDef chamferCommand(const CommandContext& context) {
 // ---------------------------------------------------------------------------
 // Press Pull
 
+namespace {
+
+const QString kTarget = QStringLiteral("target");
+const QString kContinue = QStringLiteral("continue");
+const QString kTaperType = QStringLiteral("taper_type");
+// The face_run answer for the first picked face (mitcad#1850), kept in the
+// state: how its walls continue and the feature whose end it is.
+const QString kRun = QStringLiteral("run");
+// Set while a press_pull feature is edited: Offset and a feature's own
+// edit are other features, not offered then.
+const QString kEditingContinued = QStringLiteral("editing_continued");
+
+// How Press Pull continues a face (mitcad#1850): Offset is offset_face,
+// Straight and Along the Walls are press_pull; "feature" (offered where the
+// face is a feature's moving end) opens that feature's edit instead.
+const Choices kContinueTypes = {{QStringLiteral("offset"), QStringLiteral("Offset")},
+                                {QStringLiteral("straight"), QStringLiteral("Straight")},
+                                {QStringLiteral("along"), QStringLiteral("Along the Walls (Face Turns)")}};
+const Choices kPullTapers = {{QStringLiteral("none"), QStringLiteral("None")},
+                             {QStringLiteral("draft"), QStringLiteral("Draft")},
+                             {QStringLiteral("scale"), QStringLiteral("Scale")}};
+
+bool onFaces(const CommandState& state) {
+  const Selection& items = state.items(kTarget);
+  return !items.isEmpty() && items.first().kind == SelectKind::Face;
+}
+
+// Straight or Along the Walls: a press_pull, which takes a taper.
+bool continued(const CommandState& state) {
+  const QString how = state.choice(kContinue);
+  return onFaces(state) && (how == QStringLiteral("straight") || how == QStringLiteral("along"));
+}
+
+QJsonObject faceRun(const SelectionItem& face, const CommandContext& context) {
+  try {
+    return context.queryObject({{QStringLiteral("query"), QStringLiteral("face_run")},
+                                {QStringLiteral("body"), face.owner},
+                                {QStringLiteral("face"), face.name}});
+  } catch (const std::exception&) {
+    return {}; // not flat, or not a face of this document: no run
+  }
+}
+
+// Reads the run of the first picked face into the state; a feature's
+// edit that no longer applies goes back to Offset.
+void readRun(CommandState& state, const CommandContext& context) {
+  const Selection& items = state.items(kTarget);
+  const QJsonObject run =
+      !items.isEmpty() && items.first().kind == SelectKind::Face ? faceRun(items.first(), context) : QJsonObject();
+  state.setObject(kRun, run);
+  if (state.choice(kContinue) == QStringLiteral("feature") &&
+      run.value(QStringLiteral("feature_end")).toObject().isEmpty()) {
+    state.setChoice(kContinue, QStringLiteral("offset"));
+  }
+}
+
+// The handle of Along the Walls (mitcad#1850): a ring about the walls'
+// axis through the face's area centre, its value the arc length, for a
+// turn; an arrow along the walls for a straight run. None for the others.
+std::optional<Manipulator> runHandle(const CommandState& state, const CommandContext& model) {
+  const Selection& items = state.items(kTarget);
+  if (state.choice(kContinue) != QStringLiteral("along") || items.isEmpty()) {
+    return std::nullopt;
+  }
+  const QJsonObject run = state.object(kRun);
+  const QJsonObject along = run.value(QStringLiteral("along")).toObject();
+  const QString kind = along.value(QStringLiteral("kind")).toString();
+  if (run.isEmpty() || (kind != QStringLiteral("turn") && kind != QStringLiteral("straight"))) {
+    return std::nullopt;
+  }
+  // The query answers in the body's coordinates; the view places it.
+  const TopoDS_Shape placed = model.itemShape(items.first());
+  const gp_Trsf place = placed.IsNull() ? gp_Trsf() : placed.Location().Transformation();
+  const gp_Pnt centre = pointOf(run.value(QStringLiteral("center")));
+  if (kind == QStringLiteral("straight")) {
+    Manipulator handle = arrow(centre.Transformed(place),
+                               gp_Dir(vectorOf(along.value(QStringLiteral("direction")))).Transformed(place));
+    handle.scale = itemsScale({items.first()}, model);
+    return handle;
+  }
+  const gp_Pnt origin = pointOf(along.value(QStringLiteral("origin")));
+  const gp_Dir axis(vectorOf(along.value(QStringLiteral("axis"))));
+  const double radius = along.value(QStringLiteral("radius")).toDouble();
+  if (!(radius > 1e-9)) {
+    return std::nullopt;
+  }
+  const gp_Pnt foot = origin.Translated(gp_Vec(axis) * gp_Vec(origin, centre).Dot(gp_Vec(axis)));
+  Manipulator handle = ring(foot.Transformed(place), axis.Transformed(place));
+  handle.reference = gp_Dir(gp_Vec(foot, centre)).Transformed(place);
+  handle.radius = radius;
+  handle.factor = 1.0 / radius;
+  return handle;
+}
+
+} // namespace
+
 CommandDef pressPullCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("solid.press_pull");
@@ -880,18 +988,57 @@ CommandDef pressPullCommand(const CommandContext& context) {
   def.group = QStringLiteral("MODIFY");
   def.pinned = true;
   def.keywords = {QStringLiteral("push"), QStringLiteral("pull"), QStringLiteral("offset face")};
+  // A face continued Straight or Along the walls is a press_pull of its
+  // own, edited here (mitcad#1850).
+  def.editsAlso = {QStringLiteral("press_pull")};
+  InputDef endScale =
+      valueInput(QStringLiteral("end_scale"), QObject::tr("End Scale"), ValueKind::Unitless, QStringLiteral("1"))
+          .withTooltip(QObject::tr("The end's size to the face's: 1.1 is 110 %"))
+          .withVisible([](const CommandState& state) {
+            return continued(state) && state.choice(kTaperType) == QStringLiteral("scale");
+          });
+  // The angle the scale makes at the outline's farthest point.
+  endScale.rowNote = [](const CommandState& state, const CommandContext&) {
+    const double reach = state.object(kRun).value(QStringLiteral("reach")).toDouble();
+    const double scale = state.value(QStringLiteral("end_scale"));
+    const double distance = std::abs(state.value(QStringLiteral("distance")));
+    if (!(reach > 0.0) || !std::isfinite(scale) || !(distance > 0.0)) {
+      return QString();
+    }
+    return QObject::tr("Angle at the outline's farthest point: %1°")
+        .arg(degrees(std::atan(reach * (scale - 1.0) / distance)));
+  };
   def.inputs = {
-      selectionInput(QStringLiteral("target"), QObject::tr("Faces, Edges or Profiles"),
+      selectionInput(kTarget, QObject::tr("Faces, Edges or Profiles"),
                      SelectKind::Face | SelectKind::Edge | SelectKind::Profile, 1, 0)
           .withTooltip(QObject::tr("Faces to offset, edges to fillet or profiles to extrude, one "
-                                   "kind at a time")),
+                                   "kind at a time"))
+          .withOnPick([](const SelectionItem&, CommandState& state, const CommandContext& model) {
+            readRun(state, model);
+          }),
+      choiceInput(kContinue, QObject::tr("Continue"), kContinueTypes, QStringLiteral("offset"))
+          .withTooltip(QObject::tr("Offset moves the face; Straight runs it out unturned; Along the Walls "
+                                   "turns it with them"))
+          .withChoices([](const CommandState& state) {
+            // Editing a press_pull: Straight or Along the Walls only.
+            if (state.checked(kEditingContinued)) {
+              return Choices{kContinueTypes[1], kContinueTypes[2]};
+            }
+            Choices options = kContinueTypes;
+            const QJsonObject end = state.object(kRun).value(QStringLiteral("feature_end")).toObject();
+            if (!end.isEmpty()) {
+              options.append({QStringLiteral("feature"), QObject::tr("Edit %1 Instead").arg(str(end, "name"))});
+            }
+            return options;
+          })
+          .withVisible(onFaces),
       valueInput(QStringLiteral("distance"), QObject::tr("Distance"), ValueKind::Length,
                  QStringLiteral("5 mm"))
           .withTooltip(QObject::tr("Out of the material for faces, the radius for edges, the "
                                    "height for profiles"))
           .withManipulator([](const CommandState& state,
                               const CommandContext& model) -> std::optional<Manipulator> {
-            const Selection& items = state.items(QStringLiteral("target"));
+            const Selection& items = state.items(kTarget);
             if (items.isEmpty()) {
               return std::nullopt;
             }
@@ -906,6 +1053,10 @@ CommandDef pressPullCommand(const CommandContext& context) {
               return handle;
             }
             if (items.first().kind == SelectKind::Face) {
+              // Along the walls the handle follows the run (mitcad#1850).
+              if (std::optional<Manipulator> along = runHandle(state, model)) {
+                return along;
+              }
               const auto frame = frameOf(items.first(), model);
               const auto center = centerOf({items.first()}, model);
               if (frame && center) {
@@ -916,12 +1067,26 @@ CommandDef pressPullCommand(const CommandContext& context) {
             }
             return std::nullopt;
           }),
+      choiceInput(kTaperType, QObject::tr("Taper Type"), kPullTapers, QStringLiteral("none"))
+          .withTooltip(QObject::tr("Draft leans each new wall; Scale grows or shrinks the whole outline"))
+          .withVisible(continued),
+      valueInput(QStringLiteral("taper_angle"), QObject::tr("Taper Angle"), ValueKind::Angle,
+                 QStringLiteral("0 deg"))
+          .withTooltip(QObject::tr("How far each new wall leans from its edge on the face, outward positive"))
+          .withVisible([](const CommandState& state) {
+            return continued(state) && state.choice(kTaperType) == QStringLiteral("draft");
+          }),
+      endScale,
   };
   def.enabled = [&context] { return hasBodies(context) || hasProfiles(context); };
+  def.preselected = [](const Selection&, CommandState& state, const CommandContext& model) {
+    readRun(state, model);
+  };
+  def.rolledBack = [](CommandState& state, const CommandContext& model) { readRun(state, model); };
 
   def.build = [](const CommandState& state, const CommandContext& context) {
     Built result;
-    const Selection& items = state.items(QStringLiteral("target"));
+    const Selection& items = state.items(kTarget);
     const SelectKind kind = items.first().kind;
     if (items.size() == 1 && kind == SelectKind::Face && items.first().name.contains(QStringLiteral(":fillet("))) {
       // A fillet's face: the fillet opens for its radius,
@@ -968,11 +1133,37 @@ CommandDef pressPullCommand(const CommandContext& context) {
                     {QStringLiteral("operation"), QStringLiteral("join")}};
       return result;
     }
+    const QString how = state.choice(kContinue);
+    if (kind == SelectKind::Face && how == QStringLiteral("feature")) {
+      // The face is a feature's moving end (mitcad#1850): that feature's
+      // own edit at the value that moves it.
+      const QJsonObject end = faceRun(items.first(), context).value(QStringLiteral("feature_end")).toObject();
+      if (items.size() != 1 || end.isEmpty()) {
+        return Built::failure(QObject::tr("Pick one face that ends a feature to edit that feature."),
+                              QStringLiteral("target"));
+      }
+      return Built::editing(str(end, "uid"), str(end, "input"));
+    }
     const QString body = oneBody(items, result, QStringLiteral("target"));
     if (body.isEmpty()) {
       return result;
     }
-    if (kind == SelectKind::Face) {
+    if (kind == SelectKind::Face && (how == QStringLiteral("straight") || how == QStringLiteral("along"))) {
+      // Straight or Along the walls, tapered (mitcad#1850).
+      result.def = {{QStringLiteral("type"), QStringLiteral("press_pull")},
+                    {QStringLiteral("body"), body},
+                    {QStringLiteral("faces"), names(items, SelectKind::Face)},
+                    {QStringLiteral("continue"), how},
+                    {QStringLiteral("distance"), distance}};
+      const QString taper = state.choice(kTaperType);
+      if (taper == QStringLiteral("draft")) {
+        result.def.insert(QStringLiteral("taper_type"), taper);
+        result.def.insert(QStringLiteral("taper_angle"), state.expression(QStringLiteral("taper_angle")));
+      } else if (taper == QStringLiteral("scale")) {
+        result.def.insert(QStringLiteral("taper_type"), taper);
+        result.def.insert(QStringLiteral("end_scale"), state.expression(QStringLiteral("end_scale")));
+      }
+    } else if (kind == SelectKind::Face) {
       result.def = {{QStringLiteral("type"), QStringLiteral("offset_face")},
                     {QStringLiteral("body"), body},
                     {QStringLiteral("faces"), names(items, SelectKind::Face)},
@@ -986,9 +1177,35 @@ CommandDef pressPullCommand(const CommandContext& context) {
     return result;
   };
 
+  // A press_pull's panel (mitcad#1850): its faces, how it continues, its
+  // distance and taper.
+  def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
+    Selection items;
+    for (const QJsonValue& face : feature.value(QStringLiteral("faces")).toArray()) {
+      items.append(itemOf(QJsonObject{{QStringLiteral("body"), feature.value(QStringLiteral("body"))},
+                                      {QStringLiteral("face"), face}},
+                          model));
+    }
+    state.setItems(kTarget, items);
+    state.setChecked(kEditingContinued, true);
+    state.setChoice(kContinue, feature.value(kContinue).toString(QStringLiteral("straight")));
+    loadValue(state, QStringLiteral("distance"), feature.value(QStringLiteral("distance")), feature, model);
+    state.setChoice(kTaperType, feature.value(kTaperType).toString(QStringLiteral("none")));
+    if (feature.contains(QStringLiteral("taper_angle"))) {
+      loadValue(state, QStringLiteral("taper_angle"), feature.value(QStringLiteral("taper_angle")), feature, model);
+    }
+    if (feature.contains(QStringLiteral("end_scale"))) {
+      loadValue(state, QStringLiteral("end_scale"), feature.value(QStringLiteral("end_scale")), feature, model);
+    }
+  };
+
   def.describe = [](const CommandState& state, const CommandContext&) {
-    const Selection& items = state.items(QStringLiteral("target"));
-    const QString what = items.first().kind == SelectKind::Face   ? QStringLiteral("offset face")
+    const Selection& items = state.items(kTarget);
+    const QString how = state.choice(kContinue);
+    const QString what = items.first().kind == SelectKind::Face
+                             ? (how == QStringLiteral("straight") ? QStringLiteral("press pull straight")
+                                : how == QStringLiteral("along")  ? QStringLiteral("press pull along the walls")
+                                                                  : QStringLiteral("offset face"))
                          : items.first().kind == SelectKind::Edge ? QStringLiteral("fillet")
                                                                   : QStringLiteral("extrude");
     return QStringLiteral("Press Pull made %1, distance %2")

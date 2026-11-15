@@ -110,6 +110,7 @@
 #include "framework/ChromeStyle.hpp"
 #include "framework/CommandSearch.hpp"
 #include "framework/CommandSearchRank.hpp"
+#include "framework/CommandDockWidth.hpp"
 #include "framework/DebugLog.hpp"
 #include "framework/FitToScreen.hpp"
 #include "framework/FloatingLayout.hpp"
@@ -155,10 +156,12 @@
 #include "sketch/SketchTool.hpp"
 // Click adds to the selection in sketches (mitcad#1403).
 #include "sketch/SketchPreferences.hpp"
+#include "sketch/SketchSurface.hpp"
 #include "update/UpdateController.hpp"
 #include "report/ReportCenter.hpp"
 #include "view/ModeBanner.hpp"
 #include "view/OriginPreference.hpp"
+#include "view/SelectionLook.hpp"
 #include "view/SmallCirclesPreference.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
@@ -172,8 +175,8 @@ namespace mitcad {
 namespace {
 
 const QString kFileSuffix = QStringLiteral("mitcad");
-// The view's selection and hover (the role table's, mitcad#1041).
-const QColor kSelectionColor = viewColor(ColorRole::Select, false);
+// The view's hover (the role table's, mitcad#1041); the selection's is
+// Preferences › Display › Selection color (selectionColor, mitcad#1803).
 const QColor kHoverColor = viewColor(ColorRole::Hover, false);
 // A Fillet's or Chamfer's own faces while its picked edges are drawn where
 // they were in the selection colour (mitcad#957): amber, apart from those
@@ -223,6 +226,13 @@ bool isSketchKind(SelectKind kind) {
 bool isSketchPlane(const SelectionItem& item) {
   return item.kind == SelectKind::Plane ||
          (item.kind == SelectKind::Face && item.geometry == QStringLiteral("plane"));
+}
+
+// What Create Sketch takes: a plane or a planar face, and for a 2D sketch
+// also a cylindrical or conical face, the sketch then in the face's
+// developed coordinates (mitcad#1768). A 3D sketch takes planes only.
+bool isSketchSupport(const SelectionItem& item, bool spatial) {
+  return isSketchPlane(item) || (!spatial && mitcad::sketch::isDevelopedFace(item));
 }
 
 QJsonValue planeOf(const SelectionItem& item) {
@@ -416,13 +426,14 @@ QString sectionClipKey(const QString& uid, const QString& occurrence, const QJso
 // with its Create section the palette outgrew the Docked panel at 1280 x
 // 800 and Finish Sketch scrolled away), as a command panel's OK and Cancel
 // stay under its inputs. `transparent`: the card's glass shows through
-// (the floating layout).
+// (the floating layout). It never scrolls sideways (mitcad#1825).
 QWidget* wrapPalette(sketch::SketchPalette* palette, bool transparent) {
   auto* scroll = new QScrollArea;
   scroll->setObjectName(QStringLiteral("sketchPaletteScroll"));
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  keepUnscrolledSideways(scroll); // mitcad#1825
   scroll->setWidget(palette);
   if (transparent) {
     scroll->setAutoFillBackground(false);
@@ -510,6 +521,9 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // drawn anew in every window at once.
   connect(&OriginDisplayNotifier::instance(), &OriginDisplayNotifier::changed, this,
           [this] { applyOriginDisplay(true); });
+  // Preferences > Display > Selection color or Selected line width changed
+  // (mitcad#1803): the selection drawn anew in every window at once.
+  connect(&SelectionLookNotifier::instance(), &SelectionLookNotifier::changed, this, [this] { applySelectionLook(); });
   setAcceptDrops(true);
 
   // The project indicator (mitcad#89): the current project, its kind, the
@@ -892,11 +906,11 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
 
   recompute();
   // The untitled design at the start is a new design too (mitcad#898),
-  // framed as every new design is (mitcad#1000): looking at Top with its
-  // origin shown (mitcad#1683, newDesignDocument shows it).
+  // framed as every new design is (mitcad#1000): from the default view with
+  // its origin shown (mitcad#1683, newDesignDocument shows it; mitcad#1809).
   if (!demo) {
     logNewDesignActive();
-    m_viewer->frameNewDesign(newDesignAtTop());
+    m_viewer->frameNewDesign(newDesignWithOrigin());
   }
   showHint(m_registry->shortcutWarnings().isEmpty()
                ? tr("Create a sketch to start modeling. %1 finds commands.")
@@ -1089,7 +1103,8 @@ void MainWindow::registerCommands() {
     setSketchKind(false);
     startSketch();
   });
-  sketch.tooltip = tr("Starts a sketch on a plane or a planar face: pick it, or select it first");
+  sketch.tooltip =
+      tr("Starts a sketch on a plane, a planar face, or a cylindrical or conical face");
   sketch.tab = QStringLiteral("SOLID");
   sketch.group = QStringLiteral("CREATE");
   sketch.section = QStringLiteral("sketch"); // a section of its own (mitcad#579)
@@ -1138,6 +1153,10 @@ void MainWindow::registerCommands() {
   registerSketchPlaneCommands(*m_registry, *m_sketch);
   // The BUILD tab (mitcad#375).
   registerBuildCommands(*m_registry, *this, *this, this, [this] { return documentName(); });
+  // Edit Form (mitcad#1757): no button, a Form's double-click opens it.
+  registerFormCommands();
+  // The edit panel of a derived part (mitcad#1812).
+  registerDerivedPartCommands(*m_registry, *this);
 
   CommandDef removeDef =
       action("inspect.remove_section", tr("Remove Section Analysis"), "section-analysis",
@@ -1844,9 +1863,11 @@ void MainWindow::createPanels() {
     configurationDock->setVisible(m_controller->configurationBar()->isPresent());
   }
 
-  m_commandPages = new QStackedWidget;
-  // A fixed width, so that the view keeps its size when a panel opens.
-  m_commandPages->setFixedWidth(300);
+  // At least 300 px times the larger of Text size and Icon size, so that
+  // the palette and a command's panel fit at every size, and as wide as the
+  // user dragged it (mitcad#1825, GitHub mitcad/Mitcad#336); a page that
+  // opens or closes does not change its width, so the view keeps its size.
+  m_commandPages = new CommandPages;
   m_idleInfo = new QLabel;
   m_idleInfo->setWordWrap(true);
   m_idleInfo->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -1863,6 +1884,17 @@ void MainWindow::createPanels() {
   commandDock->setObjectName(QStringLiteral("commandDock"));
   commandDock->setWidget(m_commandPages);
   addDockWidget(Qt::RightDockWidgetArea, commandDock);
+  // Its edge dragged wider is remembered and restored at the next start
+  // (mitcad#1825), as the Projects panel's; the palette's rows are logged
+  // again at a new width, for UI tests.
+  auto* commandWidth = new CommandDockWidth(*this, *commandDock);
+  commandWidth->resized = [this] {
+    if (m_mode == Mode::Sketch && m_palette != nullptr && m_commandPages->currentWidget() == m_palettePage &&
+        m_palette->isVisible()) {
+      m_palette->logLayout();
+    }
+  };
+  TestSync::singleShot(100, commandWidth, [commandWidth] { commandWidth->restore(); });
   // View › Command shows it again once its close button or the window's
   // menu of its panels hid it, as View › Browser and View › Timeline do
   // theirs (mitcad#1455: nothing brought it back). After View › Projects,
@@ -1948,8 +1980,11 @@ void MainWindow::createFloatingPanels() {
   // The user's split of the left column, as last dragged (mitcad#1020).
   m_floating->setSplitKey(QStringLiteral("floating/leftSplit"));
   m_floating->addCard(timelineCard, FloatingLayout::Anchor::Bottom);
+  // As wide as the Docked panel at least is: 300 px times the larger of Text
+  // size and Icon size, so that the Sketch Palette and a command's panel fit
+  // it at every size (mitcad#1846, as mitcad#1825 for Docked).
   m_floating->addCard(m_commandCard, FloatingLayout::Anchor::TopRight,
-                      {300, [this] { return commandContentHeight(); }, 1.0, false});
+                      {commandPanelMinimumWidth(), [this] { return commandContentHeight(); }, 1.0, false});
   // The message band above the timeline (mitcad#1042); its stub opens the
   // history above it.
   m_messageBand = new MessageBand(*m_messages);
@@ -2552,6 +2587,11 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     endCommandSketches(std::move(ended));
     return;
   }
+  // Joint and the other assembly commands on picks selected before them
+  // that lie under another component than the active one (mitcad#1864):
+  // the question (or the preference) before the panel opens, so that its
+  // first preview is made in the component chosen.
+  const QString holderNotice = holderForPreselection(*session);
   showStartingSketches(*session);
   m_session = session;
   m_lastCommand = def.id;
@@ -2562,12 +2602,15 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   scroll->setWidgetResizable(true);
   scroll->setFrameShape(QFrame::NoFrame);
   scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  keepUnscrolledSideways(scroll); // mitcad#1825
   CommandPanel* panel = session->createPanel(scroll);
   scroll->setWidget(panel);
   addParametersButton(*panel, def); // mitcad#564
   addMeasureHistory(*panel, def);   // mitcad#648
   if (!preselectionNotice.isEmpty()) {
     session->setActivationNotice(preselectionNotice); // mitcad#1634
+  } else if (!holderNotice.isEmpty()) {
+    session->setActivationNotice(holderNotice); // mitcad#1864
   }
   if (m_floating != nullptr) {
     // The card's material shows through; a changed panel resizes the card.
@@ -2629,32 +2672,42 @@ void MainWindow::editFeature(const QString& uid) {
     return;
   }
   leaveDrawing(); // a feature is edited in the 3D view (mitcad#707)
+  QString type;
+  try {
+    const QJsonObject feature =
+        queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}});
+    type = feature.value(QStringLiteral("type")).toString();
+  } catch (const std::exception&) {
+    return;
+  }
   // A feature of a linked design changes only with its file: where to
-  // change it, with Open Linked Design (mitcad#1416).
+  // change it, with Open Linked Design (mitcad#1416). A derived part is
+  // this design's own (the options a linked design is inserted with): its
+  // panel (mitcad#1812).
   if (const DocumentSnapshot::Feature* entry = m_snapshot.feature(uid)) {
     const DocumentSnapshot::Component* owner = m_snapshot.component(entry->component);
-    if (owner != nullptr && owner->linked && !owner->library) {
+    if (owner != nullptr && owner->linked && !owner->library && type != QStringLiteral("derived_part")) {
       showLinkedNotice(owner->name, owner->link);
       return;
     }
   }
-  try {
-    const QJsonObject feature =
-        queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}});
-    // A planar or a 3D sketch (mitcad#1524) opens in sketch mode.
-    const QString type = feature.value(QStringLiteral("type")).toString();
-    if (type == QStringLiteral("sketch") || type == QStringLiteral("spatial_sketch")) {
-      editSketch(uid);
-      return;
-    }
-  } catch (const std::exception&) {
+  // A planar or a 3D sketch (mitcad#1524) opens in sketch mode.
+  if (type == QStringLiteral("sketch") || type == QStringLiteral("spatial_sketch")) {
+    editSketch(uid);
     return;
   }
-  QString name = uid;
-  const CommandDef* def = editorOf(uid, &name);
+  // A Form's cage is edited in Edit Form (mitcad#1757).
+  if (type == QStringLiteral("form")) {
+    editForm(uid);
+    return;
+  }
+  const CommandDef* def = editorOf(uid);
   if (def == nullptr) {
-    // Inputs Mitcad's panels do not have yet (U4) would be lost.
-    showError(tr("%1 cannot be edited in MitCad yet.").arg(name));
+    // Inputs Mitcad's panels do not have yet (U4) would be lost: said in
+    // plain words, not as an error, with what can be done (mitcad#1812).
+    qInfo().noquote() << QStringLiteral("Edit of %1 (%2): no edit panel; Edit Parameters offered").arg(uid, type);
+    showActionStatus(tr("This feature has no edit panel yet. Its values can be changed in Edit Parameters."),
+                     NoticeLevel::Information, tr("Edit Parameters"), [this] { openParameterTable(); });
     return;
   }
   startFeatureCommand(*def, uid);
@@ -3757,13 +3810,14 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       const QJsonObject datum =
           queryObject({{QStringLiteral("query"), QStringLiteral("datum")}, {QStringLiteral("uid"), item.owner}});
       // The design's origin as Preferences draws it, a construction plane
-      // or axis at the size its handles set (mitcad#1748), a coordinate
-      // system's triad (mitcad#1775).
+      // or axis at the size its handles set (mitcad#1748) or fitted to what
+      // it is made from (mitcad#1827), a coordinate system's triad
+      // (mitcad#1775).
       if (const DocumentSnapshot::Feature* feature = m_snapshot.feature(item.owner);
           feature != nullptr && feature->type == QStringLiteral("coordinate_system")) {
         return frameTriadShape(datum, datumDisplaySize(datum) / 2.0);
       }
-      return kOriginDatums.contains(item.owner) ? originShape(datum) : datumShape(datum, datumDisplaySize(datum));
+      return kOriginDatums.contains(item.owner) ? originShape(datum) : drawnDatumShape(datum, datumDisplaySize(datum));
     }
     default:
       return TopoDS_Shape();
@@ -4321,6 +4375,26 @@ void MainWindow::showProfiles() {
   std::vector<std::pair<ProfileKey, TopoDS_Shape>> profiles;
   std::map<std::string, QString> occurrences; // of sketches of placed components
   QHash<QString, ProfileFace> faces;
+  // The curved face of each sketch on one (mitcad#1768), read once here
+  // (the `sketch` query, once per refresh); none for a plane.
+  QHash<QString, std::optional<mitcad::sketch::SketchSurface>> surfaces;
+  const auto surfaceOf = [this, &surfaces](const QString& uid) {
+    const auto known = surfaces.constFind(uid);
+    if (known != surfaces.cend()) {
+      return *known;
+    }
+    std::optional<mitcad::sketch::SketchSurface> found;
+    try {
+      found = mitcad::sketch::SketchSurface::fromJson(
+          query({{QStringLiteral("query"), QStringLiteral("sketch")}, {QStringLiteral("uid"), uid}})
+              .toObject()
+              .value(QStringLiteral("surface")));
+    } catch (const std::exception&) {
+      // A sketch that was just taken back: drawn flat, as before.
+    }
+    surfaces.insert(uid, found);
+    return found;
+  };
   const QJsonArray all =
       query({{QStringLiteral("query"), QStringLiteral("profiles")}, {QStringLiteral("hashes"), true}}).toArray();
   m_currentProfiles = all;
@@ -4354,7 +4428,13 @@ void MainWindow::showProfiles() {
     // which meshes them on this thread (mitcad#1586, OcctViewer::setProfiles);
     // never pass one to the model or a job.
     const QString key = sketch + QLatin1Char('|') + QString::fromStdString(region);
-    const QString hash = profile.value(QStringLiteral("hash")).toString();
+    // A sketch on a cylindrical or conical face (mitcad#1768): its regions
+    // laid onto the face, kept while the face stays as well.
+    const std::optional<mitcad::sketch::SketchSurface> surface = surfaceOf(sketch);
+    QString hash = profile.value(QStringLiteral("hash")).toString();
+    if (surface && !hash.isEmpty()) {
+      hash += QStringLiteral("|") + surface->signature();
+    }
     const gp_Trsf placement = placementOf(occurrence).Transformation();
     const auto cached = m_profileFaces.constFind(key);
     TopoDS_Shape face;
@@ -4367,6 +4447,17 @@ void MainWindow::showProfiles() {
       if (face.IsNull()) {
         qWarning().noquote() << "Profile not shown:" << QString::fromStdString(region);
         continue;
+      }
+      if (surface) {
+        // Flat in the face's carrier plane, laid onto the face (mitcad#1768).
+        const TopoDS_Shape onFace = mitcad::sketch::wrappedFace(face, *surface);
+        if (onFace.IsNull()) {
+          qWarning().noquote() << "Profile not laid onto its face:" << QString::fromStdString(region);
+          continue;
+        }
+        face = onFace;
+        qDebug().noquote() << QStringLiteral("Profile %1 of %2 laid onto its face")
+                                  .arg(QString::fromStdString(region), sketch);
       }
       if (!occurrence.isEmpty()) {
         face = face.Moved(TopLoc_Location(placement));
@@ -4587,6 +4678,9 @@ void MainWindow::showSketchDimensions() {
         shown.model.frame.origin.Transform(placement);
         shown.model.frame.x_axis.Transform(placement);
         shown.model.frame.y_axis.Transform(placement);
+        if (shown.model.surface) {
+          shown.model.surface->transform(placement); // a curved face's (mitcad#1768)
+        }
       }
       shown.uid = uid;
       shown.name = feature->name;
@@ -4645,9 +4739,12 @@ void MainWindow::showDatums() {
     }
     const SelectKind kind = datumKind(datum.value(QStringLiteral("type")).toString());
     // The origin as Preferences draws it, construction geometry at the size
-    // its handles set (mitcad#1748).
+    // its handles set (mitcad#1748), else fitted to what it is made from
+    // (mitcad#1827).
     DatumDisplay display{uid, kind,
-                         kOriginDatums.contains(uid) ? originShape(datum) : datumShape(datum, datumDisplaySize(datum))};
+                         kOriginDatums.contains(uid) ? originShape(datum)
+                                                     : drawnDatumShape(datum, datumDisplaySize(datum))};
+    logDrawnDatum(uid, datum);
     // A component's datum where its occurrence places it.
     display.occurrence = kOriginDatums.contains(uid) ? QString() : placingOccurrence(uid);
     if (!display.occurrence.isEmpty()) {
@@ -4760,7 +4857,25 @@ void MainWindow::logDatumPlaces() {
     const bool ofOrigin = kOriginDatums.contains(uid);
     const double size = ofOrigin ? originSize : datumDisplaySize(datum);
     std::vector<gp_Pnt> candidates;
-    if (kind == SelectKind::Plane && !ofOrigin) {
+    const std::optional<DrawnDatum> drawn = ofOrigin ? std::nullopt : drawnDatum(datum);
+    if (kind == SelectKind::Plane && drawn && drawn->plane) {
+      // A construction plane's rectangle where it is drawn (mitcad#1827),
+      // away from its middle.
+      const double ways[4][2] = {{1.0, 1.0}, {1.0, -1.0}, {-1.0, 1.0}, {-1.0, -1.0}};
+      for (const double fraction : {0.3, 0.2, 0.1}) {
+        for (const auto& way : ways) {
+          candidates.push_back(drawn->centre.Translated(drawn->xAxis * (way[0] * drawn->width * fraction) +
+                                                        drawn->yAxis * (way[1] * drawn->height * fraction)));
+        }
+      }
+    } else if (kind == SelectKind::Axis && drawn && !drawn->plane) {
+      // Along a construction axis's line where it is drawn (mitcad#1827).
+      for (const double fraction : {0.4, 0.3, 0.2, 0.12, 0.06}) {
+        for (const double sign : {1.0, -1.0}) {
+          candidates.push_back(drawn->centre.Translated(drawn->xAxis * (sign * drawn->width * fraction)));
+        }
+      }
+    } else if (kind == SelectKind::Plane && !ofOrigin) {
       // A construction plane's square, away from its middle.
       const gp_Pnt middle = pointOf(datum.value(QStringLiteral("origin")));
       const gp_Vec x = vectorOf(datum.value(QStringLiteral("x_axis")));
@@ -5200,7 +5315,7 @@ void MainWindow::clearDesignMessages() {
 }
 
 void MainWindow::createSketchOn(const SelectionItem& plane) {
-  if (m_mode == Mode::Idle && isSketchPlane(plane)) {
+  if (m_mode == Mode::Idle && isSketchSupport(plane, false)) {
     leaveDrawing(); // mitcad#707
     setSketchKind(false); // the browser's Create Sketch makes a 2D one (mitcad#1524)
     // The design policy (mitcad#220): of the active component, and of the
@@ -5230,7 +5345,7 @@ void MainWindow::pickItems(const Selection& items) {
   }
   if (m_mode == Mode::PickPlane) {
     for (const SelectionItem& item : items) {
-      if (isSketchPlane(item)) {
+      if (isSketchSupport(item, m_sketchSpatial)) {
         qDebug().noquote() << QStringLiteral("Create Sketch picked %1").arg(summarize({item}));
         // A browser row of geometry the design policy leaves out.
         if (const QString refused = sketchSupportRefusal(item); !refused.isEmpty()) {
@@ -5504,7 +5619,7 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
     for (const SelectionItem& item : items) {
       // The view's filter already leaves out what the design policy
       // refuses; a pick queued before it changed is checked again.
-      if (isSketchPlane(item) && sketchSupportRefusal(item).isEmpty()) {
+      if (isSketchSupport(item, m_sketchSpatial) && sketchSupportRefusal(item).isEmpty()) {
         // The planes lie behind the model (mitcad#844): one is not picked
         // through a face in front of it that the pick refuses (the filter
         // leaves that face out); the face says why instead.
@@ -5666,7 +5781,7 @@ void MainWindow::updateIdleView() {
     // Faces and planes the design policy leaves out (mitcad#220) are not
     // picked or highlighted, whatever else the pick would allow.
     m_viewer->setPickFilter(SelectKind::Plane | SelectKind::Face, [this](const SelectionItem& item) {
-      return isSketchPlane(item) && sketchSupportRefusal(item).isEmpty();
+      return isSketchSupport(item, m_sketchSpatial) && sketchSupportRefusal(item).isEmpty();
     });
     m_viewer->setHighlights({});
     return;
@@ -5675,9 +5790,10 @@ void MainWindow::updateIdleView() {
   // sketch mode, the sketch's selection filter decides (mitcad#217): only
   // the edited sketch's geometry, never another sketch's.
   const bool drawing = m_mode == Mode::Sketch && m_sketch->tool() != nullptr;
-  if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() && m_sketch3d->pickingNormal()) {
+  if (m_mode == Mode::Sketch && m_sketch3d != nullptr && m_sketch3d->isActive() && m_sketch3d->toolActive() &&
+      m_sketch3d->pickingNormal()) {
     // A Center Point Arc's Pick Normal (mitcad#1525): lines and edges,
-    // datum axes and planar faces.
+    // datum axes and planar faces; only while its tool is on (mitcad#1835).
     m_viewer->setPickFilter(SelectKind::SketchCurve | SelectKind::Edge | SelectKind::Axis | SelectKind::Face,
                             [](const SelectionItem& item) {
                               return item.kind != SelectKind::Face || item.geometry == QStringLiteral("plane");
@@ -5754,7 +5870,7 @@ void MainWindow::updateIdleHighlights() {
   // selection colour, dashed where the solids hide them, nothing picked on
   // them; a null shape when the feature kept none. `count` gets how many.
   const auto inputLines = [this](const SelectionItem& feature, int& count) {
-    HighlightDisplay drawn{feature, featureInputLines(feature, &count), kSelectionColor};
+    HighlightDisplay drawn{feature, featureInputLines(feature, &count), selectionColor()};
     drawn.inputLines = true;
     drawn.pickable = false;
     drawn.throughSolid = true;
@@ -5775,7 +5891,7 @@ void MainWindow::updateIdleHighlights() {
         TopExp::MapShapes(shape, TopAbs_FACE, faces);
         featureFaces << QStringLiteral("%1 %2").arg(item.owner).arg(faces.Extent());
       }
-      HighlightDisplay shown{item, shape, kSelectionColor};
+      HighlightDisplay shown{item, shape, selectionColor()};
       shown.throughSolid = item.kind == SelectKind::Feature ||
           (item.kind == SelectKind::Body && m_timelineSelection.contains(item.owner.section(QLatin1Char('.'), 0, 0)));
       if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge) {
@@ -6469,7 +6585,7 @@ void MainWindow::startSketch() {
     return;
   }
   // On the selected plane or planar face; else the user is asked for one.
-  if (m_selection.size() == 1 && isSketchPlane(m_selection.first())) {
+  if (m_selection.size() == 1 && isSketchSupport(m_selection.first(), m_sketchSpatial)) {
     if (const QString refused = sketchSupportRefusal(m_selection.first()); !refused.isEmpty()) {
       showError(tr("Create Sketch: %1").arg(refused));
       qInfo().noquote() << QStringLiteral("Create Sketch refused: %1").arg(refused);
@@ -6489,16 +6605,13 @@ void MainWindow::startSketch() {
   // face is still is. Put back when the pick ends (updateModeBanner).
   m_viewer->setPlanesBehind(true);
   m_viewer->setPlanesByDepth(true);
-  // A new design still at its Top turns to the default view first, so that
-  // all three origin planes can be picked, XZ and YZ too (mitcad#1698).
-  m_viewer->turnForPlanePick();
   inputActivated(kConstructionGeometry);
   updateIdleView();
   updateActions();
   // Faces and planes the policy leaves out are neither picked nor
   // highlighted: say whose they are.
   const QStringList& denied = m_sketchDeniedOwners;
-  QString hint = tr("Create Sketch: select a plane or a planar face (Esc cancels).");
+  QString hint = tr("Create Sketch: select a plane, a planar face or a cylindrical or conical face (Esc cancels).");
   if (!denied.isEmpty()) {
     hint += tr(" The design policy leaves out the faces and planes of %1.").arg(denied.join(QStringLiteral(", ")));
   }
@@ -6605,7 +6718,14 @@ void MainWindow::createSketchOnPick(SelectionItem item) {
     // What the newly active component's sketches may lie on.
     refreshSketchSupports();
   }
-  createSketch(sketchPlaneFields(item));
+  QJsonObject fields = sketchPlaneFields(item);
+  // A cylindrical or conical face (mitcad#1768): the sketch in its
+  // developed coordinates, its origin where the face was clicked.
+  if (!m_sketchSpatial && mitcad::sketch::isDevelopedFace(item)) {
+    fields.insert(QStringLiteral("plane"),
+                  mitcad::sketch::developedPlane(item, [this](const QJsonObject& request) { return query(request); }));
+  }
+  createSketch(fields);
 }
 
 QString MainWindow::featureError(const QString& uid) const {
@@ -6647,6 +6767,8 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   m_sketchEnterRevision = documentRevision();
   m_sketchEscHinted = false;
   m_viewer->setGridPlane(toAx3(m_sketch->model().frame)); // the grid on the sketch plane
+  // Not drawn on a cylindrical or conical face (mitcad#1853).
+  m_viewer->setGridOnCurvedFace(m_sketch->model().surface.has_value());
   m_ribbon->setSketchMode(true);
   // The palette's Create section chosen again as it opens (mitcad#1027):
   // the Sketch tab's pins first, then the tools started most.
@@ -6791,6 +6913,7 @@ void MainWindow::leaveSketchMode() {
                                    number(along.X()), number(along.Y()), number(along.Z()));
   }
   m_viewer->setGridPlane(gp_Ax3()); // back on XY
+  m_viewer->setGridOnCurvedFace(false); // drawn again (mitcad#1853)
   m_ribbon->setSketchMode(false);
   m_commandPages->setCurrentWidget(m_idlePage);
   m_sketchExisting = false;
@@ -7784,15 +7907,11 @@ bool MainWindow::installDocument(const QString& label, const QString& path, cons
   if (!m_keepView) {
     // A new design is empty: its first view frames the origin the same way
     // whatever the window's size and the design before (mitcad#1000),
-    // looking at Top (mitcad#1683). A design read from a file into a view
-    // that still looks at a new design's Top (a new window's untitled
-    // design, a file given at the start) is seen from the default view, a
-    // few degrees off the isometric one (mitcad#1698); a view the user
-    // turned keeps its direction.
+    // from the default view whatever the view looked at before, also Top
+    // (mitcad#1809). A design read from a file keeps the view's direction.
     if (newDesign) {
-      m_viewer->frameNewDesign(newDesignAtTop());
+      m_viewer->frameNewDesign(newDesignWithOrigin());
     } else {
-      m_viewer->leaveNewDesignTop();
       m_viewer->fitAll();
     }
     // The orbit's fixed center was a point of the design before

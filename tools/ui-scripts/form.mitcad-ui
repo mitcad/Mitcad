@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: MIT
+# Form and Edit Form (mitcad#1757, mitcad#1810, app/COMMANDS.md "Form") in
+# an empty design:
+#   1. Form: a box cage of 2 x 2 x 2 faces (the defaults), OK.
+#   2. Form1's double-click in the timeline opens Edit Form: the cage drawn
+#      over the view, 26 vertices, 48 edges, 24 faces, closed.
+#   3. A face of the top picked in the view and moved up 5 mm (Z
+#      Distance, Apply): one undo step, the body a solid.
+#   4. Extrude Faces: the same face extruded 5 mm, Apply: a solid.
+#   5. Crease, Semi-Sharp of Sharpness 1.5: an edge picked and creased,
+#      Apply: the edge is drawn semi-sharp, the body a solid.
+#   6. Symmetry about a picked plane: the YZ origin plane picked in the
+#      Browser, Apply: the cage symmetric, the body a solid whose halves
+#      are equal about the plane.
+#   7. A vertex dragged in the view (Move, Select Vertices): put where it
+#      was let go, one undo step, the body a solid with equal halves.
+#   8. Close keeps the edits.
+#   9. Form with Operation Cut and a box as its Objects: the box cut, a
+#      solid with less volume than its 108000 mm3.
+# Run by tools/ui-form-test.sh (Linux) and tools/ui-windows-form-test.ps1
+# (Windows).
+expect-ever 'Browser arrow Root/Origin at' 30
+wait-idle
+
+# 1. A new Form from a box cage.
+mark
+command solid.form
+expect-log '^Command Form started' 30
+wait-log '^Preview Form: ' 60
+wait-idle
+key Return
+wait-log '^Added Form$' 60
+wait-idle
+command view.fit
+wait-idle
+
+# 2. Edit Form from the timeline: the cage over the view.
+mark
+dblclick-logged '^Timeline Form1 at '
+wait-log '^Editing Form F[0-9]+ [(]Form1[)]$' 30
+wait-log '^Command Edit Form started' 30
+wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 24 faces, closed$' 30
+wait-log '^Form cage face [0-9]+ [(][+]z[)] at ' 30
+wait-idle
+
+# 3. A face of the top moved up 5 mm.
+mark
+click-logged '^Form cage face [0-9]+ [(][+]z[)] at '
+wait-log '^Form edit picked: [{]"edges":[[][]],"faces":[[][0-9]+[]],"vertices":[[][]][}]$' 30
+wait-idle
+type-in '^Panel Edit Form input move_z at ' '5'
+wait-log '^Form edit preview: [0-9]+ lines$' 60
+wait-idle
+key Return
+wait-log '^Form edit Move in Form1: done: ' 60
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume ' 60
+wait-log '^Applied Edit Form [(]1[)]$' 30
+wait-idle
+
+# 4. The same face extruded 5 mm (Extrude Faces keeps the picked face).
+mark
+qt-choice input_action 'Extrude Faces'
+wait-log '^Edit Form: Edit = Extrude Faces$' 30
+wait-log '^Form edit preview: [0-9]+ lines$' 60
+wait-idle
+key Return
+wait-log '^Form edit Extrude in Form1: done: ' 60
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume ' 60
+wait-log '^Applied Edit Form [(]2[)]$' 30
+wait-idle
+
+# 5. An edge picked and creased semi-sharp, sharp for 1.5 steps.
+mark
+qt-choice input_action 'Crease'
+wait-log '^Edit Form: Edit = Crease$' 30
+wait-idle
+qt-choice input_crease_type 'Semi-Sharp'
+wait-log '^Edit Form: Type = Semi-Sharp$' 30
+wait-idle
+type-in '^Panel Edit Form input sharpness at ' '1.5'
+wait-log '^Edit Form Sharpness: 1.5 ' 30
+wait-log '^Form cage edge -?[0-9]+,-?[0-9]+ at ' 30
+wait-idle
+click-logged '^Form cage edge -?[0-9]+,-?[0-9]+ at '
+wait-log '^Form edit picked: [{]"edges":[[][[]-?[0-9]+,-?[0-9]+[]][]],"faces":[[][]],"vertices":[[][]][}]$' 30
+wait-log '^Form edit preview: [0-9]+ lines$' 60
+wait-idle
+key Return
+wait-log '^Form edit Crease in Form1: done: .*"sharpness":1[.]5' 60
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume ' 60
+# Keep the requested geometry clear of the command card at this window size.
+command view.fit
+wait-idle
+wait-log '^Form cage edge -?[0-9]+,-?[0-9]+ [(]semi-sharp 1[.]5[)] at ' 30
+wait-log '^Applied Edit Form [(]3[)]$' 30
+wait-idle
+
+# 6. Symmetry about a picked plane: the YZ origin plane from the Browser.
+mark
+qt-choice input_action 'Symmetry'
+wait-log '^Edit Form: Edit = Symmetry$' 30
+wait-idle
+qt-choice input_plane 'Picked Plane'
+wait-log '^Edit Form: Plane = Picked Plane$' 30
+wait-idle
+click-logged '^Browser arrow Root/Origin at '
+wait-idle
+expect-log '^Browser Root/Origin/YZ at ' 10
+click-logged '^Browser Root/Origin/YZ at '
+wait-log '^Form edit mirror plane .*"normal":[[]1,0,0[]]' 30
+wait-log '^Form edit preview: [0-9]+ lines$' 60
+wait-idle
+key Return
+wait-log '^Form edit Symmetry in Form1: done: ' 60
+wait-log '^Form edit Form1: cage of [0-9]+ vertices, [0-9]+ edges, [0-9]+ faces, closed, symmetric$' 30
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume .*; halves equal about the symmetry plane$' 60
+wait-log '^Applied Edit Form [(]4[)]$' 30
+wait-idle
+
+# 7. A vertex dragged up in the view: one undo step, the halves still equal.
+mark
+qt-choice input_action 'Move'
+wait-log '^Edit Form: Edit = Move$' 30
+wait-idle
+qt-choice input_pick 'Vertices'
+wait-log '^Edit Form: Select = Vertices$' 30
+wait-log '^Form cage vertex -?[0-9]+ at ' 30
+wait-idle
+drag-from '^Form cage vertex [1-9][0-9]* at ' 0 -30
+wait-log '^Form cage drag: vertex -?[0-9]+ let go at ' 30
+wait-log '^Form edit Drag in Form1: done: [{]"cmd":"form[.]set_positions"' 60
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume .*; halves equal about the symmetry plane$' 60
+wait-idle
+
+# 8. Close keeps the edits (the four applied and the drag).
+mark
+key Escape
+wait-log '^Closed Edit Form after 4$' 30
+wait-idle
+
+# 9. A Form cut from a box: 60 x 60 x 30 standing on XY, the Form's
+#    default cage about the origin cutting into its bottom.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[-30,-30],"length":60,"width":60,"height":30,"operation":"new_body"}}'
+wait-idle
+expect-log '^Browser Root/(.*/)?Bodies/Body2 at ' 30
+mark
+command solid.form
+expect-log '^Command Form started' 30
+wait-log '^Preview Form: ' 60
+wait-idle
+qt-choice input_operation 'Cut'
+wait-log '^Form: Operation = Cut$' 30
+wait-idle
+click-logged '^Panel Form input objects at [0-9]+,[0-9]+$'
+wait-idle
+click-logged '^Browser Root/(.*/)?Bodies/Body2 at '
+wait-log '^Form Objects: 1 ' 30
+wait-log '^Preview Form: no new bodies, shown applied$' 60
+wait-idle
+key Return
+wait-log '^Form cut: body F[0-9]+[.]b0 solid, volume ([1-9][0-9]{0,4}|10[0-7][0-9]{3})[.][0-9]{3} mm3' 60
+wait-log '^Added Form$' 60
+wait-idle

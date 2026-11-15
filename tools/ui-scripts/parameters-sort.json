@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/parameters-sort.mitcad-ui (mitcad#1866): the user parameters len10 = 1 in (25.4 mm), Width = 2 cm (a favorite), len2 = 30 mm and count = 3 (no unit), in this creation order, and two boxes, First block and Second block, whose sizes are the model parameters."},
+  {"cmd": "add_parameter", "name": "len10", "unit": "in", "expression": "1 in"},
+  {"cmd": "add_parameter", "name": "Width", "unit": "cm", "expression": "2 cm"},
+  {"cmd": "add_parameter", "name": "len2", "unit": "mm", "expression": "30 mm"},
+  {"cmd": "add_parameter", "name": "count", "unit": "", "expression": "3"},
+  {"cmd": "set_parameter", "name": "Width", "favorite": true},
+  {"cmd": "add_feature", "name": "First block", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": "40 mm", "width": "10 mm", "height": "5 mm", "operation": "new_body"}},
+  {"cmd": "add_feature", "name": "Second block", "def": {"type": "box", "plane": "xy", "corner": [60, 0], "length": "8 mm", "width": "30 mm", "height": "20 mm", "operation": "new_body"}}
+]

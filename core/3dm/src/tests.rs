@@ -206,6 +206,9 @@ fn convert_all(file: &File3dm) {
             Geometry::Curve(c) => {
                 let _ = convert::to_spline(c).map(|spline| spline.to_brep(s));
             }
+            Geometry::SubD(d) => {
+                let _ = crate::subd::subd_cage(d, s);
+            }
             Geometry::Instance(_) | Geometry::Other(_) => {}
         }
     }
@@ -218,7 +221,11 @@ fn convert_all(file: &File3dm) {
 /// files).
 #[test]
 fn cut_short_and_damaged_models_never_panic() {
-    for data in [testfile::sample(), testfile::block_in_itself()] {
+    for data in [
+        testfile::sample(),
+        testfile::block_in_itself(),
+        testfile::subd(80),
+    ] {
         for len in (0..data.len()).step_by(3) {
             if let Ok(file) = File3dm::read(&data[..len]) {
                 assert_words_only(&file);
@@ -360,6 +367,38 @@ fn a_block_in_itself_reads() {
             .objects
             .contains(&testfile::record_id("loop self"))
     );
+}
+
+/// The import tests' blocks (mitcad#1838): a member on a switched-off
+/// layer reads as on a hidden layer, and an instance that scales its
+/// block keeps its scale.
+#[test]
+fn a_hidden_block_member_and_a_scaled_instance_read() {
+    let file = File3dm::read(&testfile::block_hidden_layer()).expect("it reads");
+    assert!(file.failed.is_empty(), "{:?}", file.failed);
+    let hidden = file
+        .objects
+        .iter()
+        .find(|o| o.attributes.name == "bracket hidden")
+        .expect("the hidden member");
+    assert!(hidden.attributes.visible);
+    assert!(!file.layer_visible(hidden.attributes.layer));
+    let shown = file
+        .objects
+        .iter()
+        .find(|o| o.attributes.name == "bracket box")
+        .expect("the shown member");
+    assert!(file.layer_visible(shown.attributes.layer));
+
+    let file = File3dm::read(&testfile::block_scaled()).expect("it reads");
+    assert!(file.failed.is_empty(), "{:?}", file.failed);
+    let Geometry::Instance(i) = object(&file, "bracket 1") else {
+        panic!("an instance")
+    };
+    assert_eq!(i.definition, testfile::BRACKET);
+    assert_eq!(i.xform[0][0], 2.0);
+    assert_eq!(i.xform[2][2], 2.0);
+    assert_eq!(i.xform[0][3], 3.0);
 }
 
 /// The sample's chunks carry the CRCs the format has: of each
@@ -760,8 +799,9 @@ fn uuids_print_as_text() {
 }
 
 /// The `.3dm` files of `MITCAD_3DM_CORPUS`: each reads without a failed
-/// object, and each B-rep converts with every face on a surface and every
-/// loop closed. Skipped without the variable.
+/// object, each B-rep converts with every face on a surface and every
+/// loop closed, and each SubD's control net makes a Form's cage
+/// (mitcad#1810). Skipped without the variable.
 #[test]
 fn corpus() {
     let Ok(dir) = std::env::var("MITCAD_3DM_CORPUS") else {
@@ -787,6 +827,7 @@ fn corpus() {
     files.sort();
     assert!(!files.is_empty(), "no .3dm files in {dir}");
     let mut plane_faces = 0;
+    let mut cages = 0;
     for path in files {
         let file = File3dm::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         eprintln!("{}: {}", path.display(), crate::summary(&file));
@@ -797,6 +838,21 @@ fn corpus() {
             file.failed
         );
         for o in &file.objects {
+            if let Geometry::SubD(d) = &o.geometry {
+                let made = crate::subd::subd_cage(d, file.units.mm)
+                    .unwrap_or_else(|e| panic!("{}: a SubD makes no cage: {e}", path.display()));
+                eprintln!(
+                    "  SubD of {} vertices, {} edges, {} faces: a cage of {} faces, {} creases, {} corners; {:?}",
+                    d.vertices.len(),
+                    d.edges.len(),
+                    d.faces.len(),
+                    made.cage.faces.len(),
+                    made.cage.creases.len(),
+                    made.cage.corners.len(),
+                    made.notes
+                );
+                cages += 1;
+            }
             if let Geometry::Brep(b) = &o.geometry {
                 let c = convert::brep_body(b, file.units.mm);
                 let check = c.body.check(file.tolerance * file.units.mm * 10.0);
@@ -829,6 +885,7 @@ fn corpus() {
         }
     }
     eprintln!("{plane_faces} faces on planes face as their files mean");
+    eprintln!("{cages} SubD objects make Form cages");
 }
 
 /// A block definition of format version 8 keeps its id and name in a
@@ -940,4 +997,244 @@ fn a_sphere_is_its_whole_surface() {
     }
     let first: Vec<f64> = s.poles[..s.nv].iter().map(|p| p[1]).collect();
     assert!(first.iter().all(|y| y.abs() < 1e-12), "{first:?}");
+}
+
+/// The SubD object of a test model, read.
+fn subd_of(data: &[u8]) -> (File3dm, crate::subd::SubD) {
+    let file = File3dm::read(data).expect("the model reads");
+    assert!(file.failed.is_empty(), "{:?}", file.failed);
+    let Geometry::SubD(subd) = object(&file, "blob").clone() else {
+        panic!("the SubD object is read as a SubD");
+    };
+    (file, *subd)
+}
+
+/// Each face of a closed cage points out of it: its normal away from the
+/// cage's middle.
+fn assert_faces_out(cage: &mitcad_subdiv::Cage) {
+    let n = cage.vertices.len() as f64;
+    let middle = cage
+        .vertices
+        .iter()
+        .fold([0.0; 3], |m, v| add(m, scale(v.at, 1.0 / n)));
+    for face in &cage.faces {
+        let (normal, center) = cage.face_normal(face);
+        assert!(dot(normal, sub(center, middle)) > 0.0, "{face:?}");
+    }
+}
+
+/// A SubD of archive version 8 (mitcad#1757): its control net comes in as
+/// a Form's cage in millimetres with the file's ids, its faces out, the
+/// creased edge sharp for good, the semi-sharp edge with the mean of its
+/// ends' sharpness, the corner vertex a corner, and the vertex on no face
+/// left out, each said in words.
+#[test]
+fn a_subd_comes_in_as_a_form_cage() {
+    let (file, subd) = subd_of(&testfile::subd(80));
+    assert_eq!(
+        crate::kind_name(&Geometry::SubD(Box::new(subd.clone()))),
+        "SubD"
+    );
+    assert_eq!(subd.vertices.len(), 9);
+    assert_eq!(subd.edges.len(), 12);
+    assert_eq!(subd.faces.len(), 6);
+    assert_eq!(subd.edges[1].sharpness, Some([1.0, 2.0]));
+    let made = crate::subd::subd_cage(&subd, file.units.mm).expect("a cage");
+    let cage = &made.cage;
+    cage.check().unwrap();
+    assert!(cage.full().closed());
+    let ids: Vec<u32> = cage.vertices.iter().map(|v| v.id).collect();
+    assert_eq!(ids, (11..=18).collect::<Vec<u32>>());
+    assert_eq!(cage.position(17), Some([20.0, 20.0, 20.0]));
+    assert_eq!(cage.position(12), Some([20.0, 0.0, 0.0]));
+    let faces: Vec<u32> = cage.faces.iter().map(|f| f.id).collect();
+    assert_eq!(faces, [101, 102, 103, 104, 105, 106]);
+    assert_eq!(cage.faces[0].vertices, [11, 14, 13, 12]);
+    assert_faces_out(cage);
+    assert_eq!(cage.crease(12, 13), Some(f64::INFINITY));
+    assert_eq!(cage.crease(15, 16), Some(1.5));
+    assert_eq!(cage.creases.len(), 2);
+    assert_eq!(cage.corners, [17]);
+    assert_eq!(made.notes.len(), 2, "{:?}", made.notes);
+    assert!(made.notes.iter().any(|n| n.contains("on no face")));
+    assert!(made.notes.iter().any(|n| n.contains("mean")));
+    for note in &made.notes {
+        assert!(!note.chars().any(|c| c.is_ascii_digit()), "{note}");
+    }
+}
+
+/// Archive version 7 keeps no sharpness of smooth edges: only the creased
+/// edge is creased.
+#[test]
+fn a_version_7_subd_has_its_creases() {
+    let (file, subd) = subd_of(&testfile::subd(70));
+    assert!(subd.edges.iter().all(|e| e.sharpness.is_none()));
+    let made = crate::subd::subd_cage(&subd, file.units.mm).expect("a cage");
+    assert_eq!(made.cage.creases.len(), 1);
+    assert_eq!(made.cage.crease(12, 13), Some(f64::INFINITY));
+    assert!(!made.notes.iter().any(|n| n.contains("mean")));
+}
+
+/// A face that runs against its neighbours is turned round; a closed net
+/// whose faces all point in is turned out; a face that does not go round
+/// its edges in order, or an edge of three faces, is refused in words.
+#[test]
+fn a_subd_net_is_oriented_or_refused() {
+    let (file, subd) = subd_of(&testfile::subd(80));
+    let reversed = |face: &mut crate::subd::SubDFace| {
+        face.edges.reverse();
+        for e in &mut face.edges {
+            e.1 = !e.1;
+        }
+    };
+    let mut one = subd.clone();
+    reversed(&mut one.faces[2]);
+    let made = crate::subd::subd_cage(&one, file.units.mm).expect("a cage");
+    assert_faces_out(&made.cage);
+    let mut all = subd.clone();
+    for face in &mut all.faces {
+        reversed(face);
+    }
+    let made = crate::subd::subd_cage(&all, file.units.mm).expect("a cage");
+    assert_faces_out(&made.cage);
+    made.cage.check().unwrap();
+
+    let mut broken = subd.clone();
+    broken.faces[0].edges.swap(0, 1);
+    let error = crate::subd::subd_cage(&broken, file.units.mm).unwrap_err();
+    assert!(error.contains("in order"), "{error}");
+    let mut three = subd.clone();
+    let extra = three.faces[0].clone();
+    three.faces.push(extra);
+    let error = crate::subd::subd_cage(&three, file.units.mm).unwrap_err();
+    assert!(error.contains("more than two faces"), "{error}");
+    let error = crate::subd::subd_cage(&crate::subd::SubD::default(), 1.0).unwrap_err();
+    assert!(error.contains("no faces"), "{error}");
+}
+
+/// Crafted surfaces that would ask for tens of gigabytes are refused in
+/// words before anything is allocated for them (mitcad#1837). A surface
+/// of revolution turned a billion radians (its whole surface would have
+/// hundreds of millions of spans) fails its object, which is listed as
+/// not built. A sum surface of two long polylines (tens of millions of
+/// control points from a file of a few hundred kilobytes) leaves its
+/// face out with the reason. An ordinary sum surface still builds (the
+/// ordinary surfaces of revolution: the cylinder and sphere tests).
+#[test]
+fn surfaces_too_large_to_build_are_refused() {
+    use crate::geom::Surface;
+    use crate::nurbs::{MAX_ARC_SPANS, MAX_SURFACE_POLES};
+
+    // The cylinder's side turned a billion radians, and other angles a
+    // surface of revolution cannot have.
+    for angles in [[0.0, 1e9], [0.0, f64::NAN], [1.0, 1.0], [1.0, 0.0]] {
+        let mut b = testfile::cylinder_brep(1.0, 2.0);
+        let testfile::S::Rev(_, a, ..) = &mut b.surfaces[0] else {
+            panic!("the side is a surface of revolution")
+        };
+        *a = angles;
+        let file = File3dm::read(&testfile::one_brep("turned", &b)).expect("it reads");
+        assert!(file.objects.is_empty(), "{angles:?}");
+        assert_eq!(file.failed.len(), 1, "{angles:?}: {:?}", file.failed);
+        let e = &file.failed[0].error;
+        assert!(
+            e.0.contains("a surface of revolution whose angles are not valid"),
+            "{e}"
+        );
+    }
+    // A full turn still reads.
+    let file = File3dm::read(&testfile::one_brep(
+        "cylinder",
+        &testfile::cylinder_brep(1.0, 2.0),
+    ))
+    .expect("it reads");
+    assert!(file.failed.is_empty(), "{:?}", file.failed);
+
+    // Two polylines of 5 000 points each: 25 million control points.
+    let polyline = |dir: [f64; 3]| {
+        let n = 5_000;
+        testfile::C::Polyline(
+            (0..n).map(|i| scale(dir, f64::from(i))).collect(),
+            (0..n).map(f64::from).collect(),
+        )
+    };
+    let sum = testfile::S::Sum(
+        [0.0; 3],
+        polyline([1.0, 0.0, 0.0]),
+        polyline([0.0, 1.0, 0.0]),
+    );
+    let b = testfile::B {
+        surfaces: vec![sum],
+        faces: vec![(Vec::new(), 0, false)],
+        ..Default::default()
+    };
+    let file = File3dm::read(&testfile::one_brep("sum", &b)).expect("it reads");
+    assert!(file.failed.is_empty(), "{:?}", file.failed);
+    let Geometry::Brep(sum_brep) = object(&file, "sum") else {
+        panic!("a B-rep")
+    };
+    let Some(srf) = sum_brep.surfaces[0].as_deref() else {
+        panic!("its surface")
+    };
+    assert!(matches!(srf, Surface::Sum { .. }), "{srf:?}");
+    let e = convert::surface(srf, 1.0).expect_err("refused");
+    assert_eq!(e, "a surface with more control points than MitCad builds");
+    let c = convert::brep_body(sum_brep, 1.0);
+    assert!(c.issues.contains(&format!("face 0: {e}")), "{:?}", c.issues);
+    assert!(c.skipped_faces > 0 && c.body.faces.is_empty());
+
+    // An ordinary sum surface: a line along x plus a line along y, moved
+    // up by its base, is the unit square at z 1.
+    let line = |to: [f64; 3]| testfile::C::Line([0.0; 3], to, [0.0, 1.0]);
+    let mut w = testfile::Writer::default();
+    testfile::write_surface(
+        &mut w,
+        &testfile::S::Sum(
+            [0.0, 0.0, 1.0],
+            line([1.0, 0.0, 0.0]),
+            line([0.0, 1.0, 0.0]),
+        ),
+    );
+    let mut r = archive::Reader::new(&w.buf, 70);
+    let srf = crate::geom::read_surface_object(&mut r)
+        .expect("it reads")
+        .expect("a surface");
+    let (brep::Surface::BSpline(s), false) = convert::surface(&srf, 10.0).expect("it builds")
+    else {
+        panic!("a B-spline facing as the file's")
+    };
+    assert!(s.is_valid());
+    assert_eq!((s.nu, s.nv), (2, 2));
+    assert_eq!(
+        s.poles,
+        [
+            [0.0, 0.0, 10.0],
+            [0.0, 10.0, 10.0],
+            [10.0, 0.0, 10.0],
+            [10.0, 10.0, 10.0]
+        ]
+    );
+
+    // Past the reader: an arc's spans are capped, and a whole surface of
+    // revolution over the pole limit is refused.
+    let plane = crate::geom::Plane {
+        origin: [0.0; 3],
+        x: [1.0, 0.0, 0.0],
+        y: [0.0, 1.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+    };
+    let arc = Spline::arc(&plane, 1.0, [0.0, 1e9], [0.0, 1.0]);
+    assert_eq!(arc.cvs.len(), 2 * MAX_ARC_SPANS + 1);
+    let n = MAX_SURFACE_POLES / 9 + 1;
+    let points: Vec<[f64; 3]> = (0..n).map(|i| [1.0, 0.0, i as f64]).collect();
+    let params: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let profile = Spline::polyline(&points, &params);
+    let turned = crate::nurbs::revolution_surface(
+        &profile,
+        [0.0; 3],
+        [0.0, 0.0, 1.0],
+        [0.0, std::f64::consts::TAU],
+        1.0,
+    );
+    assert!(turned.is_err());
 }

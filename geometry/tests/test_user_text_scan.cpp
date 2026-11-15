@@ -193,7 +193,8 @@ struct Allowed {
 const Allowed kAllowed[] = {
     {"boundary_fill.cpp", "std::string point_text(", "point_text()'s own head"},
     {"boundary_fill.cpp", "\"(%g, %g, %g)\"", "point_text(): a point printed for an error's detail"},
-    {"cutouts.cpp", "first = \"the chamfer of \"", "the detail of the chamfer's overflow, placed_error() below"},
+    {"cutouts.cpp", "first = std::string(\"the \") + role + \" of \"",
+     "the detail of the chamfer's or fillet's overflow, placed_error() below"},
     {"dressup.cpp", "\"an unnamed edge\" : \"edge \" + name",
      "describe_edge(): an edge's name for an error's detail (edges_error())"},
     {"dressup.cpp", "\"an unnamed face\") : \"face \" + names.front()",

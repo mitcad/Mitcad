@@ -6,7 +6,11 @@
 #include <exception>
 #include <utility>
 
+#include <QAction>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QPainter>
 #include <QPolygonF>
 #include <QStringList>
@@ -16,6 +20,7 @@
 #include <gp_Vec.hxx>
 
 #include "OcctViewer.hpp"
+#include "framework/Dialogs.hpp"
 #include "framework/Theme.hpp"
 
 namespace mitcad {
@@ -32,7 +37,7 @@ bool same(const gp_Dir& a, const gp_Dir& b) { return a.IsEqual(b, 1e-12); }
 
 bool DatumHandles::Target::operator==(const Target& other) const {
   return uid == other.uid && plane == other.plane && same(centre, other.centre) && same(xAxis, other.xAxis) &&
-         same(yAxis, other.yAxis) && size == other.size;
+         same(yAxis, other.yAxis) && size == other.size && height == other.height && stored == other.stored;
 }
 
 DatumHandles::DatumHandles(OcctViewer& viewer) : QWidget(&viewer), m_viewer(viewer) {
@@ -87,20 +92,19 @@ void DatumHandles::setTarget(const std::optional<Target>& target) {
   publish();
 }
 
-std::vector<gp_Pnt> DatumHandles::handlePoints(double size) const {
+std::vector<gp_Pnt> DatumHandles::handlePoints(double width, double height) const {
   std::vector<gp_Pnt> points;
   if (!m_target) {
     return points;
   }
-  const double half = size / 2.0;
-  const gp_Vec x = gp_Vec(m_target->xAxis) * half;
+  const gp_Vec x = gp_Vec(m_target->xAxis) * (width / 2.0);
   if (!m_target->plane) {
     points.push_back(m_target->centre.Translated(-x));
     points.push_back(m_target->centre.Translated(x));
     return points;
   }
-  const gp_Vec y = gp_Vec(m_target->yAxis) * half;
-  // Around the square: (+x, +y), (-x, +y), (-x, -y), (+x, -y).
+  const gp_Vec y = gp_Vec(m_target->yAxis) * (height / 2.0);
+  // Around the rectangle: (+x, +y), (-x, +y), (-x, -y), (+x, -y).
   points.push_back(m_target->centre.Translated(x + y));
   points.push_back(m_target->centre.Translated(y - x));
   points.push_back(m_target->centre.Translated(-x - y));
@@ -112,7 +116,7 @@ int DatumHandles::handleAt(const QPointF& position) const {
   if (!m_target || isHidden()) {
     return -1;
   }
-  const std::vector<gp_Pnt> points = handlePoints(m_target->size);
+  const std::vector<gp_Pnt> points = handlePoints(m_target->size, m_target->height);
   int best = -1;
   double bestDistance = kReach;
   for (std::size_t i = 0; i < points.size(); ++i) {
@@ -132,8 +136,8 @@ std::optional<double> DatumHandles::sizeAt(int index, const QPointF& position) c
   }
   double size = 0.0;
   if (m_target->plane) {
-    // Where the pointer's ray meets the plane: the square, centred on the
-    // plane's origin, reaches it with its farther side.
+    // Where the pointer's ray meets the plane: the square, centred where
+    // the plane is drawn, reaches it with its farther side.
     const gp_Ax3 frame(m_target->centre, m_target->xAxis.Crossed(m_target->yAxis), m_target->xAxis);
     const std::optional<gp_Pnt> at = m_viewer.planePoint(position, frame);
     if (!at) {
@@ -142,8 +146,8 @@ std::optional<double> DatumHandles::sizeAt(int index, const QPointF& position) c
     const gp_Vec offset(m_target->centre, *at);
     size = 2.0 * std::max(std::abs(offset.Dot(gp_Vec(m_target->xAxis))), std::abs(offset.Dot(gp_Vec(m_target->yAxis))));
   } else {
-    // The axis's point nearest to the pointer's ray: the line, centred on
-    // the axis's origin, reaches it.
+    // The axis's point nearest to the pointer's ray: the line, centred
+    // where the axis is drawn, reaches it.
     const auto ray = m_viewer.pointerRay(position);
     if (!ray) {
       return std::nullopt;
@@ -171,7 +175,7 @@ void DatumHandles::publish() {
     m_viewer.clearHandleAreas(this);
     return;
   }
-  const std::vector<gp_Pnt> points = handlePoints(m_target->size);
+  const std::vector<gp_Pnt> points = handlePoints(m_target->size, m_target->height);
   std::vector<OcctViewer::HandleArea> areas;
   QStringList lines;
   const QString kind = m_target->plane ? QStringLiteral("corner") : QStringLiteral("end");
@@ -219,7 +223,7 @@ void DatumHandles::paintEvent(QPaintEvent*) {
   // While a drag lasts, the new outline: the square or the line at the
   // size the release gives.
   if (m_drag >= 0) {
-    const std::vector<gp_Pnt> outline = handlePoints(m_dragSize);
+    const std::vector<gp_Pnt> outline = handlePoints(m_dragSize, m_dragSize);
     QPolygonF shown;
     for (const gp_Pnt& point : outline) {
       shown << m_viewer.toWidgetF(point);
@@ -233,7 +237,8 @@ void DatumHandles::paintEvent(QPaintEvent*) {
       painter.drawLine(shown.at(0), shown.at(1));
     }
   }
-  const std::vector<gp_Pnt> points = handlePoints(m_drag >= 0 ? m_dragSize : m_target->size);
+  const std::vector<gp_Pnt> points =
+      m_drag >= 0 ? handlePoints(m_dragSize, m_dragSize) : handlePoints(m_target->size, m_target->height);
   for (std::size_t i = 0; i < points.size(); ++i) {
     const QPointF at = m_viewer.toWidgetF(points[i]);
     const bool lit = static_cast<int>(i) == m_hover || static_cast<int>(i) == m_drag;
@@ -245,6 +250,26 @@ void DatumHandles::paintEvent(QPaintEvent*) {
     } else {
       painter.drawEllipse(knob);
     }
+  }
+}
+
+void DatumHandles::showMenu(const QPoint& globalPosition) {
+  if (!m_target) {
+    return;
+  }
+  const QString uid = m_target->uid;
+  QMenu menu(this);
+  QAction* reset = menu.addAction(tr("Reset Size"));
+  // Only a size of its own can be cleared: without one it is drawn fitted
+  // to what it is made from already.
+  reset->setEnabled(m_target->stored);
+  qDebug().noquote() << QStringLiteral("Context menu: %1%2")
+                            .arg(reset->text(), m_target->stored ? QString() : QStringLiteral(" (disabled)"));
+  const QPointer<DatumHandles> self(this);
+  QAction* chosen = execMenu(&menu, globalPosition);
+  if (self && chosen == reset) {
+    qDebug().noquote() << QStringLiteral("Datum handle %1 size reset").arg(uid);
+    emit resetRequested(uid);
   }
 }
 
@@ -271,8 +296,24 @@ bool DatumHandles::eventFilter(QObject* watched, QEvent* event) {
 
 bool DatumHandles::viewerEvent(QEvent* event) {
   switch (event->type()) {
+  case QEvent::ContextMenu: {
+    // A handle's own menu (mitcad#1827), not the view's.
+    auto* e = static_cast<QContextMenuEvent*>(event);
+    if (m_drag >= 0 || handleAt(QPointF(e->pos())) < 0) {
+      return false;
+    }
+    m_menuPress = false;
+    showMenu(e->globalPos());
+    return true;
+  }
   case QEvent::MouseButtonPress: {
     auto* e = static_cast<QMouseEvent*>(event);
+    if (e->button() == Qt::RightButton && m_drag < 0 && handleAt(e->position()) >= 0) {
+      // The handle's menu comes with the context-menu event; the view does
+      // not open its own for this click.
+      m_menuPress = true;
+      return true;
+    }
     if (e->button() != Qt::LeftButton) {
       return false;
     }
@@ -313,6 +354,10 @@ bool DatumHandles::viewerEvent(QEvent* event) {
   }
   case QEvent::MouseButtonRelease: {
     auto* e = static_cast<QMouseEvent*>(event);
+    if (e->button() == Qt::RightButton && m_menuPress) {
+      m_menuPress = false;
+      return true;
+    }
     if (e->button() != Qt::LeftButton || (m_pressed < 0 && m_drag < 0)) {
       return false;
     }
@@ -320,7 +365,7 @@ bool DatumHandles::viewerEvent(QEvent* event) {
     m_pressed = -1;
     m_drag = -1;
     update();
-    if (dragged && m_target && m_dragSize != m_target->size) {
+    if (dragged && m_target && (m_dragSize != m_target->size || m_dragSize != m_target->height)) {
       const QString uid = m_target->uid;
       const double size = m_dragSize;
       qDebug().noquote() << QStringLiteral("Datum handle %1 resized to %2 mm").arg(uid).arg(size, 0, 'g', 10);
@@ -332,6 +377,7 @@ bool DatumHandles::viewerEvent(QEvent* event) {
     // A modal dialog took the input and with it the release: nothing set.
     m_pressed = -1;
     m_drag = -1;
+    m_menuPress = false;
     update();
     return false;
   default:

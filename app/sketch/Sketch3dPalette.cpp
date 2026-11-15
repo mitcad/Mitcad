@@ -1117,10 +1117,11 @@ void Sketch3dPalette::refreshEdit() {
 namespace {
 
 // Takes a grid's widgets away; the rebuild that calls it runs from the
-// event loop, never inside an input event of one of them.
-void clearGrid(QGridLayout* grid) {
+// event loop, never inside an input event of one of them. `keep` is only
+// taken out of the grid: the rebuild puts it back.
+void clearGrid(QGridLayout* grid, QWidget* keep = nullptr) {
   while (QLayoutItem* item = grid->takeAt(0)) {
-    if (QWidget* widget = item->widget()) {
+    if (QWidget* widget = item->widget(); widget != nullptr && widget != keep) {
       widget->hide();
       widget->deleteLater();
     }
@@ -1178,14 +1179,26 @@ void Sketch3dPalette::buildItems() {
   if (signature == m_itemsShown) {
     return;
   }
-  // A value being typed keeps its row until it is entered.
-  for (const QLineEdit* field : std::as_const(m_itemFields)) {
-    if (field->hasFocus()) {
-      return;
+  // A value being typed keeps its field, with the keyboard and the text
+  // typed, while its row is still listed; the other rows are rebuilt
+  // (mitcad#1836: Remove and Driven take no keyboard, so a click on
+  // another row's left the list stale while the field had it).
+  QString typing;
+  QLineEdit* kept = nullptr;
+  for (auto it = m_itemFields.cbegin(); it != m_itemFields.cend(); ++it) {
+    if (it.value()->hasFocus()) {
+      const QString id = it.key();
+      const bool listed = std::any_of(model.items.begin(), model.items.end(),
+                                      [&id](const Sketch3dItem& item) { return item.id == id && item.dimension; });
+      if (listed) {
+        typing = id;
+        kept = it.value();
+      }
+      break;
     }
   }
   m_itemsShown = signature;
-  clearGrid(m_itemsGrid);
+  clearGrid(m_itemsGrid, kept);
   m_itemFields.clear();
   for (auto it = m_editPlaces.begin(); it != m_editPlaces.end();) {
     it = it.key().startsWith(QStringLiteral("item ")) ? m_editPlaces.erase(it) : std::next(it);
@@ -1202,18 +1215,30 @@ void Sketch3dPalette::buildItems() {
     m_editPlaces.insert(QStringLiteral("item %1 text").arg(id), text);
     if (item.dimension) {
       const QString value = itemValueText(item, millimetres);
-      auto* field = new QLineEdit;
+      // The field being typed in is the same widget again: its text, its
+      // cursor and the keyboard stay; one not typed in yet shows the value.
+      const bool reused = id == typing;
+      QLineEdit* field = reused ? kept : new QLineEdit;
       field->setObjectName(QStringLiteral("sketch3dItem ") + id);
+      const bool typed = reused && field->isModified();
       if (item.driven) {
         field->setPlaceholderText(value);
+        if (!typed && !field->text().isEmpty()) {
+          field->clear();
+        }
         field->setToolTip(tr("Driven: it measures %1 %2; type a value to make it driving").arg(value, unit));
       } else {
-        field->setText(value);
+        field->setPlaceholderText(QString());
+        if (!typed && field->text() != value) {
+          field->setText(value);
+        }
         field->setToolTip(tr("Parameter %1: type a value, an expression or a parameter's name; Enter sets it")
                               .arg(itemParameter(item)));
       }
       field->setMaximumWidth(110);
-      field->installEventFilter(this);
+      if (!reused) {
+        field->installEventFilter(this);
+      }
       m_itemFields.insert(id, field);
       m_itemsGrid->addWidget(field, row + 1, 0);
       m_editPlaces.insert(QStringLiteral("item %1 field").arg(id), field);

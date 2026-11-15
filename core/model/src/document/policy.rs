@@ -198,6 +198,30 @@ impl<K: Kernel> Document<K> {
         document
     }
 
+    /// Whether the assembly is still a new design's
+    /// ([`DocState::new_design`]): its one component Component1, placed
+    /// once in the root at the identity, and nothing else; with no feature,
+    /// the design is as empty as a new one (an import into it asks nothing,
+    /// mitcad#1629).
+    pub(crate) fn is_new_design_assembly(&self) -> bool {
+        let assembly = self.assembly();
+        match (
+            assembly.components.as_slice(),
+            assembly.occurrences.as_slice(),
+        ) {
+            ([component], [occurrence]) => {
+                component.name == NEW_DESIGN_COMPONENT
+                    && component.created_by.is_none()
+                    && component.link.is_none()
+                    && component.library.is_none()
+                    && occurrence.component == component.uid
+                    && occurrence.parent == ComponentUid::ROOT
+                    && occurrence.transform.is_identity()
+            }
+            _ => false,
+        }
+    }
+
     /// Runs `f` with changes checked against the design policy (what the
     /// JSON commands and previews do), unless checks are suspended.
     pub fn with_policy_checks<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {

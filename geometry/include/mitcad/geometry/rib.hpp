@@ -38,8 +38,12 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 // fills up to a curved or slanted face with no gap. `end_offset` moves the
 // faces it stops at along the tangent (positive: further into them). Faces
 // of a continuation: extend0 or extend1 along it, tip0 or tip1 at its tip.
-// An end whose continuation meets no face of the bodies within their bounds
-// stays as drawn, and the result carries a note saying so.
+// An end whose continuation the faces close off over only part of the rib
+// (it passes over or beside the bodies elsewhere, as from a boss's top rim)
+// fills that part: the points from which the tangent reaches a face, up to
+// it, and nothing of what passes; it says nothing (mitcad#1857). An end
+// whose continuation meets no face of the bodies within their bounds stays
+// as drawn, and the result carries a note saying so.
 //
 // With `direction` (a rib's, in the sketch plane) the rib grows along it
 // instead of at right angles to the chord (mitcad#1746); `flip` turns it.

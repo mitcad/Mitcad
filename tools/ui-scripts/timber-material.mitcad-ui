@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+# A member placed with Timber is made of its library's wood (mitcad#1817),
+# with a library whose one BUILD part is the planed 28 x 45 member "Planed
+# 28x45 test" (tools/ui-scripts/timber-material-library.json: spruce,
+# 450 kg/m3; its design tools/ui-scripts/timber-material-member.json has
+# the wood's look but no material of its own, as the parts library's):
+#   1. Timber in a new design: the member 1800 mm long at the origin
+#      (Enter).
+#   2. Physical Properties: the member is Spruce, its mass the density's,
+#      45 x 28 x 1800 mm at 0.45 g/cm3 = 1.0206 kg; never Steel (7.85
+#      g/cm3, 17.8 kg) for lack of a material.
+# Run by tools/ui-timber-material-test.sh (Linux),
+# tools/ui-windows-timber-material-test.ps1 (Windows) and
+# tools/ui-macos-timber-material-test.sh (macOS), which make and fetch the
+# library.
+expect-ever 'View area'
+wait-idle
+
+# 1. Timber: the library's one member, 1800 mm, at the origin (Enter).
+mark
+click-logged '^Ribbon tab BUILD at '
+wait-log '^Ribbon BUILD/PROFILE at ' 10
+command build.timber
+wait-log '^Command Timber started' 30
+wait-log '^Inspect Timber: place grounded' 30
+wait-idle
+type-in '^Panel Timber input length at ' '1800'
+wait-log '^Inspect Timber: place grounded, length 1800[.]00 mm' 30
+wait-idle
+mark
+key Return
+wait-log '^Placed Planed 28x45 test' 60
+wait-idle
+mark
+key Escape
+wait-log '^Closed Timber after ' 20
+wait-idle
+
+# 2. Physical Properties: Spruce and its mass, no steel.
+mark
+command inspect.properties
+wait-log '^Physical properties: ' 30
+capture volume '^Physical properties: .* volume ([0-9.]+) mass [0-9.]+ center .* material Spruce$'
+expect-near ${volume} 2268000 1e-6
+capture mass '^Physical properties: .* volume [0-9.]+ mass ([0-9.]+) center .* material Spruce$'
+expect-near ${mass} 1.0206 1e-4
+expect-no-log '^Physical properties: .*(material Steel|mass none)'
+focus-dialog '^Properties$'
+key Escape
+expect-dialog-gone '^Properties$'
+focus-main

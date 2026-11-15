@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+# A drag zoom follows the pointer's vertical motion (mitcad#1867, GitHub
+# mitcad/Mitcad#330) on the demo block, in the middle-orbit scheme
+# (Shift + middle zooms): straight up comes closer, straight down goes
+# away, sideways alone keeps the zoom, and an upward drag that wobbles
+# sideways comes closer at every step. Run by
+# tools/ui-navigation-drag-zoom-test.sh (Linux),
+# tools/ui-windows-navigation-drag-zoom-test.ps1 (Windows) and
+# tools/ui-macos-navigation-drag-zoom-test.sh (macOS), in the Floating and
+# the Docked layout.
+wait-idle
+expect-viewport
+view-navigation middle-orbit
+expect-drag-zoom
+view-navigation middle-pan
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

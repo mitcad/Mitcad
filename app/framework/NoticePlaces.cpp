@@ -47,6 +47,13 @@ QString placesText(const QJsonArray& places) {
       parts << QStringLiteral("occurrence %1").arg(place.value(QStringLiteral("path")).toString());
       continue;
     }
+    if (kind == QStringLiteral("body")) {
+      // A whole body, where an occurrence places it (mitcad#1816).
+      const QString occurrence = place.value(QStringLiteral("occurrence")).toString();
+      parts << QStringLiteral("body %1%2").arg(place.value(QStringLiteral("body")).toString(),
+                                               occurrence.isEmpty() ? QString() : QStringLiteral(" at ") + occurrence);
+      continue;
+    }
     if (kind == QStringLiteral("joint")) {
       parts << QStringLiteral("joint %1").arg(place.value(QStringLiteral("feature")).toString());
       continue;

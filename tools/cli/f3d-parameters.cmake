@@ -27,29 +27,32 @@
 cmake_minimum_required(VERSION 3.24)
 
 # <id>|<change name>|<parameter>=<value>,...|<body>=<min x>:<min y>:<min z>:
-# <max x>:<max y>:<max z>,...
+# <max x>:<max y>:<max z>,... where <body> is a body's name or #<n>, the
+# n-th body of the design as imported (from 1), which keeps the names a
+# design gives its bodies out of this file (mitcad#1802).
 set(designs
     # A grid-unit chute of three bodies: a frame, a chute of stacked rings
-    # and a catch (mitcad#641). Each grid cell (GridSize, 28 mm) more of
+    # and a catch (mitcad#641), by their order (the import names them as
+    # the file does, mitcad#1802). Each grid cell (GridSize, 28 mm) more of
     # BaseX, DepthY and BaseZ makes the frame and the catch one cell wider
     # and deeper, and the chute one cell taller with one ring more per half
     # cell (ChuteElements = round(ChuteExtent / ChuteElementHeight)). The
     # catch stays where its free move puts it, 56 mm below the frame. The
     # boxes are derived from the expressions: no reference export of the
     # changes exists yet. Each parameter a cell more, then all three.
-    "b35176e6|base-x|BaseX=5|Body3=0:0:0:140:84:28,Body5=1.8:1.8:21:138.2:82.2:119,Body6=0:0:-56:140:84:-28"
-    "b35176e6|base-z|BaseZ=6|Body3=0:0:0:112:84:28,Body5=1.8:1.8:21:110.2:82.2:147,Body6=0:0:-56:112:84:-28"
-    "b35176e6|depth-y|DepthY=4|Body3=0:0:0:112:112:28,Body5=1.8:1.8:21:110.2:110.2:119,Body6=0:0:-56:112:112:-28"
-    "b35176e6|one-cell-more|BaseX=5,BaseZ=6,DepthY=4|Body3=0:0:0:140:112:28,Body5=1.8:1.8:21:138.2:110.2:147,Body6=0:0:-56:140:112:-28"
+    "b35176e6|base-x|BaseX=5|#1=0:0:0:140:84:28,#2=1.8:1.8:21:138.2:82.2:119,#3=0:0:-56:140:84:-28"
+    "b35176e6|base-z|BaseZ=6|#1=0:0:0:112:84:28,#2=1.8:1.8:21:110.2:82.2:147,#3=0:0:-56:112:84:-28"
+    "b35176e6|depth-y|DepthY=4|#1=0:0:0:112:112:28,#2=1.8:1.8:21:110.2:110.2:119,#3=0:0:-56:112:112:-28"
+    "b35176e6|one-cell-more|BaseX=5,BaseZ=6,DepthY=4|#1=0:0:0:140:112:28,#2=1.8:1.8:21:138.2:110.2:147,#3=0:0:-56:140:112:-28"
     # Three cells wider (mitcad#890, mitcad#891): the frame's offset
     # outlines had their tangent corners 2e-5 mm off where the lines touch
     # the arcs, the chamfers lost their edges and the projections of the
     # slot their source; on a square chute (four cells deep and high) the
     # sweep cut along those corners left four rings as bodies of their own.
     # Then back: the design as imported.
-    "b35176e6|base-x-three-cells|BaseX=7|Body3=0:0:0:196:84:28,Body5=1.8:1.8:21:194.2:82.2:119,Body6=0:0:-56:196:84:-28"
-    "b35176e6|base-x-three-cells-square|BaseZ=4,DepthY=4,BaseX=7|Body3=0:0:0:196:112:28,Body5=1.8:1.8:21:194.2:110.2:91,Body6=0:0:-56:196:112:-28"
-    "b35176e6|base-x-three-cells-and-back|BaseX=7,BaseX=4|Body3=0:0:0:112:84:28,Body5=1.8:1.8:21:110.2:82.2:119,Body6=0:0:-56:112:84:-28")
+    "b35176e6|base-x-three-cells|BaseX=7|#1=0:0:0:196:84:28,#2=1.8:1.8:21:194.2:82.2:119,#3=0:0:-56:196:84:-28"
+    "b35176e6|base-x-three-cells-square|BaseZ=4,DepthY=4,BaseX=7|#1=0:0:0:196:112:28,#2=1.8:1.8:21:194.2:110.2:91,#3=0:0:-56:196:112:-28"
+    "b35176e6|base-x-three-cells-and-back|BaseX=7,BaseX=4|#1=0:0:0:112:84:28,#2=1.8:1.8:21:110.2:82.2:119,#3=0:0:-56:112:84:-28")
 
 set(folders "")
 foreach(variable MITCAD_F3D_CORPUS MITCAD_F3D_BACKUP)
@@ -256,6 +259,16 @@ foreach(design IN LISTS designs)
     string(REGEX REPLACE "^([^=]+)=(.*)$" "\\1" name "${body}")
     string(REGEX REPLACE "^([^=]+)=(.*)$" "\\2" box "${body}")
     string(REPLACE ":" ";" box "${box}")
+    # #<n>: the n-th body as imported, by its name there.
+    if(name MATCHES "^#([0-9]+)$")
+      math(EXPR k "${CMAKE_MATCH_1} - 1")
+      list(LENGTH before_names n)
+      if(k LESS 0 OR NOT k LESS n)
+        list(APPEND problems "${id} ${change}: no body ${name} (${n} bodies)")
+        continue()
+      endif()
+      list(GET before_names ${k} name)
+    endif()
     list(FIND after_names "${name}" at)
     if(at EQUAL -1)
       list(APPEND problems "${id} ${change}: no body ${name} (bodies: ${after_names})")

@@ -113,6 +113,7 @@ format and, for the `.f3d` import, per topic:
 | [docs/ipt.md](docs/ipt.md) | The `.ipt` import. |
 | [docs/iam.md](docs/iam.md) | The `.iam` import. |
 | [../import-solidcraft/docs/solidcraft.md](../import-solidcraft/docs/solidcraft.md) | The `.solidcraft` import (in its crate, `mitcad-import-solidcraft`). |
+| [../3dm/README.md](../3dm/README.md) | The `.3dm` reader (in its crate, `mitcad-3dm`; the import is `core/ffi/src/import_3dm.rs`), with its SubD objects as editable Forms (mitcad#1757). |
 
 The documents cite each other's sections by their titles in italics, with
 a link where the section is in another document. [SCHEMA.md](SCHEMA.md)

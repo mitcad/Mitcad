@@ -88,3 +88,6 @@ pub mod notice;
 pub use notice::{Notice, NoticeLevel};
 // The preview a design file carries for file managers (mitcad#1539).
 pub mod design_preview;
+// Sketches on cylindrical and conical faces: the face's development and
+// the map between the sketch and the face (mitcad#1768).
+pub mod developed;

@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# The Properties window (mitcad#1816), the shared input script of
+# tools/ui-properties-window-test.sh (Linux),
+# tools/ui-windows-properties-window-test.ps1 and
+# tools/ui-macos-properties-window-test.sh, on
+# tools/ui-scripts/properties-window.json (a plate of aluminum, two equal
+# steel cubes and a box without a material):
+#   1. All four selected: the summary (4 bodies, the mass of the three with
+#      a material, one without), three rows, the cubes merged with
+#      quantity 2 and the box saying No material without a mass.
+#   2. The pointer over the cubes' row paints both cubes in the view.
+#   3. A row clicked shows that body's values in their groups below.
+#   4. Copy puts the summary and the table on the clipboard as
+#      tab-separated text.
+#   5. One body selected: its groups, More collapsed; opened, it stays open
+#      the next time.
+wait-idle
+window-resize 1280 860
+focus-main
+expect-model-bodies 4 47000
+
+# 1. The four bodies.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+click-logged '^Browser Root/Bodies/Body2 at ' ctrl
+click-logged '^Browser Root/Bodies/Body3 at ' ctrl
+click-logged '^Browser Root/Bodies/Body4 at ' ctrl
+expect-selection 4 0
+mark
+command inspect.properties
+wait-log '^Properties summary: Bodies 4, Mass 0[.]193 kg, Bodies without material 1, Volume 47 cm3, Center of Mass [(][-0-9.]+, [-0-9.]+, [-0-9.]+[)] mm, Bounding Box 100 x 80 x 30 mm$' 30
+expect-log '^Properties row 1: 1 [|] Body1 [|] Aluminum [|] 0[.]06[78] kg [|] 25 cm3 [|] 100 x 50 x 5 mm$'
+expect-log '^Properties row 2: 2 [|] Body2, Body3 [|] Steel [|] 0[.]063 kg [|] 8 cm3 [|] 20 . 20 . 20 mm?$'
+expect-log '^Properties row 3: 1 [|] Body4 [|] No material [|]  [|] 6 cm3 [|] 10 x 20 x 30 mm$'
+expect-no-log '^Properties row 4: '
+focus-dialog '^Properties$'
+
+# 2. The cubes' row under the pointer: both cubes painted, then none.
+mark
+hover-row propertiesTable 1
+wait-log '^Notice hover highlighted: properties: body F2[.]b0, body F3[.]b0 [(]2 drawn[)]$' 30
+mark
+leave-widget propertiesTable
+wait-log '^Notice hover highlighted: none$' 30
+
+# 3. The box's row clicked: its values in groups, More collapsed.
+mark
+click-row propertiesTable 2
+wait-log '^Properties details of row 3: Body4: Physical: Material No material, Volume 6 cm3, Area 22 cm2; Place and size: Center of Mass [(]85, 70, 15[)] mm, Bounding Box 10 x 20 x 30 mm; More [(]collapsed[)]: Faces / Edges / Vertices 6 / 12 / 8$' 30
+screenshot '${MITCAD_TEST_WORK}/properties-window-several.png'
+
+# 4. Copy: the summary, an empty line and the table.
+mark
+button '.*' propertiesCopy
+wait-log '^Properties copied: 11 line[(]s[)]$' 30
+expect-clipboard '\ABodies\t4\r?\nMass\t0[.]193 kg\r?\nBodies without material\t1\r?\nVolume\t47 cm.\r?\n'
+expect-clipboard '\n\r?\nQuantity\tName\tMaterial\tMass\tVolume\tSize\r?\n'
+expect-clipboard '(?m)^2\tBody2, Body3\tSteel\t0[.]063 kg\t8 cm.\t20 . 20 . 20 mm\r?$'
+expect-clipboard '(?m)^1\tBody4\tNo material\t\t6 cm.\t10 . 20 . 30 mm\r?\n?\z'
+key Escape
+expect-dialog-gone '^Properties$'
+focus-main
+
+# 5. One body: the plate's groups, More collapsed; opened, kept open.
+mark
+click-logged '^Browser Root/Bodies/Body1 at '
+expect-selection 1 0
+mark
+command inspect.properties
+wait-log '^Properties body: Body1: Physical: Material Aluminum, Density 2[.]7 g/cm3, .*Mass 0[.]06[78] kg, Volume 25 cm3, Area 115 cm2; Place and size: Center of Mass [(]50, 25, 2[.]5[)] mm, Bounding Box 100 x 50 x 5 mm; More [(]collapsed[)]: Principal Moments .* kg mm2, Faces / Edges / Vertices 6 / 12 / 8$' 30
+expect-no-log '^Properties summary: '
+focus-dialog '^Properties$'
+mark
+button '.*' propertiesMoreToggle
+wait-log '^Properties More: open$' 30
+key Escape
+expect-dialog-gone '^Properties$'
+focus-main
+mark
+command inspect.properties
+wait-log '^Properties body: Body1: .*; More [(]open[)]: Principal Moments ' 30
+focus-dialog '^Properties$'
+screenshot '${MITCAD_TEST_WORK}/properties-window-one.png'
+key Escape
+expect-dialog-gone '^Properties$'
+focus-main
+expect-never 'Recompute failed'

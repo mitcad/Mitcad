@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# Open Cage as Form (mitcad#1757, mitcad#1810, app/COMMANDS.md "Form") on
+# a design whose imported body keeps a control cage (made by
+# tools/ui-form-kept-cage-test.sh: a 40 mm cube's B-rep data imported as
+# CageBody, its kept cage a uniform cube net of 8 vertices and 6 faces):
+#   1. CageBody's Browser row, Open Cage as Form: the cage becomes Form1,
+#      which opens in Edit Form with its cage drawn over the view: 8
+#      vertices, 12 edges, 6 faces, closed. The imported body stays.
+#   2. The top face of the cage moved up 5 mm: one undo step, the Form's
+#      body a solid.
+#   3. Close keeps the edit.
+expect-ever '^Browser Root/(.*/)?Bodies/CageBody at ' 30
+wait-idle
+
+# 1. The kept cage opened as an editable Form.
+mark
+context-menu-logged '^Browser Root/(.*/)?Bodies/CageBody at ' 'Open Cage as Form'
+wait-log '^Opened the cage of F2[.]b0 as F[0-9]+ [(]Form1[)]$' 60
+wait-log '^Editing Form F[0-9]+ [(]Form1[)]$' 30
+wait-log '^Command Edit Form started' 30
+wait-log '^Form edit Form1: cage of 8 vertices, 12 edges, 6 faces, closed$' 30
+wait-idle
+command view.fit
+wait-idle
+wait-log '^Form cage face [0-9]+ [(][+]z[)] at ' 30
+wait-idle
+
+# 2. The top face moved up 5 mm.
+mark
+click-logged '^Form cage face [0-9]+ [(][+]z[)] at '
+wait-log '^Form edit picked: [{]"edges":[[][]],"faces":[[][0-9]+[]],"vertices":[[][]][}]$' 30
+wait-idle
+type-in '^Panel Edit Form input move_z at ' '5'
+wait-log '^Form edit preview: [0-9]+ lines$' 60
+wait-idle
+key Return
+wait-log '^Form edit Move in Form1: done: ' 60
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume ' 60
+wait-log '^Applied Edit Form [(]1[)]$' 30
+wait-idle
+
+# 3. Close keeps the edit; the imported body (F2.b0, the 40 mm cube) is
+#    shown as it was.
+mark
+key Escape
+wait-log '^Closed Edit Form after 1$' 30
+wait-idle
+expect-shown-body F2.b0 - 64000

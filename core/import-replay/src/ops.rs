@@ -1952,14 +1952,17 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     .map(|r| self.body_of(r).map(|b| b.to_string()))
                     .collect::<Option<_>>()
                     .ok_or("a moved body was not found (moves of faces are not supported)")?;
-                let m: [[f64; 4]; 4] = get("transform")
-                    .and_then(|t| serde_json::from_value(t.clone()).ok())
-                    .ok_or("the move's transform was not decoded")?;
-                let matrix: Vec<[f64; 4]> = (0..3)
-                    .map(|r| [m[r][0], m[r][1], m[r][2], mm(m[r][3])])
-                    .collect();
-                let free = json!({"type": "move", "bodies": bodies,
-                    "transform": {"type": "free", "matrix": matrix}});
+                // (A move whose matrix the file does not keep, mitcad#1808:
+                // its definition alone, where that decodes.)
+                let free = get("transform")
+                    .and_then(|t| serde_json::from_value::<[[f64; 4]; 4]>(t.clone()).ok())
+                    .map(|m| {
+                        let matrix: Vec<[f64; 4]> = (0..3)
+                            .map(|r| [m[r][0], m[r][1], m[r][2], mm(m[r][3])])
+                            .collect();
+                        json!({"type": "move", "bodies": bodies,
+                            "transform": {"type": "free", "matrix": matrix}})
+                    });
                 // The move as the file defines it (mitcad#186): a rotation
                 // about an axis by its angle parameter, a translation along
                 // the axes by its distances, or a free move, whose matrix is
@@ -1999,6 +2002,13 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     c.input_provenance = InputProvenance::Read;
                     out.push(c);
                 }
+                let Some(free) = free else {
+                    return if out.is_empty() {
+                        Err("the move's transform was not decoded".to_owned())
+                    } else {
+                        Ok(out)
+                    };
+                };
                 let mut fixed = Candidate::new(free);
                 if kind == "MoveFeatureFreeMoveDefinition" {
                     fixed.input_provenance = InputProvenance::Read;
@@ -2055,13 +2065,39 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                     && references(get("splitBodies")).iter().all(produced)
                     && !references(get("splitBodies")).is_empty()
                     && tools.iter().all(|t| match t {
-                        Reference::ConstructionPlane(_) => true,
+                        Reference::ConstructionPlane(_) | Reference::SketchEntity(_) => true,
                         Reference::Face(fp) => fp.f3d.is_some(),
                         other => produced(other),
                     });
-                let mut tools = tools
+                // Sketch curves are one tool per sketch (mitcad#1808): the
+                // curves swept together.
+                let mut curves: Vec<(String, Vec<String>)> = Vec::new();
+                let mut others = Vec::new();
+                for r in tools {
+                    let Reference::SketchEntity(e) = &r else {
+                        others.push(r);
+                        continue;
+                    };
+                    let info = e
+                        .sketch_timeline_index
+                        .flatten()
+                        .and_then(|i| self.sketches.get(&i))
+                        .ok_or("the splitting curves' sketch was not imported")?;
+                    let curve =
+                        e.id.clone()
+                            .flatten()
+                            .and_then(|id| info.ids.get(&id).cloned())
+                            .ok_or("a splitting curve was not imported")?;
+                    let sketch = info.uid.to_string();
+                    match curves.iter_mut().find(|(s, _)| *s == sketch) {
+                        Some((_, list)) => list.push(curve),
+                        None => curves.push((sketch, vec![curve])),
+                    }
+                }
+                let mut tools = curves
                     .into_iter()
-                    .map(|r| self.split_tool(r))
+                    .map(|(sketch, curves)| Ok(json!({"sketch": sketch, "curves": curves})))
+                    .chain(others.into_iter().map(|r| self.split_tool(r)))
                     .collect::<Result<Vec<Value>, String>>()?;
                 if tools.is_empty() {
                     return Err("the splitting tool was not decoded".to_owned());

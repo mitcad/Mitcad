@@ -30,4 +30,12 @@ std::string untriangulated_face_message(const geometry::Shape& shape, int index,
 std::shared_ptr<geometry::Shape> mesh_from_triangles(rust::Slice<const double> vertices,
                                                      rust::Slice<const std::uint32_t> triangles);
 
+// As mesh_from_triangles, each vertex with its texture coordinates (`uvs`:
+// u, v per vertex; mitcad#1862) as the triangulation's UV nodes. A mesh
+// body's face has no surface, so its UV nodes are no surface parameters:
+// they say where the texture's image lies on it.
+std::shared_ptr<geometry::Shape> mesh_from_textured_triangles(rust::Slice<const double> vertices,
+                                                              rust::Slice<const std::uint32_t> triangles,
+                                                              rust::Slice<const double> uvs);
+
 } // namespace mitcad::bridge

@@ -42,8 +42,14 @@ mitcad-sketch = { path = "../sketch" }
 # CAM: toolpaths, machines and the post-processors (mitcad#1013), below
 # the model; re-exported as `mitcad_model::cam::engine`.
 mitcad-cam = { path = "../cam" }
+# Form: control cages, their edits and Catmull-Clark subdivision to surface
+# patches (mitcad#1757), below the model; re-exported as
+# `mitcad_model::subdiv`.
+mitcad-subdiv = { path = "../subdiv" }
 # The design packed into a zip for a report (mitcad#1795).
 mitcad-zip = { path = "../zip" }
+# glTF files read as mesh bodies and components (mitcad#1826).
+mitcad-gltf = { path = "../gltf" }
 
 [dev-dependencies]
 # The mock kernel of the model's own unit tests (mitcad#777).

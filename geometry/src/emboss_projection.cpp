@@ -606,6 +606,57 @@ ShapePtr grown(const std::string& feature, const detail::SweepFace& profile, con
 }
 
 
+// The tapered emboss of a region projected straight onto a plane parallel
+// to the sketch (mitcad#1851): an extrusion's taper of the region placed on
+// the face, from the face along its normal (out of the body for a raise,
+// into it for a negative depth) by |depth|, whose walls lean by the taper
+// as tapered() below leans them (the region moved by |depth| tan(taper)),
+// and whose walls meeting or vanishing on the way (a slot the taper
+// closes) detail::distance_side resolves. Null unless the piece is one
+// planar face parallel to the sketch and the direction is its normal.
+ShapePtr planar_tapered(const std::string& feature, const detail::SweepFace& profile,
+                        const std::vector<TopoDS_Face>& piece, const Frame& frame, const gp_Vec& along, double depth,
+                        double taper) {
+  if (piece.size() != 1) {
+    return nullptr;
+  }
+  const BRepAdaptor_Surface surface(piece.front());
+  if (surface.GetType() != GeomAbs_Plane) {
+    return nullptr;
+  }
+  const gp_Pln plane = surface.Plane();
+  const gp_Dir normal = plane.Axis().Direction();
+  if (!normal.IsParallel(frame.normal(), 1.0e-9) || !normal.IsParallel(gp_Dir(along), 1.0e-9)) {
+    return nullptr;
+  }
+  gp_Pnt inside;
+  gp_Vec out;
+  if (!detail::inner_point(piece.front(), inside, out) || out.Magnitude() <= gp::Resolution()) {
+    return nullptr;
+  }
+  // The region moved along the direction onto the face's plane.
+  const double slope = gp_Vec(along).Dot(gp_Vec(normal));
+  const double shift = gp_Vec(frame.origin, plane.Location()).Dot(gp_Vec(normal)) / slope;
+  gp_Trsf onto;
+  onto.SetTranslation(gp_Vec(along) * shift);
+  const detail::SweepFace placed = detail::transformed(profile, onto);
+  const gp_Dir grow = depth > 0.0 ? gp_Dir(out) : gp_Dir(out.Reversed());
+  ShapePtr built;
+  try {
+    built = detail::distance_side(placed, std::abs(depth), taper, grow, detail::cap_names(feature, "start", profile),
+                                  detail::cap_names(feature, "end", profile));
+  } catch (const std::invalid_argument&) {
+    return nullptr; // (the whole region closes: the emboss's own refusal)
+  }
+  // The whole region closing before the top (a convex one the extrusion
+  // ends in a pyramid) stays the emboss's refusal: the only failure.
+  double reach = -std::numeric_limits<double>::infinity();
+  for (TopExp_Explorer v(built->occt(), TopAbs_VERTEX); v.More(); v.Next()) {
+    reach = std::max(reach, gp_Vec(plane.Location(), BRep_Tool::Pnt(TopoDS::Vertex(v.Current()))).Dot(gp_Vec(grow)));
+  }
+  return reach >= std::abs(depth) - std::max(1.0e-6, 1.0e-7 * std::abs(depth)) ? built : nullptr;
+}
+
 // The piece grown by `depth` with its walls tilted by the taper
 // (mitcad#1547; EmbossProjectSpec::taper): the region moved in the sketch
 // plane by |depth| tan(taper), projected onto the face and grown along its
@@ -862,8 +913,25 @@ ShapePtr projected_emboss(const Shape& body, const EmbossProjectSpec& spec) {
       if (spec.taper == 0.0) {
         parts.push_back(grown(spec.feature, profile, piece, spec.depth, Segments(profile, spec.frame, along)));
       } else {
-        parts.push_back(tapered(spec.feature, profile, piece, target, spec.frame, along, reach, spec.face, spec.depth,
-                                spec.taper));
+        // Where the tilted walls meet or vanish (a slot the taper closes,
+        // its top losing edges), on a plane: the extrusion's taper, which
+        // resolves them (mitcad#1851).
+        ShapePtr built;
+        try {
+          built = tapered(spec.feature, profile, piece, target, spec.frame, along, reach, spec.face, spec.depth,
+                          spec.taper);
+        } catch (const Cancelled&) {
+          throw;
+        } catch (const std::exception& error) {
+          if (std::string(error.what()).find("out of memory") != std::string::npos) {
+            throw;
+          }
+          built = planar_tapered(spec.feature, profile, piece, spec.frame, along, spec.depth, spec.taper);
+          if (!built) {
+            throw;
+          }
+        }
+        parts.push_back(built);
       }
     }
     return detail::finished(*detail::fused(parts, "the emboss"), "the emboss");

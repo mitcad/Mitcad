@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# The Floating layout's Command card at the largest Text size and Icon size
+# (mitcad#1846, as docked-command-width.mitcad-ui for the Docked panel,
+# mitcad#1825), MitCad started Floating with appearance/textSize and
+# appearance/iconSize 200:
+#   1. Box's command panel: the card is at least 300 px times 200 % wide
+#      ("Floating cards: ... commandDock x,y <w>x<h>"); the panel lays out
+#      to it (commandContentHeight) and never scrolls sideways.
+#   2. A sketch on the XY plane: the card at least 600 px wide, every row of
+#      the Sketch Palette whole within it ("Palette rows cut: none"), no
+#      Create or Constraints button clipped (each as large as its icon), the
+#      constraints in two rows of seven.
+# The runner prints the card's width. Run by
+# tools/ui-floating-command-width-test.sh (Linux),
+# tools/ui-windows-floating-command-width-test.ps1 (Windows) and
+# tools/ui-macos-floating-command-width-test.sh (macOS), all Floating.
+expect-ever '^Text and icon size: Text size 200%, Icon size 200%, ' 30
+expect-ever 'View area' 30
+wait-idle
+window-resize 1500 950
+wait-idle
+
+# 1. A command's panel in the card.
+mark
+command solid.box
+expect-log '^Command Box started$' 10
+wait-idle
+sleep 300
+expect-log '^Floating cards: .*; commandDock [0-9]+,[0-9]+ ([6-9][0-9][0-9]|[0-9][0-9][0-9][0-9]+)x[0-9]+' 10
+key Escape
+wait-idle
+
+# 2. A sketch: the palette whole within the card. The plane is picked by
+#    the browser's XY row: at these sizes the Command card (Create
+#    Sketch's kind row, 600 px wide) lies over the origin's planes in the
+#    view, where the XY plane has no place left to click (Linux, 1500 x 950).
+#    The rows are scrolled to the end: where the screen keeps the window
+#    smaller (Windows' 1024 x 768, the window 1028 x 749), the XY row lies
+#    below the Browser's card at these sizes and is not logged (#1859).
+mark
+command sketch.create
+expect-log '^Create Sketch: select a plane' 10
+click-logged '^Browser arrow Root/Origin at '
+wait-idle 60
+wheel-logged '^Browser Root/Origin at ' -10
+wait-idle 60
+expect-log '^Browser Root/Origin/XY at ' 10
+click-logged '^Browser Root/Origin/XY at '
+expect-log 'Sketch started on xy' 10
+wait-idle
+expect-log '^Floating cards: .*; commandDock [0-9]+,[0-9]+ ([6-9][0-9][0-9]|[0-9][0-9][0-9][0-9]+)x[0-9]+' 10
+expect-log '^Palette rows cut: none [(]' 10
+expect-log '^Palette buttons clipped: none ' 10
+expect-log '^Palette Constraints: [0-9]+ buttons in 2 rows of 7$' 10
+expect-never 'TestDriver: FAIL'

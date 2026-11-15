@@ -5,8 +5,10 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 #include <BRepAdaptor_Curve.hxx>
@@ -22,12 +24,26 @@
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <GeomAdaptor_Surface.hxx>
+#include <GeomConvert.hxx>
+#include <GeomConvert_CurveToAnaCurve.hxx>
+#include <GeomConvert_SurfToAnaSurf.hxx>
 #include <GeomLib_IsPlanarSurface.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BezierCurve.hxx>
+#include <Geom_BezierSurface.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <Geom_Circle.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom_ElementarySurface.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom_SurfaceOfLinearExtrusion.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
+#include <Precision.hxx>
 #include <ShapeAnalysis_Surface.hxx>
+#include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax3.hxx>
@@ -52,6 +68,9 @@ constexpr double kLinear = 1e-6;
 constexpr double kAngular = 1e-9;
 // Ends of path edges closer than this are connected, mm.
 constexpr double kConnected = 1e-4;
+// A stored surface or curve within this of a plane, cylinder, cone,
+// sphere, torus or circle is that one, mm (mitcad#1855).
+constexpr double kAnalytic = 1e-6;
 
 const char* surface_type_name(GeomAbs_SurfaceType type) {
   switch (type) {
@@ -130,8 +149,283 @@ gp_Dir canonical(const gp_Dir& axis) {
   return largest < 0.0 ? axis.Reversed() : axis;
 }
 
+// How far from a point the analytic surface is, mm (planes, cylinders,
+// cones, spheres and tori; infinite for other surfaces).
+double distance_to(const Adaptor3d_Surface& surface, const gp_Pnt& point) {
+  // The point's distance along an axis from its origin and from the axis.
+  const auto axial = [&point](const gp_Ax1& axis, double& at, double& off) {
+    at = gp_Vec(axis.Location(), point).Dot(gp_Vec(axis.Direction()));
+    off = gp_Lin(axis).Distance(point);
+  };
+  double along = 0.0;
+  double from_axis = 0.0;
+  switch (surface.GetType()) {
+  case GeomAbs_Plane:
+    return surface.Plane().Distance(point);
+  case GeomAbs_Cylinder: {
+    const gp_Cylinder cylinder = surface.Cylinder();
+    return std::abs(gp_Lin(cylinder.Axis()).Distance(point) - cylinder.Radius());
+  }
+  case GeomAbs_Cone: {
+    // The radius at `along` from the reference plane is R + along tan(a);
+    // the generator's slope turns the radial gap into the distance.
+    const gp_Cone cone = surface.Cone();
+    axial(cone.Axis(), along, from_axis);
+    const double radius = cone.RefRadius() + along * std::tan(cone.SemiAngle());
+    return std::abs(from_axis - radius) * std::cos(cone.SemiAngle());
+  }
+  case GeomAbs_Sphere: {
+    const gp_Sphere sphere = surface.Sphere();
+    return std::abs(point.Distance(sphere.Location()) - sphere.Radius());
+  }
+  case GeomAbs_Torus: {
+    const gp_Torus torus = surface.Torus();
+    axial(torus.Axis(), along, from_axis);
+    return std::abs(std::hypot(from_axis - torus.MajorRadius(), along) - torus.MinorRadius());
+  }
+  default:
+    return std::numeric_limits<double>::infinity();
+  }
+}
+
+// Whether every point of a grid over the face's parameter range lies
+// within kAnalytic of the analytic surface (in the face's place).
+bool face_within(const TopoDS_Face& face, const Adaptor3d_Surface& analytic) {
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  if (!(u1 > u0) || !(v1 > v0) || Precision::IsInfinite(u0) || Precision::IsInfinite(u1) ||
+      Precision::IsInfinite(v0) || Precision::IsInfinite(v1)) {
+    return false;
+  }
+  const BRepAdaptor_Surface own(face, false);
+  constexpr int kSamples = 7;
+  for (int i = 0; i < kSamples; ++i) {
+    for (int j = 0; j < kSamples; ++j) {
+      const gp_Pnt point = own.Value(u0 + (u1 - u0) * i / (kSamples - 1), v0 + (v1 - v0) * j / (kSamples - 1));
+      if (!(distance_to(analytic, point) <= kAnalytic)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// A circle `direction` sweeps along into a cylinder: the circle's axis is
+// the direction.
+occ::handle<Geom_Surface> extruded_circle(const occ::handle<Geom_SurfaceOfLinearExtrusion>& extrusion) {
+  occ::handle<Geom_Curve> basis = extrusion->BasisCurve();
+  double first = basis->FirstParameter();
+  double last = basis->LastParameter();
+  if (!(basis->IsKind(STANDARD_TYPE(Geom_Circle)) || basis->IsKind(STANDARD_TYPE(Geom_TrimmedCurve)))) {
+    // A circle stored as a spline (a profile converted for an approximation).
+    if (Precision::IsInfinite(first) || Precision::IsInfinite(last)) {
+      return {};
+    }
+    GeomConvert_CurveToAnaCurve convert(basis);
+    occ::handle<Geom_Curve> analytic;
+    double new_first = 0.0;
+    double new_last = 0.0;
+    if (!convert.ConvertToAnalytical(kAnalytic, analytic, first, last, new_first, new_last) || analytic.IsNull() ||
+        convert.Gap() > kAnalytic) {
+      return {};
+    }
+    basis = analytic;
+  }
+  while (basis->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+    basis = occ::down_cast<Geom_TrimmedCurve>(basis)->BasisCurve();
+  }
+  const occ::handle<Geom_Circle> circle = occ::down_cast<Geom_Circle>(basis);
+  if (circle.IsNull() || !circle->Axis().Direction().IsParallel(extrusion->Direction(), kAngular * 1000.0)) {
+    return {};
+  }
+  return new Geom_CylindricalSurface(gp_Ax3(circle->Position()), circle->Radius());
+}
+
+// The plane, cylinder, cone, sphere or torus a face lies on, in the face's
+// place: its own surface, or the one its stored surface (an extrusion, a
+// revolution, a B-spline, a Bezier surface) lies within kAnalytic of over
+// the face (mitcad#1855: the walls of holes in sheet bodies are B-spline
+// cylinders). Null for other faces.
+occ::handle<Geom_Surface> recognised_surface(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  occ::handle<Geom_Surface> stored = BRep_Tool::Surface(face, location);
+  if (stored.IsNull()) {
+    return {};
+  }
+  while (stored->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface))) {
+    stored = occ::down_cast<Geom_RectangularTrimmedSurface>(stored)->BasisSurface();
+  }
+  const auto placed = [&location](const occ::handle<Geom_Surface>& surface) -> occ::handle<Geom_Surface> {
+    if (location.IsIdentity()) {
+      return surface;
+    }
+    return occ::down_cast<Geom_Surface>(surface->Transformed(location.Transformation()));
+  };
+  if (stored->IsKind(STANDARD_TYPE(Geom_ElementarySurface))) {
+    return placed(stored);
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    occ::handle<Geom_Surface> analytic;
+    const occ::handle<Geom_SurfaceOfLinearExtrusion> extrusion = occ::down_cast<Geom_SurfaceOfLinearExtrusion>(stored);
+    if (!extrusion.IsNull()) {
+      analytic = extruded_circle(extrusion);
+    }
+    if (analytic.IsNull()) {
+      occ::handle<Geom_Surface> spline = stored;
+      if (!stored->IsKind(STANDARD_TYPE(Geom_BSplineSurface)) && !stored->IsKind(STANDARD_TYPE(Geom_BezierSurface))) {
+        // Revolutions, extrusions and the rest as B-splines over the face.
+        double u0 = 0.0;
+        double u1 = 0.0;
+        double v0 = 0.0;
+        double v1 = 0.0;
+        BRepTools::UVBounds(face, u0, u1, v0, v1);
+        if (!(u1 > u0) || !(v1 > v0) || Precision::IsInfinite(u0) || Precision::IsInfinite(u1) ||
+            Precision::IsInfinite(v0) || Precision::IsInfinite(v1)) {
+          return {};
+        }
+        spline = GeomConvert::SurfaceToBSplineSurface(new Geom_RectangularTrimmedSurface(stored, u0, u1, v0, v1));
+      }
+      GeomConvert_SurfToAnaSurf convert(spline);
+      analytic = convert.ConvertToAnalytical(kAnalytic);
+      if (analytic.IsNull() || convert.Gap() > kAnalytic) {
+        return {};
+      }
+    }
+    if (!analytic->IsKind(STANDARD_TYPE(Geom_ElementarySurface))) {
+      return {};
+    }
+    analytic = placed(analytic);
+    // Checked over the face itself, whatever the conversion measured.
+    if (!face_within(face, GeomAdaptor_Surface(analytic))) {
+      return {};
+    }
+    return analytic;
+  } catch (const Standard_Failure&) {
+    return {};
+  }
+}
+
+// The circle an edge runs on, in the direction of its parameter (the edge
+// runs counter-clockwise about the circle's axis): its own, or the one its
+// stored curve (a B-spline, a Bezier curve, an ellipse with equal radii)
+// lies within kAnalytic of (mitcad#1855).
+std::optional<gp_Circ> recognised_circle(const TopoDS_Edge& forward_edge) {
+  if (BRep_Tool::Degenerated(forward_edge)) {
+    return std::nullopt;
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    const BRepAdaptor_Curve curve(forward_edge);
+    switch (curve.GetType()) {
+    case GeomAbs_Circle:
+      return curve.Circle();
+    case GeomAbs_Line:
+      return std::nullopt;
+    default:
+      break;
+    }
+    TopLoc_Location location;
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> stored = BRep_Tool::Curve(forward_edge, location, first, last);
+    if (stored.IsNull()) {
+      return std::nullopt;
+    }
+    GeomConvert_CurveToAnaCurve convert(stored);
+    occ::handle<Geom_Curve> analytic;
+    double new_first = 0.0;
+    double new_last = 0.0;
+    if (!convert.ConvertToAnalytical(kAnalytic, analytic, first, last, new_first, new_last) || analytic.IsNull() ||
+        convert.Gap() > kAnalytic) {
+      return std::nullopt;
+    }
+    while (analytic->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+      analytic = occ::down_cast<Geom_TrimmedCurve>(analytic)->BasisCurve();
+    }
+    const occ::handle<Geom_Circle> found = occ::down_cast<Geom_Circle>(analytic);
+    if (found.IsNull()) {
+      return std::nullopt;
+    }
+    gp_Circ circle = found->Circ();
+    if (!location.IsIdentity()) {
+      circle.Transform(location.Transformation());
+    }
+    // Checked along the edge itself; the axis turned so that the edge runs
+    // counter-clockwise about it.
+    constexpr int kSamples = 9;
+    for (int i = 0; i < kSamples; ++i) {
+      const gp_Pnt point =
+          curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * i / (kSamples - 1));
+      if (!(circle.Distance(point) <= kAnalytic)) {
+        return std::nullopt;
+      }
+    }
+    gp_Pnt middle;
+    gp_Vec tangent;
+    curve.D1(0.5 * (curve.FirstParameter() + curve.LastParameter()), middle, tangent);
+    const gp_Vec round = gp_Vec(circle.Axis().Direction()).Crossed(gp_Vec(circle.Location(), middle));
+    if (tangent.Dot(round) < 0.0) {
+      circle.SetAxis(circle.Axis().Reversed());
+    }
+    return circle;
+  } catch (const Standard_Failure&) {
+    return std::nullopt;
+  }
+}
+
+// A cylinder's, cone's, sphere's or torus's description (the other
+// surfaces: false).
+bool describe_round(const Adaptor3d_Surface& surface, const TopoDS_Face& face, SurfaceDescription& result) {
+  switch (surface.GetType()) {
+  case GeomAbs_Cylinder: {
+    const gp_Cylinder cylinder = surface.Cylinder();
+    result.type = "cylinder";
+    result.axis = canonical(cylinder.Axis().Direction());
+    result.origin = project(face_centre(face), cylinder.Axis());
+    result.radius = cylinder.Radius();
+    return true;
+  }
+  case GeomAbs_Cone: {
+    const gp_Cone cone = surface.Cone();
+    result.type = "cone";
+    result.axis = canonical(cone.Axis().Direction());
+    result.origin = project(face_centre(face), cone.Axis());
+    // The radius grows by tan(half angle) along the axis.
+    const double sign = result.axis.Dot(cone.Axis().Direction()) > 0.0 ? 1.0 : -1.0;
+    const double along = gp_Vec(cone.Location(), result.origin).Dot(gp_Vec(cone.Axis().Direction()));
+    result.radius = cone.RefRadius() + along * std::tan(cone.SemiAngle());
+    result.half_angle = sign * cone.SemiAngle();
+    return true;
+  }
+  case GeomAbs_Sphere: {
+    const gp_Sphere sphere = surface.Sphere();
+    result.type = "sphere";
+    result.origin = sphere.Location();
+    result.radius = sphere.Radius();
+    return true;
+  }
+  case GeomAbs_Torus: {
+    const gp_Torus torus = surface.Torus();
+    result.type = "torus";
+    result.origin = torus.Location();
+    result.axis = canonical(torus.Axis().Direction());
+    result.radius = torus.MajorRadius();
+    result.minor_radius = torus.MinorRadius();
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
 // A face's surface; without `planar_splines`, a face on another surface
-// than the analytic ones gets only its type.
+// than the analytic ones gets only its type. With it, a face stored as
+// another surface that is a plane, cylinder, cone, sphere or torus within
+// kAnalytic is that one (planes: mitcad#1537; the rest: mitcad#1855).
 SurfaceDescription describe(const TopoDS_Face& face, bool planar_splines = true) {
   SurfaceDescription result;
   TopLoc_Location location;
@@ -146,42 +440,12 @@ SurfaceDescription describe(const TopoDS_Face& face, bool planar_splines = true)
   case GeomAbs_Plane:
     plane = surface.Plane();
     break;
-  case GeomAbs_Cylinder: {
-    const gp_Cylinder cylinder = surface.Cylinder();
-    result.type = "cylinder";
-    result.axis = canonical(cylinder.Axis().Direction());
-    result.origin = project(face_centre(face), cylinder.Axis());
-    result.radius = cylinder.Radius();
+  case GeomAbs_Cylinder:
+  case GeomAbs_Cone:
+  case GeomAbs_Sphere:
+  case GeomAbs_Torus:
+    describe_round(surface, face, result);
     return result;
-  }
-  case GeomAbs_Cone: {
-    const gp_Cone cone = surface.Cone();
-    result.type = "cone";
-    result.axis = canonical(cone.Axis().Direction());
-    result.origin = project(face_centre(face), cone.Axis());
-    // The radius grows by tan(half angle) along the axis.
-    const double sign = result.axis.Dot(cone.Axis().Direction()) > 0.0 ? 1.0 : -1.0;
-    const double along = gp_Vec(cone.Location(), result.origin).Dot(gp_Vec(cone.Axis().Direction()));
-    result.radius = cone.RefRadius() + along * std::tan(cone.SemiAngle());
-    result.half_angle = sign * cone.SemiAngle();
-    return result;
-  }
-  case GeomAbs_Sphere: {
-    const gp_Sphere sphere = surface.Sphere();
-    result.type = "sphere";
-    result.origin = sphere.Location();
-    result.radius = sphere.Radius();
-    return result;
-  }
-  case GeomAbs_Torus: {
-    const gp_Torus torus = surface.Torus();
-    result.type = "torus";
-    result.origin = torus.Location();
-    result.axis = canonical(torus.Axis().Direction());
-    result.radius = torus.MajorRadius();
-    result.minor_radius = torus.MinorRadius();
-    return result;
-  }
   default: {
     if (!planar_splines) {
       result.type = surface_type_name(surface.GetType());
@@ -191,10 +455,15 @@ SurfaceDescription describe(const TopoDS_Face& face, bool planar_splines = true)
     GeomLib_IsPlanarSurface planar(BRep_Tool::Surface(face), kLinear);
     if (planar.IsPlanar()) {
       plane = planar.Plan();
-    } else {
-      result.type = surface_type_name(surface.GetType());
+      break;
+    }
+    // And holes in sheet bodies cylinders stored as splines.
+    if (const occ::handle<Geom_Surface> analytic = recognised_surface(face);
+        !analytic.IsNull() && describe_round(GeomAdaptor_Surface(analytic), face, result)) {
       return result;
     }
+    result.type = surface_type_name(surface.GetType());
+    return result;
   }
   }
   result.type = "plane";
@@ -284,15 +553,25 @@ bool poles_on_segment(const Curve& curve, const gp_Pnt& start, const gp_Pnt& end
 }
 
 // The curve of an edge, in the direction of its parameter; with
-// `straight_splines`, a straight spline or Bezier curve is a line.
+// `straight_splines`, a straight spline or Bezier curve is a line, and a
+// curve within kAnalytic of a circle that circle (mitcad#1855).
 CurveDescription describe_edge(const TopoDS_Edge& forward_edge, bool straight_splines = false) {
   const BRepAdaptor_Curve curve(forward_edge);
   CurveDescription result;
   result.start = curve.Value(curve.FirstParameter());
   result.end = curve.Value(curve.LastParameter());
-  if (straight_splines && curve.GetType() != GeomAbs_Line && is_straight(forward_edge)) {
-    result.type = "line";
-    return result;
+  if (straight_splines && curve.GetType() != GeomAbs_Line && curve.GetType() != GeomAbs_Circle) {
+    if (is_straight(forward_edge)) {
+      result.type = "line";
+      return result;
+    }
+    if (const std::optional<gp_Circ> circle = recognised_circle(forward_edge)) {
+      result.type = "circle";
+      result.center = circle->Location();
+      result.normal = circle->Axis().Direction();
+      result.radius = circle->Radius();
+      return result;
+    }
   }
   switch (curve.GetType()) {
   case GeomAbs_Line:
@@ -480,6 +759,92 @@ std::optional<gp_Pln> face_plane(const TopoDS_Face& face) {
   }
 }
 
+occ::handle<Geom_Surface> analytic_surface(const TopoDS_Face& face) {
+  if (face.IsNull()) {
+    return {};
+  }
+  return recognised_surface(face);
+}
+
+const char* analytic_kind(const TopoDS_Face& face) {
+  TopLoc_Location location;
+  if (face.IsNull() || BRep_Tool::Surface(face, location).IsNull()) {
+    return nullptr; // a mesh body's triangles
+  }
+  try {
+    switch (BRepAdaptor_Surface(face, false).GetType()) {
+    case GeomAbs_Plane:
+      return "plane";
+    case GeomAbs_Cylinder:
+      return "cylinder";
+    case GeomAbs_Cone:
+      return "cone";
+    case GeomAbs_Sphere:
+      return "sphere";
+    case GeomAbs_Torus:
+      return "torus";
+    default:
+      break;
+    }
+  } catch (const Standard_Failure&) {
+    return nullptr;
+  }
+  if (face_plane(face)) {
+    return "plane";
+  }
+  // The recognition of a large spline takes a while, and a pick asks on
+  // every move of the pointer: the answers are kept by the face's shape
+  // (its location does not change the kind; the kept face keeps the
+  // shape alive, so its address is not reused). Never freed: a static's
+  // destructor would release OCCT handles after OCCT's own statics.
+  struct Kinds {
+    std::mutex mutex;
+    std::unordered_map<const void*, std::pair<TopoDS_Face, const char*>> known;
+  };
+  static Kinds* const kinds = new Kinds();
+  const void* key = face.TShape().get();
+  {
+    const std::lock_guard<std::mutex> lock(kinds->mutex);
+    const auto found = kinds->known.find(key);
+    if (found != kinds->known.end()) {
+      return found->second.second;
+    }
+  }
+  const char* kind = nullptr;
+  if (const occ::handle<Geom_Surface> analytic = recognised_surface(face); !analytic.IsNull()) {
+    switch (GeomAdaptor_Surface(analytic).GetType()) {
+    case GeomAbs_Cylinder:
+      kind = "cylinder";
+      break;
+    case GeomAbs_Cone:
+      kind = "cone";
+      break;
+    case GeomAbs_Sphere:
+      kind = "sphere";
+      break;
+    case GeomAbs_Torus:
+      kind = "torus";
+      break;
+    default:
+      break;
+    }
+  }
+  constexpr std::size_t kKept = 4096;
+  const std::lock_guard<std::mutex> lock(kinds->mutex);
+  if (kinds->known.size() >= kKept) {
+    kinds->known.clear();
+  }
+  kinds->known.emplace(key, std::make_pair(face, kind));
+  return kind;
+}
+
+bool is_circular(const TopoDS_Edge& edge) {
+  if (edge.IsNull()) {
+    return false;
+  }
+  return recognised_circle(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD))).has_value();
+}
+
 std::vector<SurfaceDescription> face_geometries(const Shape& shape) {
   return detail::run("face geometries", [&] {
     std::vector<SurfaceDescription> result;
@@ -514,6 +879,49 @@ std::vector<CurveDescription> edge_geometries(const Shape& shape) {
   }));
   shape.keep_edge_curves(curves);
   return *curves;
+}
+
+std::vector<SurfaceDescription> recognised_face_geometries(const Shape& shape, const std::vector<int>& faces) {
+  return detail::run("recognised face geometries", [&] {
+    std::vector<SurfaceDescription> result;
+    result.reserve(faces.size());
+    for (const int i : faces) {
+      if (i < 0 || i >= shape.face_count()) {
+        throw std::out_of_range("a face asked for is past the body's faces");
+      }
+      const TopoDS_Face& face = shape.face(i);
+      // analytic_kind keeps its answer for faces on none of the surfaces,
+      // so that a body of many free-form faces is quick to ask again; a
+      // face it finds on one is read in full.
+      if (analytic_kind(face) == nullptr) {
+        result.push_back(describe(face, false));
+      } else {
+        result.push_back(describe(face, true));
+      }
+    }
+    return result;
+  });
+}
+
+std::vector<CurveDescription> recognised_edge_geometries(const Shape& shape, const std::vector<int>& edges) {
+  return detail::run("recognised edge geometries", [&] {
+    std::vector<CurveDescription> result;
+    result.reserve(edges.size());
+    for (const int i : edges) {
+      if (i < 0 || i >= shape.edge_count()) {
+        throw std::out_of_range("an edge asked for is past the body's edges");
+      }
+      const TopoDS_Edge& edge = shape.edge(i);
+      if (BRep_Tool::Degenerated(edge)) {
+        CurveDescription degenerate;
+        degenerate.type = "degenerate";
+        result.push_back(degenerate);
+      } else {
+        result.push_back(describe_edge(TopoDS::Edge(edge.Oriented(TopAbs_FORWARD)), true));
+      }
+    }
+    return result;
+  });
 }
 
 gp_Pnt vertex_point(const Shape& shape, const std::string& vertex) {

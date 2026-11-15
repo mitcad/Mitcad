@@ -32,6 +32,27 @@ impl DocState {
                 }
             }
         }
+        // A joint inside a flexible occurrence that a driven one is linked
+        // to (mitcad#1793): its position for that occurrence goes.
+        for f in self.features.iter().filter(|f| !f.suppressed) {
+            let FeatureDef::MotionLink(l) = &f.def else {
+                continue;
+            };
+            for (this, other) in [(&l.a, &l.b), (&l.b, &l.a)] {
+                let Some(o) = other.occurrence else {
+                    continue;
+                };
+                if this.occurrence.is_none() && seen.contains(&(this.joint, this.motion)) {
+                    let flex = self
+                        .assembly
+                        .occurrence_mut(o)
+                        .and_then(|o| o.flexible.as_mut());
+                    if let Some(position) = flex.and_then(|f| f.position.get_mut(&other.joint)) {
+                        position.remove(&other.motion);
+                    }
+                }
+            }
+        }
         for (joint, motion) in release {
             let Ok(mut def) = super::motion::joint_def(self, joint) else {
                 continue;
@@ -78,7 +99,11 @@ impl<K: Kernel> Document<K> {
         let joint = |m: &crate::features::LinkedMotion, key: &str| {
             active
                 .iter()
-                .find(|j| j.uid == m.joint && j.row.is_none())
+                .find(|j| {
+                    j.uid == m.joint
+                        && j.row.is_none()
+                        && j.under.as_slice() == m.occurrence.as_slice()
+                })
                 .ok_or_else(|| {
                     invalid(format!(
                         "{key}: {} is not in effect at the marker",
@@ -92,12 +117,22 @@ impl<K: Kernel> Document<K> {
             assembly: &self.state.assembly,
             component,
             placements: &self.result.placements,
+            flexed: &self.result.joints.flexed,
             resolver: |_| self.resolver(),
         };
         let (relation, _) =
             relation(&mut geo, &trial.parameters, &link, (ja, jb)).map_err(invalid)?;
-        let va = self.joint_value(link.a.joint, link.a.motion);
-        let vb = self.joint_value(link.b.joint, link.b.motion);
+        // Inside a flexible occurrence, its value there (mitcad#1793).
+        let value = |m: &crate::features::LinkedMotion| match m.occurrence {
+            Some(o) => self
+                .flexible_joint_values(o)
+                .get(&m.joint)
+                .and_then(|v| v.get(&m.motion).copied())
+                .unwrap_or(0.0),
+            None => self.joint_value(m.joint, m.motion),
+        };
+        let va = value(&link.a);
+        let vb = value(&link.b);
         Ok(vb - relation.follow(va))
     }
 

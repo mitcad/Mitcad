@@ -233,10 +233,11 @@ AppearanceDialog::AppearanceDialog(DocumentHost& host, QWidget* parent) : QDialo
   m_textureRotation->setToolTip(tr("The image turned about the projection's axis"));
   form->addRow(tr("Rotation"), m_textureRotation);
   m_textureProjection = new QComboBox;
+  m_textureProjection->setObjectName(QStringLiteral("appearanceTextureProjection"));
   m_textureProjection->addItem(tr("Box"), QStringLiteral("box"));
   m_textureProjection->addItem(tr("Planar"), QStringLiteral("planar"));
-  m_textureProjection->setToolTip(tr("Box: from the three axes, each surface from the one it faces most. "
-                                     "Planar: along the body's Z axis"));
+  m_textureProjection->addItem(tr("Texture coordinates"), QStringLiteral("uv"));
+  m_textureProjection->setToolTip(tr("How the image is laid on the body: Box, Planar or the mesh's Texture coordinates"));
   form->addRow(tr("Projection"), m_textureProjection);
   m_textureEmbed = new QCheckBox(tr("Embed the image in the design"));
   m_textureEmbed->setObjectName(QStringLiteral("appearanceTextureEmbed"));
@@ -1083,7 +1084,7 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
   m_textureWidth->setValue(texture.width);
   m_textureHeight->setValue(texture.height);
   m_textureRotation->setValue(texture.rotation / kDegree);
-  m_textureProjection->setCurrentIndex(texture.planar ? 1 : 0);
+  m_textureProjection->setCurrentIndex(texture.uv ? 2 : texture.planar ? 1 : 0);
   m_textureEmbed->setChecked(texture.embedded);
   m_building = false;
   m_textureInfo->setToolTip(QString());
@@ -1142,8 +1143,10 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
     m_textureInfo->setToolTip(m_textureInfo->text());
     m_textureInfo->setText(lines.join(QLatin1Char('\n')));
   }
+  // With the projection the dialog shows (mitcad#1874: Texture
+  // coordinates, uv, for an imported glTF mesh's).
   const QString logged =
-      QStringLiteral("Appearance %1 texture: %2, maps %3, source %4")
+      QStringLiteral("Appearance %1 texture: %2, maps %3, source %4, projection %5")
           .arg(a->id, texture.embedded ? QStringLiteral("embedded") : QStringLiteral("file"),
                maps.isEmpty() ? QStringLiteral("none") : maps.join(QLatin1Char(' ')),
                source.isEmpty() ? QStringLiteral("none")
@@ -1151,7 +1154,8 @@ void AppearanceDialog::showTexture(const Appearance* a, bool editable) {
                                       .arg(source.value(QStringLiteral("id")).toString(),
                                            source.value(QStringLiteral("asset")).toString(),
                                            source.value(QStringLiteral("resolution")).toString())
-                                      .trimmed());
+                                      .trimmed(),
+               m_textureProjection->currentData().toString());
   if (logged != m_loggedTexture) {
     m_loggedTexture = logged;
     qDebug().noquote() << logged;

@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: MIT
+# The two-finger trackpad scroll's directions (mitcad#1873, GitHub
+# mitcad/Mitcad#340) on the demo block, application events only (a
+# physical trackpad: docs/macos-trackpad-checklist.md). Run by
+# tools/ui-navigation-reverse-pan-test.sh (Linux),
+# tools/ui-windows-navigation-reverse-pan-test.ps1 (Windows) and
+# tools/ui-macos-navigation-test.sh (macOS), then, in a new process with
+# the same settings, navigation-reverse-pan-restored.mitcad-ui.
+# MITCAD_TEST_PREFERENCES_DONE is the key that closes Preferences keeping
+# its changes: Return for the Preferences dialog, ctrl+w (Cmd+W) for the
+# macOS Settings window.
+#   1. Reverse horizontal pan, Reverse vertical pan and Reverse scroll
+#      orbit are off by default.
+#   2. A vertical and a horizontal two-finger scroll pan the view.
+#   3. Reverse vertical pan turned on is saved; the same vertical scroll
+#      then pans the view the other way, the horizontal one the same way.
+
+# 1. Off by default.
+wait-idle
+expect-viewport
+command tools.preferences.navigation
+focus-dialog '^(Settings|Preferences)$'
+expect-widget-property navigationReversePanHorizontal checked false
+expect-widget-property navigationReversePanVertical checked false
+expect-widget-property navigationReverseScrollOrbit checked false
+expect-widget-property navigationReversePanHorizontal text 'Reverse horizontal pan'
+expect-widget-property navigationReversePanVertical text 'Reverse vertical pan'
+expect-widget-property navigationReverseScrollOrbit text 'Reverse scroll orbit'
+focus-widget navigationReversePanVertical
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Settings|Preferences)$'
+focus-main
+
+# 2. The scrolls as they are.
+view-navigation trackpad
+capture-view-target down_from
+trackpad-scroll 55 45 0 240 ''
+expect-view-pan ${down_from} changed
+sleep 500
+capture-view-target down_to
+trackpad-scroll 55 45 240 0 ''
+expect-view-pan ${down_to} changed
+sleep 500
+capture-view-target side_to
+
+# 3. Reverse vertical pan on: saved, and the vertical scroll reversed only.
+command tools.preferences.navigation
+focus-dialog '^(Settings|Preferences)$'
+focus-widget navigationReversePanVertical
+key Space
+expect-widget-property navigationReversePanVertical checked true
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Settings|Preferences)$'
+focus-main
+expect-setting view/reversePanVertical true
+expect-setting view/reversePanHorizontal false
+expect-setting view/reverseScrollOrbit false
+# Preferences give the view the saved scheme again.
+view-navigation trackpad
+capture-view-target reversed_from
+trackpad-scroll 55 45 0 240 ''
+expect-view-pan ${reversed_from} changed
+expect-view-pan-along ${down_from} ${down_to} ${reversed_from} opposite
+sleep 500
+capture-view-target side_from
+trackpad-scroll 55 45 240 0 ''
+expect-view-pan ${side_from} changed
+expect-view-pan-along ${down_to} ${side_to} ${side_from} same
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

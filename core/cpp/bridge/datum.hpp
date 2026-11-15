@@ -32,5 +32,9 @@ std::shared_ptr<geometry::Shape> datum_axis_shape(const DatumVec& origin,
 std::shared_ptr<geometry::Shape> datum_point_shape(const DatumVec& point);
 rust::Vec<DatumFaceEntry> datum_face_geometries(const geometry::Shape& shape);
 rust::Vec<DatumEdgeEntry> datum_edge_geometries(const geometry::Shape& shape);
+rust::Vec<DatumSurface> datum_recognised_face_geometries(const geometry::Shape& shape,
+                                                         rust::Slice<const std::uint32_t> faces);
+rust::Vec<DatumCurve> datum_recognised_edge_geometries(const geometry::Shape& shape,
+                                                       rust::Slice<const std::uint32_t> edges);
 
 } // namespace mitcad::bridge

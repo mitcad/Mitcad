@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: MIT
+# File > Open of a glTF file (mitcad#1826), the second run of
+# tools/ui-gltf-test.sh, tools/ui-windows-gltf-test.ps1 and
+# tools/ui-macos-gltf-test.sh: the application started with --open of the
+# robot.glb that tools/ui-scripts/gltf.mitcad-ui exported opens it as a new
+# document of its two components, nothing asked. Then the Appearances
+# window (mitcad#1874): the textured body's appearance, which lays its
+# image by the mesh's own texture coordinates (mitcad#1862), shows
+# Projection Texture coordinates; Box chosen there and Texture coordinates
+# chosen again, each an edit of the appearance.
+wait-log 'Imported robot\.glb as .*: 2 body\(ies\), 2 component\(s\), 2 occurrence\(s\)$' 30
+wait-idle
+expect-never 'Import place dialog opened|Could not import|TestDriver: FAIL'
+
+# The appearance of the textured body, found by its name.
+mark
+command solid.appearances
+focus-dialog '^Appearances$'
+wait-idle
+mark
+focus-widget appearanceSearch
+type 'Oak board'
+expect-log '^Appearances filtered "Oak board" \(All Categories\): 1 shown$'
+expect-log '^Appearances item custom[0-9]+ at '
+wait-idle
+mark
+dialog-click-logged '^Appearances item custom[0-9]+ at '
+wait-idle
+expect-ever '^Appearance custom[0-9]+ texture: embedded, maps none, source none, projection uv$'
+
+# Box, then Texture coordinates again: each one edit_appearance.
+mark
+qt-choice appearanceTextureProjection 'Box'
+expect-log '^Appearance custom[0-9]+ texture projection \["box"\]$'
+expect-log '^Appearance custom[0-9]+ texture: embedded, maps none, source none, projection box$'
+wait-idle
+mark
+qt-choice appearanceTextureProjection 'Texture coordinates'
+expect-log '^Appearance custom[0-9]+ texture projection \["uv"\]$'
+expect-log '^Appearance custom[0-9]+ texture: embedded, maps none, source none, projection uv$'
+wait-idle
+expect-never 'Appearance custom[0-9]+ texture .* refused'
+button '^Close$' appearanceClose
+focus-main
+wait-idle

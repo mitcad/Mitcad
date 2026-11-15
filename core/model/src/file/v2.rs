@@ -230,6 +230,9 @@ struct ComponentOut<'a> {
     // What BUILD made it of (mitcad#375).
     #[serde(skip_serializing_if = "Option::is_none")]
     build: Option<&'a crate::build::BuildRecord>,
+    // What a part converted to features was listed as (mitcad#1815).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listed: Option<&'a serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -254,6 +257,9 @@ struct OccurrenceOut {
     // Drawn see-through (mitcad#1093).
     #[serde(skip_serializing_if = "is_false")]
     transparent: bool,
+    // Flexible in its parent, with its own joint values (mitcad#1793).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flexible: Option<crate::assembly::Flex>,
 }
 
 fn is_root(component: &ComponentUid) -> bool {
@@ -353,6 +359,9 @@ struct BodyOut<'a> {
     // Drawn see-through (mitcad#1093).
     #[serde(skip_serializing_if = "is_false")]
     transparent: bool,
+    // The folder of the Bodies folder it is in (mitcad#1802).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    folder: Option<&'a str>,
 }
 
 pub(super) fn save(state: &DocState) -> String {
@@ -420,6 +429,7 @@ pub(super) fn save_with(
                 library: c.library.as_ref(),
                 policy: c.policy,
                 build: c.build.as_ref(),
+                listed: c.listed.as_ref(),
             })
             .collect(),
         occurrences: assembly
@@ -440,6 +450,7 @@ pub(super) fn save_with(
                 pattern: o.pattern.clone(),
                 visible_when: state.bindings.occurrence_visible_when.get(&o.uid).cloned(),
                 transparent: o.transparent,
+                flexible: o.flexible.clone(),
             })
             .collect(),
         next_occurrence: next_occurrence_out(assembly),
@@ -490,6 +501,7 @@ pub(super) fn save_with(
                         .map(|a| &a.face_appearance_exprs)
                         .filter(|faces| !faces.is_empty()),
                     transparent: attributes.is_some_and(|a| a.transparent),
+                    folder: attributes.and_then(|a| a.folder.as_deref()),
                 }
             })
             .collect(),
@@ -806,6 +818,9 @@ struct BodyIn {
     // Drawn see-through (mitcad#1093).
     #[serde(default)]
     transparent: bool,
+    // The folder of the Bodies folder it is in (mitcad#1802).
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 fn visible() -> bool {
@@ -827,6 +842,8 @@ struct ComponentIn {
     policy: Policy,
     #[serde(default)]
     build: Option<crate::build::BuildRecord>,
+    #[serde(default)]
+    listed: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -850,6 +867,9 @@ struct OccurrenceIn {
     // Drawn see-through (mitcad#1093).
     #[serde(default)]
     transparent: bool,
+    // Flexible in its parent (mitcad#1793).
+    #[serde(default)]
+    flexible: Option<crate::assembly::Flex>,
 }
 
 struct FeatureIn {
@@ -1106,6 +1126,7 @@ fn assembly_in(
             library: c.library,
             policy: c.policy,
             build: c.build,
+            listed: c.listed,
         });
     }
     for (i, o) in array(top, "occurrences", false)?.into_iter().enumerate() {
@@ -1142,6 +1163,7 @@ fn assembly_in(
             transparent: o.transparent,
             number: o.number,
             pattern: o.pattern,
+            flexible: o.flexible,
         });
     }
     // The number the next occurrence takes, kept where the largest was
@@ -1880,6 +1902,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             visible_when: body.visible_when.filter(|t| !t.trim().is_empty()),
             face_appearance_exprs: body.face_appearance_exprs,
             transparent: body.transparent,
+            folder: body.folder.filter(|f| !f.trim().is_empty()),
         };
         if !attributes.is_default() {
             state.body_attributes.insert(body.uid, attributes);

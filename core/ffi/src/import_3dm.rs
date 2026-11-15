@@ -17,10 +17,19 @@
 //!   file has one.
 //! - The model's unit becomes the document's (an empty document only, and
 //!   for mm, cm, m, in and ft); the bodies are millimetres either way.
+//! - A SubD object becomes a Form feature (mitcad#1757) in the component
+//!   that holds it, named after the object: its control net is the
+//!   Form's cage (`mitcad_3dm::subd`), editable with the `form.*`
+//!   commands, and its body the cage's limit surface. An instance that
+//!   scales or mirrors a block moves a copy of the cage with it (the
+//!   subdivision follows such a change of its cage exactly). What the cage
+//!   could not carry as it is (a sharpness that changes along an edge,
+//!   vertices on no face) is a warning in words; a net that makes no cage
+//!   is a body not built, with why.
 //!
 //! Hidden objects (and those on hidden layers), curves, points,
-//! annotations, SubD objects and other classes are left out; the report
-//! accounts for every object. The `import_3dm` document command.
+//! annotations and other classes are left out; the report accounts for
+//! every object. The `import_3dm` document command.
 //!
 //! The file is untrusted: the reader checks every length and count
 //! (`core/3dm`), a block that holds an instance of itself (directly or
@@ -39,10 +48,15 @@ use mitcad_3dm::File3dm;
 use mitcad_3dm::convert::{self, Converted};
 use mitcad_3dm::geom::{Geometry, InstanceRef};
 use mitcad_3dm::model::Object;
+use mitcad_3dm::subd::subd_cage;
 use mitcad_asm::convert::ConvertedBody;
 use mitcad_import::outcomes::EntityOutcome;
+use mitcad_model::features::{FeatureDef, FormDef, Operation};
 use mitcad_model::notice::Notice;
-use mitcad_model::{BaseInput, ComponentUid, ImportBody, Kernel, Transform};
+use mitcad_model::subdiv::Cage;
+use mitcad_model::{
+    BaseInput, BodyUid, ComponentUid, FeatureStatus, ImportBody, Kernel, Transform,
+};
 use mitcad_model_api::ApiError;
 
 use crate::Document;
@@ -141,7 +155,7 @@ struct Account {
     taken: BTreeMap<String, usize>,
     /// (kind, why, left out by design) -> count. By design: curves,
     /// points, annotations and the like, and hidden objects; not by
-    /// design: SubD objects and objects that could not be read.
+    /// design: objects that could not be read.
     left_out: BTreeMap<(String, String, bool), usize>,
     /// `source` (the object in words), `error`, and for agents `object`
     /// (its index in the object table).
@@ -178,6 +192,9 @@ impl Account {
 struct Builder<'a> {
     file: &'a File3dm,
     built: HashMap<usize, Vec<Built>>,
+    /// The Form cage of each SubD object converted so far (None: it makes
+    /// none).
+    cages: HashMap<usize, Option<Cage>>,
     /// The name of the block an object's id belongs to.
     block_of: HashMap<mitcad_3dm::Uuid, String>,
 }
@@ -287,6 +304,39 @@ impl Builder<'_> {
         })
     }
 
+    /// The Form cage of a SubD object in millimetres (None when its net
+    /// makes none: the account says why), each object converted once.
+    fn cage(&mut self, i: usize, account: &mut Account) -> Option<Cage> {
+        if let Some(cage) = self.cages.get(&i) {
+            return cage.clone();
+        }
+        let file = self.file;
+        let Geometry::SubD(subd) = &file.objects[i].geometry else {
+            return None;
+        };
+        let place = self.source(i);
+        let made = without_panic(|| subd_cage(subd, file.units.mm))
+            .unwrap_or_else(|| Err("the object is damaged (its conversion failed)".to_owned()));
+        let cage = match made {
+            Ok(made) => {
+                account.take("SubD");
+                for note in made.notes {
+                    account.warn(format!("{place}: {note}"), format!("object {i}: {note}"));
+                }
+                Some(made.cage)
+            }
+            Err(error) => {
+                eprintln!("import: .3dm: object {i} ({place}) makes no Form: {error}");
+                account
+                    .not_built
+                    .push(json!({"source": place, "error": error, "object": i}));
+                None
+            }
+        };
+        self.cages.insert(i, cage.clone());
+        cage
+    }
+
     /// The object's bodies (empty when it has none or is left out; the
     /// account says why).
     fn bodies(&mut self, i: usize, account: &mut Account) -> Vec<Built> {
@@ -334,16 +384,13 @@ impl Builder<'_> {
                 self.built.insert(i, out.clone());
                 return out;
             }
-            Geometry::Other(name) => {
-                if name == "SubD" {
-                    account.leave(&kind, "SubD objects are not imported yet", false);
-                } else {
-                    account.leave(&kind, "not a solid, a surface or a mesh", true);
-                }
+            Geometry::Other(_) => {
+                account.leave(&kind, "not a solid, a surface or a mesh", true);
                 self.built.insert(i, out.clone());
                 return out;
             }
-            Geometry::Instance(_) => return out,
+            // A SubD is a Form ([`Builder::cage`]), an instance is placed.
+            Geometry::SubD(_) | Geometry::Instance(_) => return out,
         };
         match made {
             Ok(b) => {
@@ -420,6 +467,40 @@ impl Placed {
     }
 }
 
+/// A SubD object's Form to add: its cage where it is placed.
+struct PlacedForm {
+    component: ComponentUid,
+    /// The object's name, when it has one.
+    name: Option<String>,
+    /// The object in words.
+    source: String,
+    /// Its index in the file, for agents.
+    object: usize,
+    cage: Cage,
+}
+
+/// A cage moved by a copy's placement (one that may scale or mirror: the
+/// subdivision of the moved cage is the moved surface); a mirroring turns
+/// the faces round so that they still point out. Err for a placement that
+/// flattens it.
+fn moved_cage(cage: &Cage, t: &Transform) -> Result<Cage, String> {
+    let det = t.determinant();
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return Err("its block is placed flattened".to_owned());
+    }
+    let mut moved = cage.clone();
+    for v in &mut moved.vertices {
+        v.at = t.apply_point(v.at);
+    }
+    if det < 0.0 {
+        for face in &mut moved.faces {
+            face.vertices.reverse();
+        }
+    }
+    moved.check()?;
+    Ok(moved)
+}
+
 /// Walks the model: the top-level objects into the root component, the
 /// blocks into components.
 struct Walk<'a> {
@@ -437,11 +518,25 @@ struct Walk<'a> {
     /// The blocks being placed, outermost first: an instance of one of
     /// them inside them is left out.
     expanding: Vec<mitcad_3dm::Uuid>,
+    /// The Forms of SubD objects, in the order they were placed.
+    forms: Vec<PlacedForm>,
+    /// The hidden objects left out so far: each is counted once, however
+    /// often its block is placed.
+    hidden: HashSet<usize>,
 }
 
 impl Walk<'_> {
     fn visible(&self, o: &Object) -> bool {
         o.attributes.visible && self.file.layer_visible(o.attributes.layer)
+    }
+
+    /// The object `i` left out as hidden in the file (it or its layer),
+    /// in the account once.
+    fn hide(&mut self, i: usize) {
+        if self.hidden.insert(i) {
+            let kind = mitcad_3dm::kind_name(&self.file.objects[i].geometry);
+            self.account.leave(&kind, "hidden in the file", true);
+        }
     }
 
     /// An object (not an instance) placed in `component`, moved by
@@ -454,6 +549,10 @@ impl Walk<'_> {
         parent_color: Option<u32>,
     ) {
         let o = &self.file.objects[i];
+        if matches!(o.geometry, Geometry::SubD(_)) {
+            self.place_form(i, component, copy);
+            return;
+        }
         let bodies = self.builder.bodies(i, &mut self.account);
         let layer = self.file.layer_path(o.attributes.layer);
         let color = self
@@ -462,6 +561,9 @@ impl Walk<'_> {
             .and_then(rgb);
         let name =
             (!o.attributes.name.trim().is_empty()).then(|| o.attributes.name.trim().to_owned());
+        // A copy's own volume: an instance that scales its block scales
+        // the volume by its determinant (a mirror keeps it).
+        let volume_scale = copy.map_or(1.0, |t| t.determinant().abs());
         for b in &bodies {
             if copy.is_some() && self.placed.copied_bodies >= MAX_COPIED_BODIES {
                 self.account.leave(
@@ -486,9 +588,58 @@ impl Walk<'_> {
                     }
                 },
             };
-            self.placed
-                .push(component, layer.clone(), name.clone(), color, b, shape);
+            let placed = Built {
+                volume: b.volume * volume_scale,
+                ..b.clone()
+            };
+            self.placed.push(
+                component,
+                layer.clone(),
+                name.clone(),
+                color,
+                &placed,
+                shape,
+            );
         }
+    }
+
+    /// A SubD object's Form placed in `component`, its cage moved by `copy`
+    /// when it is a copy of a block's geometry.
+    fn place_form(&mut self, i: usize, component: ComponentUid, copy: Option<&Transform>) {
+        let Some(mut cage) = self.builder.cage(i, &mut self.account) else {
+            return;
+        };
+        let source = self.builder.source(i);
+        if let Some(t) = copy {
+            if self.placed.copied_bodies >= MAX_COPIED_BODIES {
+                self.account.leave(
+                    "block instance",
+                    "more bodies in copies of blocks than the import makes",
+                    false,
+                );
+                return;
+            }
+            match moved_cage(&cage, t) {
+                Ok(moved) => {
+                    cage = moved;
+                    self.placed.copied_bodies += 1;
+                }
+                Err(error) => {
+                    self.account.not_built.push(
+                        json!({"source": format!("a copy of {source}"), "error": error, "object": i}),
+                    );
+                    return;
+                }
+            }
+        }
+        let name = self.file.objects[i].attributes.name.trim();
+        self.forms.push(PlacedForm {
+            component,
+            name: (!name.is_empty()).then(|| name.to_owned()),
+            source,
+            object: i,
+            cage,
+        });
     }
 
     /// An instance of a block in `component`, within copies moved by
@@ -596,7 +747,9 @@ impl Walk<'_> {
     ) -> Result<(), ApiError> {
         let file = self.file;
         for &i in objects {
-            if !file.objects[i].attributes.visible {
+            // Hidden by its own flag or its layer's, as at the top level.
+            if !self.visible(&file.objects[i]) {
+                self.hide(i);
                 continue;
             }
             match &file.objects[i].geometry {
@@ -632,6 +785,7 @@ impl Document {
             builder: Builder {
                 file: &file,
                 built: HashMap::new(),
+                cages: HashMap::new(),
                 block_of: file
                     .definitions
                     .iter()
@@ -655,6 +809,8 @@ impl Document {
             components: HashMap::new(),
             made: Vec::new(),
             expanding: Vec::new(),
+            forms: Vec::new(),
+            hidden: HashSet::new(),
         };
         for (k, d) in file.definitions.iter().enumerate() {
             walk.definitions.entry(d.id).or_insert(k);
@@ -699,12 +855,12 @@ impl Document {
         // through its instances.
         for (i, o) in file.objects.iter().enumerate() {
             let kind = mitcad_3dm::kind_name(&o.geometry);
-            *walk.account.objects.entry(kind.clone()).or_insert(0) += 1;
+            *walk.account.objects.entry(kind).or_insert(0) += 1;
             if o.attributes.mode == 3 {
                 continue;
             }
             if !walk.visible(o) {
-                walk.account.leave(&kind, "hidden in the file", true);
+                walk.hide(i);
                 continue;
             }
             match &o.geometry {
@@ -774,6 +930,60 @@ impl Document {
         if !inputs.is_empty() {
             self.0.add_base_features(&label, inputs)?;
         }
+        // The Forms of the SubD objects, each a feature of its component
+        // named after its object (where the name is free).
+        let mut forms = Vec::new();
+        for form in std::mem::take(&mut walk.forms) {
+            let full = form.cage.full();
+            let summary = json!({
+                "source": form.source,
+                "object": form.object,
+                "component": form.component.to_string(),
+                "vertices": form.cage.vertices.len(),
+                "faces": form.cage.faces.len(),
+                "creases": form.cage.creases.len(),
+                "corners": form.cage.corners.len(),
+                "closed": full.closed(),
+            });
+            let def = FeatureDef::Form(FormDef::new(form.cage, Operation::NewBody, Vec::new()));
+            let wanted = form.name.as_deref().filter(|n| !feature_names.contains(*n));
+            let added = match self.0.add_feature_to(&def, wanted, Some(form.component)) {
+                Err(_) if wanted.is_some() => {
+                    self.0.add_feature_to(&def, None, Some(form.component))
+                }
+                other => other,
+            };
+            let added = match added {
+                Ok(added) => added,
+                Err(e) => {
+                    walk.account.not_built.push(
+                        json!({"source": form.source, "error": e.to_string(), "object": form.object}),
+                    );
+                    continue;
+                }
+            };
+            feature_names.insert(added.name.clone());
+            let mut summary = summary;
+            summary["name"] = json!(added.name);
+            summary["uid"] = json!(added.uid.to_string());
+            match self.0.status(added.uid) {
+                Some(FeatureStatus::Failed(error)) => {
+                    let error = error.clone();
+                    summary["built"] = json!(false);
+                    walk.account.not_built.push(
+                        json!({"source": form.source, "error": error, "object": form.object}),
+                    );
+                }
+                _ => {
+                    summary["built"] = json!(true);
+                    if let Some(name) = &form.name {
+                        // A name another body has stays the Form's default.
+                        let _ = self.0.rename_body(BodyUid::new(added.uid, 0), name);
+                    }
+                }
+            }
+            forms.push(summary);
+        }
         self.0.merge_undo(depth, &label);
 
         let a = &walk.account;
@@ -822,6 +1032,7 @@ impl Document {
             "components": components,
             "copied_instances": p.copied,
             "bodies": p.total,
+            "forms": forms,
             "solids": p.solids,
             "meshes": p.meshes,
             "valid": p.valid,
@@ -950,6 +1161,26 @@ fn summary(report: &Value) -> String {
             n(&c["occurrences"]),
         ));
     }
+    for f in report["forms"].as_array().into_iter().flatten() {
+        text.push_str(&format!(
+            "Form {}: {} vertices, {} faces, {} creased edges, {} corners, {}{}\n",
+            f["name"].as_str().unwrap_or_default(),
+            n(&f["vertices"]),
+            n(&f["faces"]),
+            n(&f["creases"]),
+            n(&f["corners"]),
+            if f["closed"] == true {
+                "closed"
+            } else {
+                "open"
+            },
+            if f["built"] == true {
+                ""
+            } else {
+                ", not built"
+            },
+        ));
+    }
     let taken: Vec<String> = report["taken"]
         .as_object()
         .into_iter()
@@ -1003,7 +1234,7 @@ pub(crate) fn import_3dm_report_passes(json: &str) -> bool {
 /// Writes a model of the reader's test writer for the import's tests: the
 /// sample model (`mitcad_3dm::testfile::sample`, `test_case` empty) or a
 /// case of `mitcad_3dm::testfile::test_case` (`block-in-itself`,
-/// `plane-surfaces`).
+/// `plane-surfaces`, `subd`, `block-hidden-layer`, `block-scaled`).
 pub(crate) fn import_3dm_write_test_file(path: &str, test_case: &str) -> Result<(), ApiError> {
     let bytes = mitcad_3dm::testfile::test_case(test_case)
         .ok_or_else(|| ApiError(format!("unknown test case {test_case}")))?;

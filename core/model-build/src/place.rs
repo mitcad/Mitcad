@@ -258,6 +258,10 @@ pub struct PlaceInput {
     /// The part's own grade (a timber member's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// A member along a straight edge, lying on a face beside it
+    /// (mitcad#1814).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub along: Option<crate::edge::AlongEdge>,
 }
 
 /// An end's cut in `build_edit`.
@@ -343,6 +347,9 @@ pub struct EditInput {
     /// over its definition's.
     #[serde(default)]
     pub frame: Option<crate::frames::FrameInput>,
+    /// A member along an edge (mitcad#1814): its edge, face and offsets.
+    #[serde(default)]
+    pub along: Option<crate::edge::AlongEdit>,
 }
 
 /// A hole at one of a part's ends.
@@ -929,6 +936,10 @@ impl<K: Kernel> PlaceBuild<K> for Document<K> {
     }
 
     fn build_place(&mut self, input: &PlaceInput) -> Result<Placed, ModelError> {
+        // Along an edge (mitcad#1814).
+        if let Some(along) = &input.along {
+            return self.build_place_along(input, along);
+        }
         if input.spacing.is_some() {
             return self.build_place_set(input);
         }
@@ -1183,6 +1194,15 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         let mut values = input.part.parameters.clone();
         values.extend(input.parameters.clone());
         let config = source.config.as_deref();
+        // A member along an edge (mitcad#1814): the edge frame's run is its
+        // length.
+        let along_run = match &input.along {
+            Some(along) => {
+                crate::edge::check_along(input)?;
+                Some(self.plan_along(along)?.1)
+            }
+            None => None,
+        };
         // A member by two points: their distance unless a length is given
         // (mitcad#478).
         let points_length = match (&input.to, &input.length) {
@@ -1198,7 +1218,13 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             }
             _ => None,
         };
-        let input_length = points_length.as_ref().or(input.length.as_ref());
+        let along_length = along_run
+            .as_ref()
+            .map(|run| LengthInput::Value(ValueInput::Number(run.length)));
+        let input_length = along_length
+            .as_ref()
+            .or(points_length.as_ref())
+            .or(input.length.as_ref());
         let mut length = match (&source.meta.length, input_length) {
             (None, None) => LengthPlan::None,
             (None, Some(_)) => {
@@ -1331,11 +1357,27 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             )?),
             None => None,
         };
+        // A member along an edge lies as `lie` says (mitcad#1814), on the
+        // edge frame's start.
+        if along_run.is_some() && rotate.abs() > 1e-12 {
+            return Err(refuse(
+                "a member along an edge is turned by Lie: it takes no rotation",
+            ));
+        }
+        let along_spot = along_run.as_ref().map(|run| {
+            Spot::Grounded(crate::edge::along_placement(
+                &run.start,
+                &mounts,
+                bounds.as_ref(),
+                input.lie.unwrap_or_default(),
+            ))
+        });
         // A member by two points is turned by its axes, not the joint.
         let rotate = if points.is_some() { 0.0 } else { rotate };
-        let (spot, place) = match (points, &at.geometry) {
-            (Some(points), _) => (points.spot, "points"),
-            (None, None) => {
+        let (spot, place) = match (points, &at.geometry, along_spot) {
+            (None, None, Some(spot)) => (spot, "edge"),
+            (Some(points), _, _) => (points.spot, "points"),
+            (None, None, None) => {
                 // At the point (the origin), along `at.direction` (+Z).
                 let point = at.point.unwrap_or([0.0; 3]);
                 let grounded = match at.direction.and_then(unit) {
@@ -1373,7 +1415,7 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 };
                 (Spot::Grounded(grounded), "grounded")
             }
-            (None, Some(geometry)) => {
+            (None, Some(geometry), _) => {
                 let path = self.path_from_host(&at.occurrence)?;
                 match self.target(&path) {
                     Some(t) => {
@@ -3513,6 +3555,17 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
         if let Some(spacing) = &input.spacing {
             return self.edit_set(component, spacing, input.config.as_ref());
         }
+        // A member along an edge: its edge, face, offsets, lie and row
+        // (mitcad#1814).
+        if let Some(changed) = self.edit_along(component, input)? {
+            return Ok(changed);
+        }
+        if input.along.is_some() {
+            return Err(refuse(format!(
+                "{} is not placed along an edge",
+                input.component
+            )));
+        }
         // A member by two points placed anew (mitcad#478).
         if input.to.is_some()
             || input.lie.is_some()
@@ -3898,7 +3951,11 @@ impl<K: Kernel> EditBuild<K> for Document<K> {
             }
             if let Some(config) = &input.config {
                 let config = config.clone();
+                // Its material follows the row (mitcad#1817: a pine row is
+                // pine).
+                let before = state.library_material_of(part);
                 edit_part(state, part, |def| def.config = Some(config))?;
+                state.follow_library_material(part, before.as_deref());
                 changed.push("config".to_owned());
             }
             if !input.parameters.is_empty() {

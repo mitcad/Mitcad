@@ -13,6 +13,7 @@
 #include <QLockFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QtGlobal>
 
 #include "files/FileFormats.hpp"
@@ -56,6 +57,7 @@ WebFileCheck checkWebFileName(const QString& fileName) {
   case FileKind::Design:
   case FileKind::Cad:
   case FileKind::Mesh:
+  case FileKind::Gltf:
     return {WebFileKind::Component, QString()};
   case FileKind::F3d:
   case FileKind::FreeCad:
@@ -225,6 +227,21 @@ QString normalWebAddress(const QString& typed) {
     return text;
   }
   return QStringLiteral("https://") + text;
+}
+
+WebSite webSiteToAdd(const QUrl& page, const QString& title, const QString& typed) {
+  const QString scheme = page.scheme();
+  if (!page.isEmpty() && scheme != QStringLiteral("data") && scheme != QStringLiteral("about")) {
+    const QString name = title.trimmed();
+    return {name.isEmpty() ? page.host() : name, page.toString()};
+  }
+  const QString url = normalWebAddress(typed);
+  if (url.isEmpty() || url.startsWith(QStringLiteral("about:"), Qt::CaseInsensitive) ||
+      url.startsWith(QStringLiteral("data:"), Qt::CaseInsensitive)) {
+    return {};
+  }
+  const QString host = QUrl::fromUserInput(url).host();
+  return {host.isEmpty() ? url : host, url};
 }
 
 // ---------------------------------------------------------------------------

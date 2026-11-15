@@ -37,8 +37,8 @@ fn assert_point(value: &Value, expected: [f64; 3], what: &str) {
     }
 }
 
-/// Body1 (F2.b0) of aluminum in the root, and Body2 (F3.b0), steel for
-/// lack of a material, in Component1:1 (O1) at the design's origin.
+/// Body1 (F2.b0) of aluminum in the root, and Body2 (F3.b0), without a
+/// material, in Component1:1 (O1) at the design's origin.
 fn two_bodies() -> Document<MockKernel> {
     let mut b = block();
     // The mock kernel's mass properties: of the bounding boxes.
@@ -59,6 +59,28 @@ fn two_bodies() -> Document<MockKernel> {
 #[test]
 fn the_center_of_mass_is_the_placed_bodies_total() {
     let mut doc = two_bodies();
+    // Body2 has no material (mitcad#1817): it has no mass and is left
+    // out, never counted as steel.
+    let alone = query(&doc, json!({"query": "center_of_mass"}));
+    assert_eq!(alone["bodies"], 1, "{alone}");
+    assert_eq!(alone["without_material"], 1, "{alone}");
+    let properties = query(&doc, json!({"query": "properties"}));
+    assert_eq!(properties["bodies"][1]["no_material"], true);
+    let body1: Vec<f64> = (0..3)
+        .map(|i| number(&properties["bodies"][0]["center_of_mass"][i]))
+        .collect();
+    assert_point(
+        &alone["center_of_mass"],
+        [body1[0], body1[1], body1[2]],
+        "Body1 alone",
+    );
+    assert!((number(&alone["mass"]) - number(&properties["bodies"][0]["mass"])).abs() <= 1e-12);
+
+    // Steel as the design's default material: Body2 counts with it.
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
     let properties = query(&doc, json!({"query": "properties"}));
     let found = query(&doc, json!({"query": "center_of_mass"}));
     // At the origin the placed total is the `properties` query's.
@@ -74,7 +96,7 @@ fn the_center_of_mass_is_the_placed_bodies_total() {
     assert!((number(&found["mass"]) - number(&total["mass"])).abs() <= 1e-12);
     assert!((number(&found["volume"]) - number(&total["volume"])).abs() <= 1e-9);
     assert_eq!(found["bodies"], 2);
-    assert_eq!(found["default_material"], 1, "{found}");
+    assert_eq!(found["without_material"], 0, "{found}");
     assert_eq!(found["marker"], Value::Null);
     let aluminum = number(&properties["bodies"][0]["mass"]);
     let steel = number(&properties["bodies"][1]["mass"]);
@@ -99,13 +121,13 @@ fn the_center_of_mass_is_the_placed_bodies_total() {
         "moved",
     );
 
-    // A material of its own counts: none is steel by default any more.
+    // A material of its own counts over the design's default.
     command(
         &mut doc,
         json!({"cmd": "set_body_material", "uid": "F3.b0", "material": "brass"}),
     );
     let brass = query(&doc, json!({"query": "center_of_mass"}));
-    assert_eq!(brass["default_material"], 0);
+    assert_eq!(brass["without_material"], 0);
     assert!(number(&brass["mass"]) > number(&moved["mass"]));
 }
 

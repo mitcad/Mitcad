@@ -48,8 +48,10 @@
 #     typed; a Center Point Arc whose normal is picked from AB; a Line
 #     from the origin whose end snaps onto a side face of the box with the
 #     On Face badge (mitcad#1549), the relation and the face's record in
-#     the palette's lists; Finish.
-#   - Editing (mitcad#1526) of 3DSketch1 again: AB's length typed 50 in
+#     the palette's lists; a Center Point Arc's Pick Normal still waiting
+#     as Finish ends the sketch, which stops the tool (mitcad#1835).
+#   - Editing (mitcad#1526) of 3DSketch1 again: a click picks its point
+#     p2, no Pick Normal filter left (mitcad#1835); AB's length typed 50 in
 #     the palette's list (W2), made driven, removed (W3); B dragged along
 #     X (one undo step) and a drag taken back by Esc; a Length added from
 #     the palette, Fix and Unfix by Shift+F; the spline's tangent handle
@@ -474,16 +476,33 @@ ui_expect_new "3D sketch tool Line: stopped" "the tool ends"
 ui_expect_new " On Face p" "the On Face relation is in the list"
 ui_expect_new "face $FACE of F1.b0; body F1.b0; its point slides on the face" "the face's record is listed"
 [ -n "$SHOT" ] && ui_capture "${SHOT%.png}-on-face.png"
+
+echo "--- Finish while Pick Normal waits (mitcad#1835): it ends with its tool"
+ui_mark
+ui_step "Center Point Arc (F8)"          ui_key F8
+ui_expect_new "3D sketch tool Center Point Arc: started" "Center Point Arc draws again"
+ui_expect_new "3D sketch control Pick Normal at" "its Normal row is shown"
+ui_step "Pick Normal"                    ui_click_logged "3D sketch control Pick Normal"
+ui_expect_new "3D sketch Center Point Arc: picking the normal" "the next click would pick the normal"
 ui_mark
 ui_step "finish (Ctrl+Enter)"            ui_key ctrl+Return
+ui_expect_new "3D sketch tool Center Point Arc: stopped" "Finish ends the tool, its Pick Normal with it"
 ui_expect_new "Sketch finished" "finished"
 
 echo "--- 3D sketch editing (mitcad#1526): 3DSketch1's dimensions, relations, drags and references"
 ui_double_click_expect "Timeline 3DSketch1" "Editing 3D sketch F2 (3DSketch1)" "3DSketch1 is edited again"
+ui_expect_new "3D sketch entity F2/p2 at" "its points are drawn where a click picks them"
 ui_expect_new "3D sketch item k3 Length c3: 40.00 mm" "the list gives AB's length, driving"
 ui_expect_new "3D sketch item k3 field " "its value field is on the card (in sight or below it)"
 ui_expect_new "3D sketch edit control coincident " "the relations are on the card"
 [ -n "$SHOT" ] && ui_capture "${SHOT%.png}-edit.png"
+ui_mark
+ui_step "click p2 (mitcad#1835)"         ui_click_logged "3D sketch entity F2/p2"
+ui_expect_new "Selected: 1 sketch point [sketch point p2 of F2]" \
+  "a point is picked: no Pick Normal filter left from the sketch before"
+ui_step "Esc (clear the selection)"      ui_key Escape
+ui_expect_new "Selected: nothing" "Esc cleared the selection"
+ui_sync # the card laid out again without the selection
 ui_mark
 ui_step "drag along X"                   ui_click_logged "3D sketch edit control drag axis X"
 ui_expect_new "3D sketch drag on: along X" "drags go along X"

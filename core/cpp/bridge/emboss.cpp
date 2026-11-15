@@ -49,4 +49,22 @@ std::shared_ptr<geometry::Shape> projected_emboss(rust::Str feature, const Frame
   return geometry::projected_emboss(body, spec);
 }
 
+std::shared_ptr<geometry::Shape> wrapped_curves(rust::Str feature, const Frame& frame,
+                                                rust::Slice<const Segment> curves, const EmbossWrap& wrap,
+                                                double inner, double outer) {
+  geometry::WrappedCurvesSpec spec;
+  spec.feature = std::string(feature);
+  spec.frame = to_geometry(frame);
+  for (const Segment& curve : curves) {
+    spec.curves.push_back(to_geometry(curve));
+  }
+  spec.axis = gp_Ax1(gp_Pnt(wrap.axis_origin[0], wrap.axis_origin[1], wrap.axis_origin[2]),
+                     gp_Dir(wrap.axis_direction[0], wrap.axis_direction[1], wrap.axis_direction[2]));
+  spec.radius = wrap.radius;
+  spec.half_angle = wrap.half_angle;
+  spec.inner = inner;
+  spec.outer = outer;
+  return geometry::wrapped_curves(spec);
+}
+
 } // namespace mitcad::bridge

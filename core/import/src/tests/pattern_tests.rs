@@ -33,6 +33,8 @@ fn pattern_provenance_marks_only_omitted_dressup_inputs() {
         report: DesignReport::default(),
         pending: Vec::new(),
         mesh_bodies: Vec::new(),
+        translating: None,
+        cut_sources: std::cell::OnceCell::new(),
         defined: Default::default(),
         at_final: false,
         started: std::time::Instant::now(),

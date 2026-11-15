@@ -143,8 +143,8 @@ ui_step "close it (Esc)"                   ui_key Escape
 ui_focus_main
 ui_mark
 ui_step "physical properties (search)"     ui_command "Physical Properties"
-ui_expect_new "Physical properties: Body1 volume 48000 mass 0.3768 center (30, 20, 10)" \
-  "48 cm3 of steel (7.85 g/cm3) weighs 0.3768 kg"
+ui_expect_new "Physical properties: Body1 volume 48000 mass none center (30, 20, 10) material No material" \
+  "48 cm3 without a material has no mass, never a default's (mitcad#1817)"
 ui_focus_dialog "Properties"
 ui_step "close the dialog (Esc)"           ui_key Escape
 ui_focus_main

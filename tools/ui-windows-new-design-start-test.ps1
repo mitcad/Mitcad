@@ -1,28 +1,29 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp app/MainWindow.cpp app/framework/DocumentSession.cpp
 # check-all sources: app/framework/DocumentSession.hpp core/model/src/document/display.rs app/view/DefaultView.hpp
-# Input-driven Windows UI test of how a new design opens (mitcad#1683), in
-# the build VM (tools/ui-windows-lib.ps1 says how the input is posted); the
-# Linux test is tools/ui-new-design-start-test.sh:
+# Input-driven Windows UI test of how a new design opens (mitcad#1683,
+# mitcad#1809), in the build VM (tools/ui-windows-lib.ps1 says how the
+# input is posted); the Linux test is tools/ui-new-design-start-test.sh:
 #   1. The untitled design at the start shows its origin (the design's
 #      origin shown in the view, the Origin folder's light bulb on) with no
-#      undo step (the title has no "*"), and looks at Top (along -Z, Y up)
-#      with the origin within three pixels of the view's free area's centre
-#      ("View: new design looks along ...").
-#   2. Create Sketch turns the view off Top to the default view before the
-#      plane pick (mitcad#1698), a few degrees off the isometric diagonal:
-#      a click on YZ, edge-on from Top, starts a sketch on it; a rectangle
-#      drawn and Finish Sketch return to the default view with no second
-#      turn; then a sketch on XZ and one on XY, each by a click on its own
-#      plane. A view turned to Front (on F8 here) before the first sketch
-#      is not turned for the pick and keeps Front after Finish Sketch.
+#      undo step (the title has no "*"), and looks from the front right and
+#      above along the default view (mitcad#1698, a few degrees off the
+#      isometric diagonal), Z up, not at Top (mitcad#1809), with the origin
+#      within three pixels of the view's free area's centre ("View: new
+#      design looks along ..."), the camera at rest along it.
+#   2. Create Sketch does not turn that view: a click on YZ, XZ and XY each
+#      starts a sketch on its plane, and each sketch, finished, returns to
+#      the default view. A view turned to Front (on F8 here) before the
+#      first sketch keeps Front after Finish Sketch.
 #   3. A design read from a file keeps the origin it saved (hidden, light
-#      bulb off; shown, light bulb on), opens in the default view, and no
-#      new design's framing is logged for it.
+#      bulb off; shown, light bulb on), is seen from the default view, and
+#      no new design's framing is logged for it.
 #   4. New Design (Ctrl+N, in the current window) after an opened design
-#      looks at Top again with the origin shown.
+#      turned to Top (on F9 here) opens from the default view again, with
+#      the origin shown.
 # The other UI tests keep the start they were written for
-# (MITCAD_NEW_DESIGN_VIEW=0, Ui-StartApp); this one sets it to 1.
+# (MITCAD_NEW_DESIGN_VIEW=0, Ui-StartApp: the exact isometric view, the
+# origin hidden); this one sets it to 1.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-new-design-start-test.ps1 [-App build\dev\mitcad.exe] [-Out dir] [-QtBin dir]
 param(
@@ -33,13 +34,15 @@ param(
 . (Join-Path $PSScriptRoot 'ui-windows-lib.ps1')
 
 # New replaces the window's design (no second window to follow).
-# View > Front on a key of its own.
-Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.front' = 'F8'; 'documents/openInCurrentWindow' = 'true' } `
-  -StepPause 0
+# View > Front and View > Top on keys of their own.
+Ui-Init $App $Out $QtBin @{ 'sketch.create' = 'F7'; 'view.front' = 'F8'; 'view.top' = 'F9';
+  'documents/openInCurrentWindow' = 'true' } -StepPause 0
 $env:MITCAD_NEW_DESIGN_VIEW = '1'
 
 # The default view's direction (view/DefaultView.hpp: azimuth 41 degrees,
-# elevation 30), as "Camera direction" and "Sketch left with" log it.
+# elevation 30) and its up (Z up, square to it), as "View: new design looks
+# along", "Camera direction" and "Sketch left with" log them.
+$defaultLook = '-0.568,0.654,-0.5, up -0.328,0.377,0.866; '
 $defaultView = '-0.568 0.654 -0.5'
 $defaultAlong = '(-0.568, 0.654, -0.500)'
 $shownOn = "Design origin shown in the view; the Origin folder's light bulb on"
@@ -62,19 +65,21 @@ function Expect-Origin([string]$State, [string]$Description) {
   Write-Host "ok   $Description"
 }
 
-# Expect-Top "description": the last "View: new design looks along" line
-# since the mark looks along -Z with Y up and puts the origin within three
-# pixels of the free area's centre.
-function Expect-Top([string]$Description) {
+# Expect-DefaultView "description": the last "View: new design looks along"
+# line since the mark looks along the default view with Z up and puts the
+# origin within three pixels of the free area's centre, and the camera
+# comes to rest along the default view.
+function Expect-DefaultView([string]$Description) {
   Ui-ExpectNew 'View: new design looks along ' "${Description}: the new design's view is logged" | Out-Null
   $line = Ui-NewLines | Where-Object { $_.Contains('View: new design looks along ') } | Select-Object -Last 1
-  $pattern = 'View: new design looks along 0,0,-1, up 0,1,0; the origin at (-?\d+),(-?\d+), ' +
-             "the free area's centre at (-?\d+),(-?\d+)"
-  if ("$line" -notmatch $pattern) { Ui-Fail "${Description}: not looking at Top: '$line'" }
+  $pattern = 'View: new design looks along ' + [regex]::Escape($defaultLook) +
+             "the origin at (-?\d+),(-?\d+), the free area's centre at (-?\d+),(-?\d+)"
+  if ("$line" -notmatch $pattern) { Ui-Fail "${Description}: not the default view from the front right and above: '$line'" }
   $dx = [double]$Matches[1] - [double]$Matches[3]
   $dy = [double]$Matches[2] - [double]$Matches[4]
   if ($dx * $dx + $dy * $dy -gt 9) { Ui-Fail "${Description}: the origin is not in the middle of the free area: '$line'" }
   Write-Host "ok   ${Description}: $line"
+  Ui-ExpectNew "Camera direction $defaultView up " "${Description}: the camera rests along the default view" | Out-Null
 }
 
 # Expect-NoNewDesignFraming "description": an opened design is not framed
@@ -85,8 +90,6 @@ function Expect-NoNewDesignFraming([string]$Description) {
   Write-Host "ok   ${Description}: no new design's framing"
 }
 
-# A box saved with the origin hidden (no display state) and one saved with
-# it shown.
 # Draw-RectangleAndFinish "description": a rectangle from the sketch point
 # (-10, -10) to (-40, -30), then Finish Sketch (Ctrl+Enter); the mark is set
 # before the finish. Left of and below the origin, away from the orientation
@@ -106,6 +109,8 @@ function Draw-RectangleAndFinish([string]$Description) {
   Ui-ExpectNew 'Sketch finished' "${Description}: finished" | Out-Null
 }
 
+# A box saved with the origin hidden (no display state) and one saved with
+# it shown.
 function Design([string]$Display) {
   return @"
 {
@@ -128,34 +133,19 @@ $shownFile = Join-Path $script:UiOut 'shown.mitcad'
 Set-Content -Encoding ascii $hiddenFile (Design '')
 Set-Content -Encoding ascii $shownFile (Design ', "display": {"origin": true}')
 
-Write-Host "--- The untitled design at the start: Top, the origin shown"
+Write-Host "--- The untitled design at the start: the default view, the origin shown"
 Ui-StartApp 'new-design-start'
 Expect-Origin $shownOn 'a new design shows its origin, its light bulb on'
-Expect-Top 'the untitled design at the start'
+Expect-DefaultView 'the untitled design at the start'
 $title = Ui-WindowTitle
 if ($title -ne 'Untitled - MitCad') { Ui-Fail "the new design is modified: '$title'" }
 Write-Host "ok   showing the origin is no change to the design: '$title'"
 
-Write-Host "--- Create Sketch from Top: the default view first, every origin plane picked"
-Ui-Mark
-Ui-Key 'F7'
-Ui-ExpectNew 'Create Sketch: select a plane' 'Create Sketch asks for a plane' | Out-Null
-Ui-ExpectNew "View: Create Sketch turns a new design's Top to the default view" `
-  'the view turns off Top before the plane pick' | Out-Null
-Ui-ExpectNew "Camera direction $defaultView up " 'the default view: from the front right and above' | Out-Null
-# The planes' pick places are logged again as the camera rests (when they
-# moved), right after its line: the last ones logged are the default view's.
-Ui-SyncOr 500
-Ui-ClickLogged 'Datum yz'
-Ui-ExpectNew 'Sketch started on yz' 'YZ, edge-on from Top, picked by a click on it in the default view' | Out-Null
-Draw-RectangleAndFinish 'the first sketch, on YZ'
-Ui-ExpectNew "Sketch left with the view before it: the view looks along $defaultAlong" `
-  'the first sketch returns to the default view' | Out-Null
-$turned = Ui-NewLines | Where-Object { $_.Contains('View: after the first sketch') } | Select-Object -Last 1
-if ($turned) { Ui-Fail "the view turned again after the first sketch: '$turned'" }
-Write-Host 'ok   no second turn after the first sketch'
-foreach ($plane in @('xz', 'xy')) {
+Write-Host "--- Create Sketch in the default view: every origin plane picked by a click on it"
+foreach ($plane in @('yz', 'xz', 'xy')) {
   Ui-CreateSketch 'F7' $plane
+  $pickTurn = Ui-NewLines | Where-Object { $_.Contains('View: Create Sketch turns') } | Select-Object -Last 1
+  if ($pickTurn) { Ui-Fail "the view was turned for the plane pick: '$pickTurn'" }
   Draw-RectangleAndFinish "the sketch on $plane"
   Ui-ExpectNew "Sketch left with the view before it: the view looks along $defaultAlong" `
     "the sketch on $plane returns to the default view" | Out-Null
@@ -163,35 +153,32 @@ foreach ($plane in @('xz', 'xy')) {
 
 Write-Host "--- The view turned to Front before the first sketch keeps Front"
 Ui-StartApp 'new-design-start-front'
-Expect-Top 'the untitled design at the start, again'
+Expect-DefaultView 'the untitled design at the start, again'
+Ui-Mark
 Ui-Step 'front view (F8)'                { Ui-Key 'F8' }
-Ui-Sync
+Ui-ExpectNew 'Camera direction 0 1 0' 'looking from the front' | Out-Null
 Ui-CreateSketch 'F7' 'xz'
-$pickTurn = Ui-NewLines | Where-Object { $_.Contains('View: Create Sketch turns') } | Select-Object -Last 1
-if ($pickTurn) { Ui-Fail "a view turned to Front was turned to the default view for the plane pick: '$pickTurn'" }
-Write-Host 'ok   no turn for the plane pick in a view turned to Front'
 Draw-RectangleAndFinish 'a sketch on XZ from Front'
 Ui-ExpectNew 'Sketch left with the view before it: the view looks along (0.000, 1.000, 0.000)' `
   'the sketch returns to Front, the view the user chose' | Out-Null
-$turned = Ui-NewLines | Where-Object { $_.Contains('View: after the first sketch') } | Select-Object -Last 1
-if ($turned) { Ui-Fail "a view turned to Front was turned to the isometric view after the sketch: '$turned'" }
-Write-Host 'ok   no turn to the isometric view after the sketch'
 
 Write-Host "--- A design saved with its origin hidden"
 Ui-StartApp 'new-design-start-hidden' @($hiddenFile)
 Expect-Origin $hiddenOff "the opened design's origin stays hidden, its light bulb off"
-Ui-ExpectLog 'View: an opened design seen from the default view' 'the opened design is seen from the default view'
-Ui-ExpectLog "Camera direction $defaultView up " 'the opened design looks along the default view'
+Ui-ExpectLog "Camera direction $defaultView up " 'the opened design is seen from the default view'
 Expect-NoNewDesignFraming 'the design saved with its origin hidden'
 
-Write-Host "--- A design saved with its origin shown, then New Design"
+Write-Host "--- A design saved with its origin shown, turned to Top, then New Design"
 Ui-StartApp 'new-design-start-shown' @($shownFile)
 Expect-Origin $shownOn "the opened design's origin stays shown, its light bulb on"
 Expect-NoNewDesignFraming 'the design saved with its origin shown'
 Ui-Mark
+Ui-Step 'top view (F9)'                  { Ui-Key 'F9' }
+Ui-ExpectNew 'Camera direction 0 0 -1' 'the opened design seen from the top' | Out-Null
+Ui-Mark
 Ui-Step 'new design (Ctrl+N)'            { Ui-Key 'ctrl+n' }
 Ui-ExpectNew 'New design in ' 'New Design replaced the opened design' | Out-Null
-Expect-Top 'New Design after an opened design'
+Expect-DefaultView 'New Design after a design turned to Top'
 Expect-Origin $shownOn 'the new design shows its origin, its light bulb on'
 $title = Ui-WindowTitle
 if ($title -ne 'Untitled - MitCad') { Ui-Fail "the new design is modified: '$title'" }

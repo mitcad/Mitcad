@@ -1741,6 +1741,34 @@ fn body_attributes_are_commands_with_undo_and_saved() {
 #[test]
 fn physical_properties_use_materials_and_densities() {
     let mut doc = block();
+    // No material anywhere (mitcad#1817): no density, no mass, never
+    // steel unasked; its volume and center all the same.
+    let none = query(&doc, json!({"query": "properties"}));
+    let body = &none["bodies"][0];
+    assert_eq!(body["material"], Value::Null);
+    assert_eq!(body["no_material"], true);
+    assert_eq!(body.get("density"), None, "{none}");
+    assert_eq!(body.get("mass"), None, "{none}");
+    assert_eq!(body["volume"], 48000.0);
+    assert_near(&body["center_of_mass"], [30.0, 20.0, 10.0]);
+    assert_eq!(none["total"].get("mass"), None, "{none}");
+    assert_eq!(none["total"]["no_material"], 1);
+    let text = doc
+        .analysis(&json!({"query": "properties"}).to_string(), false)
+        .unwrap();
+    assert!(
+        text.starts_with("Body1 (F2.b0): no material\n    no mass, volume 48000.000 mm3"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("Total: volume 48000.000 mm3, no mass: 1 without a material\n"),
+        "{text}"
+    );
+    // Steel as the design's default material.
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
     let steel = query(&doc, json!({"query": "properties"}));
     let body = &steel["bodies"][0];
     assert_eq!(body["material"], "steel");
@@ -1749,6 +1777,18 @@ fn physical_properties_use_materials_and_densities() {
     assert!((body["mass"].as_f64().unwrap() - 0.3768).abs() < 1e-12);
     assert_near(&body["center_of_mass"], [30.0, 20.0, 10.0]);
     assert_eq!(steel["total"]["mass"], body["mass"]);
+    let text = doc
+        .analysis(&json!({"query": "properties"}).to_string(), false)
+        .unwrap();
+    assert!(
+        text.starts_with("Body1 (F2.b0): Steel, density 7.85 g/cm3\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("    mass 0.376800 kg, volume 48000.000 mm3"),
+        "{text}"
+    );
+    assert!(text.ends_with("Total: mass 0.376800 kg, volume 48000.000 mm3, center of mass [30.000, 20.000, 10.000]\n"), "{text}");
 
     command(
         &mut doc,
@@ -1766,6 +1806,11 @@ fn physical_properties_use_materials_and_densities() {
     command(
         &mut doc,
         json!({"cmd": "set_body_material", "uid": "F2.b0", "material": null}),
+    );
+    // No material anywhere again: `density` stands for one.
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": null}),
     );
     let water = query(&doc, json!({"query": "properties", "density": 1.0}));
     assert_eq!(water["bodies"][0]["material"], Value::Null);
@@ -1785,19 +1830,6 @@ fn physical_properties_use_materials_and_densities() {
         error.to_string(),
         "body F9.b0 does not exist at the timeline marker"
     );
-
-    let text = doc
-        .analysis(&json!({"query": "properties"}).to_string(), false)
-        .unwrap();
-    assert!(
-        text.starts_with("Body1 (F2.b0): Steel, density 7.85 g/cm3\n"),
-        "{text}"
-    );
-    assert!(
-        text.contains("    mass 0.376800 kg, volume 48000.000 mm3"),
-        "{text}"
-    );
-    assert!(text.ends_with("Total: mass 0.376800 kg, volume 48000.000 mm3, center of mass [30.000, 20.000, 10.000]\n"), "{text}");
 }
 
 #[test]

@@ -27,7 +27,6 @@
 #include <Geom_Surface.hxx>
 #include <NCollection_Map.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
-#include <IntCurvesFace_ShapeIntersector.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Precision.hxx>
@@ -272,7 +271,7 @@ struct Foot {
   gp_Pnt at;
   bool over = true;
 };
-std::optional<Foot> foot_on(IntCurvesFace_ShapeIntersector& rays, const gp_Pnt& point, const TopoDS_Face& face,
+std::optional<Foot> foot_on(BoundaryRays& rays, const gp_Pnt& point, const TopoDS_Face& face,
                             double allowed) {
   const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
   if (surface.IsNull()) {
@@ -287,7 +286,7 @@ std::optional<Foot> foot_on(IntCurvesFace_ShapeIntersector& rays, const gp_Pnt& 
   if (projected.LowerDistance() <= allowed) {
     return foot;
   }
-  rays.Perform(gp_Lin(point, gp_Dir(gp_Vec(point, foot.at))), 0.0, projected.LowerDistance() + allowed);
+  rays.PerformNearest(gp_Lin(point, gp_Dir(gp_Vec(point, foot.at))), 0.0, projected.LowerDistance() + allowed);
   foot.over = rays.IsDone() && rays.NbPnt() > 0;
   return foot;
 }
@@ -572,8 +571,7 @@ DressupFinding dressup_check(const Shape& input, const Shape& result, const std:
       return !names.empty() && names.front().compare(0, corner.size(), corner) == 0;
     });
     // The rays first; the solids' classifiers only where a ray cannot tell.
-    IntCurvesFace_ShapeIntersector rays;
-    rays.Load(input.occt(), Precision::Confusion());
+    BoundaryRays rays(input.occt(), Precision::Confusion());
     std::vector<std::unique_ptr<BRepClass3d_SolidClassifier>> solids;
     // (Rays through the whole body.)
     const double through = length_through(input.occt());

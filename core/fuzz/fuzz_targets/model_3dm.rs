@@ -2,7 +2,8 @@
 //! A `.3dm` model as the import reads it before any geometry is built
 //! (mitcad#1715): the chunks, the settings, layers, block definitions and
 //! the object table; then every B-rep, extrusion and surface converted to
-//! the neutral B-rep model, and the B-reps' render meshes joined. Each is
+//! the neutral B-rep model, the B-reps' render meshes joined and the SubD
+//! objects' control nets made Form cages. Each is
 //! read or refused within the budget and without a panic.
 #![no_main]
 
@@ -35,6 +36,9 @@ fuzz_target!(|data: &[u8]| {
                 }
                 Geometry::Curve(c) => {
                     let _ = convert::to_spline(c).map(|spline| spline.to_brep(s));
+                }
+                Geometry::SubD(d) => {
+                    let _ = mitcad_3dm::subd::subd_cage(d, s);
                 }
                 Geometry::Instance(_) | Geometry::Other(_) => {}
             }

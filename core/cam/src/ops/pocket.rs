@@ -17,7 +17,7 @@ use cavalier_contours::polyline::{PlineSource, Polyline};
 use cavalier_contours::shape_algorithms::{Shape, ShapeOffsetOptions};
 use serde::{Deserialize, Serialize};
 
-use super::adaptive::{Adaptive, adaptive_pocket};
+use super::adaptive::{Adaptive, adaptive_pocket_in};
 use super::contour::shape_loops;
 use super::entry::{Entry, EntrySpace, enter};
 use super::path::{self, Path};
@@ -58,18 +58,48 @@ impl PocketOp {
     }
 }
 
+/// Where a pocket's tool center may go: inside `region` and at least
+/// `clear` from its outlines. A pocket's own is its region with the
+/// tool's radius and the stock to leave kept from the walls ([`Room::of`]);
+/// 3D roughing gives the area its center may go at a level itself, kept a
+/// margin from its edges, so that the boundary's islands and inward
+/// corners hold however narrow they are next to the tool (mitcad#1829).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Room<'a> {
+    pub region: &'a Region,
+    pub clear: f64,
+}
+
+impl<'a> Room<'a> {
+    /// The room of a pocket: its region, the tool's radius and the stock
+    /// to leave from the walls.
+    pub(crate) fn of(op: &'a PocketOp, tool: &Tool) -> Room<'a> {
+        Room {
+            region: &op.region,
+            clear: tool.radius() + op.stock_to_leave,
+        }
+    }
+}
+
 /// One loop of the pocket at one depth, with its distance from the walls.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PocketLoop {
     pub contour: Contour,
-    /// The offset from the region's outlines (mm).
+    /// The offset from the outlines of the region the tool's center keeps
+    /// inside (mm): the pocket's region unless 3D roughing gives its own.
     pub offset: f64,
 }
 
 /// The loops of a pocket at one depth in cutting order (the innermost
 /// first), each oriented for the operation's direction.
 pub fn pocket_loops(op: &PocketOp, tool: &Tool) -> Result<Vec<PocketLoop>, CamError> {
+    loops_in(op, tool, Room::of(op, tool))
+}
+
+/// The loops of a pocket whose tool center keeps inside `room`.
+fn loops_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Vec<PocketLoop>, CamError> {
     op.region.validate().map_err(CamError::new)?;
+    room.region.validate().map_err(CamError::new)?;
     let stepover = op.stepover_for(tool);
     if !(stepover.is_finite() && stepover > 0.0) {
         return Err(CamError::new("The stepover must be more than zero."));
@@ -82,9 +112,9 @@ pub fn pocket_loops(op: &PocketOp, tool: &Tool) -> Result<Vec<PocketLoop>, CamEr
     if !(op.stock_to_leave.is_finite() && op.stock_to_leave >= 0.0) {
         return Err(CamError::new("The stock to leave must be zero or more."));
     }
-    let shape = region_shape(&op.region);
+    let shape = region_shape(room.region);
     let options = ShapeOffsetOptions::default();
-    let first = tool.radius() + op.stock_to_leave;
+    let first = room.clear;
     let mut rings: Vec<(f64, Shape<f64>)> = Vec::new();
     let mut d = first;
     let small = tool.radius() * 0.5;
@@ -201,21 +231,27 @@ pub(crate) fn pocket_fits(region: &Region, wall: f64, c: [f64; 2], radius: f64) 
 
 /// The toolpath of a pocket operation.
 pub fn pocket(op: &PocketOp, tool: &Tool) -> Result<Toolpath, CamError> {
+    pocket_in(op, tool, Room::of(op, tool))
+}
+
+/// The toolpath of a pocket whose tool center keeps inside `room`; the
+/// operation's region is the material it clears.
+pub(crate) fn pocket_in(op: &PocketOp, tool: &Tool, room: Room) -> Result<Toolpath, CamError> {
     if let Some(a) = &op.adaptive {
-        return adaptive_pocket(op, tool, a);
+        return adaptive_pocket_in(op, tool, a, room);
     }
     check_mill(tool, &op.cutting, &op.depths)?;
     op.heights.validate(op.depths.top)?;
     op.entry.validate()?;
     let levels = op.depths.levels()?;
-    let loops = pocket_loops(op, tool)?;
+    let loops = loops_in(op, tool, room)?;
     let stepover = op.stepover_for(tool);
-    let wall = tool.radius() + op.stock_to_leave;
-    let allowed =
-        region_shape(&op.region).parallel_offset(wall - 1e-4, &ShapeOffsetOptions::default());
+    let wall = room.clear;
+    let allowed = region_shape(room.region)
+        .parallel_offset((wall - 1e-4).max(0.0), &ShapeOffsetOptions::default());
     let feed = op.cutting.feed;
     let plunge = op.cutting.plunge_feed;
-    let fits = |c: [f64; 2], radius: f64| pocket_fits(&op.region, wall, c, radius);
+    let fits = |c: [f64; 2], radius: f64| pocket_fits(room.region, wall, c, radius);
     let space = EntrySpace {
         helix_fits: &fits,
         min_ramp: tool.radius(),
@@ -608,6 +644,42 @@ pub(crate) mod tests {
                 matches!(entry, Entry::Helix { .. }),
                 "{entry:?}"
             );
+        }
+    }
+
+    #[test]
+    fn offsets_round_a_finely_tessellated_island_cut_no_hair_short_arcs() {
+        // A 1 mm tool round a 720-sided island: the loops near it turn
+        // about each of its corners by an arc of a quarter of a degree.
+        let tool = Tool::flat_end_mill(1, 1.0);
+        let n = 720;
+        let island: Vec<[f64; 2]> = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                [10.0 + 4.0 * a.cos(), 10.0 + 4.0 * a.sin()]
+            })
+            .collect();
+        let region = Region::new(
+            Contour::rectangle([0.0, 0.0], [20.0, 20.0]),
+            vec![Contour::polygon(&island)],
+        );
+        let o = op(region);
+        let short = |s: &crate::geom::Segment| {
+            s.arc.is_some() && (s.start[0] - s.end[0]).hypot(s.start[1] - s.end[1]) < 0.01
+        };
+        let loops = pocket_loops(&o, &tool).unwrap();
+        assert!(
+            loops.iter().any(|l| l.contour.segments().iter().any(short)),
+            "the offsets hold arcs with chords under 0.01 mm"
+        );
+        let p = pocket(&o, &tool).unwrap();
+        let mut at = [0.0; 3];
+        for m in &p.moves {
+            if let Move::Arc { to, .. } = m {
+                let chord = (to[0] - at[0]).hypot(to[1] - at[1]);
+                assert!(chord >= 0.01, "an arc of a {chord} mm chord from {at:?}");
+            }
+            at = m.to();
         }
     }
 }

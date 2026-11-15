@@ -16,6 +16,7 @@
 #include <QColorDialog>
 #include <QElapsedTimer>
 #include <QEvent>
+#include <QHash>
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -31,6 +32,7 @@
 #include <QtLogging>
 
 #include "BrowserPreferences.hpp"
+#include "ConvertToFeatures.hpp"
 #include "../framework/Dialogs.hpp"
 #include "../framework/GlassCard.hpp"
 #include "../framework/Icons.hpp"
@@ -45,6 +47,7 @@
 #include "AppearanceDialog.hpp"
 #include "Bindings.hpp"
 #include "BindingsCard.hpp"
+#include "BuildMembers.hpp"
 #include "ConfigurationBindingsPage.hpp"
 #include "ConfigurationBar.hpp"
 #include "ConfigurationsDialog.hpp"
@@ -719,6 +722,17 @@ const DocumentSnapshot::Occurrence* BrowserController::occurrence(const QString&
   return find(m_snapshot.occurrences);
 }
 
+bool BrowserController::hasOwnJoints(const QString& component) const {
+  for (const QString& list : {QStringLiteral("joints"), QStringLiteral("constraints")}) {
+    for (const QJsonValue& value : m_snapshot.joints.value(list).toArray()) {
+      if (value.toObject().value(QStringLiteral("component")).toString() == component) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // The browser
 
@@ -745,6 +759,8 @@ bool BrowserController::visibilityInEveryMode(const BrowserNode& node) {
   case BrowserNode::Type::ImageReference:
   // mitcad#1013: a CAM setup's toolpaths, the window's display state.
   case BrowserNode::Type::CamSetup:
+  // mitcad#1802: a folder of a Bodies folder, its bodies' light bulbs.
+  case BrowserNode::Type::BodyFolder:
     return true;
   default:
     return false;
@@ -793,6 +809,20 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   case BrowserNode::Type::Body:
     commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), node.uid}, {QStringLiteral("visible"), show}}));
     break;
+  case BrowserNode::Type::BodyFolder: {
+    // A folder of a Bodies folder (mitcad#1802): the light bulbs of the
+    // bodies in it, one undo step (Hide Glass); those that follow Show
+    // When are left as they are (mitcad#863).
+    const DocumentSnapshot::Component* component = m_snapshot.component(node.component);
+    for (const QString& uid : component != nullptr ? component->bodies : QStringList()) {
+      const DocumentSnapshot::Body body = m_snapshot.bodies.value(uid);
+      if (body.folder == node.uid && body.visibleWhen.isEmpty() && body.visible != show) {
+        commands.append(cmd("set_body_visible", {{QStringLiteral("uid"), uid}, {QStringLiteral("visible"), show}}));
+      }
+    }
+    label = (show ? tr("Show %1") : tr("Hide %1")).arg(node.name);
+    break;
+  }
   case BrowserNode::Type::Sketch:
   case BrowserNode::Type::Datum:
     commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), node.uid},
@@ -1489,12 +1519,22 @@ void BrowserController::moveToComponent(const QJsonObject& selection) {
 
 // Move to Component… on an occurrence (mitcad#219): the occurrence with
 // everything in it under another parent, where it stays in the design; its
-// row is selected again at its new path.
+// row is selected again at its new path. The occurrence rows selected with
+// it go along in the same step (mitcad#1847), the clicked one first.
 void BrowserController::moveOccurrence(const BrowserNode& node) {
   if (node.occurrence.isEmpty() || !canChange()) {
     return;
   }
-  const QString moved = mitcad::moveOccurrence(m_window, hybridModel(), node.occurrence);
+  QStringList occurrences{node.occurrence};
+  for (const SelectionItem& item : menuMoveItems(node)) {
+    if (item.kind == SelectKind::Component && !item.occurrence.isEmpty() && !occurrences.contains(item.occurrence)) {
+      occurrences << item.occurrence;
+    }
+  }
+  if (occurrences.size() > 1) {
+    qDebug().noquote() << QStringLiteral("Move to Component on %1 selected occurrences").arg(occurrences.size());
+  }
+  const QString moved = mitcad::moveOccurrence(m_window, hybridModel(), occurrences);
   if (moved.isEmpty()) {
     qDebug().noquote() << QStringLiteral("Move of %1 cancelled").arg(node.name);
     return;
@@ -1820,6 +1860,48 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       // Shown while a condition holds (mitcad#809).
       menu.add(QStringLiteral("eye"), tr("Show When…"), [this, node] { showOccurrenceWhen(node.occurrence); });
       transparentEntry();
+      // Flexible (mitcad#1793): an occurrence of a component with joints
+      // of its own moves them in its parent, for it alone.
+      if (placed != nullptr && (placed->flexible || hasOwnJoints(placed->component))) {
+        const bool flexible = placed->flexible;
+        menu.addCheckable(tr("Flexible", "assembly: an occurrence whose own joints move in its parent"), flexible,
+                          [this, node, flexible] {
+                            if (canChange() &&
+                                m_host.runModelCommand(cmd("set_occurrence_flexible",
+                                                           {{QStringLiteral("occurrence"), node.occurrence},
+                                                            {QStringLiteral("flexible"), !flexible}}))) {
+                              qDebug().noquote() << QStringLiteral("%1 %2").arg(
+                                  flexible ? QStringLiteral("Rigid") : QStringLiteral("Flexible"), node.name);
+                            }
+                          });
+        // Its component's joints animated inside it, for it alone, and
+        // those of the flexible occurrences nested in it: the joints the
+        // `joints` query's `flexible` entry of it has values of
+        // (mitcad#1805; the model finds the chain they move through).
+        QJsonObject inside;
+        const QString last = node.occurrence.section(QLatin1Char('/'), -1);
+        for (const QJsonValue& value : m_snapshot.joints.value(QStringLiteral("flexible")).toArray()) {
+          if (value.toObject().value(QStringLiteral("occurrence")).toString() == last) {
+            inside = value.toObject().value(QStringLiteral("values")).toObject();
+          }
+        }
+        for (const QJsonValue& value : flexible ? m_snapshot.joints.value(QStringLiteral("joints")).toArray()
+                                                : QJsonArray()) {
+          const QJsonObject joint = value.toObject();
+          if ((joint.value(QStringLiteral("component")).toString() != placed->component &&
+               !inside.contains(joint.value(QStringLiteral("uid")).toString())) ||
+              joint.value(QStringLiteral("motions")).toArray().isEmpty()) {
+            continue;
+          }
+          const QString uid = joint.value(QStringLiteral("uid")).toString();
+          menu.add(QStringLiteral("drive-joint"), tr("Animate %1").arg(joint.value(QStringLiteral("name")).toString()),
+                   [this, uid, node] {
+                     if (canChange()) {
+                       m_host.animateJoint(uid, node.occurrence);
+                     }
+                   });
+        }
+      }
     }
     isolate();
     // The timeline's filter (mitcad#98), this window's view.
@@ -1903,6 +1985,14 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       menu.add(QStringLiteral("orientation-cube"), tr("Reorient Design…"), [this] { openReorient(); });
     }
     saveAsMeshEntry();
+    // A placed library part to its library design's own features
+    // (mitcad#1815).
+    if (!root && isDerivedPartComponent(m_snapshot, node.uid)) {
+      const QString component = node.uid;
+      const QString name = node.name;
+      menu.add(QStringLiteral("convert-mesh"), convertToFeaturesText(),
+               [this, component, name] { convertToFeatures(m_host, m_window, component, name); });
+    }
     break;
   }
   case BrowserNode::Type::Body: {
@@ -1910,6 +2000,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     const DocumentSnapshot::Feature* made = m_snapshot.feature(feature);
     menu.add(QStringLiteral("edit"), tr("Edit %1").arg(made != nullptr ? made->name : feature),
              [this, feature] { m_host.editFeature(feature); });
+    // An imported Form body's kept cage as an editable Form (mitcad#1757).
+    if (m_host.hasKeptCage(node.uid)) {
+      const QString body = node.uid;
+      menu.add(QStringLiteral("form"), tr("Open Cage as Form"), [this, body] { m_host.openKeptCage(body); });
+    }
     moveEntry();
     // A mesh body made a solid (mitcad#1082).
     if (node.mesh) {
@@ -2065,8 +2160,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     }
     break;
   case BrowserNode::Type::Origin: {
-    const QString entry = node.visible ? tr("Hide All") : tr("Show All");
-    const QString icon = node.visible ? QStringLiteral("eye-off") : QStringLiteral("eye");
+    // As toggleVisibility decides: the origin is drawn only while its light
+    // bulb and View › Show › Origins are both on (mitcad#1642, #1844).
+    const bool drawn = node.visible && m_snapshot.showOrigins;
+    const QString entry = drawn ? tr("Hide All") : tr("Show All");
+    const QString icon = drawn ? QStringLiteral("eye-off") : QStringLiteral("eye");
     menu.addWithTip(icon, entry, [this, node] { toggleVisibility(node); }, QString());
     break;
   }
@@ -2171,7 +2269,7 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       });
       menu.add(QStringLiteral("drive-joint"), tr("Animate %1").arg(node.name), [this, node] {
         if (canChange()) {
-          m_host.animateJoint(node.uid);
+          m_host.animateJoint(node.uid, QString());
         }
       });
     }
@@ -2501,7 +2599,71 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
     qDebug().noquote() << QStringLiteral("Delete skipped: %1").arg(omitted.join(QStringLiteral(", ")));
     m_host.showStatus(tr("Cannot delete: %1").arg(omitted.join(QStringLiteral(", "))), NoticeLevel::Warning);
   }
-  if (requested.isEmpty() && otherCommands.isEmpty() && bodies.isEmpty()) return;
+  // A BUILD part goes as a member (Delete Member's build_remove, with what
+  // it added), never by the feature that makes it or by its occurrence
+  // alone, so that the parts placed on it stay where they are
+  // (mitcad#1811).
+  QJsonArray others;
+  QJsonArray members;
+  QStringList memberNames;
+  {
+    QHash<QString, QString> partComponents; // its derived part feature: the part
+    QHash<QString, QString> partNames;      // the part: its name
+    QHash<QString, QString> partAdders;     // the part: the part that added it, if any
+    try {
+      const QJsonArray parts = m_host.model()
+                                   .queryObject({{QStringLiteral("query"), QStringLiteral("build_parts")}})
+                                   .value(QStringLiteral("parts"))
+                                   .toArray();
+      partAdders = buildPartAdders(parts);
+      for (const QJsonValue& value : parts) {
+        const QJsonObject part = value.toObject();
+        const QString component = part.value(QStringLiteral("component")).toString();
+        const QString feature = part.value(QStringLiteral("part")).toString();
+        if (!feature.isEmpty()) {
+          partComponents.insert(feature, component);
+        }
+        partNames.insert(component, part.value(QStringLiteral("name")).toString());
+      }
+    } catch (const std::exception&) {
+      // None the model can tell: deleted as they are.
+    }
+    QStringList memberComponents;
+    const auto addMember = [&](const QString& component, bool named) {
+      if (memberComponents.contains(component)) {
+        return;
+      }
+      memberComponents.append(component);
+      if (named) {
+        memberNames.append(partNames.value(component, component));
+      }
+    };
+    const QList<QString> picked(requested.begin(), requested.end());
+    for (const QString& uid : picked) {
+      if (partComponents.contains(uid)) {
+        requested.remove(uid);
+        addMember(partComponents.value(uid), true);
+      }
+    }
+    for (const QJsonValue& value : otherCommands) {
+      const QJsonObject command = value.toObject();
+      if (command.value(QStringLiteral("cmd")) == QStringLiteral("delete_occurrence")) {
+        const DocumentSnapshot::Occurrence* found = occurrence(command.value(QStringLiteral("occurrence")).toString());
+        if (found != nullptr && partNames.contains(found->component)) {
+          addMember(found->component, false); // named among otherNames
+          continue;
+        }
+      }
+      others.append(command);
+    }
+    // A fastener whose connector goes too goes with it, not on its own
+    // (mitcad#1843, as deleteOccurrences).
+    members = buildRemoveCommands(memberComponents, partAdders);
+  }
+  if (!members.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Delete as members: %1").arg(members.size());
+  }
+  if (requested.isEmpty() && others.isEmpty() && members.isEmpty() && bodies.isEmpty()) return;
   QSet<QString> removed = requested;
   try {
     for (const QString& uid : requested) {
@@ -2527,6 +2689,8 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
       if (!requested.contains(feature.uid)) dependents.append(feature.name);
     }
   }
+  names.append(memberNames);
+  allNames.append(memberNames);
   names.append(otherNames);
   allNames.append(otherNames);
   // The bodies of the features that go go with them; the others are taken
@@ -2564,7 +2728,7 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
   // selected features appears only once, and no cascade deletes a later
   // command's target. The host rolls the entire array back on any failure.
   std::vector<QJsonObject> extra;
-  for (const QJsonValue& command : otherCommands) extra.push_back(command.toObject());
+  for (const QJsonValue& command : others) extra.push_back(command.toObject());
   // Deleting a parent occurrence can also remove its child occurrences and
   // drawings. Delete those explicit children first, never a stale target
   // after its parent has already cascaded through it.
@@ -2587,6 +2751,8 @@ void BrowserController::deleteTargets(const QStringList& features, const QJsonAr
   for (auto it = ordered.crbegin(); it != ordered.crend(); ++it) {
     commands.append(cmd("delete_feature", {{QStringLiteral("uid"), *it}}));
   }
+  // The members before the occurrences, which may hold them.
+  for (const QJsonValue& command : members) commands.append(command);
   for (const QJsonObject& command : extra) {
     if (occurrence(command)) commands.append(command);
   }
@@ -2821,6 +2987,19 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
       if (row.isValid()) { selection.insert(QStringLiteral("source_occurrence"), row.occurrence); }
       moveToComponent(selection);
     });
+  }
+  // A placed library part to its library design's own features
+  // (mitcad#1815).
+  if (feature->type == QStringLiteral("derived_part")) {
+    const QString component = feature->component;
+    QString name = feature->name;
+    for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+      if (c.uid == component && !c.name.isEmpty()) {
+        name = c.name;
+      }
+    }
+    menu.add(QStringLiteral("convert-mesh"), convertToFeaturesText(),
+             [this, component, name] { convertToFeatures(m_host, m_window, component, name); });
   }
   menu.separator();
   // Timeline groups (P9): the selected run (Shift+click), or this feature.
@@ -3236,6 +3415,19 @@ void BrowserController::deleteOccurrences(const Selection& items) {
   if (occurrences.isEmpty() || !canChange()) {
     return;
   }
+  // A BUILD part's occurrence goes as a member (build_remove, with the
+  // holes and fasteners it added), never as an occurrence alone
+  // (mitcad#1820, as the Delete key since mitcad#1811).
+  QHash<QString, QString> partAddedBy; // a BUILD part: the part that added it, if any
+  try {
+    partAddedBy = buildPartAdders(m_host.model()
+                                      .queryObject({{QStringLiteral("query"), QStringLiteral("build_parts")}})
+                                      .value(QStringLiteral("parts"))
+                                      .toArray());
+  } catch (const std::exception&) {
+    // None the model can tell: deleted as occurrences.
+  }
+  QStringList memberComponents;
   QJsonArray commands;
   QStringList names;
   for (const QString& path : occurrences) {
@@ -3245,12 +3437,28 @@ void BrowserController::deleteOccurrences(const Selection& items) {
         })) {
       continue;
     }
-    commands.append(cmd("delete_occurrence", {{QStringLiteral("occurrence"), path}}));
     const DocumentSnapshot::Occurrence* found = occurrence(path);
     names << (found != nullptr ? found->name : path);
+    if (found != nullptr && partAddedBy.contains(found->component)) {
+      if (!memberComponents.contains(found->component)) {
+        memberComponents << found->component;
+      }
+      continue;
+    }
+    commands.append(cmd("delete_occurrence", {{QStringLiteral("occurrence"), path}}));
   }
-  if (m_host.runModelCommands(commands, occurrences.size() == 1 ? tr("Delete %1").arg(names.first())
-                                                                : tr("Delete Components"))) {
+  // A fastener whose connector goes too goes with it, not on its own.
+  const QJsonArray members = buildRemoveCommands(memberComponents, partAddedBy);
+  if (!members.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Delete as members: %1").arg(members.size());
+  }
+  // The members before the occurrences, which may hold them.
+  QJsonArray all = members;
+  for (const QJsonValue& command : std::as_const(commands)) {
+    all.append(command);
+  }
+  if (m_host.runModelCommands(all, occurrences.size() == 1 ? tr("Delete %1").arg(names.first())
+                                                           : tr("Delete Components"))) {
     qDebug().noquote() << QStringLiteral("Deleted component %1").arg(names.join(QStringLiteral(", ")));
   }
 }

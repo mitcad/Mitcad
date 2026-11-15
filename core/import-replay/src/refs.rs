@@ -1671,6 +1671,8 @@ pub(crate) fn compare_bodies<K: Kernel>(
             relative_difference: None,
             file_faces: (sig.faces > 0).then_some(sig.faces),
             mitcad_faces: None,
+            center_distance: None,
+            box_distance: None,
             source: body.source.clone(),
             uid: None,
         };
@@ -1681,6 +1683,17 @@ pub(crate) fn compare_bodies<K: Kernel>(
             report.mitcad_volume = Some(mine.volume);
             report.mitcad_faces = (mine.faces > 0).then_some(mine.faces);
             report.volume_difference = Some((mine.volume - sig.volume) / sig.volume);
+            // Its placement against the file's (mitcad#1802).
+            report.center_distance = Some(geom::distance(mine.center, sig.center));
+            if let (Ok(Some(a)), Ok(Some(b))) =
+                (kernel.bounding_box(shape), kernel.bounding_box(&body.shape))
+            {
+                report.box_distance = Some(
+                    (0..3)
+                        .map(|i| (a.min[i] - b.min[i]).abs().max((a.max[i] - b.max[i]).abs()))
+                        .fold(0.0, f64::max),
+                );
+            }
             let small = |s: &K::Shape| kernel.faces(s).is_ok_and(|f| f.len() <= 300);
             // A body with the same measures (to 1e-4) is not compared surface
             // by surface: the boolean differences of coincident shapes can

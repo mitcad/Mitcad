@@ -4,7 +4,7 @@
 //! libraries stay readable, and a value is a number of millimetres or a
 //! text with its unit (`"30 mm"`, `"0.9 kg"`).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::BuildRole;
@@ -213,7 +213,7 @@ fn deep_merge(into: &mut Value, from: &Value) {
 
 /// A material: a timber member's species, finish, grade, density and
 /// moisture, or a product (a sheet, a metal part) and its density.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MaterialMeta {
     pub species: String,
@@ -297,7 +297,7 @@ impl BuildMeta {
 
 /// A value of the metadata: a number of millimetres, or a text with its
 /// unit.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MetaValue {
     Number(f64),

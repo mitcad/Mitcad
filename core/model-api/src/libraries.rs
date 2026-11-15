@@ -496,3 +496,30 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
         json!({ "parts": parts })
     }
 }
+
+/// The `library_source` query (mitcad#1812): a library source's design as
+/// the design keeps it, for Open Source Design of a derived part: `source`,
+/// `name`, `library`, `version`, `sha256` and `text` (the design file's
+/// text at the part's pinned version; null while it is a reference into
+/// the project's store not read yet).
+pub(crate) fn library_source_json<K: Kernel>(
+    doc: &Document<K>,
+    source: &str,
+) -> Result<Value, ApiError> {
+    let id: mitcad_model::build::SourceId = source
+        .parse()
+        .map_err(|e: mitcad_model::ids::IdError| ApiError(e.to_string()))?;
+    let def = doc
+        .state()
+        .library_sources
+        .get(id)
+        .ok_or_else(|| ApiError(format!("library source {id} is not in the design")))?;
+    Ok(json!({
+        "source": id,
+        "name": def.label(),
+        "library": def.library.library,
+        "version": def.library.version_text(),
+        "sha256": def.design.sha256.to_string(),
+        "text": def.design.text(),
+    }))
+}

@@ -314,14 +314,128 @@ fn is_material(package: &Package, n: &Name) -> bool {
     }
 }
 
-/// The body's name: the first printable string after the reference to
-/// entity `E + 1`.
+/// The class of the body's display record (module `Scene`), whose
+/// reference the body record's name follows.
+const BODY_SCENE_CLASS: &str = "702B9CD2-537C-429E-8CC4-22BEEEB98C37";
+
+/// The body's name: the string after the reference to its display record
+/// (class `702B9CD2`). That record is entity `E + 1` where the body was
+/// made with its record; a body a later item brought (a base feature's,
+/// a pasted one) has it further on (mitcad#1802: 2141 of a reported
+/// design's 2246 body records, whose names were read only after `E + 1`
+/// before).
 fn body_name(seg: &Segment, d: &[u8], entity: u64) -> Option<String> {
-    let (_, r) = seg
-        .refs_in(d, 0, d.len())
-        .into_iter()
-        .find(|(_, r)| r.id == entity + 1)?;
-    str16_at(d, r.end).map(|(s, _)| s).filter(|s| !s.is_empty())
+    let refs = seg.refs_in(d, 0, d.len());
+    let (_, r) = refs
+        .iter()
+        .find(|(_, r)| seg.guid_of(r.id) == Some(BODY_SCENE_CLASS))
+        .or_else(|| refs.iter().find(|(_, r)| r.id == entity + 1))?;
+    str16_at(d, r.end)
+        .map(|(s, _)| s)
+        .filter(|s| !s.is_empty())
+        .or_else(|| default_number(d).map(|n| format!("Body{n}")))
+}
+
+/// The number of a body's default name (`Body<n>`), which a record that
+/// stores no name of its own is shown by (mitcad#1802): after the browser
+/// node GUID, `f64 volume (cm³) | f64 | u32 n`. Checked on a reported
+/// design: the removals the file names after their bodies (`RemoveBody-
+/// Body361`, …) name the n of their bodies' records; named bodies have
+/// their own numbers there too.
+fn default_number(d: &[u8]) -> Option<u32> {
+    (0..d.len().saturating_sub(4)).find_map(|p| {
+        if u32_at(d, p)? != 36 {
+            return None;
+        }
+        let (_, e) = str16_at(d, p).filter(|(s, _)| is_lower_guid(s))?;
+        // (A face entry's GUID is followed by its colour, not by this.)
+        if u32_at(d, e + 20)? != 1 || *d.get(e + 24)? != 0 {
+            return None;
+        }
+        u32_at(d, e + 16).filter(|&n| n > 0 && n < 1_000_000)
+    })
+}
+
+/// A body folder of the browser (mitcad#1802): its object (class
+/// `3A8E00DC`, module `Body`) keeps, after its header, a few flag bytes,
+/// the folder's name, its place among its component's folders and the
+/// body records it holds, then the references to its component's body
+/// holder (`CD57BC48`) and a record of class `372234A0`:
+/// `… | str16 name | u32 place | u32 n | n × ref body record | ref holder
+/// | … | ref`. Checked on a reported design of 24 folders over 1026
+/// bodies (each body in one folder, places 1, 2, … per component); a
+/// folder whose name is not stored (a design of the corpora writes 13
+/// flag bytes and no name before its place) is named `Folder<place>`.
+const BODY_FOLDER_CLASS: &str = "3A8E00DC-E342-4C03-8521-846BD9F7513E";
+
+/// The folders of the body records: body entity -> folder name. A body
+/// listed by two folders keeps the first.
+fn body_folders(seg: &Segment) -> HashMap<u64, String> {
+    let mut out = HashMap::new();
+    for o in seg.objects_of(BODY_FOLDER_CLASS) {
+        let d = seg.data(o);
+        let Some(start) = super::stream::header_end(d) else {
+            continue;
+        };
+        if let Some((name, bodies)) = folder_at(seg, d, start) {
+            for body in bodies {
+                out.entry(body).or_insert_with(|| name.clone());
+            }
+        }
+    }
+    out
+}
+
+/// A folder's name and body records, from the first place after its
+/// header where `[str16 name] | u32 place | u32 n | n × ref` reads with
+/// every reference a body record.
+fn folder_at(seg: &Segment, d: &[u8], start: usize) -> Option<(String, Vec<u64>)> {
+    let bodies_at = |p: usize| {
+        let (ids, _) = seg.ref_list_at(d, p + 4)?;
+        (!ids.is_empty() && ids.iter().all(|&id| seg.guid_of(id) == Some(BODY_CLASS)))
+            .then_some(ids)
+    };
+    let printable = |s: &str| !s.trim().is_empty() && s.chars().all(|c| !c.is_control());
+    (start..start + 24).find_map(|p| {
+        if let Some((name, e)) = str16_at(d, p).filter(|(s, _)| printable(s))
+            && let Some(ids) = bodies_at(e)
+        {
+            return Some((name, ids));
+        }
+        let place = u32_at(d, p).filter(|&k| (1..10_000).contains(&k))?;
+        bodies_at(p).map(|ids| (format!("Folder{place}"), ids))
+    })
+}
+
+/// The browser node of each body (mitcad#1802): a body record of class
+/// `D26351F0` (`classes::BODY_RECORD`, the one body inputs refer to) keeps,
+/// after its header and the node's GUID, `u8 out | u8 light bulb | ref
+/// body` (the body object, class `D3937028`). Checked against the display
+/// scene a reported design keeps (2077 nodes): of the bodies whose `out`
+/// is 0, the scene draws those whose light bulb is 1 (1064 of 1065) and
+/// draws few of those whose light bulb is 0 (9 of 89, as the record's own
+/// light bulb byte says); every body whose `out` is 1 (922) is missing
+/// from the scene: the file took it out of the design (a removal) though
+/// its blob still holds it. Body entity -> (out, light bulb).
+fn body_nodes(seg: &Segment) -> HashMap<u64, (bool, bool)> {
+    let mut out = HashMap::new();
+    for o in seg.objects_of(super::classes::BODY_RECORD) {
+        let d = seg.data(o);
+        let Some(start) = super::stream::header_end(d) else {
+            continue;
+        };
+        let found = (start..start.saturating_add(24).min(d.len())).find_map(|p| {
+            let (_, e) = str16_at(d, p).filter(|(s, _)| is_guid(s))?;
+            let (gone, bulb) = (*d.get(e)?, *d.get(e + 1)?);
+            let r = seg.ref_at(d, e + 2)?;
+            (gone <= 1 && bulb <= 1 && seg.guid_of(r.id) == Some(BODY_CLASS))
+                .then_some((r.id, (gone == 1, bulb == 1)))
+        });
+        if let Some((body, flags)) = found {
+            out.entry(body).or_insert(flags);
+        }
+    }
+    out
 }
 
 /// The body record's class version whose light bulb is read
@@ -387,20 +501,31 @@ pub fn decode(seg: &Segment, doc: &F3dFile) -> AppearanceData {
             used.push(a.clone());
         }
     };
+    let folders = body_folders(seg);
+    let nodes = body_nodes(seg);
     let mut bodies = Vec::new();
     for o in seg.objects_of(BODY_CLASS) {
         let d = seg.data(o);
         let names = names_in(d);
-        if names.is_empty() {
+        let folder = folders.get(&o.id).cloned();
+        // A record that names no asset still gives the body's name and
+        // folder (mitcad#1802).
+        if names.is_empty() && folder.is_none() {
             continue;
         }
+        // The light bulb: the record's own byte, else its browser node's
+        // (mitcad#1802: records laid out without the byte).
+        let node = nodes.get(&o.id).copied();
         let mut body = BodyLook {
             entity: Some(o.id),
             name: body_name(seg, d, o.id),
             light_bulb: seg
                 .version(o)
                 .filter(|&v| v == LIGHT_BULB_VERSION)
-                .and_then(|_| light_bulb(d)),
+                .and_then(|_| light_bulb(d))
+                .or(node.map(|(_, bulb)| bulb)),
+            folder,
+            removed: node.and_then(|(gone, _)| gone.then_some(true)),
             ..BodyLook::default()
         };
         if let Some((blob, selector)) = maps.get(&o.id) {

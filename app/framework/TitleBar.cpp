@@ -526,10 +526,16 @@ TitleBar::TitleText TitleBar::titleText() const {
   const int padding = m_floatingRow ? kTitlePadX : 0;
   const int available = freeRight - freeLeft - 2 * padding;
   text.title = titleMetrics.elidedText(title, Qt::ElideMiddle, available);
+  // The subtitle is cut to the free part too (mitcad#1859: "Edited" at a
+  // large Text size was wider than the part left between the tabs and the
+  // search field, and the box's bounds crossed).
+  text.subtitle = subMetrics.elidedText(text.subtitle, Qt::ElideRight, available);
+  // An elided text is still as wide as its ellipsis where the part is
+  // narrower than that: the box then starts at the free part's left.
   const int textWidth =
       qMax(titleMetrics.horizontalAdvance(text.title), subMetrics.horizontalAdvance(text.subtitle));
   int left = width() / 2 - textWidth / 2;
-  left = qBound(freeLeft + padding, left, freeRight - padding - textWidth);
+  left = qBound(freeLeft + padding, left, qMax(freeLeft + padding, freeRight - padding - textWidth));
   const int lineHeight = titleMetrics.height();
   const int block = text.subtitle.isEmpty() ? lineHeight : lineHeight + subMetrics.height() - 2;
   text.block = QRect(left, (height() - block) / 2, textWidth, block);

@@ -5,6 +5,7 @@
 #include <optional>
 
 #include <QHash>
+#include <QJsonObject>
 #include <QPair>
 #include <QString>
 #include <QStringList>
@@ -13,10 +14,12 @@
 namespace mitcad {
 
 // Remembered values of command panels (mitcad#1028, app/COMMANDS.md
-// "Remembered values"): a value input marked so (InputDef::withRemembered)
-// starts a new feature's panel with what was given in it on that command's
-// last OK, from any design, kept in the local settings
-// ("commands/<command id>/<input id>", commands/solid.fillet/radius=3 mm).
+// "Remembered values"): a value or choice input marked so
+// (InputDef::withRemembered; choices since mitcad#1868) starts a new
+// feature's panel with what was given in it on that command's last OK,
+// from any design, kept in the local settings ("commands/<command
+// id>/<input id>", commands/solid.fillet/radius=3 mm,
+// commands/sheet.flange/position=outside: a choice's option id).
 // Editing a feature and Cancel keep nothing. Plain Qt Core: CommandSession
 // asks and tells it, and tests use it without a panel.
 
@@ -41,7 +44,7 @@ QString rememberedValue(const QString& command, const QString& input);
 
 // Where a new feature's panel starts an input marked to remember.
 struct PanelStart {
-  QString text;           // what the field starts with
+  QString text;           // what the field starts with (a choice: its option id)
   QString remembered;     // the remembered value, empty when none is kept
   bool fromMemory = false; // text is the remembered value
 };
@@ -52,9 +55,15 @@ struct PanelStart {
 PanelStart panelStartText(const QString& command, const QString& input, const QString& defaultText,
                           const std::function<bool(const QString&)>& evaluates);
 
+// A choice marked to remember (mitcad#1868): the option kept on the
+// command's last OK when the choice offers it here (`offered`, the
+// options' ids), otherwise the default, without an error.
+PanelStart panelStartChoice(const QString& command, const QString& input, const QString& defaultChoice,
+                            const QStringList& offered);
+
 // A panel ended: on a new feature's OK (committed, not editing) the fields
-// given, (input id, rememberedText) pairs, are kept, an empty text left as
-// it was; Cancel or an edit keeps nothing.
+// given, (input id, rememberedText or a choice's option id) pairs, are
+// kept, an empty text left as it was; Cancel or an edit keeps nothing.
 void rememberPanelValues(const QString& command, const QVector<QPair<QString, QString>>& fields,
                          bool committed, bool editing);
 
@@ -84,6 +93,11 @@ struct PanelSettings {
   QHash<QString, QString> values;
   QHash<QString, QString> choices;
   QHash<QString, bool> checks;
+  // Repeat's only (CommandDef::repeatState, mitcad#1845): the state beside
+  // the inputs that says what was set by hand, by key; never kept in the
+  // local settings.
+  QHash<QString, QJsonObject> stateObjects;
+  QHash<QString, bool> stateChecks;
 };
 
 // The settings group of a command's kept settings.

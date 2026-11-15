@@ -3009,6 +3009,14 @@ int camToolpathsTests();
 int camStockTests();
 int uiKeysTests();
 int originPreferenceTests();
+int formCageTests();
+int selectionLookTests();
+int propertiesReportTests();
+int sketchSurfaceTests();
+int buildMembersTests();
+int browserKeysTests();
+int jointHolderQuestionTests();
+int parameterSortTests();
 
 int main(int argc, char* argv[]) {
   // The application's own class: its notify() is tested (busy_input.cpp).
@@ -3192,6 +3200,14 @@ int main(int argc, char* argv[]) {
     failures += camStockTests();
     failures += uiKeysTests();
     failures += originPreferenceTests();
+    failures += formCageTests();
+    failures += selectionLookTests();
+    failures += propertiesReportTests();
+    failures += sketchSurfaceTests();
+    failures += buildMembersTests();
+    failures += browserKeysTests();
+    failures += jointHolderQuestionTests();
+    failures += parameterSortTests();
     mitcad::tests::navigationSettingsTests(check);
   }
   if (failures != 0) {

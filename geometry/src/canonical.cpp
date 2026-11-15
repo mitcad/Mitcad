@@ -36,6 +36,7 @@
 #include <TopExp_Explorer.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Vec2d.hxx>
@@ -50,6 +51,8 @@ using ShapeData = NCollection_DataMap<TopoDS_Shape, T, TopTools_ShapeMapHasher>;
 // tolerance): the roundings OCCT walks as B-splines lie within 1e-13 of
 // their cylinders, their arcs within 1e-8 of their circles.
 constexpr double kExact = 1e-7;
+
+constexpr double kPi = 3.14159265358979323846;
 
 bool spline_surface(const occ::handle<Geom_Surface>& surface) {
   return surface->IsKind(STANDARD_TYPE(Geom_BSplineSurface)) || surface->IsKind(STANDARD_TYPE(Geom_BezierSurface));
@@ -186,8 +189,11 @@ public:
   }
 };
 
-// The analytic surface of a B-spline face, or none.
-std::optional<Canonical::Face> analytic_face(const TopoDS_Face& face, double exact) {
+// The analytic surface of a B-spline face, or none. With `seam_away` a
+// surface closed round its axis (a cylinder, cone, sphere or torus) is
+// turned about that axis so that its seam lies opposite the face's middle
+// (mitcad#1849).
+std::optional<Canonical::Face> analytic_face(const TopoDS_Face& face, double exact, bool seam_away) {
   for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
     if (BRep_Tool::IsClosed(TopoDS::Edge(edges.Current()), face)) {
       return std::nullopt;
@@ -205,7 +211,7 @@ std::optional<Canonical::Face> analytic_face(const TopoDS_Face& face, double exa
     return std::nullopt;
   }
   GeomConvert_SurfToAnaSurf convert(surface);
-  const occ::handle<Geom_Surface> analytic = convert.ConvertToAnalytical(exact);
+  occ::handle<Geom_Surface> analytic = convert.ConvertToAnalytical(exact);
   if (analytic.IsNull() || !analytic->IsKind(STANDARD_TYPE(Geom_ElementarySurface)) || convert.Gap() > exact) {
     return std::nullopt;
   }
@@ -242,6 +248,43 @@ std::optional<Canonical::Face> analytic_face(const TopoDS_Face& face, double exa
       return std::nullopt;
     }
     again.LowerDistanceParameters(u, v);
+  }
+  // The seam opposite the face's middle (u = pi there), so that it runs
+  // through no face or region built on the surface near the face: the
+  // regions past a narrow face are bounded by the surface with its own seam
+  // (cutouts.cpp side_of), mitcad#1849. Turned the way that brings the
+  // middle there (a left-handed frame counts the other way).
+  if (seam_away && analytic->IsUPeriodic()) {
+    const occ::handle<Geom_ElementarySurface> revolved = occ::down_cast<Geom_ElementarySurface>(analytic);
+    const double period = analytic->UPeriod();
+    const auto off_pi = [&](double at) {
+      const double d = std::remainder(at - kPi, period);
+      return std::abs(d);
+    };
+    if (!revolved.IsNull() && off_pi(u) > 1e-9) {
+      const gp_Ax1 axis = revolved->Axis();
+      double turn = u - kPi;
+      for (int attempt = 0; attempt < 2; ++attempt) {
+        const occ::handle<Geom_Surface> turned = occ::down_cast<Geom_Surface>(analytic->Rotated(axis, turn));
+        if (turned.IsNull()) {
+          break;
+        }
+        GeomAPI_ProjectPointOnSurf projected(point, turned);
+        if (projected.NbPoints() == 0 || projected.LowerDistance() > exact * 10) {
+          break;
+        }
+        double tu = 0.0;
+        double tv = 0.0;
+        projected.LowerDistanceParameters(tu, tv);
+        if (off_pi(tu) < 1e-6) {
+          analytic = turned;
+          u = tu;
+          v = tv;
+          break;
+        }
+        turn = -turn;
+      }
+    }
   }
   Canonical::Face out;
   out.surface = analytic;
@@ -293,7 +336,7 @@ bool elementary(const TopoDS_Face& face) {
 
 } // namespace
 
-ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact) {
+ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact, bool seams_away) {
   try {
     OCC_CATCH_SIGNALS
     const occ::handle<Canonical> modification = new Canonical();
@@ -303,7 +346,7 @@ ShapePtr canonical_dressup(const Shape& input, const Shape& result, double exact
       if (input.face_index(face) >= 0) {
         continue;
       }
-      if (std::optional<Canonical::Face> analytic = analytic_face(face, exact)) {
+      if (std::optional<Canonical::Face> analytic = analytic_face(face, exact, seams_away)) {
         modification->faces.Bind(face, *analytic);
         changed.push_back(i);
       }

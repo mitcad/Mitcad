@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# A sketch on a cone's side (mitcad#1853) on sketch-cone-face.json (a cone
+# of base radius 20 and height 30 about Y, F2.b0, its side
+# F2:side(c4[c1,c7]), half angle atan(20 / 30)):
+#   1. Create Sketch with nothing selected waits for a plane; a click on
+#      the cone's side starts Sketch2 on it, in the face's development
+#      (the plane sent with `developed`), its origin on the base circle.
+#      The layout grid is not drawn on the curved face.
+#   2. A rectangle from the sketch's origin typed 20 by 12: its lines keep
+#      their lengths on the face (a development keeps lengths), 20 mm and
+#      12 mm (the `sketch_surface` query's curves); its one profile is
+#      drawn laid onto the face, and the two dimensions the typed sizes
+#      made are drawn on the face, their lines bent with it (none
+#      straight). A picture of the view for the look.
+#   3. Finish Sketch: the grid is drawn again.
+# Run by tools/ui-sketch-cone-face-test.sh (Linux),
+# tools/ui-windows-sketch-cone-face-test.ps1 (Windows) and
+# tools/ui-macos-sketch-cone-face-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The cone's side takes the sketch.
+mark
+command sketch.create
+wait-log '^Create Sketch: select a plane'
+wait-log '^Pick face F2[.]b0/F2:side[(]c4[^ ]*[)] at '
+mark
+click-logged '^Pick face F2[.]b0/F2:side[(]c4[^ ]*[)] at '
+wait-log '^Sketch started on [{]"body":"F2[.]b0","developed":[{]"angle":'
+wait-log '^Sketch Sketch2 lies on its face in its developed coordinates [(]cone, radius 20[.]000 mm, half angle 33[.]690 deg[)]$'
+wait-log '^Layout grid not drawn: the sketch lies on a curved face$'
+wait-log '^Sketch view '
+wait-idle
+
+# 2. A rectangle by its typed sizes, from the sketch's origin.
+mark
+key r
+sketch-click 0 0
+type 20
+key Tab
+type 12
+key Return
+wait-log '^Added rectangle 20 x 12 mm at '
+wait-idle
+wait-log '^Profile r[{].* of F3 laid onto its face$'
+expect-profiles 1
+wait-log '^Sketch Sketch2 on its face [(]cone, radius 20[.]000 mm, half angle 33[.]690 deg[)]: curves (c1 20[.]000 mm, c2 12[.]000 mm, c3 20[.]000 mm, c4 12[.]000 mm|c1 12[.]000 mm, c2 20[.]000 mm, c3 12[.]000 mm, c4 20[.]000 mm)$'
+wait-log '^Sketch dimensions on its face: 2 drawn, [1-9][0-9]* line[(]s[)] laid onto it, 0 straight, [1-9][0-9]* bent with it$'
+key Escape
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-cone-face.png'
+
+# 3. Finish Sketch.
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-log '^Layout grid drawn on its plane again$'
+wait-idle
+expect-profiles 1
+expect-never 'TestDriver: FAIL'

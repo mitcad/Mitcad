@@ -3,11 +3,11 @@
 //! independent of any controller. The post-processors turn them into
 //! G-code; the checks and the simulation sample them.
 
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 use serde::{Deserialize, Serialize};
 
-use crate::geom::{Contour, POS_EPS};
+use crate::geom::{Contour, POS_EPS, Segment};
 
 /// A point of the tool tip (mm).
 pub type P3 = [f64; 3];
@@ -178,6 +178,21 @@ pub fn arc_sweep(from: [f64; 2], to: [f64; 2], center: [f64; 2], ccw: bool) -> f
     d
 }
 
+/// The shortest chord (mm) of an outline's arc that is cut as an arc. A
+/// shorter one (an offset's arc about a vertex of a finely tessellated
+/// curve, a piece left where a loop is split) is cut as the line between
+/// its ends, at most half the chord off the arc: written as an arc, its
+/// end could round to its start at the program's digits, which a
+/// controller runs as a whole turn.
+pub(crate) const MIN_ARC_CHORD: f64 = 0.01;
+
+/// Whether an outline's arc from `from` to `to` about `center` is cut as
+/// an arc ([`MIN_ARC_CHORD`]); an arc of more than half a turn always is.
+pub(crate) fn cut_as_arc(from: [f64; 2], to: [f64; 2], center: [f64; 2], ccw: bool) -> bool {
+    (from[0] - to[0]).hypot(from[1] - to[1]) >= MIN_ARC_CHORD
+        || arc_sweep(from, to, center, ccw).abs() > PI
+}
+
 /// The length of a move from `from`.
 pub fn move_length(from: P3, m: &Move) -> f64 {
     match *m {
@@ -302,11 +317,20 @@ impl PathBuilder {
     /// the tool must be), round to the first vertex again when closed.
     pub fn follow(&mut self, contour: &Contour, z: f64, feed: f64) {
         for s in contour.segments() {
-            let to = [s.end[0], s.end[1], z];
-            match s.arc {
-                Some((center, ccw)) => self.arc(to, center, ccw, feed),
-                None => self.line(to, feed),
+            self.segment(&s, [s.end[0], s.end[1], z], feed);
+        }
+    }
+
+    /// Cuts along an outline's segment from its start (where the tool
+    /// is) to `to`, its end at the height `to[2]`: an arc as an arc,
+    /// unless its chord is shorter than [`MIN_ARC_CHORD`], when the line
+    /// between its ends stands for it.
+    pub(crate) fn segment(&mut self, s: &Segment, to: P3, feed: f64) {
+        match s.arc {
+            Some((center, ccw)) if cut_as_arc(s.start, s.end, center, ccw) => {
+                self.arc(to, center, ccw, feed)
             }
+            _ => self.line(to, feed),
         }
     }
 

@@ -1,0 +1,9 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A sketch on a cylinder's side (mitcad#1768, tools/ui-sketch-cylinder-face-test.sh): a cylinder of diameter 40 and height 60 standing on XY at the origin (Sketch1's circle extruded, F2.b0), its side F2:side(c1) a cylindrical face of radius 20."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":40},
+  {"cmd":"add_feature","def":{"type":"extrude","profiles":[{"sketch":"F1","region":"r{c1}"}],
+    "extent":{"type":"distance","distance":60},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok"}}
+]

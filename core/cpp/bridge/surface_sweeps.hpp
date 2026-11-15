@@ -36,9 +36,12 @@ std::shared_ptr<geometry::Shape> sweep_sheet(rust::Str feature, rust::Slice<cons
 // geometry::loft_sheet.
 std::shared_ptr<geometry::Shape> loft_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
                                             rust::Slice<const std::size_t> chains, bool ruled, bool closed);
-// geometry::helix_sheet (mitcad#1777): the axis as x, y, z, dx, dy, dz.
+// geometry::helix_sheet (mitcad#1777): the axis as x, y, z, dx, dy, dz;
+// the ends (mitcad#1797) as start flat, start transition, end transition,
+// end flat.
 std::shared_ptr<geometry::Shape> helix_sheet(rust::Str feature, rust::Slice<const SweepCurve> curves,
                                              rust::Slice<const std::size_t> chains, rust::Slice<const double> axis,
-                                             double pitch, double revolutions, bool left_handed);
+                                             double pitch, double revolutions, bool left_handed, double growth,
+                                             rust::Slice<const double> ends);
 
 } // namespace mitcad::bridge

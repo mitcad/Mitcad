@@ -51,6 +51,15 @@ pub(crate) const SUPPRESSED: &str = "suppressed in the file";
 pub const SUPPRESSED_UNCHECKED: &str =
     "suppressed in the file; not checked against the file's history";
 
+/// The note of a removal suppressed in the file that came in suppressed
+/// with its definition, unbuilt (mitcad#1802).
+pub const SUPPRESSED_REMOVAL: &str = "suppressed in the file; its body is one the item suppressed before it made; not built or checked against the file's history";
+
+/// The note of a move or copy of bodies suppressed in the file that came
+/// in suppressed with its definition, unbuilt, as bodies it takes are
+/// ones items suppressed before it made (mitcad#1808).
+pub const SUPPRESSED_UNBUILT: &str = "suppressed in the file; it takes bodies items suppressed before it made; not built or checked against the file's history";
+
 /// The note of an item after the timeline marker in the file.
 pub(crate) const ROLLED_BACK: &str = "rolled back in the file (after its timeline marker)";
 
@@ -85,6 +94,11 @@ pub struct Run {
     pub(crate) rolled_from: Option<usize>,
     /// The number of features before that item's.
     marker: Option<usize>,
+    /// While a suppressed item is translated with the bodies suppressed
+    /// features before it would make (mitcad#1808,
+    /// [`Importer::unbuilt_body`]): how many of its body inputs are such
+    /// bodies.
+    pub(crate) unbuilt: Option<std::cell::Cell<usize>>,
 }
 
 /// The timeline position of the first item after the timeline marker in
@@ -248,6 +262,19 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 self.report.suppressed.suppressed_as_features += 1;
             }
             Err(reason) => {
+                // A removal, move or copy of bodies a feature suppressed
+                // before it made (mitcad#1802, mitcad#1808): suppressed with
+                // its definition, unbuilt.
+                if let Some((uid, c)) = self.suppressed_unbuilt(index, item) {
+                    let note = if item.object_type() == Some("RemoveFeature") {
+                        SUPPRESSED_REMOVAL
+                    } else {
+                        SUPPRESSED_UNBUILT
+                    };
+                    self.accept_unchecked(at, index, &[uid], &c, note);
+                    self.report.suppressed.suppressed_as_features += 1;
+                    return;
+                }
                 let through = if indirect { THROUGH_ANOTHER } else { "" };
                 self.note(
                     at,
@@ -258,6 +285,76 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 self.report.suppressed.suppressed_as_placeholders += 1;
             }
         }
+    }
+
+    /// A removal suppressed in the file whose body a feature suppressed
+    /// before it made (mitcad#1802: a reported design's removals of the
+    /// copies of patterns suppressed hundreds of items earlier): no state of
+    /// the import holds the body, so the removal comes in suppressed and
+    /// unbuilt, its body the producer's body of the file's index
+    /// (`_f3d.producer`, `_f3d.body_index`) among the bodies of the
+    /// producer's suppressed feature. None where the producer did not come
+    /// in as one suppressed feature.
+    ///
+    /// A move or a copy of bodies the same way (mitcad#1808: a copy of a
+    /// suppressed extrusion's body and the moves of its copies): its body
+    /// inputs found among the replay's bodies, else as the bodies of
+    /// suppressed features ([`Importer::unbuilt_body`]); at least one of
+    /// them is such a body (else its definition failed for another
+    /// reason). A cut and paste is not: it moves bodies into another
+    /// component, which bodies not built have none of.
+    fn suppressed_unbuilt(
+        &mut self,
+        index: i64,
+        item: &TimelineItem,
+    ) -> Option<(FeatureUid, Candidate)> {
+        if !matches!(
+            item.object_type(),
+            Some("RemoveFeature" | "MoveFeature" | "CopyPasteBodies")
+        ) || item
+            .f3d
+            .as_ref()
+            .and_then(|f| f.base_name.as_deref())
+            .is_some_and(|n| n.starts_with("Cut"))
+        {
+            return None;
+        }
+        self.suppressed.unbuilt = Some(std::cell::Cell::new(0));
+        let translated = self.translate(index, item);
+        let unbuilt = self.suppressed.unbuilt.take().map_or(0, |c| c.get());
+        if unbuilt == 0 {
+            return None;
+        }
+        let c = translated
+            .ok()?
+            .into_iter()
+            .find(|c| !c.guess && c.defs.len() == 1)?;
+        let def: FeatureDef<mitcad_model::features::ValueInput> =
+            serde_json::from_value(c.defs[0].clone()).ok()?;
+        // In the component of the feature that made its first body.
+        let component = c.defs[0]["bodies"]
+            .as_array()
+            .and_then(|b| b.first())
+            .and_then(serde_json::Value::as_str)
+            .and_then(|b| b.parse::<mitcad_model::BodyUid>().ok())
+            .and_then(|b| self.doc.feature(b.feature))
+            .map(|f| f.component);
+        let note = if item.object_type() == Some("RemoveFeature") {
+            SUPPRESSED_REMOVAL
+        } else {
+            SUPPRESSED_UNBUILT
+        };
+        let name = item.name().map(str::to_owned);
+        let added = self
+            .doc
+            .add_import_suppressed(&def, name.as_deref(), note, component)
+            .ok()?;
+        trace!(
+            "{}: suppressed in the file, came in suppressed as {} on {unbuilt} bodies of suppressed features (not built)",
+            crate::item_name(item),
+            crate::summary(&c)
+        );
+        Some((added.uid, c))
     }
 
     /// An item whose definition `c` was taken without the file's history

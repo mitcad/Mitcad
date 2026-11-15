@@ -11,10 +11,12 @@
 //! fixed geometry.
 
 pub mod axis;
+pub mod drawn;
 pub mod plane;
 pub mod point;
 
 pub use axis::{AxisDefinition, ConstructionAxisDef};
+pub use drawn::{DrawnExtent, DrawnSource};
 pub use plane::{ConstructionPlaneDef, PlaneDefinition};
 pub use point::{ConstructionPointDef, PointDefinition};
 

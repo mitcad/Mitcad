@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1793: a flexible subassembly on flexible-subassembly.json, two
+# grounded Hinges whose Arm turns on Joint1, the Hinge's own joint. Hinge:1
+# is made Flexible from its row's menu (the menu then shows it checked),
+# and its Arm dragged in the view: it turns along Joint1 for Hinge:1 alone
+# (the drag logs Joint1's new value "in Hinge:1"), while Hinge:2's Arm
+# stays where the Hinge has it. Then Joint1 is animated inside Hinge:1
+# from the same menu (mitcad#1805). All geometry is synthetic.
+# Run by tools/ui-flexible-subassembly-test.sh (Linux) and
+# tools/ui-windows-flexible-subassembly-test.ps1 (Windows).
+wait-idle
+window-resize 1400 990
+mark
+command view.fit
+wait-idle
+# Where the two Arms are shown before.
+capture mine '^Body F4[.]b0 in O1/O2 at ([0-9]+,[0-9]+)$' 20
+capture other '^Body F4[.]b0 in O3/O2 at ([0-9]+,[0-9]+)$' 20
+# Hinge:1 made Flexible from its row's menu.
+mark
+context-menu-logged '^Browser Root/Hinge:1 at ' 'Flexible'
+expect-log '^Context menu: .*Flexible'
+wait-log '^Flexible Hinge:1$' 30
+wait-idle 30
+mark
+context-menu-logged '^Browser Root/Hinge:1 at ' cancel
+expect-log '^Context menu checked: (.* [|] )?Flexible'
+# Its Arm dragged: it turns along Joint1, for Hinge:1 alone.
+mark
+drag-from '^Body F4[.]b0 in O1/O2 at ' 60 -40
+wait-log '^Drag of Arm:1 started' 10
+wait-log '^Dragged Arm:1 to [(].*[)]: Joint1 rz -?[0-9.]+ deg in Hinge:1$' 30
+wait-idle 30
+wait-log '^Body F4[.]b0 in O3/O2 at ${other:re}$' 30
+expect-no-log '^Body F4[.]b0 in O1/O2 at ${mine:re}$'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'
+# mitcad#1805: Joint1 animated inside Hinge:1 from its row's menu, for it
+# alone: every frame from the joint solver (`joint_poses` with the
+# occurrence), none refused; it plays back and forth (mitcad#1790) until
+# Esc.
+wait-idle 30
+mark
+context-menu-logged '^Browser Root/Hinge:1 at ' 'Animate Joint1'
+wait-log '^Animating Joint1 rz in Hinge:1: back and forth from .*, frames by the joint solver$' 30
+wait-log '^Animation of Joint1: pass 2 ' 60
+key Escape
+wait-log '^Animation of Joint1 stopped: ' 30
+expect-no-log 'Animation of Joint1 in Hinge:1 refused'
+expect-never 'Recompute failed'
+expect-never 'TestDriver: FAIL'

@@ -895,3 +895,114 @@ fn grbl_refuses_mist_coolant_which_its_standard_build_lacks() {
             .contains("\nM7\n")
     );
 }
+
+/// A cut round a circle whose first arc ends a hair from its start (under
+/// the last digit in both units), the second a little farther (under an
+/// inch's last digit only), then a helix turn that is meant.
+fn short_arcs() -> Program {
+    let arc = |to: P3| Move::Arc {
+        to,
+        center: [0.0, 0.0],
+        ccw: true,
+        feed: 1000.0,
+    };
+    let mut p = Program::new("Short arcs", 15.0);
+    p.operations.push(ProgramOp {
+        name: "Contour 1".into(),
+        tool: Tool::flat_end_mill(1, 6.0),
+        spindle_rpm: 18000.0,
+        spindle: SpindleDirection::Cw,
+        coolant: Coolant::Off,
+        toolpath: Toolpath {
+            moves: vec![
+                Move::Rapid {
+                    to: [10.0, 0.0, 5.0],
+                },
+                Move::Line {
+                    to: [10.0, 0.0, -1.0],
+                    feed: 300.0,
+                },
+                arc([10.0, 0.0003, -1.0]),
+                arc([10.0, 0.001, -1.0]),
+                arc([10.0, 0.001, -2.0]),
+                Move::Line {
+                    to: [20.0, 0.001, -2.0],
+                    feed: 1000.0,
+                },
+                Move::Rapid {
+                    to: [20.0, 0.001, 15.0],
+                },
+            ],
+            ..Toolpath::default()
+        },
+    });
+    p
+}
+
+/// The G2 and G3 lines whose X and Y are where the tool already is: a
+/// whole turn to the controller.
+fn arcs_in_place(g: &str) -> Vec<String> {
+    let mut at = [String::new(), String::new()];
+    let mut found = Vec::new();
+    for l in g.lines() {
+        let words: Vec<&str> = l.split_whitespace().collect();
+        let Some(&code) = words.first() else {
+            continue;
+        };
+        if !matches!(code, "G0" | "G1" | "G2" | "G3") {
+            continue;
+        }
+        let word = |axis: char| {
+            words
+                .iter()
+                .find_map(|w| w.strip_prefix(axis))
+                .map(str::to_string)
+        };
+        let (x, y) = (word('X'), word('Y'));
+        if matches!(code, "G2" | "G3")
+            && x.as_deref() == Some(at[0].as_str())
+            && y.as_deref() == Some(at[1].as_str())
+        {
+            found.push(l.to_string());
+        }
+        if let Some(x) = x {
+            at[0] = x;
+        }
+        if let Some(y) = y {
+            at[1] = y;
+        }
+    }
+    found
+}
+
+#[test]
+fn an_arc_whose_end_rounds_to_its_start_is_no_whole_turn() {
+    for units in [Units::Millimetres, Units::Inches] {
+        let settings = PostSettings {
+            units,
+            ..PostSettings::default()
+        };
+        for d in dialects() {
+            let g = post(&short_arcs(), d.as_ref(), &settings, None).unwrap();
+            if !d.supports_arcs() {
+                assert!(arcs_in_place(&g).is_empty(), "{} {units:?}", d.id());
+                continue;
+            }
+            // Only the helix turn ends where it starts, and it goes down.
+            let whole = arcs_in_place(&g);
+            assert_eq!(whole.len(), 1, "{} {units:?}: {whole:?}\n{g}", d.id());
+            assert!(whole[0].contains(" Z"), "{} {units:?}: {whole:?}", d.id());
+        }
+    }
+    let mm = post(&short_arcs(), &LinuxCnc, &PostSettings::default(), None).unwrap();
+    assert!(mm.contains("\nG3 X10 Y0.001 I-10 J0 F1000\n"), "{mm}");
+    assert!(mm.contains("\nG3 X10 Y0.001 Z-2 I-10 J-0.001\n"), "{mm}");
+    let inch = post(&short_arcs(), &LinuxCnc, &inches(), None).unwrap();
+    assert_eq!(
+        inch.lines()
+            .filter(|l| l.starts_with("G2 ") || l.starts_with("G3 "))
+            .collect::<Vec<_>>(),
+        vec!["G3 X0.3937 Y0 Z-0.0787 I-0.3937 J0 F39.37"],
+        "{inch}"
+    );
+}

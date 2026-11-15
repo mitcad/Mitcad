@@ -26,7 +26,10 @@ std::vector<ShapePtr> split_body(const std::string& feature, const Shape& body, 
 // Splits the named faces along their intersection with the tool (a plane, a
 // face, a body, or sketch curves swept along a direction). The body's shape
 // and volume do not change; the pieces of each face keep its name with
-// "#k". Fails when a face is not split.
+// "#k". A region of the tool that crosses a face's seam (a cylinder's or a
+// cone's) is one piece: the split's pieces on either side of the seam are
+// joined again, unless a cut runs along it (mitcad#1853). Fails when a face
+// is not split.
 ShapePtr split_faces(const std::string& feature, const Shape& body,
                      const std::vector<std::string>& faces, const Tool& tool, bool extend = true);
 

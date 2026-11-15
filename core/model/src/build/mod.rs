@@ -19,6 +19,8 @@
 // A part centred in a free stretch whose neighbour goes (mitcad#1401).
 mod gap;
 pub(crate) mod geometry;
+// A library part's material (mitcad#1817).
+mod library_material;
 mod meta;
 // What BUILD reads of a placed part; the parts list and the properties
 // use it (mitcad#777).
@@ -26,6 +28,7 @@ pub(crate) mod part_info;
 pub(crate) mod sources;
 
 pub(crate) use geometry::*;
+pub use library_material::{library_material, library_material_density, library_material_name};
 pub use meta::*;
 pub use sources::{LibrarySourceDef, LibrarySources, SourceDesign};
 

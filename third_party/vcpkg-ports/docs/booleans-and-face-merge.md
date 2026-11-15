@@ -1,4 +1,4 @@
-# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285
+# Booleans and the face merge: 0110, 0220, 0360, 0590, 0680, 1040, 1285, 1695
 
 OCCT's face merge after booleans (`ShapeUpgrade_UnifySameDomain`) and the
 boolean's wire splitter. The face merge's speed-ups are 0006 in
@@ -30,6 +30,9 @@ boolean's wire splitter. The face merge's speed-ups are 0006 in
   segments to the faces have all run out, instead of counting it as
   outside; the checker took a cavity of a face-merged union for lying
   outside another, and the union was kept unmerged (mitcad#1280).
+- **1695** stops the decomposition of a walking intersection line at the
+  faces' boundaries from reading a point past the line's ends, which
+  crashed a boolean in a release build (mitcad#1819).
 
 ## 0110: a chain that cannot be concatenated
 
@@ -200,6 +203,33 @@ passed over, and only when every one is the point rejected as before. The
 box is computed only then; classifications whose segments did not run out
 are unchanged.
 
+## 1695: no point read past a walking line's ends
+
+The patch 1695 comes from mitcad#1819: the table of dressups that take a
+face away (`geometry/tests/test_dressup_consumes_face.cpp`, its chains
+part) builds the reference of a concave two-distance chamfer along a
+tangent chain over a cylinder strip by a boolean of the chamfered body with
+the body it was made on, and on Linux that boolean crashed with a
+segmentation fault in a release build of OCCT; a debug build raised
+`Standard_OutOfRange` there instead and the row passed.
+
+### 1695-inttools-wline-decomposition-reads-no-point-past-the-line-ends
+
+`IntTools_WLineTool::DecompositionOfWLine` splits a walking line of a
+face/face intersection where it leaves the faces' domains, and moves the
+end point of a piece onto a natural boundary or away from a tangent zone.
+To do so it looks along the line, from the end's neighbour on, for a point
+distinct from that neighbour (more than `gp::Resolution` apart in the
+face's parameters): two `while` loops step the index one point on and read
+`theWLine->Point(index)` before their condition checks the index. Where
+every point up to the line's end lies on the neighbour, the last step read
+`Point(0)` or `Point(NbPnts + 1)`: in a release build, without the
+sequence's range check, a null node (valgrind: an invalid read at address
+0x28 in `DecompositionOfWLine` under `IntTools_FaceFace::MakeCurve`). Each
+loop now stops before an index outside `1..NbPnts`, as it ends when it
+finds no distinct point within the piece; every case that read only points
+of the line keeps its result.
+
 ## Reports and tests
 
 - 0220: mitcad#284 and the coaxial cylinders' join in
@@ -228,3 +258,9 @@ are unchanged.
   patch `BRepCheck_SubshapeNotInShape`). The join of the reported design's
   257 bodies in `geometry/tests/test_join_many_bodies.cpp` keeps its merged
   union.
+- 1695: mitcad#1819 and the chains part of
+  `geometry/tests/test_dressup_consumes_face.cpp` (ctest
+  `geometry.dressup_consumes_face.chains`): its third row, a concave
+  two-distance chamfer of 0.99 of the strip's width along a tangent chain
+  over a cylinder strip, whose reference boolean crashed in a release
+  build.

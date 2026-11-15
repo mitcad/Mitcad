@@ -758,4 +758,122 @@ void TestDriver::testNavigationGestureState() {
   });
 }
 
+// A drag bound to Zoom in the view's scheme (mitcad#1867, GitHub
+// mitcad/Mitcad#330): straight up comes closer, straight down goes away,
+// sideways alone keeps the zoom, and an upward drag that wobbles sideways
+// comes closer at every step. Application events, a frame after each.
+void TestDriver::testDragZoom() {
+  auto* window = qobject_cast<MainWindow*>(m_main.data());
+  if (!window || window->modelBusy()) {
+    fail(m_line, QStringLiteral("drag zoom requires an idle document"));
+    return;
+  }
+  const NavigationSettings original = window->viewer().navigation();
+  const auto bindings = original.scheme == NavigationScheme::Custom ? original.customBindings
+                                                                    : navigationBindings(original.scheme);
+  const auto zoom = std::find_if(bindings.cbegin(), bindings.cend(), [](const NavigationBinding& binding) {
+    return binding.action == NavigationAction::Zoom && !binding.f4 &&
+           binding.input != NavigationInput::TrackpadScroll && navigationBindingAllowed(binding);
+  });
+  if (zoom == bindings.cend()) {
+    fail(m_line, QStringLiteral("drag zoom: the view's navigation binds no drag to Zoom"));
+    return;
+  }
+  const Qt::MouseButton button = zoom->input == NavigationInput::LeftButton     ? Qt::LeftButton
+                                 : zoom->input == NavigationInput::MiddleButton ? Qt::MiddleButton
+                                                                                : Qt::RightButton;
+  const Qt::KeyboardModifiers keys = zoom->modifiers;
+  struct State {
+    QPointer<OcctViewer> view;
+    NavigationSettings original;
+    CameraState camera;
+    QPointF at;
+    QPointF offset; // the pointer's last place from at
+    double last = 0.0; // the view's height after the last step
+  };
+  auto state = std::make_shared<State>();
+  state->view = &window->viewer();
+  state->original = original;
+  state->view->settleCamera();
+  state->camera = state->view->camera();
+  const auto mouse = [state, button, keys](QEvent::Type type, const QPointF& offset) {
+    if (!state->view) return;
+    const QPointF point = state->at + offset;
+    QMouseEvent event(type, point, QPointF(state->view->mapToGlobal(point.toPoint())),
+                      type == QEvent::MouseMove ? Qt::NoButton : button,
+                      type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::MouseButtons(button), keys);
+    QCoreApplication::sendEvent(state->view, &event);
+  };
+  // A frame now: OCCT applies the zoom the moves asked for.
+  const auto height = [state] {
+    state->view->grabFramebuffer();
+    return state->view->camera().height;
+  };
+  struct Drag {
+    const char* name;
+    int dy;     // per move, logical pixels (down is positive)
+    int wobble; // sideways, alternating in sign
+    int closer; // 1: every step comes closer, -1: goes away, 0: no change
+  };
+  static const std::array<Drag, 4> drags{{
+      {"straight up", -6, 0, 1},
+      {"straight down", 6, 0, -1},
+      {"sideways", 0, 30, 0},
+      {"up with a sideways wobble", -4, 25, 1},
+  }};
+  for (const Drag& drag : drags) {
+    queue([state, mouse, height] {
+      if (!state->view) return;
+      NavigationSettings settings = state->original;
+      settings.animate = false;
+      state->view->setNavigation(settings);
+      state->view->setCamera(state->camera);
+      state->view->settleCamera();
+      state->at = QPointF(state->view->width() * 0.5, state->view->height() * 0.5);
+      state->offset = {};
+      state->last = height();
+      mouse(QEvent::MouseButtonPress, {});
+    });
+    for (int step = 1; step <= 8; ++step) {
+      queue([this, state, mouse, height, drag, step] {
+        if (!state->view) return;
+        const double x = drag.wobble * (step % 2 == 1 ? 1 : -1);
+        state->offset = QPointF(x, drag.dy * step);
+        mouse(QEvent::MouseMove, state->offset);
+        const double now = height();
+        const double change = std::log(now / state->last); // negative: closer
+        const bool ok = drag.closer > 0   ? change < -1e-9
+                        : drag.closer < 0 ? change > 1e-9
+                                          : std::abs(change) <= 1e-9;
+        if (!std::isfinite(change) || !ok) {
+          fail(m_line, QStringLiteral("drag zoom %1: step %2 changed the view's height from %3 to %4")
+                           .arg(QString::fromLatin1(drag.name)).arg(step).arg(state->last).arg(now));
+          return;
+        }
+        state->last = now;
+      });
+    }
+    queue([state, mouse] {
+      if (!state->view) return;
+      mouse(QEvent::MouseButtonRelease, state->offset);
+    });
+  }
+  QString input = button == Qt::LeftButton ? QStringLiteral("left") : button == Qt::MiddleButton
+                                                                        ? QStringLiteral("middle")
+                                                                        : QStringLiteral("right");
+  if (keys.testFlag(Qt::AltModifier)) input.prepend(QStringLiteral("Alt + "));
+  if (keys.testFlag(Qt::ControlModifier)) input.prepend(QStringLiteral("Ctrl + "));
+  if (keys.testFlag(Qt::ShiftModifier)) input.prepend(QStringLiteral("Shift + "));
+  queue([state, input] {
+    if (!state->view) return;
+    state->view->setNavigation(state->original);
+    state->view->setCamera(state->camera);
+    state->view->settleCamera();
+    qInfo().noquote() << QStringLiteral("Drag zoom: straight up came closer, straight down went away, sideways kept "
+                                        "the zoom, an upward drag with a sideways wobble came closer at every step "
+                                        "(%1)")
+                             .arg(input);
+  });
+}
+
 } // namespace mitcad

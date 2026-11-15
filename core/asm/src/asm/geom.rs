@@ -332,11 +332,13 @@ pub fn bs3_surface(c: &mut Cursor) -> Result<Option<Bs3Surface>> {
     let (v_knots, v_mults) = knots_of_count(c, nkv)?;
     let nu = pole_count(&u_mults, u_degree)?;
     let nv = pole_count(&v_mults, v_degree)?;
-    if nu * nv > 10_000_000 {
+    // Stored points, each read from the file, but the count is a product
+    // of the file's numbers: checked so that it cannot overflow.
+    let Some(n) = nu.checked_mul(nv).filter(|&n| n <= 10_000_000) else {
         return err("too many control points");
-    }
-    let mut ctrl = Vec::with_capacity(nu * nv);
-    for _ in 0..nu * nv {
+    };
+    let mut ctrl = Vec::with_capacity(n);
+    for _ in 0..n {
         let p = [c.double()?, c.double()?, c.double()?];
         let w = if rational { c.double()? } else { 1.0 };
         ctrl.push([p[0], p[1], p[2], w]);

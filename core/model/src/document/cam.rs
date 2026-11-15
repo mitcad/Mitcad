@@ -1025,16 +1025,31 @@ impl<K: Kernel> Document<K> {
         setup_def.name.clear();
         // The eye is display state.
         setup_def.visible = true;
+        // The values count as the parameters evaluate them (below), not as
+        // typed: a parameter's rename rewrites their texts and leaves the
+        // toolpath up to date (mitcad#1830).
+        for (value, _) in setup_def
+            .values_mut()
+            .into_iter()
+            .chain(op_def.values_mut())
+        {
+            *value = CamValue::Number(0.0);
+        }
         let _ = serde_json::to_writer(&mut f, &(&setup_def, &op_def));
         let tool = machine.and_then(|m| m.tools.get(op.tool));
         let _ = serde_json::to_writer(&mut f, &(machine.map(|m| &m.machine), tool));
+        let params = self.parameters();
         // A rest machining follows the bigger tool and what it left.
         if let OperationKind::Rest {
             from_tool: Some(from),
         } = op.kind
         {
             let bigger = machine.and_then(|m| m.tools.get(from));
-            let left = rest_previous(setup, op).map(|o| &o.stock_to_leave);
+            let left = rest_previous(setup, op).map(|o| {
+                o.stock_to_leave
+                    .as_ref()
+                    .map(|v| v.evaluate(params, ValueKind::Length))
+            });
             let _ = serde_json::to_writer(&mut f, &(bigger, left));
         }
         // A 3-axis operation without bodies of its own machines the
@@ -1084,7 +1099,6 @@ impl<K: Kernel> Document<K> {
                 f.str(e);
             }
         }
-        let params = self.parameters();
         for (value, kind) in setup.values().into_iter().chain(op.values()) {
             match value.evaluate(params, kind) {
                 Ok(v) => f.f64(v),

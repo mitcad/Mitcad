@@ -264,6 +264,50 @@ fn joined_copies_of_bodies_that_add_nothing_are_left_out() {
     }
 }
 
+#[test]
+fn a_copy_on_the_place_of_a_skipped_copy_is_made() {
+    // mitcad#1832: the block joined with its copies four times over 540
+    // degrees about Z (0, 180, 360 and 540 degrees), copy 1 skipped: copy
+    // 3 lands where copy 1 would be and is joined, not left out as a copy
+    // of the skipped one.
+    let mut b = block();
+    b.doc.kernel().measures.set(true);
+    b.doc.kernel().copies_by_bounds.set(true);
+    let pattern = add(
+        &mut b.doc,
+        json!({"type": "circular_pattern", "objects": block_body(),
+               "axis": origin("z"), "quantity": 4, "angle": 3.0 * PI,
+               "combine": true, "skipped_copies": [1]}),
+    );
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    assert_eq!(uids(&b.doc), ["F2.b0"]);
+    let history = shape(&b.doc, "F2.b0").history;
+    assert!(history.contains(",inst3)"), "{history}");
+    assert!(!history.contains(",inst1)"), "{history}");
+
+    // The same with the copies kept as bodies of their own and joined
+    // where they touch (`combine_any`).
+    let mut b = block();
+    b.doc.kernel().measures.set(true);
+    b.doc.kernel().copies_by_bounds.set(true);
+    let pattern = add(
+        &mut b.doc,
+        json!({"type": "circular_pattern", "objects": block_body(),
+               "axis": origin("z"), "quantity": 4, "angle": 3.0 * PI,
+               "combine": true, "combine_any": true, "skipped_copies": [1]}),
+    );
+    assert_eq!(status(&b.doc, pattern), FeatureStatus::Ok);
+    let made = |e: u32| {
+        b.doc.bodies().iter().any(|body| {
+            b.doc
+                .body_shape(body.uid)
+                .is_some_and(|s| s.history.contains(&format!(",inst{e})")))
+        })
+    };
+    assert!(made(3), "{:?}", uids(&b.doc));
+    assert!(!made(1), "{:?}", uids(&b.doc));
+}
+
 /// The keys of the sketch's regions that have a piece of `curve` in their
 /// boundary.
 fn regions_along(doc: &Document<MockKernel>, sketch: &str, curve: &str) -> Vec<String> {

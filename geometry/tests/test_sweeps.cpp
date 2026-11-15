@@ -16,6 +16,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
@@ -1362,6 +1363,54 @@ void test_ribs() {
   const BooleanResult braced = boolean(BooleanOp::Join, {bosses.get()}, *between);
   CHECK(braced.pieces.size() == 1);
   CHECK_NEAR(volume(*braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 30 * 4 + slivers);
+  // From the tall cylinder's top edge (mitcad#1857, GitHub #345): the line
+  // (30, 60) - (70, 30). Continued, its start rises over the top face, and
+  // only the wall below the edge closes it off: the start fills from its tip
+  // (x = 30) up to the curved face, below the line along the tangent
+  // (-0.8, 0.6) through the edge, nothing above the top face, and no note.
+  // At t across the thickness the wall is w = 10 - sqrt(100 - t^2) from the
+  // tip: the start fills 50 w - 3/8 w^2 (from the base's top at z = 10 up
+  // to z = 60 - 3/4 of the way to the wall), the end 20 w - 3/8 w^2 under
+  // its continuation; with the trapezoid 40 * 35 * 4.
+  RibSpec rim = down;
+  rim.chains = {{{"c1", line3(gp_Pnt(30, 20, 60), gp_Pnt(70, 20, 30))}}};
+  const double w1 = 40 - 2 * std::sqrt(96.0) - 100 * std::asin(0.2);                    // integral of w
+  const double w2 = 800 - 16.0 / 3 - 20 * (2 * std::sqrt(96.0) + 100 * std::asin(0.2)); // of w^2
+  const ShapePtr from_rim = rib(rim);
+  CHECK_NEAR(volume(*from_rim), 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  CHECK(from_rim->notes().empty());
+  CHECK(near(bounding_box(*from_rim).max.Z(), 60, 1e-6));
+  const BooleanResult rim_braced = boolean(BooleanOp::Join, {bosses.get()}, *from_rim);
+  CHECK(rim_braced.pieces.size() == 1);
+  CHECK_NEAR(volume(*rim_braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  // Without Extend Ends the start leaves the gap: 50 w less, with the end's.
+  rim.extend_ends = false;
+  CHECK_NEAR(volume(*rib(rim)), 40.0 * 35 * 4);
+  // From the low cylinder's top edge the other way, (70, 30) - (30, 60):
+  // the same rib, the end now the one from the top edge.
+  rim.extend_ends = true;
+  rim.chains = {{{"c1", line3(gp_Pnt(70, 20, 30), gp_Pnt(30, 20, 60))}}};
+  const ShapePtr reversed = rib(rim);
+  CHECK_NEAR(volume(*reversed), 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  CHECK(reversed->notes().empty());
+  // End Offset +1 moves the faces the ends stop at 1 further along their
+  // tangents (0.8 across, 0.6 up or down), the partly closed off end's as
+  // the other's, but not the line where the bodies stop closing it off
+  // (mitcad#1865). The end at the top edge fills 0.8 further into the wall
+  // below the top face, from the base's top moved up to z = 10.6, and
+  // nothing over the top face (no lip up to 0.6 high inside the wall): at t
+  // across the thickness 49.4 w - 3/8 w^2 + 0.8 * 49.4. The other end runs
+  // W = 0.8 + w to the moved wall, from the base's top moved down to
+  // z = 9.4: 20.6 W - 3/8 W^2. With no note.
+  rim.end_offset = 1.0;
+  const ShapePtr sunk = rib(rim);
+  const double sunk_volume =
+      40.0 * 35 * 4 + 69.4 * w1 - 0.75 * w2 + 4 * (0.8 * 49.4 + 20.6 * 0.8 - 0.375 * 0.8 * 0.8);
+  CHECK_NEAR(volume(*sunk), sunk_volume);
+  CHECK(sunk->notes().empty());
+  CHECK(near(bounding_box(*sunk).max.Z(), 60, 1e-6));
+  const BooleanResult sunk_braced = boolean(BooleanOp::Join, {bosses.get()}, *sunk);
+  CHECK(sunk_braced.pieces.size() == 1);
   // Flipped it grows up, where nothing closes it off.
   down.flip = true;
   CHECK(throws_with([&] { rib(down); }, "does not end at faces of the bodies"));
@@ -1406,6 +1455,58 @@ void test_ribs() {
   CHECK_NEAR(volume(*rib(webs)), 40 * 2 * 20);
   webs.flip = true;
   CHECK(throws_with([&] { rib(webs); }, "lies inside the bodies"));
+}
+
+// Extend Ends past the outline of a torus and of a freeform face
+// (mitcad#1865): a boss of radius 15 about (20, 0), 23 high, its top edge
+// rounded with radius 6 (a torus from z = 17 to 23, its tube's centre 9
+// from the axis), and the same boss with every face a B-spline. A rib on
+// the plane z = 20, 4 thick, from (-20, 0) to (0, 0), 20 deep along +Y:
+// continued along +X, its end meets the rounding only below the boss's
+// outline seen along X, where at the height z the boss is
+// r = 9 + sqrt(36 - (z - 17)^2) wide. At each height the end fills from its
+// tip (x = 0) up to the boss below y = r, 20 r - pi r^2 / 4, and nothing
+// above r; the start meets nothing and stays, with a note.
+void test_rib_outlines() {
+  const ShapePtr post = extrude("F2", {circle(5, 20, 0, 15)}, 0, 23);
+  FilletSet rounding;
+  rounding.faces = {"F2:end(r{c5})"};
+  rounding.radius = 6;
+  const ShapePtr boss = fillet("F3", *post, {rounding});
+  const ShapePtr freeform = std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(boss->occt(), true).Shape());
+  const auto has_face = [](const Shape& shape, GeomAbs_SurfaceType type) {
+    for (TopExp_Explorer f(shape.occt(), TopAbs_FACE); f.More(); f.Next()) {
+      if (BRepAdaptor_Surface(TopoDS::Face(f.Current())).GetType() == type) {
+        return true;
+      }
+    }
+    return false;
+  };
+  CHECK(has_face(*boss, GeomAbs_Torus));
+  CHECK(has_face(*freeform, GeomAbs_BSplineSurface) && !has_face(*freeform, GeomAbs_Torus));
+  // The integrals of r and r^2 from z = 18 to 22 (s = z - 17 from 1 to 5).
+  const auto g = [](double s) { return (s * std::sqrt(36 - s * s) + 36 * std::asin(s / 6)) / 2; };
+  const double root = g(5) - g(1); // of sqrt(36 - s^2)
+  const double r1 = 4 * 9 + root;
+  const double r2 = 4 * (81 + 36) - (125.0 - 1) / 3 + 18 * root;
+  const double filled = 20 * r1 - kPi / 4 * r2;
+  RibSpec spec;
+  spec.feature = "F6";
+  spec.frame = xy_at(20);
+  spec.chains = {{{"c1", line3(gp_Pnt(-20, 0, 20), gp_Pnt(0, 0, 20))}}};
+  spec.thickness = 4;
+  spec.depth = 20.0;
+  spec.extend_ends = true;
+  for (const ShapePtr& body : {boss, freeform}) {
+    spec.bodies = {body};
+    const ShapePtr ribbed = rib(spec);
+    CHECK_NEAR_TOL(volume(*ribbed), 20.0 * 20 * 4 + filled, 1e-5);
+    CHECK(ribbed->notes().size() == 1);
+    CHECK(!ribbed->notes().empty() && ribbed->notes().front().find("start") != std::string::npos &&
+          ribbed->notes().front().find("meets no face of the bodies") != std::string::npos);
+    const BooleanResult joined = boolean(BooleanOp::Join, {body.get()}, *ribbed);
+    CHECK(joined.pieces.size() == 1);
+  }
 }
 
 // A B-spline as a path curve.
@@ -2359,6 +2460,7 @@ void sweeps_tests_2() {
   guarded("parallel turns", test_parallel_turns);
   guarded("helix slivers within the bodies' faces", test_helix_slivers_within_the_bodies_faces);
   guarded("ribs", test_ribs);
+  guarded("rib outlines", test_rib_outlines);
 }
 
 void sweeps_tests_3() {

@@ -284,6 +284,11 @@ impl<K: Kernel> MotionCrateOps<K> for Document<K> {
         if cmd != "play_study" && cmd != "drive_joint" {
             return Ok(None);
         }
+        // A joint driven for a flexible occurrence alone (mitcad#1793): as
+        // any command.
+        if value.get("occurrence").is_some() {
+            return Ok(None);
+        }
         let preview: MotionPreview = super::parse(value.clone(), "preview command")?;
         let (report, outcome) = match preview {
             MotionPreview::PlayStudy { study, step, from } => {
@@ -364,6 +369,7 @@ impl<K: Kernel> MotionCrateOps<K> for Document<K> {
             .overlapping(
                 self.kernel(),
                 &self.last_result().placements,
+                &self.last_result().joints.flexed,
                 &BTreeSet::new(),
             )
             .map_err(|e| ApiError(format!("contact check: {e}")))?;

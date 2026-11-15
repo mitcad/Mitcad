@@ -265,11 +265,16 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                     "components": removed.components,
                     "features": removed.features,
                     "detached": removed.detached,
+                    // The parts placed on it that stay, freed of it
+                    // (mitcad#1811).
+                    "freed": removed.freed,
                 }});
-                // The cut-scope exclusions it dropped (mitcad#1236).
-                let dropped = self.state().dropped_exclusions(&before);
-                if !dropped.is_empty() {
-                    reply["notices"] = mitcad_model::notice::to_json(&dropped);
+                // What stayed, in words (mitcad#1811), and the cut-scope
+                // exclusions it dropped (mitcad#1236).
+                let mut notices = removed.notices;
+                notices.extend(self.state().dropped_exclusions(&before));
+                if !notices.is_empty() {
+                    reply["notices"] = mitcad_model::notice::to_json(&notices);
                 }
                 reply
             }
@@ -722,6 +727,15 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 });
                 // Centred between these profiles (mitcad#1401).
                 part["gap"] = json!(info.record.gap);
+                // A member along an edge (mitcad#1814): its edge frame,
+                // whose definition has the edge, the face and the offsets,
+                // and how it lies.
+                part["along"] = match mitcad_model_build::along_of(self, info.component) {
+                    Some(along) => {
+                        json!({"feature": along.frames, "joint": along.joint, "lie": along.lie})
+                    }
+                    None => Value::Null,
+                };
                 part
             })
             .collect();
@@ -1045,7 +1059,9 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
         let given = matches!(
             input.length,
             Some(mitcad_model_build::LengthInput::Value(_))
-        ) || (input.to.is_some() && input.length.is_none());
+        ) || (input.to.is_some() && input.length.is_none())
+            // Along an edge the edge and its offsets give it (mitcad#1814).
+            || input.along.is_some();
         let mut length_value = match (&plan.length, &hit) {
             (LengthPlan::None, _) => None,
             (LengthPlan::Bound { first, .. }, _) => Some(*first),

@@ -10,6 +10,7 @@
 #include <QJsonArray>
 
 #include "../framework/CommandRegistry.hpp"
+#include "CommandFactories.hpp"
 #include "CommandSupport.hpp"
 #include "Commands.hpp"
 
@@ -292,24 +293,26 @@ CommandDef surfaceRevolveCommand(const CommandContext& context) {
   return def;
 }
 
-// --- Surface Helix (mitcad#1777)
+// --- Surface Helix (mitcad#1777): Helix's sizes and Growth (mitcad#1797,
+// helixSizeInputs) and its flat ends (mitcad#1798, helixEndInputs: the
+// definition's `start` and `end`).
 
 CommandDef surfaceHelixCommand(const CommandContext& context) {
   CommandDef def = surfaceCommand("surface.helix", QObject::tr("Surface Helix"), "helix",
                                   QObject::tr("Turns sketch curves about an axis as they rise along it, into surfaces"));
   def.featureType = QStringLiteral("helix");
   def.inputs = sheetInputs(context);
-  def.inputs += {
+  def.inputs.append(
       selectionInput(QStringLiteral("axis"), QObject::tr("Axis"),
                      SelectKind::SketchCurve | SelectKind::Axis | SelectKind::Edge, 1, 1)
           .withTooltip(QObject::tr("A sketch line, an origin or construction axis, or a straight edge"))
-          .withAccepts([](const SelectionItem& item) { return item.kind == SelectKind::Axis || isLine(item); }),
-      valueInput(QStringLiteral("revolutions"), QObject::tr("Revolutions"), ValueKind::Unitless, QStringLiteral("4"))
-          .withStepMinimum(0.0, true)
-          .withTooltip(QObject::tr("The turns; need not be whole")),
-      valueInput(QStringLiteral("pitch"), QObject::tr("Pitch"), ValueKind::Length, QStringLiteral("5 mm"))
-          .withStepMinimum(0.0, true)
-          .withTooltip(QObject::tr("The rise per turn")),
+          .withAccepts([](const SelectionItem& item) { return item.kind == SelectKind::Axis || isLine(item); }));
+  def.inputs += helixSizeInputs({QStringLiteral("4"), QStringLiteral("20 mm"), QStringLiteral("5 mm"),
+                                 QObject::tr("How far the curves rise along the axis"),
+                                 QObject::tr("How far the curves move out from the axis per turn, a conical "
+                                             "helicoid; negative narrows it")});
+  def.inputs += helixEndInputs();
+  def.inputs += {
       choiceInput(QStringLiteral("hand"), QObject::tr("Handedness"),
                   {{QStringLiteral("right"), QStringLiteral("Right Hand")},
                    {QStringLiteral("left"), QStringLiteral("Left Hand")}},
@@ -329,8 +332,11 @@ CommandDef surfaceHelixCommand(const CommandContext& context) {
       return Built::failure(QObject::tr("Select the axis."), QStringLiteral("axis"));
     }
     definition.insert(QStringLiteral("axis"), axis.first().reference());
-    definition.insert(QStringLiteral("pitch"), state.expression(QStringLiteral("pitch")));
-    definition.insert(QStringLiteral("revolutions"), state.expression(QStringLiteral("revolutions")));
+    addHelixSizes(definition, state);
+    if (helixHasGrowth(state)) {
+      definition.insert(QStringLiteral("growth"), state.expression(QStringLiteral("growth")));
+    }
+    addHelixEnds(definition, state);
     if (state.choice(QStringLiteral("hand")) == QStringLiteral("left")) {
       definition.insert(QStringLiteral("left_handed"), true);
     }
@@ -345,8 +351,8 @@ CommandDef surfaceHelixCommand(const CommandContext& context) {
     if (axis.isValid()) {
       state.setItems(QStringLiteral("axis"), {axis});
     }
-    loadValue(state, QStringLiteral("pitch"), feature.value(QStringLiteral("pitch")), feature, context);
-    loadValue(state, QStringLiteral("revolutions"), feature.value(QStringLiteral("revolutions")), feature, context);
+    loadHelixSizes(feature, state, context);
+    loadHelixEnds(feature, state, context);
     state.setChoice(QStringLiteral("hand"), feature.value(QStringLiteral("left_handed")).toBool()
                                                 ? QStringLiteral("left")
                                                 : QStringLiteral("right"));
@@ -356,9 +362,16 @@ CommandDef surfaceHelixCommand(const CommandContext& context) {
     return sheetEditable(feature, context) && isShowable(feature.value(QStringLiteral("axis")), context);
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
-    return QStringLiteral("Added surface helix of %1, %2 turns of %3")
-        .arg(sheetCount(state), number(state.value(QStringLiteral("revolutions"))),
-             number(state.value(QStringLiteral("pitch"))));
+    const auto [turns, pitch] = helixTurnsAndPitch(state);
+    QString text =
+        QStringLiteral("Added surface helix of %1, %2 turns of %3").arg(sheetCount(state), number(turns), number(pitch));
+    if (helixHasGrowth(state)) {
+      text += QStringLiteral(", growing %1 per turn").arg(number(state.value(QStringLiteral("growth"))));
+    }
+    if (helixHasEnds(state)) {
+      text += QStringLiteral(", with flat ends");
+    }
+    return text;
   };
   return def;
 }

@@ -258,6 +258,21 @@ std::vector<InputDef> MainWindow::filamentChangeInputs(const std::function<bool(
                 events.removeAt(index);
                 if (setFilamentChanges(events, nullptr)) {
                   qInfo().noquote() << QStringLiteral("Filament changes: removed %1").arg(place);
+                  // Filament Change, not modal, follows the event it edits
+                  // (mitcad#1842): one below the removed row moves up with
+                  // it; the removed one's own window closes (after the
+                  // panel's call, as its view picks go back to the panel).
+                  TestSync::singleShot(0, this, [this, index] {
+                    if (!m_filamentChangeDialog || !m_filamentChangeDialog->isVisible()) {
+                      return;
+                    }
+                    const int open = m_filamentChangeDialog->row();
+                    if (open == index) {
+                      m_filamentChangeDialog->eventRemoved();
+                    } else if (open > index) {
+                      m_filamentChangeDialog->moveToRow(open - 1);
+                    }
+                  });
                 }
               }
             },
@@ -439,7 +454,25 @@ void MainWindow::editFilamentChange(int row, const SelectionItem& here) {
     connect(m_filamentChangeDialog, &FilamentChangeDialog::applied, this,
             [this](int edited, const QJsonObject& changed) {
               QJsonArray events = storedEvents(filamentChangesNow());
-              if (edited >= 0 && edited < events.size()) {
+              if (edited >= 0) {
+                // The event it was opened on, found again should the
+                // schedule have changed beside the window (mitcad#1842):
+                // the edit replaces that event, never another one, and is
+                // not added as a new one when it is gone.
+                const QJsonValue original = m_filamentChangeDialog->editedEvent();
+                if (edited >= events.size() || events.at(edited) != original) {
+                  edited = -1;
+                  for (int i = 0; i < events.size(); ++i) {
+                    if (events.at(i) == original) {
+                      edited = i;
+                      break;
+                    }
+                  }
+                  if (edited < 0) {
+                    m_filamentChangeDialog->showRefusal(tr("This event is no longer among the filament changes."));
+                    return;
+                  }
+                }
                 events.replace(edited, changed);
               } else {
                 events.append(changed);

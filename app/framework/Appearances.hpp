@@ -37,10 +37,17 @@ struct AppearanceMap {
   // empty when there is none, with the reason in `missing`.
   QString file = QString();
   QString missing = QString();
+  // The colour channel that holds the map's values in an image that packs
+  // several (mitcad#1862, the model's `channel`): 0 red, 1 green, 2 blue;
+  // -1 the grey value.
+  int channel = -1;
+  // The map's values multiplied by it (mitcad#1874, the model's `factor`:
+  // glTF's roughness and metalness factors); 1 when it has none.
+  double factor = 1.0;
 
   bool operator==(const AppearanceMap& o) const {
     return present == o.present && path == o.path && embedded == o.embedded && imageSha256 == o.imageSha256 &&
-           file == o.file;
+           file == o.file && channel == o.channel && factor == o.factor;
   }
   bool operator!=(const AppearanceMap& o) const { return !(*this == o); }
 };
@@ -61,6 +68,7 @@ struct AppearanceTexture {
   double height = 100.0;
   double rotation = 0.0; // radians
   bool planar = false;   // else box
+  bool uv = false;       // by the body's own texture coordinates (mitcad#1862)
   bool embedded = false; // the image is in the design file
   QString imageSha256;   // of an embedded image
   // The image file the renderer reads (resolveTexture): absolute; empty
@@ -72,7 +80,8 @@ struct AppearanceTexture {
 
   bool operator==(const AppearanceTexture& o) const {
     return path == o.path && width == o.width && height == o.height && rotation == o.rotation &&
-           planar == o.planar && embedded == o.embedded && imageSha256 == o.imageSha256 && file == o.file &&
+           planar == o.planar && uv == o.uv && embedded == o.embedded && imageSha256 == o.imageSha256 &&
+           file == o.file &&
            maps == o.maps;
   }
   bool operator!=(const AppearanceTexture& o) const { return !(*this == o); }

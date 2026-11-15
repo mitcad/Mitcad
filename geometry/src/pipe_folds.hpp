@@ -9,6 +9,7 @@
 // (OCCT's boolean union), so that the material they share counts once.
 // Internal to the geometry library.
 
+#include <cstddef>
 #include <functional>
 #include <vector>
 
@@ -69,5 +70,10 @@ inline constexpr const char* kFoldsResolved =
 // with a place, where the sweep folds and neither way builds it.
 UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<SweptProfile>& profiles,
                                     const std::function<ShapePtr()>& whole);
+
+// (mitcad#1788) How many times a sweep has run OCCT's check for its faces
+// crossing each other in this process: a test sees that a path coming back
+// closer to itself than its profile is wide skips it.
+std::size_t faces_crossing_checks();
 
 } // namespace mitcad::geometry::detail

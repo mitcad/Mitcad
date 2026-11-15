@@ -89,10 +89,10 @@ rust::Box<Document> newDesignDocument() {
   return document;
 }
 
-bool newDesignAtTop() { return qEnvironmentVariable("MITCAD_NEW_DESIGN_VIEW").trimmed() != QLatin1String("0"); }
+bool newDesignWithOrigin() { return qEnvironmentVariable("MITCAD_NEW_DESIGN_VIEW").trimmed() != QLatin1String("0"); }
 
 void showNewDesignOrigin(Document& document) {
-  if (!newDesignAtTop()) {
+  if (!newDesignWithOrigin()) {
     return;
   }
   try {

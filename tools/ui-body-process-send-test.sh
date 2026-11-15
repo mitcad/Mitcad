@@ -3,6 +3,7 @@
 # check-all sources: app/files/MainWindowPrint.cpp app/MainWindowMake.cpp app/print/MakeBodyCard.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/framework/TestDriver.cpp
 # check-all sources: core/model/src/document/print_settings.rs core/model/src/exchange core/model/src/print_files tools/cli
+# check-all sources: core/model/src/document/print_plates.rs
 # Send to Slicer's Process row shows the process set on the body
 # (mitcad#1799), the shared input script
 # tools/ui-scripts/body-process-send.mitcad-ui (also run by
@@ -10,10 +11,12 @@
 # design's processes Fixture Fine and Fixture Draft, none on the root: a
 # process set on Body1 on the Make card is the row's choice, Body2 with
 # another one gives Per body, and Fixture Fine chosen in the panel is set
-# on both bodies in one undo step; Send (a fixture slicer that does
-# nothing, 3MF) writes the file, read back here
-# (tools/ui-scripts/body-process-send-verify.py): Fixture Fine for both
-# bodies, no part of its own with Fixture Draft's layers.
+# on both bodies in one undo step. With the bodies on two plates of their
+# own and the plates sent (mitcad#1807) the row is Per body again, and a
+# choice there sets it on both bodies; Send (a fixture slicer that does
+# nothing, 3MF) writes the plates' file, read back here
+# (tools/ui-scripts/body-process-send-verify.py): two plates, Fixture Fine
+# for both bodies, no part of its own with Fixture Draft's layers.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-body-process-send-test.sh
@@ -45,7 +48,7 @@ done
 kill -0 "$UI_RUNNER" 2> /dev/null && { ui_fail "Send to Slicer process driver timed out"; exit 1; }
 wait "$UI_RUNNER" || { cat "$UI_LOG" >&2; exit 1; }
 ui_expect_log 'TestDriver: done' \
-  "the body's process is the Process row's choice, Per body for two, a choice sets it on both bodies"
+  "the body's process is the Process row's choice, Per body for two, a choice sets it on both bodies, also with the plates sent"
 python3 -I "$here/ui-scripts/body-process-send-verify.py" "$TMPDIR/mitcad-print/body-process/body-process.3mf" ||
-  ui_fail "the 3MF of the two bodies"
+  ui_fail "the 3MF of the two plates"
 ui_finish "UI Send to Slicer's Process row and the bodies' own process"

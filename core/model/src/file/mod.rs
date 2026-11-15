@@ -260,7 +260,9 @@
 //! `rotation`, `projection`, `data`, and the maps `normal`, `roughness`,
 //! `metalness`, `occlusion` {`path`, `data`} and `source`, mitcad#313};
 //! and its `class` (mitcad#1102), written only when set, which older
-//! versions refuse;
+//! versions refuse, as they refuse the `projection` `uv` and a map's
+//! `channel` (`red`, `green`, `blue`; mitcad#1862) and `factor`
+//! (mitcad#1874);
 //! parameters left out are the default's), see [`crate::appearance`].
 //! Embedded images are in their texture's `data` (base64) unless a map's
 //! image is embedded or one image is embedded twice: then the file has
@@ -294,6 +296,12 @@
 //! (`shapes`: rectangles and circles, in version 1 and early version 2) are
 //! converted to entities, constraints and dimensions with the same curve
 //! ids and parameters, so region keys and face names keep resolving.
+//!
+//! A mesh body imported with texture coordinates (mitcad#1862, a glTF
+//! file's) keeps them as its triangulation's UV nodes in its base
+//! feature's B-rep data (OCCT's binary format writes them with the
+//! triangulation of a face without a surface); older versions read the
+//! data and leave them unused.
 //!
 //! Version 3 (P12a, a design in a project) is version 2 whose base features
 //! refer to their B-rep data in the store of the project the file is in by
@@ -891,6 +899,9 @@ fn load_parts(json: &str) -> Result<Loaded, FileError> {
     // A flange's profile sketch on a fixed plane of its own follows the
     // flange's wall from now on (mitcad#1776).
     state.settle_flange_profiles();
+    // A part placed from a library before its library gave its material
+    // gets it now (mitcad#1817): never a silent default.
+    state.settle_library_materials();
     Ok(Loaded {
         state,
         warnings,
@@ -1212,8 +1223,10 @@ pub fn parse_length_unit(text: &str) -> Result<crate::expr::LengthUnit, String> 
 /// after, leaves the reference (its base feature fails) and adds a warning.
 /// Bodies with the same data share it.
 fn resolve(state: &mut DocState, store: &dyn BlobStore, warnings: &mut Vec<String>) {
-    // Library sources' designs (mitcad#375).
+    // Library sources' designs (mitcad#375), and the materials their
+    // parts take from them (mitcad#1817).
     state.library_sources.resolve(store, warnings);
+    state.settle_library_materials();
     let mut found: HashMap<Sha256, Option<Brep>> = HashMap::new();
     // The data read from the store counts against one budget, each piece
     // once however many bodies share it (mitcad#928).

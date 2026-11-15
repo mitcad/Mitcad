@@ -48,8 +48,12 @@ QString surfaceType(const TopoDS_Face& face) {
     return QStringLiteral("sphere");
   case GeomAbs_Torus:
     return QStringLiteral("torus");
-  default:
-    return geometry::face_plane(face) ? QStringLiteral("plane") : QStringLiteral("other");
+  default: {
+    // And a spline within 1e-6 mm of a cylinder, cone, sphere or torus is
+    // that one (mitcad#1855).
+    const char* kind = geometry::analytic_kind(face);
+    return kind != nullptr ? QString::fromLatin1(kind) : QStringLiteral("other");
+  }
   }
 }
 
@@ -64,7 +68,11 @@ QString curveType(const TopoDS_Edge& edge) {
   case GeomAbs_Ellipse:
     return QStringLiteral("ellipse");
   default:
-    return geometry::is_straight(edge) ? QStringLiteral("line") : QStringLiteral("other");
+    if (geometry::is_straight(edge)) {
+      return QStringLiteral("line");
+    }
+    // A round spline is a circle (mitcad#1855).
+    return geometry::is_circular(edge) ? QStringLiteral("circle") : QStringLiteral("other");
   }
 }
 

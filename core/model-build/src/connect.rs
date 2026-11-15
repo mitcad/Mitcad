@@ -105,6 +105,12 @@ pub struct RemoveResult {
     pub features: Vec<FeatureUid>,
     /// Bound lengths of other parts that ended on it, detached first.
     pub detached: Vec<FeatureUid>,
+    /// The components placed on it that stay where they are, freed of it
+    /// (mitcad#1811).
+    pub freed: Vec<ComponentUid>,
+    /// What happened to them, in words, one information each, the
+    /// occurrence its place.
+    pub notices: Vec<mitcad_model::notice::Notice>,
 }
 
 /// A part made from a source and placed by a joint: what connectors,
@@ -1725,11 +1731,24 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
         };
         self.apply(|state| {
             let mut out = RemoveResult::default();
+            let mut freed_of = Vec::new();
             for plan in &plans {
                 let removed = apply_remove(state, plan)?;
                 out.components.extend(removed.components);
                 out.features.extend(removed.features);
                 out.detached.extend(removed.detached);
+                for c in removed.freed {
+                    freed_of.push((c, plan.name.clone()));
+                }
+            }
+            // The parts that stayed, freed of what went, in words
+            // (mitcad#1811); one a later plan removed is not among them.
+            for (c, from) in freed_of {
+                if !state.assembly.exists(c) || out.freed.contains(&c) {
+                    continue;
+                }
+                out.freed.push(c);
+                out.notices.push(freed_notice(state, c, &from));
             }
             if let Some(c) = frame_component.filter(|c| {
                 state.assembly.exists(*c)
@@ -1929,55 +1948,68 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
                 }
             }
         }
-        // Occurrences whose joints go with it keep where they are.
+        // The joints that place what goes, or place something on it. Most
+        // go with the derived part their frame is on; one on a design's XY
+        // (a panel's, a fastener's without frames) names only the
+        // occurrence, which is deleted; one on a face or an edge of what
+        // goes (a shaft through its hole) names its occurrence too.
         let removed_parts: BTreeSet<FeatureUid> = components
             .iter()
             .filter_map(|c| self.part_info(*c).and_then(|i| i.part))
             .collect();
-        let mut keep = Vec::new();
+        // The other sides of those joints keep where they are (mitcad#1811):
+        // a part placed on what goes stays, freed of it; what it was placed
+        // on stays too. Side a is the one a joint places.
+        let mut sides = Vec::new();
+        let mut placed = Vec::new();
         for entry in self.features() {
             let FeatureDef::Joint(j) = &entry.def else {
                 continue;
             };
-            let on_removed = [&j.a, &j.b].iter().any(|o| {
-                matches!(&o.geometry, GeomRef::Mount { feature, .. } if removed_parts.contains(feature))
-            });
-            if !on_removed {
-                continue;
-            }
-            for side in [&j.a, &j.b] {
-                if let Some(first) = side.occurrence.0.first()
-                    && let Ok(c) = mitcad_model::internal::joints::path_component(
+            let goes = |side: &JointOrigin| {
+                matches!(&side.geometry, GeomRef::Mount { feature, .. } if removed_parts.contains(feature))
+                    || mitcad_model::internal::joints::path_component(
                         self.assembly(),
                         entry.component,
                         &side.occurrence.0,
                     )
-                    && !components.contains(&c)
-                    && let Some(t) = self.placement(*first)
-                {
-                    keep.push((*first, t));
+                    .is_ok_and(|c| components.contains(&c))
+            };
+            let (a_goes, b_goes) = (goes(&j.a), goes(&j.b));
+            if !a_goes && !b_goes {
+                continue;
+            }
+            features.insert(entry.uid);
+            // Placed on what goes: side a of a joint whose b goes.
+            for (side, gone, on_gone) in [(&j.a, a_goes, b_goes), (&j.b, b_goes, false)] {
+                let Some(first) = side.occurrence.0.first() else {
+                    continue;
+                };
+                if gone {
+                    continue;
+                }
+                if !sides.contains(first) {
+                    sides.push(*first);
+                }
+                if on_gone && !placed.contains(first) {
+                    placed.push(*first);
                 }
             }
         }
-        // The joints that place what goes. Most go with the derived part
-        // their frame is on; one on a design's XY (a panel's, a fastener's
-        // without frames) names only the occurrence, which is deleted.
-        for entry in self.features() {
-            let FeatureDef::Joint(j) = &entry.def else {
-                continue;
-            };
-            let places_removed = [&j.a, &j.b].iter().any(|side| {
-                mitcad_model::internal::joints::path_component(
-                    self.assembly(),
-                    entry.component,
-                    &side.occurrence.0,
-                )
-                .is_ok_and(|c| components.contains(&c))
-            });
-            if places_removed {
-                features.insert(entry.uid);
-            }
-        }
+        let held = self.held_placements(sides.iter().copied());
+        let keep: Vec<(OccurrenceUid, Transform)> = sides
+            .iter()
+            .filter_map(|o| held.get(o).map(|t| (*o, *t)))
+            .collect();
+        let freed = placed
+            .iter()
+            .filter(|o| {
+                self.assembly()
+                    .occurrence(**o)
+                    .is_some_and(|occurrence| !occurrence.grounded)
+            })
+            .copied()
+            .collect();
         Ok(RemovePlan {
             component,
             name: info.name.clone(),
@@ -1985,6 +2017,7 @@ impl<K: Kernel> ConnectCrateOps<K> for Document<K> {
             features,
             others,
             keep,
+            freed,
         })
     }
 }
@@ -2000,6 +2033,9 @@ pub(crate) struct RemovePlan {
     pub features: BTreeSet<FeatureUid>,
     pub others: Vec<(ComponentUid, FeatureUid, FeatureUid)>,
     pub keep: Vec<(OccurrenceUid, Transform)>,
+    /// The occurrences placed on what goes, not grounded: they stay,
+    /// freed of it (mitcad#1811).
+    pub freed: Vec<OccurrenceUid>,
 }
 
 /// Removes what a plan says, in `state`.
@@ -2017,11 +2053,9 @@ pub(crate) fn apply_remove(
         detach(state, *other, *bound, *part)?;
         detached.push(*bound);
     }
-    for (occurrence, t) in &plan.keep {
-        if let Some(o) = state.assembly.occurrence_mut(*occurrence) {
-            o.transform = *t;
-        }
-    }
+    // What its joints placed stays where it is (mitcad#1811).
+    let held: BTreeMap<OccurrenceUid, Transform> = plan.keep.iter().copied().collect();
+    state.hold_placements(plan.keep.iter().map(|(o, _)| *o), &held);
     // A spacing set's lead hands the set to the next member (mitcad#478),
     // and joinery with the parts that go is taken out of the others.
     crate::spacing::hand_over_set(state, components);
@@ -2051,11 +2085,62 @@ pub(crate) fn apply_remove(
         .filter(|c| state.assembly.exists(*c))
         .collect();
     removed.extend(state.delete_components(alive));
+    // The parts placed on it are free of it: no joint of theirs is left to
+    // measure from or slide along (mitcad#1811), as a part placed without
+    // one.
+    let mut freed = Vec::new();
+    for occurrence in &plan.freed {
+        let Some(c) = state.assembly.occurrence(*occurrence).map(|o| o.component) else {
+            continue;
+        };
+        let lost = state
+            .assembly
+            .component(c)
+            .and_then(|d| d.build.as_ref())
+            .and_then(|r| r.joint)
+            .is_some_and(|j| state.position(j).is_none());
+        if lost
+            && let Some(record) = state
+                .assembly
+                .component_mut(c)
+                .and_then(|d| d.build.as_mut())
+        {
+            record.joint = None;
+            record.from = None;
+            record.gap = None;
+        }
+        if !freed.contains(&c) {
+            freed.push(c);
+        }
+    }
     Ok(RemoveResult {
         components: components.iter().copied().collect(),
         features: removed,
         detached,
+        freed,
+        notices: Vec::new(),
     })
+}
+
+/// The information that a part placed on a removed one stays where it was
+/// (mitcad#1811): in words with the components' names, its occurrence
+/// painted.
+fn freed_notice(state: &DocState, component: ComponentUid, from: &str) -> mitcad_model::Notice {
+    let notice = mitcad_model::Notice::info(format!(
+        "{} stays where it was, no longer placed on {from}.",
+        state.assembly.name(component)
+    ));
+    match state.assembly.paths_to(component).into_iter().next() {
+        Some(path) if !path.is_empty() => {
+            notice.with_places([mitcad_model::notice::NoticePlace::occurrence(
+                path.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            )])
+        }
+        _ => notice,
+    }
 }
 
 /// The document's BUILD methods of this block, as an extension trait

@@ -580,18 +580,21 @@ impl<K: Kernel> Document<K> {
                         .map(|b| b.designation.clone())
                         .or_else(|| c.library.as_ref().map(|l| l.designation.clone()))
                         .filter(|d| !d.is_empty())
+                        // A part converted to features keeps it (mitcad#1815).
+                        .or_else(|| self.stored_text(c.uid, "Designation"))
                         .unwrap_or_else(|| c.name.clone()),
                     quantity: placed(a, c.uid, &mut memo, 0),
                     linked: c.link.is_some(),
                     supplier: library
                         .as_ref()
                         .map(|l| l.supplier.clone())
+                        .or_else(|| self.stored_text(c.uid, "Supplier"))
                         .unwrap_or_default(),
                     part_number: build
                         .as_ref()
                         .map(|b| b.part_number.clone())
                         .or_else(|| library.as_ref().map(|l| l.part_number.clone()))
-                        .or_else(|| self.stored_part_number(c.uid))
+                        .or_else(|| self.stored_text(c.uid, "Part number"))
                         .unwrap_or_default(),
                     supplier_url: library
                         .as_ref()
@@ -607,18 +610,20 @@ impl<K: Kernel> Document<K> {
             .collect()
     }
 
-    /// A component's own stored `Part number` (of any set), the parts
-    /// list's for a component that is no library or BUILD part: one
-    /// brought in from the web gets its file name's first part
-    /// (mitcad#1579), and a user may give any component one.
-    fn stored_part_number(&self, component: ComponentUid) -> Option<String> {
+    /// A component's own stored text `key` (of any set): its `Part
+    /// number`, the parts list's for a component that is no library or
+    /// BUILD part: one brought in from the web gets its file name's first
+    /// part (mitcad#1579), and a user may give any component one; its
+    /// `Designation` and `Supplier`, which a part converted to features
+    /// keeps from its library (mitcad#1815).
+    fn stored_text(&self, component: ComponentUid, key: &str) -> Option<String> {
         use crate::properties::{PropertyOwner, PropertyValue, same_name};
         self.state
             .properties
             .sets(PropertyOwner::Component(component))
             .iter()
             .flat_map(|group| group.properties.iter())
-            .find(|p| same_name(&p.key, "Part number"))
+            .find(|p| same_name(&p.key, key))
             .and_then(|p| match &p.value {
                 PropertyValue::Text(text) => Some(text.trim().to_owned()),
                 PropertyValue::Integer(number) => Some(number.to_string()),

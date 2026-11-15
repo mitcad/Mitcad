@@ -155,6 +155,9 @@ std::optional<SelectionItem> readItem(const QJsonValue& value, const CommandCont
                   .arg(mcp::echoed(QString::fromUtf8(QJsonDocument(entry).toJson(QJsonDocument::Compact))));
     return std::nullopt;
   }
+  // The type as the queries give it: a spline face within 1e-6 mm of a
+  // cylinder (a hole's wall in a sheet body) a cylinder, a round spline
+  // edge a circle, as the view calls them (mitcad#1863).
   if (item.geometry.isEmpty() && (item.kind == SelectKind::Face || item.kind == SelectKind::Edge)) {
     try {
       const bool face = item.kind == SelectKind::Face;

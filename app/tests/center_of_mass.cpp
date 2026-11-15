@@ -45,7 +45,7 @@ QJsonObject answer(bool visible, int defaults) {
           {QStringLiteral("mass"), 0.0351},
           {QStringLiteral("volume"), 8400.0},
           {QStringLiteral("bodies"), 2},
-          {QStringLiteral("default_material"), defaults},
+          {QStringLiteral("without_material"), defaults},
           {QStringLiteral("marker"), QJsonObject{{QStringLiteral("visible"), visible}}}};
 }
 
@@ -61,16 +61,16 @@ void stateTests() {
   CHECK(shown.has_value());
   CHECK(shown && shown->visible && shown->point.has_value());
   CHECK(shown && shown->point && (*shown->point)[1] == -10.5);
-  CHECK(shown && shown->bodies == 2 && shown->defaultMaterial == 1);
+  CHECK(shown && shown->bodies == 2 && shown->withoutMaterial == 1);
   CHECK(shown && centerOfMassTip(*shown) ==
-                     QStringLiteral("(15, -10.5, 2.25) mm, 0.0351 kg; 1 body without a material counted as steel"));
+                     QStringLiteral("(15, -10.5, 2.25) mm, 0.0351 kg; 1 body without a material left out"));
   CHECK(centerOfMassLog(shown) ==
         QStringLiteral("Center of Mass: at 15.000000000, -10.500000000, 2.250000000 mm, mass 0.035100000000 kg, "
                        "2 bodies, 1 without a material (shown)"));
   const std::optional<CenterOfMassShown> three = centerOfMassOf(answer(false, 3));
   CHECK(three && !three->visible);
   CHECK(three && centerOfMassTip(*three) ==
-                     QStringLiteral("(15, -10.5, 2.25) mm, 0.0351 kg; 3 bodies without a material counted as steel"));
+                     QStringLiteral("(15, -10.5, 2.25) mm, 0.0351 kg; 3 bodies without a material left out"));
   CHECK(centerOfMassLog(three).endsWith(QStringLiteral("3 without a material (hidden)")));
   const std::optional<CenterOfMassShown> own = centerOfMassOf(answer(true, 0));
   CHECK(own && centerOfMassTip(*own) == QStringLiteral("(15, -10.5, 2.25) mm, 0.0351 kg"));
@@ -81,6 +81,12 @@ void stateTests() {
   const std::optional<CenterOfMassShown> nothing = centerOfMassOf(empty);
   CHECK(nothing && !nothing->point);
   CHECK(centerOfMassLog(nothing) == QStringLiteral("Center of Mass: no bodies (shown)"));
+  // Bodies, none of a material (mitcad#1817): all left out, said so.
+  QJsonObject unmade = answer(true, 2);
+  unmade.insert(QStringLiteral("center_of_mass"), QJsonValue());
+  const std::optional<CenterOfMassShown> massless = centerOfMassOf(unmade);
+  CHECK(massless && !massless->point);
+  CHECK(massless && centerOfMassTip(*massless) == QStringLiteral("No body has a material, so none has a mass"));
 
   // A query that failed: why, and no point.
   const QJsonObject failed{{QStringLiteral("marker"), QJsonObject{{QStringLiteral("visible"), true}}},

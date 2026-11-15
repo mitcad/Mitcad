@@ -2,7 +2,11 @@
 #include "pipe_folds.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -16,6 +20,9 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepAlgoAPI_Check.hxx>
 #include <BRepAlgoAPI_Common.hxx>
@@ -33,6 +40,8 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAbs_SurfaceType.hxx>
+#include <Precision.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
@@ -47,6 +56,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shell.hxx>
+#include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Ax1.hxx>
@@ -121,11 +131,60 @@ bool sound(const Shape& shape) {
   return props.Mass() > 0.0;
 }
 
+// How many times self_interfering ran (faces_crossing_checks).
+std::atomic<std::size_t> g_crossing_checks{0};
+
 // Whether OCCT's checker finds faces of the shape crossing each other.
+// (mitcad#1788) Stopped on a cancel request, as the booleans are: a
+// preview made obsolete by a changed input gives way here too.
 bool self_interfering(const Shape& shape) {
-  BRepAlgoAPI_Check check(shape.occt(), false, true);
+  ++g_crossing_checks;
+  BRepAlgoAPI_Check check;
+  check.SetData(shape.occt(), false, true);
+  interruptible([&](const Message_ProgressRange& range) { check.Perform(range); });
   return !check.IsValid();
 }
+
+// (mitcad#1788) Whether the stages of a sweep that may pass through itself
+// are timed on the standard error: while MITCAD_TRACE_PIPE_FOLDS is set
+// (read each time, so that a run can set it round one pipe).
+bool tracing_folds() {
+#ifdef _MSC_VER
+  char* value = nullptr;
+  std::size_t length = 0;
+  if (_dupenv_s(&value, &length, "MITCAD_TRACE_PIPE_FOLDS") != 0 || value == nullptr) {
+    return false;
+  }
+  const bool on = value[0] != '\0';
+  std::free(value);
+  return on;
+#else
+  const char* value = std::getenv("MITCAD_TRACE_PIPE_FOLDS");
+  return value != nullptr && value[0] != '\0';
+#endif
+}
+
+// The trace of those stages: each line `pipe folds: <stage>: <ms> ms`, the
+// time since the line before (or since the trace began).
+class FoldTrace {
+public:
+  FoldTrace() : m_on(tracing_folds()), m_last(std::chrono::steady_clock::now()) {}
+
+  void stage(const std::string& what) {
+    if (!m_on) {
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(now - m_last).count();
+    std::fprintf(stderr, "pipe folds: %s: %.0f ms\n", what.c_str(), ms);
+    std::fflush(stderr);
+    m_last = now;
+  }
+
+private:
+  bool m_on = false;
+  std::chrono::steady_clock::time_point m_last;
+};
 
 // The face the loops bound (the outer one first, then its holes).
 TopoDS_Face profile_face(const std::vector<NamedWire>& loops) {
@@ -1678,6 +1737,7 @@ public:
       m_reach = std::max(m_reach, p.Distance(origin));
     }
     m_slack = 1.0e-9 * std::max(1.0, m_reach);
+    m_inside = inside_radius(m_spine.edge_tangent(at.edge, at.local));
     m_joints = joints();
     find_bends();
     m_cuts = folded_legs({});
@@ -1708,6 +1768,13 @@ public:
   }
   bool folds() const { return m_folds; }
   bool returns() const { return m_returning < std::numeric_limits<double>::infinity(); }
+  // (mitcad#1788) Whether the path comes back closer to itself than twice
+  // the radius of the circle inside the profiles (m_inside), between points
+  // inside it (find_return): the tubes of that circle about the two
+  // stretches overlap, so the sweep in one piece has faces crossing each
+  // other for certain, and OCCT's check of that (minutes along a helix of
+  // four turns) is not needed.
+  bool crosses_for_certain() const { return m_inside > 0.0 && m_nearest < 2.0 * m_inside * (1.0 - 1.0e-6); }
   const gp_Pnt& where() const { return m_where; }
 
   bool has_corner() const {
@@ -1749,7 +1816,7 @@ public:
 
   // The pieces between the cuts, and the joints at the corners cut,
   // fused.
-  ShapePtr pieces_fused(const std::vector<double>& cuts) const {
+  ShapePtr pieces_fused(const std::vector<double>& cuts, FoldTrace& trace) const {
     std::vector<double> bounds{0.0};
     for (const double s : cuts) {
       if (s > m_eps && s < m_length - m_eps) {
@@ -1798,7 +1865,9 @@ public:
         }
       }
     }
+    trace.stage(std::to_string(parts.size()) + " pieces swept");
     ShapePtr result = fused(parts, m_sweep.what, false, m_sweep.tolerance);
+    trace.stage("pieces fused");
     // Sound, and the pieces of a profile one solid.
     std::size_t solids = 0;
     for (TopExp_Explorer s(result->occt(), TopAbs_SOLID); s.More(); s.Next()) {
@@ -1823,6 +1892,7 @@ public:
     if (props.Mass() < largest * (1.0 - 1.0e-6) || props.Mass() > all * (1.0 + 1.0e-6)) {
       throw std::runtime_error(std::string(m_sweep.what) + ": its pieces' union does not hold them");
     }
+    trace.stage("union checked");
     return result;
   }
 
@@ -2042,6 +2112,45 @@ private:
       out.emplace_back(origin, p.Transformed(move));
     }
     return out;
+  }
+
+  // (mitcad#1788) The radius of the largest circle about the path's point
+  // where the profiles lie (m_at) inside the outer loop of every profile,
+  // the profiles square to the path (`tangent`); 0 where a profile lies at
+  // a slant to it or that point lies outside one. The tube that circle
+  // sweeps lies inside the sweep. A round profile's is its rim's radius.
+  double inside_radius(const gp_Dir& tangent) const {
+    if (m_round && !m_radii.empty()) {
+      return m_radii.front();
+    }
+    const gp_Pnt origin = m_at.Location();
+    const TopoDS_Vertex at = BRepBuilderAPI_MakeVertex(origin).Vertex();
+    double inside = std::numeric_limits<double>::infinity();
+    for (const SweptProfile& profile : m_profiles) {
+      if (profile.loops.empty()) {
+        return 0.0;
+      }
+      const TopoDS_Wire& outer = profile.loops.front().wire;
+      BRepBuilderAPI_MakeFace face(outer, true);
+      if (!face.IsDone()) {
+        return 0.0;
+      }
+      const BRepAdaptor_Surface surface(face.Face());
+      if (surface.GetType() != GeomAbs_Plane ||
+          std::abs(surface.Plane().Axis().Direction().Dot(tangent)) < 1.0 - 1.0e-9) {
+        return 0.0;
+      }
+      BRepClass_FaceClassifier classifier(face.Face(), origin, Precision::Confusion());
+      if (classifier.State() != TopAbs_IN) {
+        return 0.0;
+      }
+      BRepExtrema_DistShapeShape distance(at, outer);
+      if (!distance.IsDone() || distance.NbSolution() == 0) {
+        return 0.0;
+      }
+      inside = std::min(inside, distance.Value());
+    }
+    return std::isfinite(inside) ? inside : 0.0;
   }
 
   // How far the profile reaches along `direction` at the station.
@@ -2308,15 +2417,28 @@ private:
       const Station at = station(length * i / n, true);
       points.push_back(m_spine.edge_point(at.edge, at.local));
     }
+    // (mitcad#1788) Points far enough from the ends that the tube of
+    // m_inside about the path holds everything within m_inside of them.
+    const auto inner = [&](int i) {
+      const double s = length * i / n;
+      return m_sweep.around || (s >= 2.0 * m_reach && s <= length - 2.0 * m_reach);
+    };
     for (int i = 0; i <= n; ++i) {
       for (int j = i + 1; j <= n; ++j) {
         double along = length * (j - i) / n;
         if (m_sweep.around) {
           along = std::min(along, length - along);
         }
-        if (along > 4.0 * m_reach && along < m_returning && points[i].Distance(points[j]) < 2.0 * m_reach) {
+        if (along <= 4.0 * m_reach) {
+          continue;
+        }
+        const double apart = points[i].Distance(points[j]);
+        if (along < m_returning && apart < 2.0 * m_reach) {
           m_returning = along;
           note_where(points[i]);
+        }
+        if (apart < m_nearest && inner(i) && inner(j)) {
+          m_nearest = apart;
         }
       }
     }
@@ -2469,6 +2591,11 @@ private:
   bool m_turns_back = false;
   gp_Pnt m_back;
   double m_returning = std::numeric_limits<double>::infinity();
+  // (mitcad#1788) The radius of the circle about the path inside the
+  // profiles (inside_radius), and the least distance between points of the
+  // path farther apart along it than four reaches, both inside it.
+  double m_inside = 0.0;
+  double m_nearest = std::numeric_limits<double>::infinity();
   gp_Pnt m_where;
   bool m_placed = false;
   const NameList m_none;
@@ -2564,6 +2691,8 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
   } else {
     return {whole(), false};
   }
+  // (mitcad#1788) Where the time goes, with MITCAD_TRACE_PIPE_FOLDS set.
+  FoldTrace trace;
   std::optional<Unfolder> unfolder;
   try {
     unfolder.emplace(sweep, profiles, binormal);
@@ -2574,21 +2703,35 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
     // corner, a curve in no plane under a profile that is not round): as
     // before.
     throw_if_cancelled();
+    trace.stage("frames not known here, swept in one piece");
     return {whole(), false};
   }
+  trace.stage(std::string("path looked at: folds ") + (unfolder->folds() ? "yes" : "no") + ", comes back near itself " +
+              (unfolder->returns() ? "yes" : "no") + ", unresolvable " + (unfolder->unresolvable() ? "yes" : "no"));
   const auto in_pieces = [&](bool at_corners, std::string& why) -> ShapePtr {
     try {
       if (unfolder->tube_only()) {
-        return unfolder->whole_tube();
+        ShapePtr tube = unfolder->whole_tube();
+        trace.stage("built as its tube");
+        return tube;
       }
-      return unfolder->pieces_fused(unfolder->plan(at_corners));
+      const std::vector<double> cuts = unfolder->plan(at_corners);
+      trace.stage("planned " + std::to_string(cuts.size()) + " cuts");
+      return unfolder->pieces_fused(cuts, trace);
     } catch (const Cancelled&) {
       throw;
     } catch (const std::exception& error) {
       throw_if_cancelled();
       why = error.what();
+      trace.stage(std::string("not built in pieces: ") + why);
     }
     return nullptr;
+  };
+  // The sweep in one piece, traced.
+  const auto whole_traced = [&] {
+    Whole one = built_whole(whole);
+    trace.stage(std::string("swept in one piece: ") + (one.shape ? (one.sound ? "sound" : "unsound") : "failed"));
+    return one;
   };
   std::string why;
   if (unfolder->folds() && !unfolder->unresolvable()) {
@@ -2607,7 +2750,7 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
           std::string(sweep.what) + " passes through itself where its path turns right back at a corner",
           {point_place(*back)}));
     }
-    const Whole one = built_whole(whole);
+    const Whole one = whole_traced();
     if (one.sound) {
       return {one.shape, false};
     }
@@ -2618,9 +2761,28 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
   }
   if (unfolder->returns()) {
     // The path comes back near itself: a fold only where the sides cross.
-    const Whole one = built_whole(whole);
-    if (one.sound && !self_interfering(*one.shape)) {
-      return {one.shape, false};
+    // (mitcad#1788) Where it comes back closer than the circle inside the
+    // profiles is wide, they cross for certain: straight to the pieces,
+    // without the sweep in one piece and OCCT's check of it (88 of 89 s
+    // for four turns of a helix 4.98 mm apart under a section of 8 mm).
+    bool tried = false;
+    if (unfolder->crosses_for_certain() && !unfolder->unresolvable()) {
+      trace.stage("comes back closer than the profile is wide: faces cross, not checked");
+      tried = true;
+      if (ShapePtr pieces = in_pieces(false, why)) {
+        return {pieces, true};
+      }
+    }
+    const Whole one = whole_traced();
+    if (tried) {
+      return one.as_built();
+    }
+    if (one.sound) {
+      const bool crossing = self_interfering(*one.shape);
+      trace.stage(std::string("checked for faces crossing: ") + (crossing ? "crossing" : "none"));
+      if (!crossing) {
+        return {one.shape, false};
+      }
     }
     if (!unfolder->unresolvable()) {
       if (ShapePtr pieces = in_pieces(false, why)) {
@@ -2631,7 +2793,7 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
   }
   // No fold: in one piece; where that does not build, in pieces at the
   // corners.
-  const Whole one = built_whole(whole);
+  const Whole one = whole_traced();
   if (one.sound) {
     return {one.shape, false};
   }
@@ -2642,5 +2804,7 @@ UnfoldedSweep swept_resolving_folds(const FoldedSweep& sweep, const std::vector<
   }
   return one.as_built();
 }
+
+std::size_t faces_crossing_checks() { return g_crossing_checks.load(); }
 
 } // namespace mitcad::geometry::detail

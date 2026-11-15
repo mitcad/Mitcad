@@ -91,7 +91,19 @@ Options:
   --default-cores N     (default 1; corpus tests 2)
   --default-wall SECS   (default 60)
   --disk-floor SIZE     no test starts below this free disk (default 10G)
-  --no-cgroup           Linux: no systemd scopes (rusage only)";
+  --no-cgroup           Linux: no systemd scopes (rusage only)
+
+A release gate's full run (mitcad#1822):
+  --release-passed DIR  the folder of the release gates' passes, outside
+                        every build folder: a geometry* test whose
+                        fingerprint (what it is built from and runs) passed
+                        in an earlier release gate of this platform
+                        (DIR/<platform>/<test>) is skipped; the report and
+                        OUT/release-skipped.tsv name each with the release it
+                        last passed in, and the passes of this run are kept
+  --release-tag TAG     this gate's release and RC (0.63.0-rc1), kept with
+                        its passes (needed with --release-passed)
+  --all-geometry        runs every geometry* test (their passes are kept)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -224,6 +236,11 @@ pub struct Options {
     pub default_wall: f64,
     pub disk_floor: u64,
     pub cgroups: bool,
+    /// A release gate's passes (`fingerprint`): the folder, this gate's
+    /// release and RC, and whether every geometry test runs anyway.
+    pub release_passed: Option<PathBuf>,
+    pub release_tag: Option<String>,
+    pub all_geometry: bool,
 }
 
 impl Default for Options {
@@ -261,6 +278,9 @@ impl Default for Options {
             default_wall: 60.0,
             disk_floor: 10 << 30,
             cgroups: true,
+            release_passed: None,
+            release_tag: None,
+            all_geometry: false,
         }
     }
 }
@@ -361,6 +381,9 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
             "--default-wall" => o.default_wall = number(value()?, name)?,
             "--disk-floor" => o.disk_floor = parse_size(value()?)?,
             "--no-cgroup" => o.cgroups = false,
+            "--release-passed" => o.release_passed = Some(PathBuf::from(value()?)),
+            "--release-tag" => o.release_tag = Some(value()?.to_owned()),
+            "--all-geometry" => o.all_geometry = true,
             _ => return Err(format!("unknown option {name}")),
         }
     }
@@ -376,6 +399,16 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     }
     if o.ui_max == Some(0) {
         return Err("--ui-max must be at least 1".into());
+    }
+    let tag_ok = |tag: &String| !tag.is_empty() && !tag.contains(['\t', '\n', '\r']);
+    match (&o.release_passed, &o.release_tag) {
+        (Some(_), Some(tag)) if !tag_ok(tag) => return Err(format!("not a release: {tag}")),
+        (Some(_), None) => return Err("--release-passed needs --release-tag".into()),
+        (None, Some(_)) => return Err("--release-tag needs --release-passed".into()),
+        _ => {}
+    }
+    if o.all_geometry && o.release_passed.is_none() {
+        return Err("--all-geometry needs --release-passed".into());
     }
     Ok(o)
 }
@@ -482,6 +515,22 @@ mod tests {
         assert!(parse(&args("--build b --frobnicate")).is_err());
         assert!(parse(&args("--build b -j")).is_err());
         assert!(parse(&args("--build b -j 0")).is_err());
+    }
+
+    #[test]
+    fn the_release_options_parse() {
+        let o = parse(&args(
+            "--build b --schedule --release-passed /r --release-tag 0.63.0-rc1 --all-geometry",
+        ))
+        .unwrap();
+        assert_eq!(o.release_passed, Some(PathBuf::from("/r")));
+        assert_eq!(o.release_tag.as_deref(), Some("0.63.0-rc1"));
+        assert!(o.all_geometry);
+        let o = parse(&args("--build b")).unwrap();
+        assert!(o.release_passed.is_none() && !o.all_geometry);
+        assert!(parse(&args("--build b --release-passed /r")).is_err());
+        assert!(parse(&args("--build b --release-tag 0.63.0-rc1")).is_err());
+        assert!(parse(&args("--build b --all-geometry")).is_err());
     }
 
     #[test]

@@ -15,6 +15,7 @@
 #include <QString>
 
 class QLockFile;
+class QUrl;
 
 namespace mitcad {
 
@@ -69,6 +70,12 @@ void saveWebSites(const QList<WebSite>& sites);
 // A typed address as a URL text: "example.com/parts" → "https://example.com/parts";
 // one with a scheme stays as it is. Empty for an empty text.
 QString normalWebAddress(const QString& typed);
+// The site Sites › Add This Page… adds (mitcad#1844): the loaded page (page,
+// its address; named by its title, else by its host); on MitCad's own start
+// page (a data: address) or about:blank, which are no site, the address
+// typed in the field (named by its host). An empty url when there is
+// neither: the entry is then disabled.
+WebSite webSiteToAdd(const QUrl& page, const QString& title, const QString& typed);
 
 // The downloads' temporary folders: under MitCad's own folder in the
 // system's temporary folder (MITCAD_WEB_DOWNLOADS_DIR for tests), one per

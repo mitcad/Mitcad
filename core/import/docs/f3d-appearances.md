@@ -125,7 +125,8 @@ decoder), else a sketch's `detail.isVisible` (external dumps); otherwise
 the default decides. The decoder reads it for sketches of the current file
 format (sketch class version 18, most of 17) and for construction planes;
 older sketches, construction axes and points stay unknown. Copies of a
-sketch imported into another component follow the default. The report
+sketch imported into another component take its light bulb too
+(mitcad#1802; before they followed the default). The report
 counts sketches and construction features, those with unknown light bulb
 and those kept (`light_bulbs`).
 
@@ -375,3 +376,155 @@ way):
 - Notes: translucency (18 appearances), bump and normal maps (20),
   texture images for the colour (8) and the roughness (5).
 
+
+## Body names, body folders and bodies out of the design (mitcad#1802)
+
+A large reported design (a house of ten components, 2246 body records, 24
+body folders) came in with every body named `Body<n>` by MitCad, without
+its folders, with flat surfaces and bodies the file does not show in the
+view. What the file keeps, read from its bytes and checked against the
+display scene it saves (`mitcad-f3d-inspect meshes`: meshes in their
+component's coordinates; its scene graph keeps each occurrence's matrix):
+
+- **Names.** A body record (class `D3937028`) keeps its name after the
+  reference to its display record (class `702B9CD2`, module `Scene`):
+  that record is entity `E + 1` only where the body was made with its
+  record, so the decoder read 105 of the 2246 names before; a body a later
+  item brought has it further on. A record that stores no name (410 of
+  them) is shown by its default name `Body<n>`, whose n follows its
+  browser node GUID (`f64 volume | f64 | u32 n`); the removals the file
+  names after their bodies (`RemoveBody-Body361`) agree with every n.
+  The decoder gives the name as the body's `name` in
+  `_f3d.appearance.bodies`; the import names the replayed bodies so
+  (`Document::name_bodies`, one step for all of them). Names are unique
+  within a component in MitCad now, as in the file: bodies of different
+  components may share one (176 of the design's do).
+- **Folders.** A body folder (class `3A8E00DC`, module `Body`) keeps its
+  name, its place among its component's folders and the body records it
+  holds (`appearance::body_folders`); the decoder gives each body's
+  `folder`, the import puts the body there (the model's body folders,
+  commands.md, *Folders of the Bodies folder*). The folders of the design
+  do not nest; a folder that stores no name (one of the corpora) is
+  named `Folder<place>`.
+- **Browser nodes.** The body record of class `D26351F0` (the one body
+  inputs refer to) keeps `u8 out | u8 light bulb | ref body` after its
+  node GUID (`appearance::body_nodes`). Of the bodies whose `out` is 0 the
+  scene draws those whose light bulb is 1 (1064 of 1065); every body
+  whose `out` is 1 (922) is missing from the scene: a removal took it out
+  of the design, though its blob still holds it. The decoder takes the
+  node's light bulb where the record has no light bulb byte (records
+  laid out without it), and marks the bodies out of the design
+  `removed`. Such a body still in the replay at its end (its removal did
+  not come in) is hidden and counted in the report (`removed_left`, the
+  text's `bodies the file took out of the design`).
+- **Removals.** A removal's body input names its body object
+  (`_f3d.body_entity`); where neither the item that made the body nor
+  its names find it, the import takes the stored body of that object's
+  record in the history state and removes the replay's body with the
+  same faces and measures (`Importer::removed_by_record`). A removal
+  after items the history has not settled yet (pending) was skipped
+  before; now its body is found so in the state the replay last stood
+  for, removed without a check against a state, and the stored body
+  leaves the states from there on (`Oracle::retire`), so that the
+  pending items' fallback does not bring it back
+  (`Importer::remove_behind_pending`). Of the design's 676 removals not
+  suppressed, 138 came in before, 664 now.
+- **Suppressed removals.** A removal suppressed in the file because the
+  pattern that made its body is (the copies a suppressed pattern made,
+  removed one by one) came in as a placeholder, as no state of the import
+  holds such a body. Two things changed (*Items suppressed in the file*,
+  [f3d-fallbacks.md](f3d-fallbacks.md#items-suppressed-in-the-file)): a
+  timeline group between suppressed items no longer ends their run (the
+  design grouped eight removals right after their suppressed pattern, so
+  the pattern was suppressed again before them); and a suppressed removal
+  whose body was made by a feature suppressed before it comes in
+  suppressed with its definition, not built (`Document::
+  add_import_suppressed`): its body is that feature's body of the file's
+  index (`_f3d.producer`, `_f3d.body_index`), unchecked as every
+  suppressed item is. Of the design's 93 such placeholders, 85 remained
+  after the first change, 2 after the second (one's producer is a
+  placeholder itself, the other's is not suppressed and its body is gone
+  by then).
+- **The stored design** is the design's bodies: the stored bodies whose
+  records say the file took them out of the design are left out of it
+  (`Importer::out_of_design`), so the last fallback (`Stored bodies`)
+  takes out those the replay still has. A stored solid no body record
+  names, where the records name the bodies of their blobs, is no body of
+  the design either: it stays, hidden (the report's `unnamed_hidden`).
+- **Surfaces of sketches.** A component's history blob keeps a sketch's
+  profiles and features' tools as sheets beside the design's bodies; a
+  fallback's base feature took them in as surface bodies (eleven flat
+  surfaces on the ground plane and a wall's plane, which looked like
+  sketches whose light bulbs did nothing). Where the file's body records
+  name the bodies of their blobs, a fallback now takes only the sheets a
+  record names (`Importer::design_sheets`).
+- **Copies of sketches.** A sketch imported again into another
+  component for a feature there (*Across components*,
+  [f3d-components.md](f3d-components.md#components)) takes the file's
+  light bulb as the sketch itself does; before it followed the default,
+  and where its feature fell back to the file's bodies it no longer used
+  the copy, which then showed (48 of the design's 107 copies, drawn where
+  the file hides every sketch but one).
+- **Placements.** The occurrences are placed as the file's last captured
+  positions place them, which is also where its display scene draws them
+  (two components moved by captured positions, by 14.6 mm and 125 mm);
+  the final comparison now gives each body's `center_distance` and
+  `box_distance` against the file's body in their component's
+  coordinates (`refs::compare_bodies`).
+
+The ctest `cli.f3d_reported_house` (`tools/cli/f3d-reported-house-test.py`)
+imports the design (MITCAD_MITCAD_REPORTED, with expectations read from
+the file's bytes apart from the decoder) and checks every body.
+
+## Bodies by their records for every reference (mitcad#1808)
+
+What mitcad#1802 left of the same design: references other than removals
+still found their body by its maker's index, 12 removals not suppressed
+in the file were skipped, and 15 items suppressed in the file came in as
+placeholders.
+
+- **References by record.** Every body input, not only a removal's, goes
+  through the body's record first (`records.rs`,
+  `Importer::recorded_body`): the stored body of its record in the state
+  the replay stands for, and the replay's body of the same faces and
+  measures in that body's component; where none has the same faces, the
+  one within the import's tolerance (a replayed split piece can have its
+  faces split otherwise); where several do (a pasted copy where its
+  original is), the one the item that made the body made. The maker's
+  index is the fallback, and the record's body refuses it where they
+  differ (29 references of the design: the index counts the bodies the
+  maker still has in the replay, or a fallback's bodies with others).
+  A record is where the body is at the end of the timeline, so it is not
+  used for a body that a cut and paste at or after the item moves into
+  another component (its record is in the destination's blob, where an
+  earlier state holds another body under that number), nor where the
+  maker made one body with its own features and the input names it by
+  the first index. Without those two rules the record took the wrong body
+  for 3 cut and paste items and one extrusion of the design, each of which
+  the maker's body, checked against the history state after it, had right;
+  a wider rule (the record's body must be one its maker made) lost 83
+  removals, as the replay's list of an item's bodies does not follow the
+  bodies that cut and paste and body transfers moved.
+- **The 12 removals** came in as remove features: one by its record in
+  the stored body's component (a copy and its original lay in one place,
+  in two components), one by its maker among two copies in one place, 10
+  by the tolerance (the pieces of a replayed split, whose faces the file
+  splits otherwise). All 676 removals not suppressed
+  in the file are remove features now.
+- **Placeholders, 15 to 10.** A move whose matrix the file does not keep
+  comes in by its decoded definition (a translation by its distances). A
+  split by sketch curves: the selection's entity inputs name the curves by
+  their tags without a target object, which the decoder now reads
+  (`Builder::member`), and the import makes one tool of the curves of
+  each sketch. A copy or move of bodies a suppressed feature made comes
+  in suppressed and unbuilt, as such removals do (`Importer::unbuilt_body`,
+  the note *it takes bodies items suppressed before it made*). The 10
+  left: five moves of faces and two splits whose faces are in no state of
+  any of the file's history blobs (every state of the ten blobs searched
+  by the faces' names: the suppressed items that made them have no
+  states), the removal of one of those splits' bodies, the removal of a
+  body that a later cut and paste moves (its maker's bodies are gone from
+  the replay by then, and its record names another body at that point),
+  and one move of a face the kernel refuses on the file's own body (the
+  replay matched the file's state before it within 3e-13). Their notes
+  say why in words.

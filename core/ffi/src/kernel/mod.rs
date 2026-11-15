@@ -99,6 +99,13 @@ pub mod repeated_parts;
 pub mod intersection_curve;
 // Narrow gaps between bodies that touch: face pairs measured (mitcad#1672).
 pub mod print_gaps;
+// Form bodies: the patches of a control cage's limit surface sewn
+// (mitcad#1757).
+pub mod form;
+// Fill Cavity: the empty spaces of a body below a cap plane (mitcad#1818).
+pub mod fill_cavity;
+// Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
+pub mod press_pull;
 
 use std::sync::Arc;
 
@@ -1527,6 +1534,7 @@ impl Kernel for OcctKernel {
             normals: mesh.normals.as_chunks::<3>().0.to_vec(),
             triangles: mesh.triangles.as_chunks::<3>().0.to_vec(),
             face_triangles: mesh.face_triangles,
+            uvs: mesh.uvs.as_chunks::<2>().0.to_vec(),
         })
     }
 
@@ -2904,9 +2912,9 @@ impl Kernel for OcctKernel {
         spec: &mitcad_model::HelixSpec<'_, Self::Shape>,
         chains: &[Vec<mitcad_model::PathCurve>],
     ) -> Result<Self::Shape, KernelError> {
-        if spec.growth != 0.0 || spec.ends.iter().any(|a| *a != 0.0) || spec.piece_shift != 0.0 {
+        if spec.freecad || spec.piece_shift != 0.0 {
             return Err(KernelError::Unsupported(
-                "a surface helix of curves that grows or has flat ends",
+                "a surface helix of curves of another construction than MitCad's",
             ));
         }
         let (curves, counts) = surface_sweeps::chains(chains);
@@ -2920,8 +2928,180 @@ impl Kernel for OcctKernel {
             spec.pitch,
             spec.revolutions,
             spec.left_handed,
+            spec.growth,
+            &spec.ends,
         )
         .map_err(failed)
+    }
+
+    // Subdivision surfaces: Form bodies sewn from the patches of a control
+    // cage's limit surface (mitcad#1757; form.rs).
+
+    fn patch_body(
+        &self,
+        spec: &mitcad_model::kernel::PatchBodySpec<'_>,
+    ) -> Result<Self::Shape, KernelError> {
+        let patches: Vec<form::ffi::FormPatch> = spec.patches.iter().map(form::patch).collect();
+        form::ffi::patch_body(&patches, spec.closed, spec.tolerance).map_err(failed)
+    }
+
+    // Fill Cavity: the empty spaces of a body below a cap plane
+    // (mitcad#1818; fill_cavity.rs, geometry's fill_cavity.hpp).
+
+    fn cavity_pieces(
+        &self,
+        spec: &mitcad_model::kernel::CavitySpec<'_, Self::Shape>,
+    ) -> Result<Vec<Self::Shape>, KernelError> {
+        let cavity = fill_cavity::ffi::Cavity {
+            feature: spec.feature.to_string(),
+            top: spec.top.to_string(),
+            origin: spec.origin,
+            x_axis: spec.x_axis,
+            normal: spec.normal,
+            min: spec.min,
+            max: spec.max,
+        };
+        let list = fill_cavity::ffi::cavity_pieces(occt(spec.body)?, &cavity).map_err(failed)?;
+        Ok(shapes(&list))
+    }
+
+    // Sketches on cylindrical and conical faces (mitcad#1768; emboss.rs).
+
+    fn wrapped_curves(
+        &self,
+        spec: &mitcad_model::kernel::WrappedCurvesSpec<'_>,
+    ) -> Result<Self::Shape, KernelError> {
+        let curves: Vec<profile::ffi::Segment> = spec
+            .curves
+            .iter()
+            .map(|c| profile::segment(c.name.clone(), &c.geometry))
+            .collect();
+        let wrap = emboss::ffi::EmbossWrap {
+            axis_origin: spec.axis.origin,
+            axis_direction: spec.axis.direction,
+            radius: spec.radius,
+            to_radius: spec.radius,
+            half_angle: spec.half_angle,
+            taper: 0.0,
+        };
+        emboss::ffi::wrapped_curves(
+            &spec.feature.to_string(),
+            &profile::frame(&spec.frame),
+            &curves,
+            &wrap,
+            spec.inner,
+            spec.outer,
+        )
+        .map_err(failed)
+    }
+
+    // Mesh bodies with texture coordinates (mitcad#1862; mesh.rs).
+
+    fn textured_triangle_body(
+        &self,
+        points: &[[f64; 3]],
+        triangles: &[[u32; 3]],
+        uvs: &[[f64; 2]],
+    ) -> Result<Self::Shape, KernelError> {
+        if uvs.len() != points.len() {
+            return Err(KernelError::failed(format!(
+                "{} texture coordinates for {} points",
+                uvs.len(),
+                points.len()
+            )));
+        }
+        mesh::ffi::mesh_from_textured_triangles(
+            points.as_flattened(),
+            triangles.as_flattened(),
+            uvs.as_flattened(),
+        )
+        .map_err(failed)
+    }
+
+    // Press Pull continued Straight or Along the walls, tapered
+    // (mitcad#1850; press_pull.rs).
+
+    fn press_pull(
+        &self,
+        feature: FeatureUid,
+        body: &Self::Shape,
+        faces: &[FaceName],
+        spec: &mitcad_model::kernel::PressPullSpec,
+    ) -> Result<Self::Shape, KernelError> {
+        use mitcad_model::kernel::{PressPullRun, PressPullTaper};
+        let (taper, taper_angle, end_scale) = match spec.taper {
+            PressPullTaper::None => (press_pull::ffi::PressPullTaper::Untapered, 0.0, 1.0),
+            PressPullTaper::Draft { angle } => (press_pull::ffi::PressPullTaper::Draft, angle, 1.0),
+            PressPullTaper::Scale { end } => (press_pull::ffi::PressPullTaper::Scale, 0.0, end),
+        };
+        let params = press_pull::ffi::PressPullParams {
+            run: match spec.run {
+                PressPullRun::Straight => press_pull::ffi::PressPullRun::Straight,
+                PressPullRun::Along => press_pull::ffi::PressPullRun::Along,
+            },
+            distance: spec.distance,
+            taper,
+            taper_angle,
+            end_scale,
+        };
+        press_pull::ffi::press_pull(
+            &feature.to_string(),
+            occt(body)?,
+            &face_names(faces),
+            &params,
+        )
+        .map_err(failed)
+    }
+
+    fn face_run(
+        &self,
+        body: &Self::Shape,
+        face: &FaceName,
+    ) -> Result<mitcad_model::kernel::FaceRun, KernelError> {
+        use mitcad_model::kernel::{FaceAlong, FaceRun};
+        let run = press_pull::ffi::face_run(occt(body)?, &face.to_string()).map_err(failed)?;
+        let along = match run.along {
+            press_pull::ffi::FaceAlong::Straight => FaceAlong::Straight {
+                direction: run.direction,
+            },
+            press_pull::ffi::FaceAlong::Turn => FaceAlong::Turn {
+                origin: run.axis_origin,
+                axis: run.axis_direction,
+                radius: run.radius,
+            },
+            _ => FaceAlong::Refused { error: run.refusal },
+        };
+        Ok(FaceRun {
+            centre: run.centre,
+            normal: run.normal,
+            reach: run.reach,
+            along,
+        })
+    }
+
+    // Faces and edges stored as other types read as what they are
+    // (mitcad#1863; datum.rs).
+
+    fn recognised_face_geometries(
+        &self,
+        shape: &Self::Shape,
+        faces: &[usize],
+    ) -> Result<Vec<SurfaceGeometry>, KernelError> {
+        let found =
+            datum::ffi::datum_recognised_face_geometries(occt(shape)?, &item_indices(faces)?)
+                .map_err(failed)?;
+        Ok(found.into_iter().map(datum::surface).collect())
+    }
+
+    fn recognised_edge_geometries(
+        &self,
+        shape: &Self::Shape,
+        edges: &[usize],
+    ) -> Result<Vec<CurveGeometry>, KernelError> {
+        let found =
+            datum::ffi::datum_recognised_edge_geometries(occt(shape)?, &item_indices(edges)?)
+                .map_err(failed)?;
+        Ok(found.into_iter().map(datum::curve).collect())
     }
 }
 

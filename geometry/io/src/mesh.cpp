@@ -2157,12 +2157,12 @@ bool triangulation_lies_on(const TopoDS_Face& face, const Poly_Triangulation& tr
   if (checked.back() != nodes) {
     checked.push_back(nodes);
   }
-  if (triangulation.HasUVNodes()) {
-    TopLoc_Location placed;
-    const occ::handle<Geom_Surface>& surface = BRep_Tool::Surface(face, placed);
-    if (surface.IsNull()) {
-      return false;
-    }
+  TopLoc_Location placed;
+  const occ::handle<Geom_Surface>& surface = BRep_Tool::Surface(face, placed);
+  // A mesh body's face has no surface: its UV nodes are texture
+  // coordinates (mitcad#1862), not parameters, and its nodes are checked
+  // against its bounds.
+  if (triangulation.HasUVNodes() && !surface.IsNull()) {
     // The surface's points in the triangulation's frame, the face's.
     const gp_Trsf to_nodes = placed.Predivided(face.Location()).Transformation();
     for (const int i : checked) {

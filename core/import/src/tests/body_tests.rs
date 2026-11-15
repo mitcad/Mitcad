@@ -439,6 +439,8 @@ fn a_split_in_two_operations_made_the_new_bodies_of_both() {
         report: DesignReport::default(),
         pending: Vec::new(),
         mesh_bodies: Vec::new(),
+        translating: None,
+        cut_sources: std::cell::OnceCell::new(),
         defined: Default::default(),
         at_final: false,
         started: std::time::Instant::now(),
@@ -561,6 +563,8 @@ fn named_participants_alone_when_the_history_changed_only_them() {
             report: DesignReport::default(),
             pending: Vec::new(),
             mesh_bodies: Vec::new(),
+            translating: None,
+            cut_sources: std::cell::OnceCell::new(),
             defined: Default::default(),
             at_final: false,
             started: std::time::Instant::now(),
@@ -1183,6 +1187,189 @@ fn a_combine_does_not_prove_local_document_from_a_missing_target_producer() {
         report.items[4].outcome,
         Outcome::Parametric,
         "{}",
+        report.text()
+    );
+}
+
+/// The stored bodies as a blob holds them, by their records
+/// (`BREP.test.smbh#<id>`: the same record for the same body in every
+/// state), as the file's body records name them.
+struct RecordGeometry(TestGeometry);
+
+impl StoredGeometry<MockShape> for RecordGeometry {
+    fn state_count(&mut self) -> usize {
+        self.0.state_count()
+    }
+
+    fn state(&mut self, index: usize) -> Result<Vec<StoredBody<MockShape>>, String> {
+        Ok(self
+            .0
+            .state(index)?
+            .into_iter()
+            .map(|mut b| {
+                b.source = format!("BREP.test.smbh#{}", b.id.unwrap_or(99));
+                b
+            })
+            .collect())
+    }
+
+    fn item_state(&mut self, index: i64) -> Option<usize> {
+        self.0.item_state(index)
+    }
+
+    fn final_bodies(&mut self) -> Result<Vec<StoredBody<MockShape>>, String> {
+        let last = self.0.state_count() - 1;
+        self.state(last)
+    }
+}
+
+/// A reference after a sibling's removal (mitcad#1808): an extrusion made
+/// three bodies, a removal took the first, and a move names the third, by
+/// its body record and by its index among the extrusion's records (2).
+/// The extrusion has two bodies left in the replay, so that index names
+/// none of them: the move finds its body through the body's record, as
+/// the removal does (the stored body of that record in the state the
+/// replay stands for, and the replay's body with its faces and measures),
+/// and the state after it is the file's.
+#[test]
+fn a_reference_after_a_siblings_removal_finds_its_body_by_its_record() {
+    // Three rectangles side by side.
+    let mut sketch = two_rectangles(0);
+    let detail = &mut sketch["detail"];
+    for (id, x, y) in [
+        ("p8", 7.0, 0.0),
+        ("p9", 8.0, 0.0),
+        ("p10", 8.0, 2.0),
+        ("p11", 7.0, 2.0),
+    ] {
+        detail["points"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": id, "xyz": [x, y, 0.0]}));
+    }
+    for (id, a, b) in [
+        ("c8", "p8", "p9"),
+        ("c9", "p9", "p10"),
+        ("c10", "p10", "p11"),
+        ("c11", "p11", "p8"),
+    ] {
+        detail["curves"].as_array_mut().unwrap().push(
+            json!({"id": id, "type": "SketchLine", "startSketchPoint": a, "endSketchPoint": b}),
+        );
+    }
+    let mut reference = Document::new(TestKernel::default());
+    import_design(
+        &mut reference,
+        &timeline_dump(vec![sketch.clone()]),
+        &mut NoGeometry,
+        &Options::default(),
+    );
+    // The extrusion of the three rectangles: three bodies.
+    let regions: Vec<Value> = reference
+        .sketch_output("F1".parse().unwrap())
+        .unwrap()
+        .regions
+        .iter()
+        .map(|r| json!({"sketch": "F1", "region": r.key.to_string()}))
+        .collect();
+    assert_eq!(regions.len(), 3);
+    add(
+        &mut reference,
+        json!({"type": "extrude", "profiles": regions,
+               "extent": {"type": "distance", "distance": "d2"}, "operation": "new_body"}),
+    );
+    let s0 = shapes(&reference);
+    assert_eq!(s0.len(), 3);
+    add(
+        &mut reference,
+        json!({"type": "remove_body", "bodies": ["F2.b0"]}),
+    );
+    add(
+        &mut reference,
+        json!({"type": "move", "bodies": ["F2.b2"],
+               "transform": {"type": "free", "matrix": [[1.0, 0.0, 0.0, 0.0],
+                                                        [0.0, 1.0, 0.0, 10.0],
+                                                        [0.0, 0.0, 1.0, 0.0]]}}),
+    );
+    let moved = reference
+        .body_shape("F2.b2".parse().unwrap())
+        .unwrap()
+        .clone();
+    // The history keeps the removed body as it was (a removal has no state
+    // of its own).
+    let geometry = TestGeometry {
+        states: vec![s0.clone(), vec![s0[0].clone(), s0[1].clone(), moved]],
+        items: HashMap::from([(1, 0), (3, 1)]),
+        ids: true,
+        ..TestGeometry::default()
+    };
+    // Body objects 300 to 302, records #0 to #2 (the ids of the stored
+    // bodies): the first taken out of the design.
+    let body = |entity: u64, index: i64| {
+        json!({"kind": "body", "objectType": "BRepBody",
+               "_f3d": {"producer": 1, "body_index": index, "body_entity": entity}})
+    };
+    let mut all = extrude(1, 0, "NewBodyFeatureOperation", "d2");
+    let profile = all["detail"]["profile"][0].clone();
+    all["detail"]["profile"] = json!([profile.clone(), profile.clone(), profile]);
+    let items = vec![
+        sketch,
+        all,
+        json!({"index": 2, "name": "RemoveBody-Body1", "objectType": "RemoveFeature",
+               "detail": {"itemToRemove": body(300, 0)}}),
+        json!({"index": 3, "name": "Move1", "objectType": "MoveFeature",
+               "detail": {"inputEntities": [body(302, 2)],
+                          "definition": {"_type": "MoveFeatureFreeMoveDefinition"},
+                          "transform": [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 1.0],
+                                        [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]}}),
+    ];
+    let mut source = serde_json::to_value(timeline_dump(items)).unwrap();
+    source["_f3d"] = json!({"appearance": {"bodies": [
+        {"entity": 300, "name": "Body1", "blob": "BREP.test.smbh", "record": 0,
+         "removed": true},
+        {"entity": 301, "name": "Body2", "blob": "BREP.test.smbh", "record": 1},
+        {"entity": 302, "name": "Body3", "blob": "BREP.test.smbh", "record": 2}
+    ]}});
+    let mut doc = Document::new(TestKernel::default());
+    let report = import_design(
+        &mut doc,
+        &dump(source),
+        &mut RecordGeometry(geometry),
+        &Options::default(),
+    );
+    let def = |at: usize| -> Value {
+        let uid = report.items[at]
+            .features
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        serde_json::from_str::<Value>(
+            &doc.query(&json!({"query": "feature", "uid": uid}).to_string())
+                .unwrap(),
+        )
+        .unwrap()["def"]
+            .clone()
+    };
+    assert_eq!(
+        report.items[2].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert_eq!(def(2)["bodies"], json!(["F2.b0"]), "{}", report.text());
+    // The body of the third record, whichever place the replay gave it
+    // among the extrusion's bodies: the state after the move is the file's.
+    assert_eq!(
+        report.items[3].outcome,
+        Outcome::Parametric,
+        "{}",
+        report.text()
+    );
+    assert_eq!(report.items[3].verified, Some(true), "{}", report.text());
+    let moved = def(3)["bodies"][0].as_str().unwrap_or_default().to_owned();
+    assert!(
+        moved.starts_with("F2.b") && moved != "F2.b0",
+        "{moved}: {}",
         report.text()
     );
 }

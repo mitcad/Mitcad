@@ -444,6 +444,7 @@ päätä", never "napsauta keskipiste".
 | assembly | kokoonpano | Assemble group: Kokoonpano |
 | joint | liitos | |
 | ground, unground (an occurrence) | kiinnittää, vapauttaa kiinnitys | Ground: Kiinnitä; Unground: Vapauta kiinnitys; grounded: kiinnitetty; never maadoittaa (electrical earthing); the render environment's ground: maa |
+| flexible (an occurrence, a subassembly) | joustava | Flexible: Joustava; its own joints move in its parent; rigid there: jäykkä |
 | sheet metal | ohutlevy | flat pattern: levitys; bend: taivutus |
 | drawing | piirustus | |
 | view (a drawing's) | kuvanto | base view: peruskuvanto; projected: projektiokuvanto; section: leikkauskuvanto; detail: detaljikuvanto; break: katkaisu; parent view: emokuvanto; the 3D view: näkymä |

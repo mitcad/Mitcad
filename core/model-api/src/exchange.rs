@@ -502,14 +502,23 @@ pub(super) fn imported_json(imported: &Imported) -> Value {
     out
 }
 
-/// The reply of an `import_file` that kept a STEP assembly (mitcad#1274):
-/// the first base feature's `uid` and `name` and every body it and the
-/// others made, as for one base feature, and the components.
-fn components_json(components: &[ImportedComponent], warnings: &[String]) -> Value {
-    let first = components.iter().find_map(|c| c.feature.as_ref());
-    let bodies: Vec<Value> = components
+/// The reply of an `import_file` that kept a STEP assembly (mitcad#1274)
+/// or a glTF file's node tree (mitcad#1826): the first base feature's `uid`
+/// and `name` and every body it and the others made, as for one base
+/// feature, and the components; a glTF file's bodies outside its
+/// components (`loose`) come first.
+fn components_json(
+    components: &[ImportedComponent],
+    warnings: &[String],
+    loose: Option<&Imported>,
+) -> Value {
+    let features: Vec<&Imported> = loose
+        .into_iter()
+        .chain(components.iter().filter_map(|c| c.feature.as_ref()))
+        .collect();
+    let first = features.first().copied();
+    let bodies: Vec<Value> = features
         .iter()
-        .filter_map(|c| c.feature.as_ref())
         .flat_map(|f| &f.bodies)
         .map(|b| json!({"uid": b.uid, "name": b.name, "kind": b.kind.as_str()}))
         .collect();
@@ -592,9 +601,13 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
         // one base feature, or each part's of the components.
         let bases: Vec<FeatureUid> = match &imported {
             ImportedFile::Base(imported) => vec![imported.feature.uid],
-            ImportedFile::Components { components, .. } => components
+            ImportedFile::Components {
+                components, loose, ..
+            } => components
                 .iter()
-                .filter_map(|c| c.feature.as_ref().map(|f| f.feature.uid))
+                .filter_map(|c| c.feature.as_ref())
+                .chain(loose)
+                .map(|f| f.feature.uid)
                 .collect(),
         };
         let mut out = match &imported {
@@ -602,7 +615,8 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             ImportedFile::Components {
                 components,
                 warnings,
-            } => components_json(components, warnings),
+                loose,
+            } => components_json(components, warnings, loose.as_ref()),
         };
         if let Some(wrapper) = &wrapper {
             out["component"] = json!({

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::measure_axes::{self, Element};
 use super::physical_extent::{
-    ComponentArg, Extent, PhysicalExtentOps, PlacedProperties, Placement,
+    BodyIdentities, ComponentArg, Extent, PhysicalExtentOps, PlacedProperties, Placement,
 };
 use super::prelude::*;
 use super::{ApiError, parse, read_json};
@@ -21,6 +21,7 @@ use mitcad_model::analysis::{
 };
 use mitcad_model::datum::{CurveGeometry, Datum, DatumPlane, OriginDatum, SurfaceGeometry, Vec3};
 use mitcad_model::features::OccurrencePath;
+use mitcad_model::features::construction::{DrawnExtent, DrawnSource};
 use mitcad_model::features::geom_ref::GeomRef;
 use mitcad_model::ids::{BodyUid, ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::internal::fingerprint::Fingerprint;
@@ -326,6 +327,42 @@ pub(super) fn datum_json(datum: &Datum) -> Value {
         }
         Datum::Point(point) => json!({"type": "point", "point": v(point.point)}),
     }
+}
+
+/// Where the application draws a construction plane or axis (mitcad#1827):
+/// `source` (`display_size`: its resize handles' size, `fitted`: what it is
+/// made from, `default`: nothing to measure), a plane's `rect` {`center`,
+/// `x_axis`, `y_axis`, `width`, `height`}, an axis's `segment` {`start`,
+/// `end`} and `length`; `size` too where it is drawn at a size (the square's
+/// side, the line's length) rather than fitted.
+pub(super) fn drawn_json(drawn: &DrawnExtent, source: DrawnSource) -> Value {
+    let v = |v: Vec3| v.map(|x| x + 0.0);
+    let (mut value, size) = match *drawn {
+        DrawnExtent::Rect {
+            center,
+            x_axis,
+            y_axis,
+            width,
+            height,
+            ..
+        } => (
+            json!({"rect": {"center": v(center), "x_axis": v(x_axis), "y_axis": v(y_axis),
+                "width": width, "height": height}}),
+            width,
+        ),
+        DrawnExtent::Segment { start, end, .. } => {
+            let length = mitcad_vec3::distance(start, end);
+            (
+                json!({"segment": {"start": v(start), "end": v(end)}, "length": length}),
+                length,
+            )
+        }
+    };
+    value["source"] = json!(source.name());
+    if source != DrawnSource::Fitted {
+        value["size"] = json!(size);
+    }
+    value
 }
 
 fn properties_json(p: &PhysicalProperties) -> Value {
@@ -678,13 +715,26 @@ impl<K: Kernel> AnalysisApi<K> for Document<K> {
                 }
                 let total = &result["total"];
                 extent_text(&mut text, "Total ", total);
-                let _ = writeln!(
-                    text,
-                    "Total: mass {:.6} kg, volume {:.3} mm3, center of mass {}",
-                    total["mass"].as_f64().unwrap_or(0.0),
-                    total["volume"].as_f64().unwrap_or(0.0),
-                    point(vec3(&total["center_of_mass"]))
-                );
+                match total["mass"].as_f64() {
+                    Some(mass) => {
+                        let _ = writeln!(
+                            text,
+                            "Total: mass {:.6} kg, volume {:.3} mm3, center of mass {}",
+                            mass,
+                            total["volume"].as_f64().unwrap_or(0.0),
+                            point(vec3(&total["center_of_mass"]))
+                        );
+                    }
+                    // Bodies without a material (mitcad#1817): no mass.
+                    None => {
+                        let _ = writeln!(
+                            text,
+                            "Total: volume {:.3} mm3, no mass: {} without a material",
+                            total["volume"].as_f64().unwrap_or(0.0),
+                            total["no_material"].as_u64().unwrap_or(0)
+                        );
+                    }
+                }
             }
             TextQuery::Measure(q) => {
                 let result = self.measure_json(&q)?;
@@ -966,9 +1016,13 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             let mut value = datum_json(&view.datum);
             value["uid"] = json!(view.uid);
             value["name"] = json!(view.name);
-            // Drawn at the size its resize handles set (mitcad#1748).
+            // Drawn at the size its resize handles set (mitcad#1748), else
+            // over what it is made from (mitcad#1827).
             if let Some(size) = self.datum_display_size(view.uid) {
                 value["display_size"] = json!(size);
+            }
+            if let Some((drawn, source)) = self.datum_drawn(view.uid) {
+                value["drawn"] = drawn_json(&drawn, source);
             }
             datums.push(value);
         }
@@ -978,12 +1032,13 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     fn datum_json(&self, query: &DatumQuery) -> Result<Value, ApiError> {
         let (uid, name, datum) = self.datum_by_id(&query.uid)?;
         let mut value = datum_json(&datum);
-        if let Some(size) = uid
-            .parse::<FeatureUid>()
-            .ok()
-            .and_then(|feature| self.datum_display_size(feature))
-        {
-            value["display_size"] = json!(size);
+        if let Ok(feature) = uid.parse::<FeatureUid>() {
+            if let Some(size) = self.datum_display_size(feature) {
+                value["display_size"] = json!(size);
+            }
+            if let Some((drawn, source)) = self.datum_drawn(feature) {
+                value["drawn"] = drawn_json(&drawn, source);
+            }
         }
         value["uid"] = json!(uid);
         value["name"] = json!(name);
@@ -1006,6 +1061,8 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         let scope = self.properties_scope(&query.bodies, &query.components)?;
         let mut computed = PlacedProperties::new(self);
         let mut extent = Extent::default();
+        let identities = BodyIdentities::new(self);
+        let mut without_material = 0usize;
         let own = [Placement::OWN];
         for (BodyView { uid, name, shape }, placements) in &scope.bodies {
             let (uid, name, shape) = (*uid, name.as_str(), *shape);
@@ -1018,11 +1075,12 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
             for placement in placements {
                 // Its own material, else the nearest component default up
                 // its occurrence path (mitcad#640); `density` stands for
-                // the default.
+                // the default. A body with neither has no material, so no
+                // density and no mass (mitcad#1817): never steel unasked.
                 let (made_of, source) = self.body_material(uid, placement.material_path());
                 let (material, density) = match query.densities.get(&uid) {
                     Some(density) if *density > 0.0 && density.is_finite() => {
-                        (Value::Null, *density)
+                        (Value::Null, Some(*density))
                     }
                     Some(density) => {
                         return Err(ApiError(format!(
@@ -1031,21 +1089,43 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                     }
                     None => match (source, query.density) {
                         (mitcad_model::MaterialSource::Default, Some(density)) => {
-                            (Value::Null, density)
+                            (Value::Null, Some(density))
                         }
-                        _ => (json!(made_of.id), made_of.density),
+                        (mitcad_model::MaterialSource::Default, None) => (Value::Null, None),
+                        _ => (json!(made_of.id), Some(made_of.density)),
                     },
                 };
-                let properties = computed.at(uid, shape, name, density, placement)?;
+                // Its volume, area and center (of its volume) at any one
+                // density.
+                let properties =
+                    computed.at(uid, shape, name, density.unwrap_or(1.0), placement)?;
                 let mut value = properties_json(&properties);
                 value["uid"] = json!(uid);
                 value["name"] = json!(name);
                 if !placement.path_name.is_empty() {
                     value["occurrence"] = json!(placement.path_name);
                 }
+                // None set anywhere: `no_material`, no density and no mass
+                // (mitcad#1816's flag, mitcad#1817's rule: never a default
+                // standing in).
                 value["material"] = material;
-                value["density"] = json!(density);
+                match density {
+                    Some(density) => value["density"] = json!(density),
+                    None => {
+                        value["no_material"] = json!(true);
+                        if let Some(fields) = value.as_object_mut() {
+                            for key in ["mass", "inertia", "principal_moments"] {
+                                fields.remove(key);
+                            }
+                        }
+                        without_material += 1;
+                    }
+                }
+                identities.write(self, uid, placement, &mut value);
                 if !value["material"].is_null() {
+                    // Its name as the materials list shows it (a library
+                    // part's `Spruce`, mitcad#1817).
+                    value["material_name"] = json!(made_of.name);
                     value["material_properties"] = json!(super::materials::material_property_rows(
                         made_of,
                         system,
@@ -1069,6 +1149,16 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
                       "center_of_mass": total.center_of_mass, "inertia": total.inertia},
         });
         extent.write(&mut result["total"]);
+        // Bodies without a material (mitcad#1817): the total has no mass,
+        // and so no center of mass or inertia, but how many they are.
+        if without_material > 0 {
+            if let Some(fields) = result["total"].as_object_mut() {
+                for key in ["mass", "inertia", "center_of_mass"] {
+                    fields.remove(key);
+                }
+            }
+            result["total"]["no_material"] = json!(without_material);
+        }
         if !scope.components.is_empty() {
             result["components"] = Value::Array(scope.components);
         }
@@ -1271,6 +1361,10 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         // Drawn see-through (mitcad#1093).
         if attributes.transparent {
             value["transparent"] = json!(true);
+        }
+        // The folder of the Bodies folder it is in (mitcad#1802).
+        if let Some(folder) = &attributes.folder {
+            value["folder"] = json!(folder);
         }
         if let Some(material) = &attributes.material {
             value["material"] = json!(material);
@@ -2599,7 +2693,9 @@ fn properties_text(text: &mut String, body: &Value) {
     let material = match body["material"].as_str() {
         // A built-in one by its name, the woods too (mitcad#1706).
         Some(id) => mitcad_model::material::built_in_material(id)
-            .map_or(id, |m| m.name.as_str())
+            .map(|m| m.name.as_str())
+            .or_else(|| body["material_name"].as_str())
+            .unwrap_or(id)
             .to_owned(),
         None => "custom".to_owned(),
     };
@@ -2608,6 +2704,28 @@ fn properties_text(text: &mut String, body: &Value) {
         .as_str()
         .map(|path| format!(" in {path}"))
         .unwrap_or_default();
+    // No material (mitcad#1817): no density, mass or moments.
+    if body["no_material"].as_bool() == Some(true) {
+        let _ = writeln!(
+            text,
+            "{} ({}){placed}: no material",
+            body["name"].as_str().unwrap_or_default(),
+            body["uid"].as_str().unwrap_or_default()
+        );
+        let _ = writeln!(
+            text,
+            "    no mass, volume {:.3} mm3, area {:.3} mm2",
+            number("volume"),
+            number("area")
+        );
+        let _ = writeln!(
+            text,
+            "    center of mass {}",
+            point(vec3(&body["center_of_mass"]))
+        );
+        extent_text(text, "    ", body);
+        return;
+    }
     let _ = writeln!(
         text,
         "{} ({}){placed}: {material}, density {} g/cm3",

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include "BuildModel.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 
 #include <QObject>
 
@@ -192,6 +194,75 @@ std::optional<gp_Pnt> pickPoint(const QString& key, const CommandState& state, c
     }
   }
   return cmd::centerOf({items.first()}, context);
+}
+
+QStringList edgeFaces(const QString& name) {
+  const qsizetype close = name.lastIndexOf(QLatin1Char('}'));
+  if (!name.startsWith(QStringLiteral("E{")) || close < 2) {
+    return {};
+  }
+  QStringList faces;
+  int depth = 0;
+  qsizetype from = 2;
+  for (qsizetype i = 2; i < close; ++i) {
+    const QChar c = name.at(i);
+    if (c == QLatin1Char('(') || c == QLatin1Char('[') || c == QLatin1Char('{')) {
+      ++depth;
+    } else if (c == QLatin1Char(')') || c == QLatin1Char(']') || c == QLatin1Char('}')) {
+      --depth;
+    } else if (c == QLatin1Char('|') && depth == 0) {
+      faces << name.mid(from, i - from);
+      from = i + 1;
+    }
+  }
+  faces << name.mid(from, close - from);
+  return faces;
+}
+
+std::optional<SelectionItem> nearestStraightEdge(const SelectionItem& face, const QString& key,
+                                                 const CommandState& state, const CommandContext& context) {
+  QJsonObject answer;
+  try {
+    answer = context.queryObject({{QStringLiteral("query"), QStringLiteral("edges")},
+                                  {QStringLiteral("body"), face.owner},
+                                  {QStringLiteral("geometry"), true},
+                                  {QStringLiteral("curve"), QStringLiteral("line")},
+                                  {QStringLiteral("limit"), 1000}});
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  const std::optional<gp_Pnt> click = pickPoint(key, state, context);
+  const gp_Trsf placed = worldOf(face.occurrence, context).value_or(gp_Trsf());
+  std::optional<SelectionItem> best;
+  double nearest = std::numeric_limits<double>::infinity();
+  for (const QJsonValue& value : answer.value(QStringLiteral("edges")).toArray()) {
+    const QJsonObject edge = value.toObject();
+    const QString name = edge.value(QStringLiteral("name")).toString();
+    const std::optional<gp_Pnt> a = pointFrom(edge.value(QStringLiteral("start")));
+    const std::optional<gp_Pnt> b = pointFrom(edge.value(QStringLiteral("end")));
+    if (!edgeFaces(name).contains(face.name) || !a || !b) {
+      continue;
+    }
+    const gp_Pnt start = a->Transformed(placed);
+    const gp_Vec run(start, b->Transformed(placed));
+    double distance = 0.0;
+    if (click) {
+      const double square = run.SquareMagnitude();
+      const double t = square > 0.0 ? std::clamp(gp_Vec(start, *click).Dot(run) / square, 0.0, 1.0) : 0.0;
+      distance = click->Distance(start.Translated(run * t));
+    }
+    if (distance < nearest) {
+      nearest = distance;
+      SelectionItem item;
+      item.kind = SelectKind::Edge;
+      item.owner = face.owner;
+      item.name = name;
+      item.geometry = QStringLiteral("line");
+      item.occurrence = face.occurrence;
+      best = item;
+    }
+  }
+  return best;
 }
 
 std::optional<QJsonObject> atOf(const QString& key, const CommandState& state, const CommandContext& context,

@@ -762,7 +762,9 @@ fails on:
   numbers or placeholders (`%1 x %2 mm`, rule 7);
 - an AppKit `@"…"` literal that reads as text (words with a space, or a
   capitalised word) and is not a system menu item or a title the code
-  compares with (`kObjcAllowed`, rule 10): AppKit texts go through
+  compares with, nor an error the Quick Look extension gives Quick Look
+  (shown as the file's icon, from a process without Qt) (`kObjcAllowed`,
+  rule 10): AppKit texts go through
   `QObject::tr`;
 - a value quoted as `'{x}'` in a Rust string (rule 6);
 - `SelectionItem::logDescription()` (an item's internal name and its

@@ -85,6 +85,8 @@ use mitcad_import_base::body_scope;
 mod snap;
 // Bodies the file removed from the design.
 mod removal;
+// Bodies by their records (mitcad#1808).
+mod records;
 // Bodies the file cut and pasted into other components.
 mod pasting;
 pub use pasting::{Commands, RunCommand};
@@ -569,6 +571,12 @@ pub struct Importer<'a, K: Kernel> {
     /// ([`StoredMesh::id`]), for their materials and appearances
     /// (`meshes.rs`, mitcad#1376).
     pub mesh_bodies: Vec<(u64, BodyUid)>,
+    /// The timeline index of the item being translated (mitcad#1808: a
+    /// body's record is where a later cut and paste puts it, `records.rs`).
+    pub translating: Option<i64>,
+    /// The body objects cut and pasted into other components, with the
+    /// last item that does so (`records.rs`), worked out once.
+    pub cut_sources: std::cell::OnceCell<HashMap<u64, i64>>,
 }
 
 /// The families of the replay in the crates above this one (mitcad#785):
@@ -691,6 +699,8 @@ impl<'a, K: Kernel> Importer<'a, K> {
             deviated_log: Vec::new(),
             deviation_points: Vec::new(),
             mesh_bodies: Vec::new(),
+            translating: None,
+            cut_sources: std::cell::OnceCell::new(),
         }
     }
 }
@@ -807,6 +817,15 @@ pub fn replay_design<K: ImportKernel>(
 const HUNG: &str =
     "the geometry kernel did not finish a definition of it (given up by the import's watchdog)";
 
+/// A stored body's `blob#record` (`StoredBody::source`, which a lump of
+/// a body of several solids follows with `#k`).
+fn stored_record(source: &str) -> &str {
+    match source.match_indices('#').nth(1) {
+        Some((at, _)) => &source[..at],
+        None => source,
+    }
+}
+
 /// The note of a modelling item not replayed because the import was
 /// stopped ([`Options::stop`]); also why a try the watchdog gave up stops
 /// trying definitions ([`Progress::abandon`]: its report is not used).
@@ -892,6 +911,9 @@ pub fn kernel_failure(error: &str) -> bool {
         || error.starts_with("fillet: ")
         || error.starts_with("chamfer: ")
         || error.starts_with("the taper failed")
+        // (A taper that closes the whole profile, which the kernel said as
+        // "the taper failed: …" before mitcad#1851.)
+        || error.starts_with(KernelError::TAPER_CLOSES_PROFILE)
 }
 
 /// The note of a modelling item whose operation in the file's history left
@@ -1863,8 +1885,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
     /// differs from Mitcad's default (a sketch hidden while a feature uses
     /// it, construction geometry shown), so a sketch that follows the
     /// default still shows when its last consumer is deleted. Where the
-    /// file does not tell, the default decides. Part of the import's undo
-    /// step.
+    /// file does not tell, the default decides. A sketch's copies in other
+    /// components take its light bulb alike (mitcad#1802). Part of the
+    /// import's undo step.
     fn light_bulbs(&mut self) {
         let dump = self.dump;
         for (position, item) in dump.timeline_items().iter().enumerate() {
@@ -1892,15 +1915,32 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
             let Some(on) = bulb else {
                 continue;
             };
-            if self.doc.feature_shown(uid) == Some(on) {
-                continue;
+            // Its copies in other components too (mitcad#1802: a copy whose
+            // feature fell back to the file's bodies uses it no more, and
+            // the default showed it where the file hides the sketch).
+            let mut uids = vec![uid];
+            if sketch {
+                let mut copies: Vec<FeatureUid> = self
+                    .sketch_copies
+                    .iter()
+                    .filter(|((i, _), _)| *i == index)
+                    .map(|(_, (_, info))| info.uid)
+                    .filter(|copy| *copy != uid && self.doc.feature_shown(*copy).is_some())
+                    .collect();
+                copies.sort();
+                uids.extend(copies);
             }
-            match self.doc.set_feature_visible(uid, on) {
-                Ok(()) => self.report.light_bulbs.bulbs_set += 1,
-                Err(e) => self
-                    .report
-                    .warnings
-                    .push(format!("light bulb of {}: {e}", item.name().unwrap_or("?"))),
+            for uid in uids {
+                if self.doc.feature_shown(uid) == Some(on) {
+                    continue;
+                }
+                match self.doc.set_feature_visible(uid, on) {
+                    Ok(()) => self.report.light_bulbs.bulbs_set += 1,
+                    Err(e) => self
+                        .report
+                        .warnings
+                        .push(format!("light bulb of {}: {e}", item.name().unwrap_or("?"))),
+                }
             }
         }
     }
@@ -1980,7 +2020,12 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         self.begin_rolled_back(position);
         if suppressed {
             self.begin_suppressed_run();
-        } else {
+        } else if object_type.as_deref() != Some("Group") {
+            // (A timeline group, which changes nothing, does not end the
+            // run, mitcad#1802: a reported design groups the removals of a
+            // suppressed pattern's copies after the pattern, and those
+            // removals found no copies to remove where the group had
+            // suppressed the pattern before them.)
             self.close_suppressed_run();
         }
         // The file's mesh bodies (mitcad#1366, `meshes.rs`).
@@ -5269,6 +5314,7 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         let kernel = self.doc.kernel();
         let state: Vec<(StoredBody<K::Shape>, Sig)> = self.oracle.state(kernel, q)?.to_vec();
         let sheets = self.oracle.sheets(kernel, q)?.to_vec();
+        let sheets = self.design_sheets(sheets);
         let name = name.map(str::to_owned).or_else(|| {
             self.pending
                 .last()
@@ -5302,6 +5348,58 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         // and sketch faces its blobs also keep: solids only.
         self.replace_bodies(&finals, &[], Some(name), "stored design")?
             .ok_or_else(|| "the bodies are the stored ones already".to_owned())
+    }
+
+    /// The sheets of a history state that are bodies of the design
+    /// (mitcad#1802): where the file's body records name the bodies of
+    /// their blobs (the stream decoder's), a sheet no record names is a
+    /// sketch's faces or a feature's tool the blob keeps beside the
+    /// design's bodies (a reported design's fallbacks brought a sketch's
+    /// profiles in as 11 flat surface bodies the light bulbs of its
+    /// sketches could not hide); without body records every sheet counts.
+    fn design_sheets(
+        &self,
+        sheets: Vec<(StoredBody<K::Shape>, SheetSig)>,
+    ) -> Vec<(StoredBody<K::Shape>, SheetSig)> {
+        let named: std::collections::HashSet<String> = self
+            .dump
+            .f3d
+            .as_ref()
+            .and_then(|f| f.appearance.as_ref())
+            .and_then(|a| a.bodies.as_ref())
+            .into_iter()
+            .flatten()
+            .filter_map(|b| Some(format!("{}#{}", b.blob.as_ref()?, b.record?)))
+            .collect();
+        if named.is_empty() {
+            return sheets;
+        }
+        sheets
+            .into_iter()
+            .filter(|(b, _)| {
+                // `blob#record`, or `blob#record#k` for a lump of it.
+                let mut parts = b.source.splitn(3, '#');
+                match (parts.next(), parts.next()) {
+                    (Some(blob), Some(record)) => named.contains(&format!("{blob}#{record}")),
+                    _ => true,
+                }
+            })
+            .collect()
+    }
+
+    /// The stored bodies (`blob#record`) whose body records say the file
+    /// took them out of the design (a removal; `removed`, mitcad#1802).
+    fn out_of_design(&self) -> std::collections::HashSet<String> {
+        self.dump
+            .f3d
+            .as_ref()
+            .and_then(|f| f.appearance.as_ref())
+            .and_then(|a| a.bodies.as_ref())
+            .into_iter()
+            .flatten()
+            .filter(|b| b.removed == Some(true))
+            .filter_map(|b| Some(format!("{}#{}", b.blob.as_ref()?, b.record?)))
+            .collect()
     }
 
     /// The replay's sheets (surface bodies) with their signatures and
@@ -5728,9 +5826,13 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         if self.abandoned() {
             return;
         }
+        // The bodies the file took out of the design, which their blobs
+        // still hold, are not the design's (mitcad#1802).
+        let out = self.out_of_design();
         let kernel = self.doc.kernel();
         let finals: Vec<(StoredBody<K::Shape>, Sig)> = finals
             .into_iter()
+            .filter(|b| !out.contains(stored_record(&b.source)))
             .filter_map(|b| {
                 let s = Sig::of(kernel, &b.shape)?;
                 Some((b, s))
@@ -5746,6 +5848,7 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
+        let sheets = self.design_sheets(sheets);
         if finals.is_empty() && sheets.is_empty() {
             return;
         }

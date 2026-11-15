@@ -429,6 +429,21 @@ impl<K: Kernel> Document<K> {
             let Ok(to_sketch) = link.transform(assembly, component, &mut placement) else {
                 continue;
             };
+            // Inside flexible occurrences where they have it, as the
+            // sketch's recompute sees it (mitcad#1805).
+            let flexed = &self.result.joints.flexed;
+            let to_sketch = link
+                .target_path(assembly, component)
+                .ok()
+                .and_then(|target| {
+                    crate::links::flexed_transform(
+                        &link.source.0,
+                        &target,
+                        &mut placement,
+                        &mut |prefix, o| crate::joints::flexed_step(flexed, prefix, o),
+                    )
+                })
+                .unwrap_or(to_sketch);
             seen.push(Seen {
                 body: instance.body,
                 shape: &shape.value,

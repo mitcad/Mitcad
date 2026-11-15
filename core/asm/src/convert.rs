@@ -1429,8 +1429,13 @@ impl<'a> Ctx<'a> {
                 kb > 0.0,
             )),
             (Curve::BSpline(a), Curve::BSpline(b)) => {
-                let mut poles = Vec::with_capacity(a.poles.len() * b.poles.len());
-                let mut weights = Vec::with_capacity(poles.capacity());
+                // Each curve is bounded by the file's bytes, their product
+                // is not (mitcad#1837).
+                let n = brep::product_poles(a.poles.len(), b.poles.len()).ok_or_else(|| {
+                    GeomError("a sum surface with more control points than MitCad builds".into())
+                })?;
+                let mut poles = Vec::with_capacity(n);
+                let mut weights = Vec::with_capacity(n);
                 for (i, pa) in a.poles.iter().enumerate() {
                     for (j, pb) in b.poles.iter().enumerate() {
                         poles.push(brep::sub(brep::add(*pa, *pb), origin));
@@ -2131,6 +2136,14 @@ pub fn helix_circle_surface(
     let radius = brep::norm(h.major);
     if h.radius.is_nan() || h.radius <= 0.0 || radius.is_nan() || radius <= 0.0 {
         return Err(GeomError("helix_spl_circ without a radius".into()));
+    }
+    // The arc turns once at most in a real file (twice is allowed for the
+    // rounding of periodic ranges); its arcs, one a quarter turn, would
+    // otherwise be counted from the file's numbers without bound
+    // (mitcad#1837).
+    let sweep = u1 - u0;
+    if !sweep.is_finite() || sweep > 2.0 * tau {
+        return Err(GeomError("a helical sweep whose arc is not valid".into()));
     }
     let du = (0.02 * (u1 - u0)).min(0.5 * (tau - (u1 - u0)).max(0.0));
     let dv = (0.02 * (v1 - v0)).max(0.02);
@@ -3182,6 +3195,43 @@ mod tests {
         }
     }
 
+    /// mitcad#1837: two curves of 1100 poles each, a few kilobytes of a
+    /// file, would make a sum surface of 1.21 million poles; it is
+    /// refused in words before anything is allocated for it.
+    #[test]
+    fn oversized_sum_surfaces_are_refused() {
+        let file = AsmFile::parse(&crate::asm::writer::Writer::new(1, 2).finish()).unwrap();
+        let ctx = empty_ctx(&file);
+        let n = 1100;
+        assert!(n * n > brep::MAX_SURFACE_POLES);
+        let long = || AsmCurve::Int {
+            reversed: false,
+            subtype: "exact_int_cur".into(),
+            geom: IntGeom::BSpline(Bs3Curve {
+                degree: 1,
+                rational: false,
+                closure: 0,
+                knots: (0..n).map(|i| i as f64).collect(),
+                mults: vec![1; n],
+                ctrl: (0..n).map(|i| [i as f64, 0.0, 0.0, 1.0]).collect(),
+            }),
+        };
+        let sum = AsmSurface::Spline {
+            reversed: false,
+            subtype: "sum_spl_sur".into(),
+            geom: SplineGeom::Sum {
+                curves: Box::new([long(), long()]),
+                origin: [0.0; 3],
+            },
+            ranges: [[None; 2]; 2],
+        };
+        let e = ctx.surface_geom(&sum).expect_err("refused");
+        assert_eq!(
+            e.0,
+            "a sum surface with more control points than MitCad builds"
+        );
+    }
+
     #[test]
     fn offset_surfaces_without_approximation_are_exact() {
         // mitcad_private#198: an offset of a plane is the plane moved; of a
@@ -3861,6 +3911,33 @@ mod tests {
         );
         assert_eq!(samples(200.0).unwrap(), MAX_HELIX_SURFACE_SPANS);
         assert!(samples(300.0).is_err());
+    }
+
+    /// mitcad#1837: a helical sweep's arc is made of one arc a quarter
+    /// turn, counted from the face's range: a range of a billion radians
+    /// or without end is refused instead of asking for that many.
+    #[test]
+    fn helical_sweeps_of_endless_arcs_are_refused() {
+        let tau = std::f64::consts::TAU;
+        let h = HelixCircle {
+            ranges: [[Some(0.0), Some(1.0)], [Some(0.0), Some(tau)]],
+            phase: 0.0,
+            center: [0.0; 3],
+            major: [0.0, 0.0, -0.17],
+            minor: [-0.17, 0.0, 0.0],
+            pitch: [0.0, 0.07, 0.0],
+            taper: 0.0,
+            axis: [0.0, 1.0, 0.0],
+            radius: 0.00875,
+        };
+        for u1 in [1e9, f64::INFINITY] {
+            let face = [[Some(0.0), Some(u1)], [Some(0.0), Some(tau)]];
+            let e = helix_circle_surface(&h, &face, &Options::default()).expect_err("refused");
+            assert_eq!(e.0, "a helical sweep whose arc is not valid");
+        }
+        // A full turn is built.
+        let face = [[Some(0.0), Some(tau)], [Some(0.0), Some(tau)]];
+        assert!(helix_circle_surface(&h, &face, &Options::default()).is_ok());
     }
 
     #[test]

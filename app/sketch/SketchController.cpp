@@ -783,6 +783,8 @@ SketchController::~SketchController() {
 
 void SketchController::enter(const QString& uid) {
   m_uid = uid;
+  m_surfaceAround.reset();
+  m_surfaceHits.clear();
   m_status.clear();
   m_loggedProjections.clear();
   m_loggedView.clear();
@@ -813,6 +815,11 @@ void SketchController::enter(const QString& uid) {
   if (!m_model.dimensions.empty()) {
     logDimensionTexts();
   }
+  // On a cylindrical or conical face (mitcad#1768): the face, for UI tests.
+  if (m_model.surface) {
+    qDebug().noquote() << QStringLiteral("Sketch %1 lies on its face in its developed coordinates (%2)")
+                              .arg(m_model.name, m_model.surface->describe());
+  }
   m_viewer.setSketchPlane(toAx3(m_model.frame));
   m_overlay->resize(m_viewer.size());
   m_overlay->show();
@@ -840,6 +847,9 @@ void SketchController::leave() {
   m_uid.clear();
   m_model = SketchModel();
   ++m_modelRevision;
+  m_placement = gp_Trsf();
+  m_surfaceAround.reset();
+  m_surfaceHits.clear();
   m_body.clear();
   m_bodyKey.clear();
   m_geometryRevision.clear();
@@ -875,6 +885,22 @@ void SketchController::reload() {
       m_model.frame.origin.Transform(placement);
       m_model.frame.x_axis.Transform(placement);
       m_model.frame.y_axis.Transform(placement);
+      // A sketch on a curved face (mitcad#1768): its face where the view
+      // shows it too; the pointer's rays go back to the model's coordinates.
+      if (m_model.surface) {
+        m_model.surface->transform(placement);
+      } else {
+        m_surfaceAround.reset();
+      }
+      m_placement = placement;
+      // The plane the view looks at and the pointer meets: moved with the
+      // sketch by Redefine Sketch Plane (onto a curved face's carrier plane
+      // too, mitcad#1768).
+      if (m_overlay != nullptr && m_overlay->isVisible()) {
+        m_viewer.setSketchPlane(toAx3(m_model.frame));
+        // No grid on a curved face (mitcad#1853), drawn again on a plane.
+        m_viewer.setGridOnCurvedFace(m_model.surface.has_value());
+      }
     }
     const QJsonObject document = m_host.queryObject({{QStringLiteral("query"), QStringLiteral("document")}});
     const QJsonObject units = document.value(QStringLiteral("units")).toObject();
@@ -904,6 +930,8 @@ void SketchController::reload() {
   // What is drawn inactive (mitcad#721), also where the view never paints
   // (Windows session 0).
   m_overlay->logInactive();
+  // Its dimensions laid onto a curved face (mitcad#1853).
+  m_overlay->logDimensionsOnFace();
   // Where their symbols are now: a change of the geometry moves them
   // without a change of the view (mitcad#723).
   logGlyphs();
@@ -1024,8 +1052,14 @@ void SketchController::logView() {
   // Where sketch points are in the window, for UI tests that click at
   // sketch coordinates.
   QStringList places;
-  for (const V2& p : {V2{0.0, 0.0}, V2{100.0, 0.0}, V2{0.0, 100.0}}) {
-    const QPointF at = toScreen(p);
+  // On a curved face (mitcad#1768) the places of 100 mm along the axes
+  // are where the face would put them if it were the plane it touches at
+  // the origin (from the places 1 mm along them): the tests' clicks near
+  // the origin land where they mean.
+  const QPointF zero = toScreen(V2{});
+  const double reach = m_model.surface ? 1.0 : 100.0;
+  for (const V2& p : {V2{0.0, 0.0}, V2{reach, 0.0}, V2{0.0, reach}}) {
+    const QPointF at = m_model.surface ? zero + (toScreen(p) - zero) * (100.0 / reach) : toScreen(p);
     const QPoint window = m_viewer.mapTo(m_viewer.window(), QPoint(0, 0));
     places << QStringLiteral("%1,%2").arg(at.x() + window.x(), 0, 'f', 2).arg(at.y() + window.y(), 0, 'f', 2);
   }
@@ -1045,6 +1079,7 @@ void SketchController::logView() {
   }
   logGlyphs();
   m_overlay->logDimensionHalos();
+  m_overlay->logDimensionsOnFace(); // on a curved face (mitcad#1853)
   m_overlay->logInactive();
   // The origin and axes the overlay draws (mitcad#739), also where the
   // view never paints (Windows session 0).
@@ -2132,12 +2167,106 @@ void SketchController::recordAutoEntity(const QString& made) {
 // View
 
 QPointF SketchController::toScreen(const V2& p) const {
-  return m_viewer.toWidgetF(toModel(m_model.frame, p));
+  // On a sketch's curved face where it has one (mitcad#1768).
+  return m_viewer.toWidgetF(m_model.place(p));
 }
 
 QPointF SketchController::toScreen(const V2& p, double height) const {
-  const gp_Pnt on = toModel(m_model.frame, p);
-  return m_viewer.toWidgetF(on.Translated(gp_Vec(m_model.frame.normal()) * height));
+  const gp_Pnt on = m_model.place(p);
+  return m_viewer.toWidgetF(on.Translated(gp_Vec(m_model.normalAt(p)) * height));
+}
+
+QPolygonF SketchController::screenPath(const std::vector<V2>& points, bool closed) const {
+  QPolygonF path;
+  if (m_model.surface) {
+    // Bent with the face (mitcad#1768): a straight piece in the sketch is
+    // an arc or a helix on it.
+    for (const V2& p : densified(points, m_model.surface->step(), closed)) {
+      path << toScreen(p);
+    }
+    return path;
+  }
+  for (const V2& p : points) {
+    path << toScreen(p);
+  }
+  if (closed && !path.isEmpty()) {
+    path << path.first();
+  }
+  return path;
+}
+
+double SketchController::faceBend() const { return m_model.surface ? m_model.surface->step() : 0.0; }
+
+QPointF SketchController::screenAlong(const V2& direction, double length) const {
+  const QPointF origin = toScreen(V2{});
+  if (!m_model.surface || length == 0.0) {
+    return toScreen(direction * length) - origin;
+  }
+  const double reach = std::min(std::abs(length), m_model.surface->step());
+  return (toScreen(direction * (length > 0.0 ? reach : -reach)) - origin) * (std::abs(length) / reach);
+}
+
+std::optional<V2> SketchController::surfaceAt(const QPointF& screen) const {
+  // The pointer's ray met with the face by the model's `sketch_surface`
+  // query (mitcad#1768): its hit is the sketch point, on the turn of the
+  // face nearest to the last one, so that a pointer going on past the far
+  // side of a cylinder keeps going on in the sketch. A miss is no place:
+  // the tools then take no point there. Asked once per place, camera and
+  // sketch revision; never while a job computes the model.
+  const auto ray = m_viewer.pointerRay(screen);
+  if (!ray) {
+    return std::nullopt;
+  }
+  const occ::handle<Graphic3d_Camera>& camera = m_viewer.viewCamera();
+  const QString key = QStringLiteral("%1,%2|%3|%4,%5,%6|%7,%8,%9|%10")
+                          .arg(screen.x(), 0, 'f', 3)
+                          .arg(screen.y(), 0, 'f', 3)
+                          .arg(m_modelRevision)
+                          .arg(camera->Eye().X(), 0, 'g', 12)
+                          .arg(camera->Eye().Y(), 0, 'g', 12)
+                          .arg(camera->Eye().Z(), 0, 'g', 12)
+                          .arg(camera->Center().X(), 0, 'g', 12)
+                          .arg(camera->Center().Y(), 0, 'g', 12)
+                          .arg(camera->Center().Z(), 0, 'g', 12)
+                          .arg(camera->Scale(), 0, 'g', 12);
+  if (const auto known = m_surfaceHits.constFind(key); known != m_surfaceHits.cend()) {
+    return *known;
+  }
+  if (m_host.modelBusy()) {
+    return std::nullopt;
+  }
+  // The ray in the sketch's component's coordinates (mitcad#505).
+  gp_Trsf inverse = m_placement;
+  inverse.Invert();
+  const gp_Pnt origin = ray->first.Transformed(inverse);
+  const gp_Dir direction = ray->second.Transformed(inverse);
+  QJsonObject request{
+      {QStringLiteral("query"), QStringLiteral("sketch_surface")},
+      {QStringLiteral("sketch"), m_uid},
+      {QStringLiteral("rays"),
+       QJsonArray{QJsonObject{{QStringLiteral("origin"), QJsonArray{origin.X(), origin.Y(), origin.Z()}},
+                              {QStringLiteral("direction"),
+                               QJsonArray{direction.X(), direction.Y(), direction.Z()}}}}}};
+  if (m_surfaceAround) {
+    request.insert(QStringLiteral("around"), QJsonArray{m_surfaceAround->x, m_surfaceAround->y});
+  }
+  std::optional<V2> hit;
+  try {
+    const QJsonObject answer = m_host.queryObject(request);
+    const QJsonObject first = answer.value(QStringLiteral("rays")).toArray().at(0).toObject();
+    if (first.value(QStringLiteral("hit")).toBool()) {
+      const QJsonArray point = first.value(QStringLiteral("point")).toArray();
+      hit = V2{point.at(0).toDouble(), point.at(1).toDouble()};
+      m_surfaceAround = hit;
+    }
+  } catch (const std::exception&) {
+    return std::nullopt; // the sketch is being taken back; no place
+  }
+  if (m_surfaceHits.size() > 256) {
+    m_surfaceHits.clear();
+  }
+  m_surfaceHits.insert(key, hit);
+  return hit;
 }
 
 QPolygonF SketchController::bodyPath(const BodyItem& item) const {
@@ -2149,6 +2278,9 @@ QPolygonF SketchController::bodyPath(const BodyItem& item) const {
 }
 
 std::optional<V2> SketchController::sketchAt(const QPointF& screen) const {
+  if (m_model.surface) {
+    return surfaceAt(screen); // on the sketch's curved face (mitcad#1768)
+  }
   if (const auto p = m_viewer.sketchPlanePoint(screen)) {
     return V2{p->X(), p->Y()};
   }
@@ -2158,6 +2290,9 @@ std::optional<V2> SketchController::sketchAt(const QPointF& screen) const {
 std::optional<V2> SketchController::sketchAtF(const QPointF& screen) const {
   if (m_viewer.width() <= 0 || m_viewer.height() <= 0) {
     return std::nullopt;
+  }
+  if (m_model.surface) {
+    return surfaceAt(screen); // on the sketch's curved face (mitcad#1768)
   }
   // Point placement uses OCCT's integer device-pixel convention. Layout
   // and hit distances instead invert toWidgetF's continuous projection,
@@ -2280,8 +2415,8 @@ QString SketchController::entityAt(const QPointF& screen, unsigned filter) const
       // the view.
       const QPointF origin = toScreen(V2{});
       for (const QString& axis : {QStringLiteral("x"), QStringLiteral("y")}) {
-        const V2 step = axis == QStringLiteral("x") ? V2{100.0 * px, 0.0} : V2{0.0, 100.0 * px};
-        const std::optional<double> off = axisScreenDistance(screen, origin, toScreen(step) - origin);
+        const V2 direction = axis == QStringLiteral("x") ? V2{1.0, 0.0} : V2{0.0, 1.0};
+        const std::optional<double> off = axisScreenDistance(screen, origin, screenAlong(direction, 100.0 * px));
         if (!off) {
           continue; // the sketch plane seen edge on
         }
@@ -2501,7 +2636,7 @@ void SketchController::outOfPlaneAt(const QPointF& screen, bool points, double r
   std::vector<Candidate> candidates;
   const std::vector<BodyScreen>& screens = bodyScreens();
   const auto lifted = [this](const V2& at, double height) {
-    return toModel(m_model.frame, at).Translated(gp_Vec(m_model.frame.normal()) * height);
+    return m_model.place(at).Translated(gp_Vec(m_model.normalAt(at)) * height);
   };
   for (std::size_t i = 0; i < m_body.items().size(); ++i) {
     const BodyItem& item = m_body.items()[i];
@@ -3753,7 +3888,7 @@ void SketchController::placeFields() {
   if (m_tool) {
     m_tool->paint(preview);
   }
-  const Projection projection{[this](const V2& p) { return toScreen(p); }, pixel()};
+  const Projection projection{[this](const V2& p) { return toScreen(p); }, pixel(), faceBend()};
   QPointF fallback = m_cursor + QPointF(20.0, 16.0);
   QVector<QRectF> occupied;
   // While a drawing tool waits for a point, its next click goes where the

@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,6 +16,7 @@ use crate::changed;
 use crate::concurrency;
 use crate::corpus::{self, Demand, FileRun, Room};
 use crate::ctest::{self, TestDef};
+use crate::fingerprint;
 use crate::options::{self, Budget, Mode, Options};
 use crate::profile::{self, Defaults, Machine, Prediction, Profiles, ResultKind};
 use crate::report::{self, Outcome, Summary};
@@ -389,16 +390,20 @@ pub struct Runner<'o> {
     samples: Samples,
     stop: Option<String>,
     skipped: Vec<String>,
+    /// A release gate's run: the geometry tests left out by their
+    /// fingerprints, and those whose passes are kept (`fingerprint`).
+    release: Option<fingerprint::Plan>,
 }
 
-/// The tests of the build tree as ctest selects them.
-fn list_tests(o: &Options) -> Result<Vec<TestDef>, String> {
+/// ctest's listing of the build tree's tests (`--show-only=json-v1`) with
+/// the selection's arguments.
+fn ctest_listing(o: &Options, select: &[String]) -> Result<String, String> {
     let mut command = Command::new(&o.ctest);
     command
         .arg("--test-dir")
         .arg(&o.build)
         .arg("--show-only=json-v1")
-        .args(&o.select);
+        .args(select);
     if let Some(config) = &o.config {
         command.arg("-C").arg(config);
     }
@@ -409,7 +414,56 @@ fn list_tests(o: &Options) -> Result<Vec<TestDef>, String> {
         let errors = String::from_utf8_lossy(&output.stderr);
         return Err(format!("{} --show-only failed: {}", o.ctest, errors.trim()));
     }
-    ctest::parse_tests(&String::from_utf8_lossy(&output.stdout))
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The tests of the build tree as ctest selects them.
+fn list_tests(o: &Options) -> Result<Vec<TestDef>, String> {
+    ctest::parse_tests(&ctest_listing(o, &o.select)?)
+}
+
+/// A release gate's run (`--release-passed`, mitcad#1822): which of the
+/// selected geometry tests passed with their fingerprints in an earlier
+/// release gate of this platform. The fingerprints come from the whole
+/// build's listing (not the selection), so that a selection does not
+/// change them; without them every geometry test runs.
+fn release_plan(o: &Options, base: &Path, selected: &[TestDef]) -> fingerprint::Plan {
+    let platform = concurrency::PLATFORM;
+    let store = fingerprint::Store::new(base, platform);
+    let release = o.release_tag.clone().unwrap_or_default();
+    let names: Vec<&str> = selected
+        .iter()
+        .filter(|def| fingerprint::candidate(def))
+        .map(|def| def.name.as_str())
+        .collect();
+    let loaded = ctest_listing(o, &[])
+        .and_then(|listing| fingerprint::Fingerprints::load(&o.build, &listing));
+    let (fingerprints, note): (Vec<(String, Option<String>)>, Option<String>) = match loaded {
+        Ok(mut found) => {
+            let note = found.note();
+            let each = names
+                .iter()
+                .map(|&name| (name.to_owned(), found.fingerprint(name)))
+                .collect();
+            (each, note)
+        }
+        Err(e) => {
+            let each = names.iter().map(|&name| (name.to_owned(), None)).collect();
+            let group = fingerprint::GROUP;
+            (
+                each,
+                Some(format!("no fingerprints ({e}): every {group} test runs")),
+            )
+        }
+    };
+    fingerprint::decide(
+        &store,
+        platform,
+        &release,
+        &fingerprints,
+        o.all_geometry,
+        note,
+    )
 }
 
 impl<'o> Runner<'o> {
@@ -424,6 +478,15 @@ impl<'o> Runner<'o> {
             } else {
                 selected.push(def);
             }
+        }
+        // A release gate's run leaves out the geometry tests that passed
+        // with their fingerprints in an earlier release gate (mitcad#1822).
+        let release = o
+            .release_passed
+            .as_deref()
+            .map(|base| release_plan(o, base, &selected));
+        if let Some(plan) = &release {
+            selected.retain(|def| !plan.skips(&def.name));
         }
         let cores = thread::available_parallelism().map_or(1, |n| n.get());
         let variable = options::memory_variable();
@@ -626,6 +689,7 @@ impl<'o> Runner<'o> {
             samples: Samples::default(),
             stop: None,
             skipped,
+            release,
         })
     }
 
@@ -703,6 +767,9 @@ impl<'o> Runner<'o> {
             let names = self.skipped.join(", ");
             out.push_str(&format!("Disabled or not available: {names}\n"));
         }
+        if let Some(plan) = &self.release {
+            out.push_str(&plan.text());
+        }
         out
     }
 
@@ -750,6 +817,9 @@ impl<'o> Runner<'o> {
         );
         if let Some(free) = &self.free {
             println!("{}", free.line(None));
+        }
+        if let Some(plan) = &self.release {
+            println!("Release fingerprints: {}", plan.summary());
         }
         let lane: Vec<String> = self
             .tests
@@ -809,8 +879,48 @@ impl<'o> Runner<'o> {
             thread::sleep(POLL);
         }
         self.save();
+        self.record_release();
         let ui = self.learn_ui_cap();
         self.finish_report(ui.as_deref())
+    }
+
+    /// A release gate's run: keeps the fingerprints of the geometry tests
+    /// that passed (`fingerprint::Store`), the release and RC with each.
+    fn record_release(&mut self) {
+        let (Some(plan), Some(base)) = (self.release.as_mut(), self.o.release_passed.as_deref())
+        else {
+            return;
+        };
+        let store = fingerprint::Store::new(base, &plan.platform);
+        let passed = |name: &str| {
+            self.tests.iter().any(|t| {
+                t.def.name == name
+                    && t.outcome
+                        .as_ref()
+                        .is_some_and(|o| o.kind == ResultKind::Passed)
+            })
+        };
+        let mut kept = 0;
+        let mut errors = Vec::new();
+        for (name, fingerprint) in &plan.run {
+            if !passed(name) {
+                continue;
+            }
+            match store.record(name, fingerprint, &plan.release) {
+                Ok(()) => kept += 1,
+                Err(e) => errors.push(format!("{name}: {e}")),
+            }
+        }
+        let mut line = format!(
+            "{kept} passes as {} in {}",
+            plan.release,
+            store.dir().display()
+        );
+        if !errors.is_empty() {
+            line.push_str("; not kept: ");
+            line.push_str(&errors.join(", "));
+        }
+        plan.recorded = Some(line);
     }
 
     /// Polls the running tests; whether any ended.
@@ -1432,6 +1542,17 @@ impl<'o> Runner<'o> {
             free.line(mean)
         });
         let budget = self.free.map_or(self.limits.budget, |free| free.cap);
+        // The release's skipped tests (a stale table of an earlier run goes).
+        let release = self.release.as_ref().map(fingerprint::Plan::text);
+        let table = self.out.join(fingerprint::SKIPPED_TABLE);
+        match &self.release {
+            Some(plan) => {
+                let _ = fs::write(&table, plan.table());
+            }
+            None => {
+                let _ = fs::remove_file(&table);
+            }
+        }
         let summary = Summary {
             mode: self.mode_name(),
             method: sys::method(self.cgroup),
@@ -1447,6 +1568,7 @@ impl<'o> Runner<'o> {
             profiles: self.profiles.as_deref().filter(|_| self.o.record),
             ui,
             free: free.as_deref(),
+            release: release.as_deref(),
         };
         let text = report::render(&summary);
         println!("\n{text}");

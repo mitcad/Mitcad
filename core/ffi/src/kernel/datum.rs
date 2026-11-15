@@ -83,6 +83,16 @@ pub mod ffi {
         /// Every face's and edge's geometry in one pass (mitcad#87).
         fn datum_face_geometries(shape: &Shape) -> Result<Vec<DatumFaceEntry>>;
         fn datum_edge_geometries(shape: &Shape) -> Result<Vec<DatumEdgeEntry>>;
+        /// The faces and edges with these indices as one is read alone:
+        /// those stored as other types recognised (mitcad#1863).
+        fn datum_recognised_face_geometries(
+            shape: &Shape,
+            faces: &[u32],
+        ) -> Result<Vec<DatumSurface>>;
+        fn datum_recognised_edge_geometries(
+            shape: &Shape,
+            edges: &[u32],
+        ) -> Result<Vec<DatumCurve>>;
     }
 }
 

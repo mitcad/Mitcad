@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: MIT
+# Construction planes drawn at the size and shape of what they come from
+# (mitcad#1827, GitHub mitcad/Mitcad#321), on construction-size.json (a
+# plate 200 x 150 x 10 with a 10 x 10 boss on it; Plane1 off the plate's
+# long narrow side face, Plane2 over the boss's small top, Plane3 above XY
+# saved with a size of its own, 60 mm), opened from its file:
+#   1. Plane3 opens unchanged: drawn 60 mm (display_size) as saved.
+#   2. Plane1 is a rectangle over the 200 x 10 side face, 220 x 30 with
+#      its margin, where the face is (10 mm off it); Plane2 over the small
+#      face is small, 16 x 16.
+#   3. Plane1 selected: a drag of a corner handle stores its size, which
+#      the drawing takes (a square of that size), one undo step.
+#   4. The handle's context menu, Reset Size: the fitted rectangle again,
+#      one undo step; Undo brings the size back.
+# The drawn extents are read from the model's datum query (`drawn`) and
+# the view's log ("Datum F3 drawn 220 x 30 mm (fitted)").
+# Run by tools/ui-construction-size-test.sh (Linux),
+# tools/ui-windows-construction-size-test.ps1 (Windows) and
+# tools/ui-macos-construction-size-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-model-bodies 2 301500
+
+# 1. A size of its own, kept in the file.
+capture-model-number plane3_stored '{"query":"datum","uid":"F5"}' display_size
+expect-near ${plane3_stored} 60 0 0.000001
+capture-model-number plane3_drawn '{"query":"datum","uid":"F5"}' drawn.size
+expect-near ${plane3_drawn} 60 0 0.000001
+expect-ever '^Datum F5 drawn 60 x 60 mm \(display_size\)$'
+
+# 2. Fitted to the faces they come from.
+capture-model-number plane1_width '{"query":"datum","uid":"F3"}' drawn.rect.width
+expect-near ${plane1_width} 220 0 0.001
+capture-model-number plane1_height '{"query":"datum","uid":"F3"}' drawn.rect.height
+expect-near ${plane1_height} 30 0 0.001
+capture-model-number plane1_x '{"query":"datum","uid":"F3"}' drawn.rect.center.0
+expect-near ${plane1_x} 100 0 0.001
+capture-model-number plane1_y '{"query":"datum","uid":"F3"}' drawn.rect.center.1
+expect-near ${plane1_y} -10 0 0.001
+expect-ever '^Datum F3 drawn 220 x 30 mm \(fitted\)$'
+capture-model-number plane2_width '{"query":"datum","uid":"F4"}' drawn.rect.width
+expect-near ${plane2_width} 16 0 0.001
+capture-model-number plane2_height '{"query":"datum","uid":"F4"}' drawn.rect.height
+expect-near ${plane2_height} 16 0 0.001
+expect-ever '^Datum F4 drawn 16 x 16 mm \(fitted\)$'
+
+# 3. A corner handle's drag: a size of its own.
+mark
+command view.fit
+wait-idle
+mark
+click-logged '^Datum F3 at '
+wait-log '^Selected: .*\[plane F3\]'
+wait-log '^Datum handle F3 corner [1-4] at '
+wait-idle
+capture-undo-depth before_resize
+mark
+drag-from '^Datum handle F3 corner [1-4] at ' 40 30
+wait-log '^Datum handle F3 resized to [0-9.]+ mm$'
+wait-idle
+capture dragged '^Datum handle F3 resized to ([0-9.]+) mm$'
+capture-model-number stored '{"query":"datum","uid":"F3"}' display_size
+expect-near ${stored} ${dragged} 0 0.000001
+capture-model-number square '{"query":"datum","uid":"F3"}' drawn.rect.height
+expect-near ${square} ${dragged} 0 0.000001
+wait-log '^Datum F3 drawn [0-9.e+]+ x [0-9.e+]+ mm \(display_size\)$'
+wait-log '^Datum handle F3 corner [1-4] at '
+expect-undo-depth ${before_resize} 1
+wait-idle
+
+# 4. Reset Size: fitted again.
+mark
+context-menu-logged '^Datum handle F3 corner [1-4] at ' 'Reset Size'
+wait-log '^Context menu: Reset Size$'
+wait-log '^Datum handle F3 size reset$'
+wait-log '^Datum F3 drawn 220 x 30 mm \(fitted\)$'
+wait-idle
+capture-model-number reset_width '{"query":"datum","uid":"F3"}' drawn.rect.width
+expect-near ${reset_width} 220 0 0.001
+expect-undo-depth ${before_resize} 2
+mark
+key ctrl+z
+wait-log '^Undo: Resize Plane1$'
+wait-log '^Datum F3 drawn [0-9.e+]+ x [0-9.e+]+ mm \(display_size\)$'
+wait-idle

@@ -43,7 +43,8 @@ constexpr std::size_t kKeptWorkerMeshes = 64;
 constexpr std::size_t kKeptWorkerBytes = std::size_t(256) << 20;
 
 std::size_t bytesOf(const render::MeshData& mesh) {
-  return (mesh.positions.size() + mesh.normals.size()) * sizeof(float) + mesh.indices.size() * sizeof(std::uint32_t);
+  return (mesh.positions.size() + mesh.normals.size() + mesh.uvs.size()) * sizeof(float) +
+         mesh.indices.size() * sizeof(std::uint32_t);
 }
 
 QString joined(const QJsonValue& list) {

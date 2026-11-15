@@ -81,6 +81,11 @@ ProfileFace make_profile(const Frame& frame, const Region& region);
 // modelling tolerance; larger gaps must not silently become closed contours.
 ProfileFace make_profile(const Frame& frame, const Region& region, double max_gap);
 
+// The edge of one segment placed by the frame, open or closed as the
+// segment is (mitcad#1768: curves of a sketch on a curved face, laid onto
+// the face). Throws std::invalid_argument for invalid geometry.
+TopoDS_Edge segment_edge(const Frame& frame, const Segment& segment);
+
 // The faces of the regions, for display; unnamed.
 ShapePtr profile_shape(const Frame& frame, const std::vector<Region>& regions);
 

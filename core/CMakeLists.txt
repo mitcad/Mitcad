@@ -143,7 +143,13 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Intersection curves: two sketches' curves swept and crossed (mitcad#1405).
   kernel/intersection_curve.rs
   # Narrow gaps between bodies that touch: face pairs measured (mitcad#1672).
-  kernel/print_gaps.rs)
+  kernel/print_gaps.rs
+  # Form bodies: the patches of a control cage's limit surface sewn (mitcad#1757).
+  kernel/form.rs
+  # Fill Cavity: the empty spaces of a body below a cap plane (mitcad#1818).
+  kernel/fill_cavity.rs
+  # Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
+  kernel/press_pull.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -336,6 +342,18 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/print_gaps.cpp
   cpp/bridge/print_gaps.hpp)
+# Form bodies: the patches of a control cage's limit surface sewn (mitcad#1757).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/form.cpp
+  cpp/bridge/form.hpp)
+# Fill Cavity: the empty spaces of a body below a cap plane (mitcad#1818).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/fill_cavity.cpp
+  cpp/bridge/fill_cavity.hpp)
+# Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/press_pull.cpp
+  cpp/bridge/press_pull.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -663,9 +681,16 @@ if(BUILD_TESTING)
   # layers, blocks, the geometry classes and their conversion; its corpus
   # test reads MITCAD_3DM_CORPUS and skips without it.
   mitcad_cargo_test(core.3dm mitcad-3dm)
+  # The glTF reader (mitcad#1826; no OCCT): binary and JSON files, their
+  # buffers and images embedded or beside them, cut short and damaged, and
+  # the public-domain sample of core/gltf/samples.
+  mitcad_cargo_test(core.gltf mitcad-gltf)
   # The vector helpers on [f64; 3] that the model, the solver and the
   # readers share (mitcad#582; no OCCT).
   mitcad_cargo_test(core.vec3 mitcad-vec3)
+  # Form: control cages, their edits, Catmull-Clark subdivision and the
+  # limit surface's patches (mitcad#1757; no OCCT).
+  mitcad_cargo_test(core.subdiv mitcad-subdiv)
   # The test runner's scheduling, profiles and parsers (tools/testrun,
   # mitcad#790); no ctest needed.
   mitcad_cargo_test(tools.testrun mitcad-testrun)

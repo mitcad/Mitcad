@@ -197,6 +197,34 @@
             <numerusform>, %n thin regions</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>%n face(s)</source>
+        <translation>
+            <numerusform>%n face</numerusform>
+            <numerusform>%n faces</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n edge(s)</source>
+        <translation>
+            <numerusform>%n edge</numerusform>
+            <numerusform>%n edges</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n vertex(es)</source>
+        <translation>
+            <numerusform>%n vertex</numerusform>
+            <numerusform>%n vertices</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n edit(s) applied in this panel</source>
+        <translation>
+            <numerusform>%n edit applied in this panel</numerusform>
+            <numerusform>%n edits applied in this panel</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>Sketch3d</name>

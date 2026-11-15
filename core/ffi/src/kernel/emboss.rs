@@ -45,6 +45,7 @@ pub mod ffi {
         type Shape = crate::kernel::shape::ffi::Shape;
         type Frame = crate::kernel::profile::ffi::Frame;
         type Region = crate::kernel::profile::ffi::Region;
+        type Segment = crate::kernel::profile::ffi::Segment;
 
         /// The regions wrapped onto the cylinder or the cone and grown
         /// along its normals, faces named after `feature`.
@@ -67,6 +68,19 @@ pub mod ffi {
             body: &Shape,
             face: &str,
             projection: &EmbossProjection,
+        ) -> Result<SharedPtr<Shape>>;
+
+        /// Sketch curves laid onto the cylinder or the cone of `wrap`
+        /// (its `to_radius` unused) and ruled along its normals from
+        /// `inner` to `outer` (mitcad#1768): bands named
+        /// `<feature>:band(<curve>)`.
+        fn wrapped_curves(
+            feature: &str,
+            frame: &Frame,
+            curves: &[Segment],
+            wrap: &EmbossWrap,
+            inner: f64,
+            outer: f64,
         ) -> Result<SharedPtr<Shape>>;
     }
 }

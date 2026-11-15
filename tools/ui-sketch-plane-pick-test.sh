@@ -5,14 +5,14 @@
 # check-all sources: app/browser/BrowserController.cpp app/browser/DocumentHost.hpp app/framework/FloatingLayout.cpp
 # check-all sources: app/mcp core/mcp core/ffi/src/mcp.rs tools/cli
 # Create Sketch waiting for a plane (mitcad#474), through the real UI, in
-# the Docked and the Floating layout, on a block and a cylinder:
-#   - the view's banner "Create Sketch: pick a plane or a planar face. Esc
-#     cancels." shows while the mode lasts and below the cards floating
-#     over the view's top; the MCP's ui_state reports it as its hint, the
-#     status line beside it;
-#   - a click on the cylinder's side, which cannot take a sketch, says so
-#     (not planar, a cylindrical surface) and logs "Create Sketch: refused
-#     pick"; the banner stays and no sketch starts;
+# the Docked and the Floating layout, on a block and a ball:
+#   - the view's banner "Create Sketch: pick a plane, a planar face or a
+#     cylindrical or conical face. Esc cancels." shows while the mode lasts
+#     and below the cards floating over the view's top; the MCP's ui_state
+#     reports it as its hint, the status line beside it;
+#   - a click on the ball, which cannot take a sketch, says so (neither
+#     planar nor cylindrical or conical, a spherical surface) and logs
+#     "Create Sketch: refused pick"; the banner stays and no sketch starts;
 #   - the browser's Design Policy... is refused with what the window waits
 #     for, not "Finish the command or the sketch first.";
 #   - Esc ends the mode and the banner; a planar face still starts the
@@ -32,20 +32,21 @@ trap '[ -n "$BRIDGE" ] && kill "$BRIDGE" 2> /dev/null; ui_cleanup; rm -rf "$WORK
 # The listener's record in a private folder of the test's own.
 export MITCAD_MCP_DISCOVERY_DIR=$WORK/discovery
 
-BANNER="Create Sketch: pick a plane or a planar face. Esc cancels."
+BANNER="Create Sketch: pick a plane, a planar face or a cylindrical or conical face. Esc cancels."
 WAITING="Create Sketch is waiting for a plane: pick one or press Esc."
 
-# A block (F1.b0) in the root and beside it a cylinder (F2.b0) standing on
-# xy in the component Pin (O1). The origin planes are shown for the pick in
-# every design (mitcad#844), behind the model: a click on the cylinder's
-# side is refused, also where a plane lies behind it, never picked through
-# it. The root's sketches may lie on Pin's faces (mitcad#220).
+# A block (F1.b0) in the root and beside it a ball (F2.b0) centred on xy
+# in the component Pin (O1). The origin planes are shown for the pick in
+# every design (mitcad#844), behind the model: a click on the ball is
+# refused, also where a plane lies behind it, never picked through it (a
+# cylinder's side takes a 2D sketch since mitcad#1768, so the refused face
+# is a sphere's). The root's sketches may lie on Pin's faces (mitcad#220).
 cat > "$WORK/model.json" << 'EOF'
 [{"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
   "corner": [0, 0], "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
  {"cmd": "create_component", "name": "Pin"},
- {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [80, 20],
-  "diameter": 30, "height": 30, "operation": "new_body"}},
+ {"cmd": "add_feature", "def": {"type": "sphere", "plane": "xy", "center": [80, 20],
+  "diameter": 30, "operation": "new_body"}},
  {"cmd": "activate_component", "component": "Root"},
  {"cmd": "set_policy", "component": "Pin", "policy": {"attachments_from_others": true}},
  {"cmd": "set_policy", "component": "Root", "policy": {"attach_to_others": true}}]
@@ -124,14 +125,14 @@ start_pick() {
   ui_sync
 }
 
-# refused_cylinder layout: a click on the cylinder's side says why it
-# cannot take the sketch, and the mode goes on.
-refused_cylinder() {
-  ui_expect_new "Pick refused face F2.b0/" "$1: the cylinder's side is where a click hits it"
+# refused_sphere layout: a click on the ball says why it cannot take the
+# sketch, and the mode goes on.
+refused_sphere() {
+  ui_expect_new "Pick refused face F2.b0/" "$1: the ball is where a click hits it"
   ui_mark
-  ui_step "click the cylinder's side"      ui_click_pick "refused face F2.b0/"
+  ui_step "click the ball"                 ui_click_pick "refused face F2.b0/"
   ui_expect_new "Create Sketch: refused pick face " "$1: the refused pick logged"
-  ui_expect_new "is not planar (a cylindrical surface); pick a planar face or a plane, or make one with Construct." \
+  ui_expect_new "is neither planar nor cylindrical or conical (a spherical surface); pick a plane or a planar, cylindrical or conical face, or make a plane with Construct." \
     "$1: the reason shown"
   ui_sync
   expect_none "Sketch started" "$1: no sketch started"
@@ -154,9 +155,9 @@ start_pick Docked
 mcp_tool ui_state '{}'
 expect '.mode == "pick_plane" and .hint == $banner and .hint_is_error == false' \
   "ui_state's hint is the banner's text while the mode lasts" --arg banner "$BANNER"
-refused_cylinder Docked
+refused_sphere Docked
 mcp_tool ui_state '{}'
-expect '.mode == "pick_plane" and .hint == $banner and (.status_line | contains("is not planar")) and .status_line_is_error' \
+expect '.mode == "pick_plane" and .hint == $banner and (.status_line | contains("is neither planar")) and .status_line_is_error' \
   "after the refused pick too, the refusal in its status line" --arg banner "$BANNER"
 
 echo "--- A browser action blocked by the pick"
@@ -191,7 +192,7 @@ top=$(grep -o 'View banner at [0-9]*,[0-9]*' "$UI_LOG" | tail -1 | sed 's/.*,//'
 [ -n "$rows" ] && [ -n "$top" ] || ui_fail "Floating: no rows' bottom ($rows) or banner place ($top) logged"
 [ "$top" -ge "$rows" ] || ui_fail "Floating: the banner at y $top is under the floating rows (bottom $rows)"
 echo "ok   Floating: the banner below the rows over the view (y $top, rows end at $rows)"
-refused_cylinder Floating
+refused_sphere Floating
 ui_mark
 ui_step "click a face of the block"      ui_click_pick "face F1.b0/"
 ui_expect_new "Sketch started on " "Floating: a planar face still starts the sketch"

@@ -29,4 +29,9 @@ std::shared_ptr<geometry::Shape> projected_emboss(rust::Str feature, const Frame
                                                   rust::Slice<const Region> regions, const geometry::Shape& body,
                                                   rust::Str face, const EmbossProjection& projection);
 
+// geometry::wrapped_curves (mitcad#1768).
+std::shared_ptr<geometry::Shape> wrapped_curves(rust::Str feature, const Frame& frame,
+                                                rust::Slice<const Segment> curves, const EmbossWrap& wrap,
+                                                double inner, double outer);
+
 } // namespace mitcad::bridge

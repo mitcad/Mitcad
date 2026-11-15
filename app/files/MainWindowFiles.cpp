@@ -48,6 +48,7 @@
 #include "../framework/Json.hpp"
 #include "../framework/WaitCursor.hpp"
 #include "../report/ReportCenter.hpp"
+#include "../web/GltfExport.hpp"
 #include "../web/WebPage.hpp"
 #include "Autosave.hpp"
 #include "FileCommands.hpp"
@@ -289,7 +290,8 @@ void MainWindow::registerFileCommands() {
                         QStringLiteral("fcstd"),   QStringLiteral("ipt"),   QStringLiteral("iam"),
                         QStringLiteral("ifc"),     QStringLiteral("ifczip"), QStringLiteral("rvt"),
                         QStringLiteral("rfa"),     QStringLiteral("solidcraft"), QStringLiteral("sc"),
-                        QStringLiteral("dwg"),     QStringLiteral("3dm"),   QStringLiteral("open")};
+                        QStringLiteral("dwg"),     QStringLiteral("3dm"),   QStringLiteral("open"),
+                        QStringLiteral("gltf"),    QStringLiteral("glb")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export…"), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -298,7 +300,7 @@ void MainWindow::registerFileCommands() {
   exportDef.mode = CommandDef::Mode::Any;
   exportDef.keywords = {QStringLiteral("step"), QStringLiteral("stl"), QStringLiteral("dxf"),
                         QStringLiteral("save as"), QStringLiteral("3mf"), QStringLiteral("usdz"),
-                        QStringLiteral("augmented reality")};
+                        QStringLiteral("augmented reality"), QStringLiteral("gltf"), QStringLiteral("glb")};
   m_registry->add(exportDef);
   // Drawings with views, dimensions and a hole table (mitcad#471,
   // MainWindowDrawing.cpp).
@@ -530,6 +532,7 @@ bool MainWindow::openFile(const QString& path, QString& error) {
     return true;
   case FileKind::Cad:
   case FileKind::Mesh:
+  case FileKind::Gltf:
   case FileKind::Drawing: {
     if (!startImportedDocument(path, error)) {
       return false;
@@ -793,7 +796,11 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
   case FileKind::Design:
     insertComponent(path);
     return true;
-  case FileKind::Cad: {
+  // A glTF file's node tree comes in as components (mitcad#1826): into a
+  // design with content, in a component of its own unless asked otherwise,
+  // as STEP's; its unit is the metre, nothing to ask.
+  case FileKind::Cad:
+  case FileKind::Gltf: {
     QString structure;
     bool repeatedParts = false;
     std::optional<bool> wrap;
@@ -1122,8 +1129,10 @@ void MainWindow::insertSvg() {
 }
 
 void MainWindow::insertMesh() {
+  // A glTF file (mitcad#1826) comes in as File > Import takes it: its node
+  // tree as components, in metres, nothing asked about the unit.
   const QString path = dialogOpenFileName(this, tr("Insert Mesh"), dialogFolder(DialogGroup::Import),
-                                          tr("Meshes (*.stl *.obj);;All files (*)"));
+                                          tr("Meshes (*.stl *.obj *.glb *.gltf);;All files (*)"));
   if (!path.isEmpty()) {
     rememberDialogFolder(DialogGroup::Import, path);
     importPath(path, true);
@@ -1533,6 +1542,46 @@ void MainWindow::exportFile() {
              tr("Exported %1 (%n body(ies), %2).", nullptr, page.bodies)
                  .arg(QDir::toNativeSeparators(choice->path), QLocale().formattedDataSize(page.bytes)),
              page.warnings, QStringLiteral("Export"));
+    return;
+  }
+  if (choice->format == QStringLiteral("glb") || choice->format == QStringLiteral("gltf")) {
+    // A glTF file (mitcad#1826, web/GltfExport.hpp): the web page's
+    // writer, the bodies (visible, or those selected) meshed within the
+    // refinement's tolerances, the component tree as nested nodes.
+    const io::Refinement refinement = choice->refinement == QLatin1String("low")    ? io::Refinement::Low
+                                      : choice->refinement == QLatin1String("high") ? io::Refinement::High
+                                                                                    : io::Refinement::Medium;
+    const io::MeshOptions tolerance = io::MeshOptions::from(refinement);
+    web::GltfOptions options;
+    options.linearDeflection = tolerance.linear_deflection;
+    options.angularDeflection = tolerance.angular_deflection;
+    options.binary = choice->format == QStringLiteral("glb");
+    options.title = base;
+    options.designFolder = documentFolder();
+    if (choice->selectedOnly) {
+      options.bodies = selected;
+    }
+    web::GltfResult written;
+    {
+      const WaitCursor wait(QStringLiteral("Export glTF"));
+      written = web::writeGltf(model(), choice->path, options);
+    }
+    if (!written.ok) {
+      qWarning().noquote() << QStringLiteral("Export of %1 failed: %2").arg(choice->path, written.error);
+      sheetCritical(this, tr("Export"), tr("Could not export:\n%1").arg(written.error));
+      return;
+    }
+    qInfo().noquote() << QStringLiteral("Exported %1: %2, %3 body(ies), %4 triangles, %5 file(s), %6 bytes")
+                             .arg(choice->path, choice->format)
+                             .arg(written.bodies)
+                             .arg(written.triangles)
+                             .arg(written.files.size())
+                             .arg(written.bytes);
+    // Its warnings as every export's (mitcad#1040).
+    showDone(*this,
+             tr("Exported %1 (%n body(ies), %2).", nullptr, written.bodies)
+                 .arg(QDir::toNativeSeparators(choice->path), QLocale().formattedDataSize(written.bytes)),
+             written.warnings, QStringLiteral("Export"));
     return;
   }
   QJsonObject command;

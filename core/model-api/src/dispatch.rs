@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 30];
+    fn command_families() -> [CommandFamily<K>; 32];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 30] {
+    fn command_families() -> [CommandFamily<K>; 32] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -370,6 +370,25 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                     super::cam::run_cam_command(doc, parse(value, "command")?)
                 },
             },
+            // Forms: control cages edited and their limit surfaces
+            // (mitcad#1757, `form.rs`): their own namespace, so that an
+            // unknown `form.` command's error lists theirs.
+            CommandFamily {
+                names: super::form::FormCommand::NAMES,
+                prefix: Some("form."),
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    let command = super::form::parse_form_command(value)?;
+                    super::form::run_form_command(doc, command)
+                },
+            },
+            // Convert to Features (mitcad#1815, `convert_derived.rs`).
+            CommandFamily {
+                names: super::convert_derived::ConvertCommand::NAMES,
+                prefix: None,
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    doc.run_convert_command(parse(value, "command")?)
+                },
+            },
         ]
     }
 }
@@ -510,7 +529,7 @@ mod tests {
             ),
             "{error}"
         );
-        assert!(error.ends_with("`sheet_flange_profile`"), "{error}");
+        assert!(error.ends_with("`set_body_folder`"), "{error}");
         let error = doc
             .command(r#"{"cmd": "sketch.fly"}"#)
             .unwrap_err()

@@ -1,4 +1,4 @@
-# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284
+# Repeated work removed: 0006–0009, 0060, 0120, 0121, 1050, 1270, 1280–1284, 1680, 1690, 1691
 
 These patches change no result. Each removes repeated work that made an
 OCCT algorithm quadratic (or worse) in the edges or wires of a face or a
@@ -31,6 +31,15 @@ The same kind of bound for booleans on faces that run many turns is in
   only when it is read, a solid's face intersectors made beside each other,
   a face intersector classifying only the points in its range, and a new
   solid's edges mapped once for all its holes (mitcad#1279).
+- **1680** sets up the classifier of each side face once for the hundreds
+  of points the join of two stripes across a corner (0772, 0820) asks it
+  about, instead of once per point (mitcad#1806).
+- **1690** reads a blend's line by index in constant time; the
+  approximation of a blend's surface walked the line's linked list at every
+  evaluation (mitcad#1823).
+- **1691** keeps the polyhedra of a face's surface for all the edges a
+  boolean or an offset intersects with the face, instead of sampling the
+  surface again for every edge (mitcad#1823).
 
 ## 0006 to 0009: booleans and the checker
 
@@ -208,6 +217,91 @@ OCCT left it (8 721 faces). With the box test the merged union is valid
 and taken (7 458 faces, 0.26 mm³ less), and the union took 1.5 s less,
 mostly because the union as OCCT left it was then not checked.
 
+## 1680: the join of two stripes across a corner
+
+### 1680-chfi3d-corner-join-face-classifier-set-up-once-per-face
+
+`ChFi3d_Builder::JoinAcrossCorner` (0772, 0820) walks one blend over a
+corner of the solid and finds where its contact on the side faces leaves
+the one face and comes onto the other: it classifies the contact's points
+in 400 steps from the middle of the first stripe's piece, then bisects
+each change in 50 steps. Every point was classified with a new
+`BRepClass_FaceClassifier(F, P, Tol)`, which computed the face's parameter
+bounds again from its edges' p-curves, set up the projection on its
+surface again (`Extrema_ExtPS`: for a B-spline surface the grid of its
+samples, up to a thousand parameters a direction on a thread's face since
+patch 0593, evaluated at the first point) and made the explorer of its
+edges again. Each face now has its bounds, its projection and its
+explorer set up once (`gapFaceStates`), and each point is projected and
+classified with them: the same bounds and tolerances, the nearest
+projection classified against the face's edges by the same classifier, a
+point without a projection out, so the answers are those of a classifier
+made for the point.
+
+On the threaded design of mitcad#1801, whose edit (a chamfer's distance)
+recomputes a fillet that joins two stripes across a corner beside the
+thread, the fillet took 2.7-3.4 s instead of 3.1-3.9 s and the edit
+4.8-6.2 s instead of 5.3-6.7 s (four pairs of runs, the old and the new
+library at the same time). What is left of the join is the classification
+of each point against the face's edges itself (the line from the point
+intersected with the thread's helical p-curves), about a sixth of the
+edit.
+
+## 1690 and 1691: a blend's line, a face's polyhedra
+
+Both from the three slowest geometry tests (mitcad#1823), profiled with
+stack samples.
+
+### 1690-brepblend-line-points-read-by-index-in-constant-time
+
+A blend's line (`BRepBlend_Line`, the points a fillet's walk found) held
+its points in an `NCollection_Sequence`, whose access by index walks its
+linked list from the place read last. The approximation of the blend's
+surface (`BRepBlend_AppFuncRoot::SearchPoint`, under
+`Approx_SweepApproximation`) finds the points around each parameter it
+evaluates by a bisection over the line, reads the line's middle point for
+a ball that stays put (mitcad#1412) and inserts the points that took long
+to solve, so every evaluation walked the line several times over. Rounding
+the window sills of a ring wall away (`geometry.fillet_consumed_strip`),
+whose blends the approximation cuts into many pieces, spent 90 % of its
+stack samples in `NCollection_BaseSequence::Find`. The line now holds its
+points in a `std::deque` of their own allocations: a point is read by index
+in constant time, keeps its address while others are added or removed
+elsewhere (as a sequence's node did), and the line's order, contents and
+range checks are those of the sequence.
+
+The fillet of that test took 23 s instead of 514 s on a Linux workstation
+(the old and the new library at the same time), its result written as
+BRep the same byte for byte. What is left of it is the approximation's
+own work: each evaluated section solved by Newton's method
+(`math_FunctionSetRoot` on `BlendFunc_ConstRad`), at the many points of a
+blend whose two contacts meet at the wall's middle.
+
+### 1691-intcurvesurface-surface-polyhedra-made-once-per-face
+
+The intersection of an edge with a face in a boolean
+(`IntTools_BeanFaceIntersector::ComputeAroundExactIntersection`) asks
+`IntCurveSurface_HInter` where the edge's curve meets the face's surface;
+for a surface that is neither a plane nor a quadric, HInter samples each
+piece of the surface into a polyhedron (up to 40 × 40 points and their
+derivatives, with its deflection; a B-spline surface's own samples) for
+every curve. A face meets many edges in a boolean or an offset, so its
+polyhedra were made again for each. `IntCurveSurface_HInter` gets
+`Perform(Curve, Surface, Polyhedra)`: the same steps as `Perform(Curve,
+Surface)`, with the polyhedron of each piece taken from `Polyhedra` where
+it was made before for the same bounds and kept there where it is made
+now; `IntTools_Context` keeps each face's polyhedra
+(`CurveSurfacePolyhedra`) for the bean intersector. The same polyhedra
+give the same intersections.
+
+The 28 closed offsets of lofts of `geometry.offset_loft_circle_seam_lean_in`
+(each a boolean of its offset faces per pair) took 68 s instead of 92 s
+(the old and the new library at the same time), all 28 results the same
+byte for byte as BRep. What is left of an offset is OCCT's own work:
+the face/face intersections and, for the edge merged across a tangent end
+(patch 1190), its curves projected on both faces and their tolerance
+found by a global search (`GeomLib_CheckCurveOnSurface`).
+
 ## Reports and tests
 
 - 0006 to 0009: the reports mitcad#84 (0006), mitcad#90 (0007), mitcad#91
@@ -222,3 +316,14 @@ mostly because the union as OCCT left it was then not checked.
 - 1280 to 1284: mitcad#1279, the same test (the same results, 17 s → 12.9 s
   for the union), and the boolean, fillet and chamfer tests of `geometry`
   and `core.model.features-solid`, whose results are OCCT's without them.
+- 1680: mitcad#1806, the reported threaded design of mitcad#1801 (its
+  bodies and timeline the same, `mitcad-cli info --json` byte for byte),
+  and the fillet and chamfer tests of `geometry`, whose results are OCCT's
+  without it.
+- 1690 and 1691: mitcad#1823, `geometry/tests/test_kernel_repeated_work.cpp`
+  (the line's order and addresses through appends, prepends, inserts and
+  removals; the curve/surface intersections with and without kept
+  polyhedra on a B-spline surface and a surface of revolution), and the
+  ctests `geometry.fillet_consumed_strip` and
+  `geometry.offset_loft_circle_seam_lean_in`, whose results are OCCT's
+  without them.

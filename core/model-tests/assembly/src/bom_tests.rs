@@ -247,6 +247,12 @@ fn bom_material_columns_follow_placement_materials_without_changing_other_proper
         &mut doc,
         json!({"cmd": "create_component", "name": "SteelParent"}),
     );
+    // Steel as SteelParent's default: a body without a material lists none
+    // (mitcad#1817).
+    command(
+        &mut doc,
+        json!({"cmd": "set_component_material", "component": "SteelParent", "material": "steel"}),
+    );
     command(
         &mut doc,
         json!({"cmd": "create_component", "name": "Shared"}),

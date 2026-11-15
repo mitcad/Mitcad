@@ -763,7 +763,7 @@ private:
     // Where its ends lie in the design (mitcad#505: on the sketch's face
     // where the view shows it).
     const auto designText = [this](const V2& p) {
-      const gp_Pnt at = toModel(m_c.model().frame, p);
+      const gp_Pnt at = m_c.model().place(p);
       return QStringLiteral("(%1, %2, %3)")
           .arg(QString::number(at.X(), 'f', 6), QString::number(at.Y(), 'f', 6), QString::number(at.Z(), 'f', 6));
     };

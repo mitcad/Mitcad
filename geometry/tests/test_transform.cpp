@@ -3,7 +3,9 @@
 // unions, the tools of faces and primitives.
 
 #include <cmath>
+#include <cstdio>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <BRepCheck_Analyzer.hxx>
@@ -19,6 +21,8 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Pnt2d.hxx>
 
 #include "check.hpp"
 #include "mitcad/geometry/input_check.hpp"
@@ -418,6 +422,93 @@ void test_mesh_bodies_move() {
   CHECK(box_is(*original, 0, 0, 0, 60, 40, 20));
 }
 
+// mesh_block with texture coordinates as its UV nodes, as the glTF import
+// keeps them (mitcad#1862): x across the block's 60 mm, y across its 40.
+ShapePtr textured_mesh_block() {
+  occ::handle<Poly_Triangulation> mesh = new Poly_Triangulation(8, 12, true);
+  for (int i = 0; i < 8; ++i) {
+    mesh->SetNode(i + 1, gp_Pnt((i & 1) ? 60 : 0, (i & 2) ? 40 : 0, (i & 4) ? 20 : 0));
+    mesh->SetUVNode(i + 1, gp_Pnt2d((i & 1) ? 1.0 : 0.0, (i & 2) ? 1.0 : 0.0));
+  }
+  const int triangles[12][3] = {{1, 3, 4}, {1, 4, 2}, {5, 6, 8}, {5, 8, 7}, {1, 2, 6}, {1, 6, 5},
+                                {3, 7, 8}, {3, 8, 4}, {1, 5, 7}, {1, 7, 3}, {2, 4, 8}, {2, 8, 6}};
+  for (int t = 0; t < 12; ++t) {
+    mesh->SetTriangle(t + 1, Poly_Triangle(triangles[t][0], triangles[t][1], triangles[t][2]));
+  }
+  TopoDS_Face face;
+  BRep_Builder().MakeFace(face, mesh);
+  return import_body(face, "F7", 0);
+}
+
+// The texture coordinates of a mesh body's one face, by node, in the
+// face's own frame (each node's UV with its point placed); empty without.
+std::vector<std::pair<gp_Pnt, gp_Pnt2d>> placed_uvs(const Shape& shape) {
+  std::vector<std::pair<gp_Pnt, gp_Pnt2d>> found;
+  for (TopExp_Explorer it(shape.occt(), TopAbs_FACE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    const occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(TopoDS::Face(it.Current()), location);
+    if (mesh.IsNull() || !mesh->HasUVNodes()) {
+      continue;
+    }
+    for (int n = 1; n <= mesh->NbNodes(); ++n) {
+      found.emplace_back(mesh->Node(n).Transformed(location.Transformation()), mesh->UVNode(n));
+    }
+  }
+  return found;
+}
+
+// A mesh body with texture coordinates keeps them through a motion, a
+// uniform and a non-uniform scale and a mirror (mitcad#1874): each node's
+// UV is the one its point had before the map, and the input keeps its own.
+void test_mesh_bodies_keep_texture_coordinates() {
+  const ShapePtr original = textured_mesh_block();
+  const std::vector<std::pair<gp_Pnt, gp_Pnt2d>> before = placed_uvs(*original);
+  CHECK(before.size() == 8);
+  const auto kept = [&before](const Shape& mapped, const Affine& map, const char* what) {
+    const std::vector<std::pair<gp_Pnt, gp_Pnt2d>> after = placed_uvs(mapped);
+    bool ok = after.size() == before.size();
+    for (std::size_t i = 0; ok && i < after.size(); ++i) {
+      // The node's point before the map: the one that maps onto it.
+      const gp_Pnt& p = before[i].first;
+      const auto& m = map.linear;
+      const gp_Pnt image(m[0][0] * p.X() + m[0][1] * p.Y() + m[0][2] * p.Z() + map.translation[0],
+                         m[1][0] * p.X() + m[1][1] * p.Y() + m[1][2] * p.Z() + map.translation[1],
+                         m[2][0] * p.X() + m[2][1] * p.Y() + m[2][2] * p.Z() + map.translation[2]);
+      ok = after[i].first.Distance(image) < 1e-9 && after[i].second.Distance(before[i].second) < 1e-12;
+    }
+    if (!ok) {
+      std::fprintf(stderr, "%s: %zu texture coordinates of %zu kept\n", what, after.size(), before.size());
+    }
+    return ok;
+  };
+  Affine twice;
+  twice.linear = {{{2, 0, 0}, {0, 2, 0}, {0, 0, 2}}};
+  const ShapePtr bigger = transform_shape(*original, twice);
+  CHECK(kept(*bigger, twice, "a uniform scale"));
+  CHECK_NEAR(volume(*bigger), 8 * 48000.0);
+
+  Affine uneven;
+  uneven.linear = {{{2, 0, 0}, {0, 1, 0}, {0, 0, 0.5}}};
+  const ShapePtr stretched = transform_shape(*original, uneven);
+  CHECK(kept(*stretched, uneven, "a non-uniform scale"));
+
+  Affine mirror;
+  mirror.linear = {{{-1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+  const ShapePtr mirrored = transform_shape(*original, mirror);
+  CHECK(kept(*mirrored, mirror, "a mirror"));
+  CHECK_NEAR(volume(*mirrored), 48000.0);
+
+  const Affine moved = translation(10, 5, 0);
+  CHECK(kept(*transform_shape(*original, moved), moved, "a translation"));
+  CHECK(kept(*move_shape(*original, mirror), mirror, "a Move's mirror"));
+  // The input is as it was.
+  const std::vector<std::pair<gp_Pnt, gp_Pnt2d>> still = placed_uvs(*original);
+  CHECK(still.size() == before.size());
+  for (std::size_t i = 0; i < still.size() && i < before.size(); ++i) {
+    CHECK(still[i].first.Distance(before[i].first) < 1e-12 && still[i].second.Distance(before[i].second) < 1e-12);
+  }
+}
+
 // A body OCCT's checker finds invalid, as some imported bodies are (one
 // solid of two shells' faces in one shell, which is not connected): a
 // rigid motion moves it as it is (mitcad#537: Reorient Design's Move of such
@@ -637,6 +728,7 @@ void transform_tests() {
   test_plate_with_flattened_spheres();
   test_plate_with_38_flattened_spheres();
   test_mesh_bodies_move();
+  test_mesh_bodies_keep_texture_coordinates();
   test_moves_keep_meshes();
   test_invalid_bodies_move();
   test_mesh_bodies_refused();

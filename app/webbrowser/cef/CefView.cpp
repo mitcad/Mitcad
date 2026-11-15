@@ -31,6 +31,7 @@
 #include <QtLogging>
 
 #include "CefEngine.hpp"
+#include "webbrowser/BrowserKeys.hpp"
 #include "webbrowser/ComponentWebFiles.hpp"
 #include "include/cef_client.h"
 #include "include/cef_context_menu_handler.h"
@@ -922,7 +923,11 @@ void CefView::sendKey(QKeyEvent* event, bool down) {
   key.native_key_code = static_cast<int>(event->nativeScanCode());
 #endif
   key.windows_key_code = code;
-  key.is_system_key = event->modifiers().testFlag(Qt::AltModifier) ? 1 : 0;
+  // Commands, system keys and AltGr's characters (mitcad#1840,
+  // webbrowser/BrowserKeys.hpp).
+  const QString text = event->text();
+  const mitcad::BrowserKeyRoles roles = mitcad::browserKeyRoles(event->modifiers(), text, mitcad::currentKeyPlatform());
+  key.is_system_key = roles.systemKey ? 1 : 0;
   if (!down) {
     key.type = KEYEVENT_KEYUP;
     browserHost->SendKeyEvent(key);
@@ -930,21 +935,27 @@ void CefView::sendKey(QKeyEvent* event, bool down) {
   }
   key.type = KEYEVENT_RAWKEYDOWN;
   browserHost->SendKeyEvent(key);
-  // The characters typed (not with Control or Command, which are commands).
-  const QString text = event->text();
-  const bool command = event->modifiers().testFlag(Qt::ControlModifier);
-  if (!command) {
-    for (const QChar c : text) {
-      if (c.unicode() < 0x20 && c != QLatin1Char('\r') && c != QLatin1Char('\t')) {
-        continue;
-      }
-      CefKeyEvent character = key;
-      character.type = KEYEVENT_CHAR;
-      character.windows_key_code = c.unicode();
-      character.character = c.unicode();
-      character.unmodified_character = c.unicode();
-      browserHost->SendKeyEvent(character);
+  // The characters typed (not with Control or Command, which are commands;
+  // AltGr's with AltGr in place of Control and Alt, so that the page inserts
+  // them).
+  if (!roles.characters) {
+    return;
+  }
+  for (const QChar c : text) {
+    if (c.unicode() < 0x20 && c != QLatin1Char('\r') && c != QLatin1Char('\t')) {
+      continue;
     }
+    CefKeyEvent character = key;
+    character.type = KEYEVENT_CHAR;
+    character.windows_key_code = c.unicode();
+    character.character = c.unicode();
+    character.unmodified_character = c.unicode();
+    if (roles.altGr) {
+      character.modifiers =
+          (character.modifiers & ~static_cast<std::uint32_t>(EVENTFLAG_CONTROL_DOWN | EVENTFLAG_ALT_DOWN)) |
+          EVENTFLAG_ALTGR_DOWN;
+    }
+    browserHost->SendKeyEvent(character);
   }
 }
 

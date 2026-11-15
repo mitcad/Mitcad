@@ -10,14 +10,18 @@
 #include <QSet>
 #include <QStringList>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRep_Builder.hxx>
 #include <ElCLib.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <NCollection_Array1.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <Standard_Failure.hxx>
 #include <gp_Ax2.hxx>
@@ -26,6 +30,7 @@
 #include <gp_Pln.hxx>
 #include <gp_XYZ.hxx>
 
+#include "../sketch/SketchSurface.hpp"
 #include "Json.hpp"
 
 namespace mitcad {
@@ -142,6 +147,37 @@ TopoDS_Shape curveShape(const QString& type, const QJsonObject& g, const geometr
     return BRepBuilderAPI_MakeEdge(curve).Edge();
   }
   return TopoDS_Shape();
+}
+
+// A curve of a sketch on a cylindrical or conical face (mitcad#1768) built
+// flat in the sketch's own coordinates (on XY, its x and y the sketch's),
+// laid onto the face point by point as a polyline; null when there is
+// nothing to lay.
+TopoDS_Shape wrappedCurve(const TopoDS_Shape& flat, const mitcad::sketch::SketchSurface& surface) {
+  if (flat.IsNull()) {
+    return TopoDS_Shape();
+  }
+  TopoDS_Compound compound;
+  BRep_Builder builder;
+  builder.MakeCompound(compound);
+  bool any = false;
+  for (TopExp_Explorer edges(flat, TopAbs_EDGE); edges.More(); edges.Next()) {
+    const BRepAdaptor_Curve curve(TopoDS::Edge(edges.Current()));
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    const double length = GCPnts_AbscissaPoint::Length(curve);
+    const int pieces = std::clamp(static_cast<int>(std::ceil(length / surface.step())), 8, 4096);
+    BRepBuilderAPI_MakePolygon polygon;
+    for (int i = 0; i <= pieces; ++i) {
+      const gp_Pnt p = curve.Value(first + (last - first) * i / pieces);
+      polygon.Add(surface.point(mitcad::sketch::V2{p.X(), p.Y()}));
+    }
+    if (polygon.IsDone()) {
+      builder.Add(compound, polygon.Wire());
+      any = true;
+    }
+  }
+  return any ? TopoDS_Shape(compound) : TopoDS_Shape();
 }
 
 // A 3D sketch's frame in its component's coordinates (mitcad#1524): local
@@ -392,6 +428,27 @@ QJsonObject placedDatum(const QJsonObject& datum, const gp_Trsf& placement) {
       placed.insert(QLatin1String(key), array(vectorOf(value).Transformed(placement).XYZ()));
     }
   }
+  // Where it is drawn (mitcad#1827): its rectangle or line placed too.
+  QJsonObject drawn = datum.value(QStringLiteral("drawn")).toObject();
+  for (const char* part : {"rect", "segment"}) {
+    if (!drawn.contains(QLatin1String(part))) {
+      continue;
+    }
+    QJsonObject shape = drawn.value(QLatin1String(part)).toObject();
+    for (const char* key : {"center", "start", "end"}) {
+      if (const auto p = pointFrom(shape.value(QLatin1String(key)))) {
+        shape.insert(QLatin1String(key), array(p->Transformed(placement).XYZ()));
+      }
+    }
+    for (const char* key : {"x_axis", "y_axis"}) {
+      const QJsonValue value = shape.value(QLatin1String(key));
+      if (value.toArray().size() >= 3) {
+        shape.insert(QLatin1String(key), array(vectorOf(value).Transformed(placement).XYZ()));
+      }
+    }
+    drawn.insert(QLatin1String(part), shape);
+    placed.insert(QStringLiteral("drawn"), drawn);
+  }
   return placed;
 }
 
@@ -474,6 +531,74 @@ TopoDS_Shape datumShape(const QJsonObject& datum, double size) {
   return TopoDS_Shape();
 }
 
+std::optional<DrawnDatum> drawnDatum(const QJsonObject& datum) {
+  const QJsonObject drawn = datum.value(QStringLiteral("drawn")).toObject();
+  if (drawn.isEmpty()) {
+    return std::nullopt;
+  }
+  DrawnDatum out;
+  out.source = drawn.value(QStringLiteral("source")).toString();
+  const auto unitOf = [](const QJsonValue& value) -> std::optional<gp_Vec> {
+    const std::optional<gp_Pnt> p = pointFrom(value);
+    if (!p) {
+      return std::nullopt;
+    }
+    const gp_Vec v(p->XYZ());
+    if (v.Magnitude() < 1e-12) {
+      return std::nullopt;
+    }
+    return v.Normalized();
+  };
+  if (drawn.contains(QStringLiteral("rect"))) {
+    const QJsonObject rect = drawn.value(QStringLiteral("rect")).toObject();
+    const std::optional<gp_Pnt> centre = pointFrom(rect.value(QStringLiteral("center")));
+    const std::optional<gp_Vec> x = unitOf(rect.value(QStringLiteral("x_axis")));
+    const std::optional<gp_Vec> y = unitOf(rect.value(QStringLiteral("y_axis")));
+    out.width = rect.value(QStringLiteral("width")).toDouble(0.0);
+    out.height = rect.value(QStringLiteral("height")).toDouble(0.0);
+    if (!centre || !x || !y || !(out.width > 0.0) || !(out.height > 0.0) ||
+        x->CrossMagnitude(*y) < 1e-9) {
+      return std::nullopt;
+    }
+    out.plane = true;
+    out.centre = *centre;
+    out.xAxis = *x;
+    out.yAxis = *y;
+    return out;
+  }
+  const QJsonObject segment = drawn.value(QStringLiteral("segment")).toObject();
+  const std::optional<gp_Pnt> start = pointFrom(segment.value(QStringLiteral("start")));
+  const std::optional<gp_Pnt> end = pointFrom(segment.value(QStringLiteral("end")));
+  if (!start || !end || start->Distance(*end) < 1e-9) {
+    return std::nullopt;
+  }
+  out.plane = false;
+  out.centre = gp_Pnt((start->XYZ() + end->XYZ()) / 2.0);
+  out.xAxis = gp_Vec(*start, *end).Normalized();
+  out.width = start->Distance(*end);
+  return out;
+}
+
+TopoDS_Shape drawnDatumShape(const QJsonObject& datum, double size) {
+  const std::optional<DrawnDatum> drawn = drawnDatum(datum);
+  if (!drawn) {
+    return datumShape(datum, size);
+  }
+  try {
+    if (drawn->plane) {
+      const gp_Ax3 frame(drawn->centre, gp_Dir(drawn->xAxis.Crossed(drawn->yAxis)), gp_Dir(drawn->xAxis));
+      return BRepBuilderAPI_MakeFace(gp_Pln(frame), -drawn->width / 2.0, drawn->width / 2.0, -drawn->height / 2.0,
+                                     drawn->height / 2.0)
+          .Face();
+    }
+    const gp_Vec half = drawn->xAxis * (drawn->width / 2.0);
+    return BRepBuilderAPI_MakeEdge(drawn->centre.Translated(-half), drawn->centre.Translated(half)).Edge();
+  } catch (const Standard_Failure&) {
+    // A degenerate extent is drawn as before.
+  }
+  return datumShape(datum, size);
+}
+
 TopoDS_Shape frameTriadShape(const QJsonObject& datum, double length, int axis) {
   if (text(datum, "type") != QStringLiteral("plane") || !(length > 0.0)) {
     return TopoDS_Shape();
@@ -520,15 +645,42 @@ gp_Ax3 toAx3(const geometry::Frame& frame) {
   return gp_Ax3(frame.origin, frame.normal(), frame.x_axis);
 }
 
-std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch) {
+std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch, const QJsonObject& onFace) {
   std::vector<SketchEntityDisplay> result;
   geometry::Frame frame;
   if (!sketchFrame(sketch, frame)) {
     return result;
   }
   const QString uid = text(sketch, "uid");
-  // The frame the entities are placed with, for their signatures.
-  const QString placed = QString::fromUtf8(compactJson(sketch.value(QStringLiteral("frame")).toObject()));
+  // A sketch on a cylindrical or conical face (mitcad#1768): its curves
+  // drawn on the face, from the `sketch_surface` query's polylines, and
+  // what that leaves out (a curve the answer lacks, texts' outlines) laid
+  // onto the face from the curve built flat in the sketch's coordinates.
+  const std::optional<mitcad::sketch::SketchSurface> surface =
+      mitcad::sketch::SketchSurface::fromJson(sketch.value(QStringLiteral("surface")));
+  const geometry::Frame flat; // the sketch's own coordinates on XY
+  QHash<QString, QJsonArray> polylines;
+  for (const QJsonValue& value : onFace.value(QStringLiteral("curves")).toArray()) {
+    const QJsonObject curve = value.toObject();
+    polylines.insert(curve.value(QStringLiteral("id")).toString(), curve.value(QStringLiteral("polyline")).toArray());
+  }
+  const auto curveOnSketch = [&](const QString& type, const QJsonObject& g, const QString& id) {
+    if (!surface) {
+      return curveShape(type, g, frame);
+    }
+    const auto known = polylines.constFind(id);
+    if (known != polylines.cend()) {
+      const TopoDS_Shape drawn = polylineShape(*known);
+      if (!drawn.IsNull()) {
+        return drawn;
+      }
+    }
+    return wrappedCurve(curveShape(type, g, flat), *surface);
+  };
+  // The frame the entities are placed with, for their signatures (with the
+  // face of a sketch on one).
+  const QString placed = QString::fromUtf8(compactJson(sketch.value(QStringLiteral("frame")).toObject())) +
+                         (surface ? surface->signature() : QString());
   // The ends of the curves: of a derived offset's spline (P4) only they are
   // shown, its other control points are the offset's, not handles to drag.
   QSet<QString> ends;
@@ -567,8 +719,9 @@ std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch) {
           continue;
         }
         display.geometry = QStringLiteral("point");
+        const gp_Pnt2d at = point2(entity.value(QStringLiteral("at")));
         display.shape =
-            BRepBuilderAPI_MakeVertex(frame.point(point2(entity.value(QStringLiteral("at")))))
+            BRepBuilderAPI_MakeVertex(surface ? surface->point(mitcad::sketch::V2{at.X(), at.Y()}) : frame.point(at))
                 .Vertex();
       } else {
         const QJsonObject geometry = entity.value(QStringLiteral("geometry")).toObject();
@@ -576,7 +729,7 @@ std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch) {
           continue;
         }
         display.geometry = type;
-        display.shape = curveShape(type, geometry, frame);
+        display.shape = curveOnSketch(type, geometry, display.id);
       }
     } catch (const Standard_Failure&) {
       continue;
@@ -606,9 +759,11 @@ std::vector<SketchEntityDisplay> sketchEntities(const QJsonObject& sketch) {
       for (const QJsonValue& piece : contour.toObject().value(QStringLiteral("curves")).toArray()) {
         const QJsonObject g = piece.toObject();
         try {
-          const TopoDS_Shape edge =
-              curveShape(g.contains(QStringLiteral("control")) ? QStringLiteral("spline") : QStringLiteral("line"),
-                         g, frame);
+          const QString pieceType =
+              g.contains(QStringLiteral("control")) ? QStringLiteral("spline") : QStringLiteral("line");
+          // On a curved face's sketch, laid onto the face (mitcad#1768).
+          const TopoDS_Shape edge = surface ? wrappedCurve(curveShape(pieceType, g, flat), *surface)
+                                            : curveShape(pieceType, g, frame);
           if (!edge.IsNull()) {
             builder.Add(compound, edge);
             any = true;

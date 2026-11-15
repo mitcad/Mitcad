@@ -12,12 +12,15 @@
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAdaptor_Surface.hxx>
+#include <Geom_Surface.hxx>
 #include <Precision.hxx>
 #include <TopoDS.hxx>
 #include <gp_Cone.hxx>
 #include <gp_Cylinder.hxx>
 
 #include "face_select.hpp"
+#include "mitcad/geometry/datum.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -32,6 +35,33 @@ std::vector<TopoDS_Face> faces_named(const Shape& shape, const std::string& face
     throw std::invalid_argument(no_face_error(face));
   }
   return faces;
+}
+
+// The cylinder or cone a face lies on: its own surface, or the one a
+// surface stored as another type lies within 1e-6 mm of (mitcad#1855, as
+// face_geometry reads it).
+std::optional<gp_Cylinder> cylinder_of(const TopoDS_Face& face) {
+  const occ::handle<Geom_Surface> analytic = analytic_surface(face);
+  if (analytic.IsNull()) {
+    return std::nullopt;
+  }
+  const GeomAdaptor_Surface surface(analytic);
+  if (surface.GetType() != GeomAbs_Cylinder) {
+    return std::nullopt;
+  }
+  return surface.Cylinder();
+}
+
+std::optional<gp_Cone> cone_of(const TopoDS_Face& face) {
+  const occ::handle<Geom_Surface> analytic = analytic_surface(face);
+  if (analytic.IsNull()) {
+    return std::nullopt;
+  }
+  const GeomAdaptor_Surface surface(analytic);
+  if (surface.GetType() != GeomAbs_Cone) {
+    return std::nullopt;
+  }
+  return surface.Cone();
 }
 
 // The face's normal at the middle of its parameter range, out of the material.
@@ -77,30 +107,34 @@ gp_Pln face_plane(const Shape& shape, const std::string& face) {
 CylinderFace face_cylinder(const Shape& shape, const std::string& face) {
   return detail::run("face cylinder", [&] {
     const std::vector<TopoDS_Face> faces = faces_named(shape, face);
-    const BRepAdaptor_Surface surface(faces.front());
-    if (surface.GetType() != GeomAbs_Cylinder) {
+    const std::optional<gp_Cylinder> first = cylinder_of(faces.front());
+    if (!first) {
       throw std::invalid_argument(face_error(face, "the face is not cylindrical", "face " + face + " is not cylindrical"));
     }
-    const gp_Cylinder cylinder = surface.Cylinder();
+    const gp_Cylinder cylinder = *first;
     const gp_Ax1 axis = cylinder.Axis();
     double low = std::numeric_limits<double>::infinity();
     double high = -std::numeric_limits<double>::infinity();
     for (const TopoDS_Face& piece : faces) {
-      const BRepAdaptor_Surface own(piece);
-      if (own.GetType() != GeomAbs_Cylinder ||
-          !own.Cylinder().Axis().IsCoaxial(axis, 1.0e-9, Precision::Confusion()) ||
-          std::abs(own.Cylinder().Radius() - cylinder.Radius()) > Precision::Confusion()) {
+      const std::optional<gp_Cylinder> own = cylinder_of(piece);
+      if (!own || !own->Axis().IsCoaxial(axis, 1.0e-9, Precision::Confusion()) ||
+          std::abs(own->Radius() - cylinder.Radius()) > Precision::Confusion()) {
         throw std::invalid_argument(
             face_error(face, "the pieces of the face are not one cylinder", "the pieces of face " + face + " are not one cylinder"));
       }
       double u0 = 0, u1 = 0, v0 = 0, v1 = 0;
       BRepTools::UVBounds(piece, u0, u1, v0, v1);
-      // Points at both ends, measured along the axis.
-      for (const double v : {v0, v1}) {
-        const gp_Pnt p = own.Value(u0, v);
-        const double t = gp_Vec(axis.Location(), p).Dot(gp_Vec(axis.Direction()));
-        low = std::min(low, t);
-        high = std::max(high, t);
+      // Points of the face's parameter range, measured along the axis: on a
+      // cylinder's own surface its ends are at v0 and v1; a spline's
+      // (mitcad#1855) may run along the axis in either parameter.
+      const BRepAdaptor_Surface stored(piece);
+      for (const double u : {u0, 0.5 * (u0 + u1), u1}) {
+        for (const double v : {v0, 0.5 * (v0 + v1), v1}) {
+          const gp_Pnt p = stored.Value(u, v);
+          const double t = gp_Vec(axis.Location(), p).Dot(gp_Vec(axis.Direction()));
+          low = std::min(low, t);
+          high = std::max(high, t);
+        }
       }
     }
     CylinderFace result;
@@ -121,15 +155,15 @@ CylinderFace face_cylinder(const Shape& shape, const std::string& face) {
 ConeFace face_cone(const Shape& shape, const std::string& face) {
   return detail::run("face cone", [&] {
     const std::vector<TopoDS_Face> faces = faces_named(shape, face);
-    const BRepAdaptor_Surface surface(faces.front());
-    if (surface.GetType() != GeomAbs_Cone) {
+    const std::optional<gp_Cone> first = cone_of(faces.front());
+    if (!first) {
       throw std::invalid_argument(face_error(face, "the face is not conical", "face " + face + " is not conical"));
     }
-    const gp_Cone cone = surface.Cone();
+    const gp_Cone cone = *first;
     for (const TopoDS_Face& piece : faces) {
-      const BRepAdaptor_Surface own(piece);
-      if (own.GetType() != GeomAbs_Cone || own.Cone().Apex().Distance(cone.Apex()) > Precision::Confusion() ||
-          !own.Cone().Axis().IsParallel(cone.Axis(), 1.0e-9)) {
+      const std::optional<gp_Cone> own = cone_of(piece);
+      if (!own || own->Apex().Distance(cone.Apex()) > Precision::Confusion() ||
+          !own->Axis().IsParallel(cone.Axis(), 1.0e-9)) {
         throw std::invalid_argument(
             face_error(face, "the pieces of the face are not one cone", "the pieces of face " + face + " are not one cone"));
       }

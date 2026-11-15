@@ -553,6 +553,121 @@ fn tight_bends(
     problems
 }
 
+/// (mitcad#1788) Where the turns of a helix of the path lie closer to each
+/// other than the section is wide: the pipe's turns pass through each
+/// other. `gap`: how close the turns come (the least distance between
+/// points of the helix half a turn to a turn and a half apart along it);
+/// `largest`: the size of the section that just fits that gap; `near`: the
+/// two points of the helix that close, in the middle of the swept part.
+#[derive(Debug, Clone, PartialEq)]
+struct TurnsOverlap {
+    gap: f64,
+    largest: f64,
+    near: [[f64; 3]; 2],
+}
+
+impl TurnsOverlap {
+    /// The refusal in words, the two points as its places; the points for
+    /// agents in its detail.
+    fn refusal(&self, size: f64) -> String {
+        let said = format!(
+            "the helix's turns lie {} mm apart, so a section of {} mm makes the pipe's turns pass \
+             through each other; make the section smaller than {} mm or the helix's pitch larger",
+            mm(self.gap),
+            mm(size),
+            mm(self.largest)
+        );
+        let point = |p: [f64; 3]| format!("({}, {}, {})", mm(p[0]), mm(p[1]), mm(p[2]));
+        let detail = format!(
+            "{said} (the turns come that close at {} and {})",
+            point(self.near[0]),
+            point(self.near[1])
+        );
+        crate::notice::FeatureError::new(said)
+            .with_detail(detail)
+            .with_places(self.near.map(crate::notice::NoticePlace::point))
+            .text()
+    }
+}
+
+/// Whether the turns of `curve`, a helix swept over the `part` of it from
+/// its start (a fraction of its length), pass through each other under a
+/// section of `size` (mitcad#1788). Only certain overlaps: the circle
+/// inside the section, which the section holds however it is turned about
+/// the path, swept along two turns closer than its diameter. Tighter turns
+/// of the helix itself (a radius smaller than the section reaches) are
+/// bends ([`smallest_bend`]); the next turn but one lies further than the
+/// next.
+fn overlapping_turns(
+    curve: &Curve3,
+    part: f64,
+    section: PipeSection,
+    size: f64,
+) -> Option<TurnsOverlap> {
+    use std::f64::consts::{PI, TAU};
+    let Curve3::Helix {
+        center,
+        axis,
+        x_axis,
+        radius,
+        pitch,
+        start,
+        end,
+    } = curve
+    else {
+        return None;
+    };
+    let (r, rise) = (*radius, pitch.abs() / TAU);
+    let span = (end - start).abs() * part;
+    if !(r > 0.0 && rise > 0.0 && span.is_finite() && span > PI) {
+        return None;
+    }
+    // Points of the helix `theta` apart along it (radians) lie this far
+    // apart, wherever they are.
+    let apart =
+        |theta: f64| (4.0 * r * r * (theta / 2.0).sin().powi(2) + (rise * theta).powi(2)).sqrt();
+    let (from, to) = (PI, span.min(3.0 * PI));
+    // The least distance sampled, then narrowed down between the samples
+    // beside it.
+    const SAMPLES: u32 = 512;
+    let step = (to - from) / f64::from(SAMPLES);
+    let mut best = from;
+    for k in 0..=SAMPLES {
+        let theta = from + step * f64::from(k);
+        if apart(theta) < apart(best) {
+            best = theta;
+        }
+    }
+    let (mut low, mut high) = ((best - step).max(from), (best + step).min(to));
+    for _ in 0..80 {
+        let a = low + (high - low) / 3.0;
+        let b = high - (high - low) / 3.0;
+        if apart(a) < apart(b) {
+            high = b;
+        } else {
+            low = a;
+        }
+    }
+    let theta = (low + high) / 2.0;
+    let gap = apart(theta);
+    // The width of the circle inside a section of size 1: the circle's
+    // diameter, the square's side, two thirds of the triangle's height.
+    let width = match section {
+        PipeSection::Circular | PipeSection::Square => 1.0,
+        PipeSection::Triangular => 2.0 / 3.0,
+    };
+    if width * size <= gap * (1.0 + 1.0e-9) {
+        return None;
+    }
+    let first = *start + (span - theta) / 2.0;
+    let at = |t: f64| path::helix_point(*center, *axis, *x_axis, (r, *pitch), t);
+    Some(TurnsOverlap {
+        gap,
+        largest: gap / width,
+        near: [at(first), at(first + theta)],
+    })
+}
+
 impl FeatureInfo for PipeDef {
     fn references(&self) -> References {
         let mut references = References::default();
@@ -618,6 +733,23 @@ impl<K: Kernel> Evaluate<K> for PipeDef {
             }
             extent => extent.fractions(ctx, true)?,
         };
+        // (mitcad#1788) A helix whose turns lie closer than the section is
+        // wide: refused at once, before the geometry joins the turns that
+        // pass through each other (minutes, and a ribbed sleeve, not a
+        // pipe along the helix). A lone helix as far as the pipe runs
+        // along it, a helix among other curves along the whole path.
+        let part = match (path.len(), &self.extent) {
+            (1, _) => Some(extent1),
+            (_, PathExtent::Full) => Some(1.0),
+            _ => None,
+        };
+        if let Some(part) = part {
+            for piece in &path {
+                if let Some(overlap) = overlapping_turns(&piece.curve, part, self.section, size) {
+                    return Err(overlap.refusal(size));
+                }
+            }
+        }
         // A bend tighter than the section, or miters that overlap
         // (mitcad#1497): checked along the whole path only, as a part of
         // it may leave the place out.
@@ -690,6 +822,7 @@ impl PipeDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notice::FeatureError;
 
     fn line(name: &str, a: [f64; 3], b: [f64; 3]) -> PathCurve {
         PathCurve {
@@ -893,5 +1026,86 @@ mod tests {
             1e-12
         ));
         assert_eq!(section_reach(PipeSection::Triangular, 9.0, false), 6.0);
+    }
+
+    /// A helix of radius 10 about z rising 5 a turn, `turns` turns.
+    fn helix(turns: f64) -> Curve3 {
+        Curve3::Helix {
+            center: [0.0; 3],
+            axis: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            radius: 10.0,
+            pitch: 5.0,
+            start: 0.0,
+            end: turns * std::f64::consts::TAU,
+        }
+    }
+
+    #[test]
+    fn turns_closer_than_the_section_overlap() {
+        // (mitcad#1788) Four turns rising 5 a turn: the turns come closest
+        // a little less than a turn apart along the helix, 5 cos α apart
+        // (α the helix's angle, tan α = 5 / 20π), closer than a section of
+        // 8 is wide.
+        let cos = 1.0 / (1.0 + (5.0 / (20.0 * std::f64::consts::PI)).powi(2)).sqrt();
+        let overlap = overlapping_turns(&helix(4.0), 1.0, PipeSection::Circular, 8.0).unwrap();
+        assert!(close(overlap.gap, 5.0 * cos, 1e-4), "{overlap:?}");
+        assert!(close(overlap.largest, overlap.gap, 1e-12), "{overlap:?}");
+        // The two points are that far apart, one on each of two turns, in
+        // the middle of the helix (10 mm up).
+        let [a, b] = overlap.near;
+        assert!(close(mitcad_vec3::distance(a, b), overlap.gap, 1e-9));
+        assert!(close((a[2] + b[2]) / 2.0, 10.0, 1e-9), "{a:?} {b:?}");
+        assert!(close(b[2] - a[2], 5.0, 0.05), "{a:?} {b:?}");
+        assert_eq!(
+            FeatureError::from_text(&overlap.refusal(8.0)).message,
+            "the helix's turns lie 4.984 mm apart, so a section of 8 mm makes the pipe's turns \
+             pass through each other; make the section smaller than 4.984 mm or the helix's \
+             pitch larger"
+        );
+        // A section of 2 fits between the turns.
+        assert_eq!(
+            overlapping_turns(&helix(4.0), 1.0, PipeSection::Circular, 2.0),
+            None
+        );
+        // The circle inside a square is as wide as its side: a square of
+        // side 4.9 may pass between the turns (its corners turned away from
+        // them), one of side 5 is refused. A triangle's circle is two
+        // thirds of its height wide: one 7 high passes, one 8 high is
+        // refused, as is any higher than 1.5 times the gap.
+        let square = overlapping_turns(&helix(4.0), 1.0, PipeSection::Square, 5.0).unwrap();
+        assert!(close(square.largest, overlap.gap, 1e-12));
+        assert_eq!(
+            overlapping_turns(&helix(4.0), 1.0, PipeSection::Square, 4.9),
+            None
+        );
+        let triangle = overlapping_turns(&helix(4.0), 1.0, PipeSection::Triangular, 8.0).unwrap();
+        assert!(close(triangle.largest, overlap.gap * 1.5, 1e-9));
+        assert_eq!(
+            overlapping_turns(&helix(4.0), 1.0, PipeSection::Triangular, 7.0),
+            None
+        );
+    }
+
+    #[test]
+    fn less_than_a_turn_has_no_turns_to_overlap() {
+        // Under a turn (also as the part of four turns a pipe runs along)
+        // no point of the helix lies near another of a turn before.
+        assert_eq!(
+            overlapping_turns(&helix(0.75), 1.0, PipeSection::Circular, 8.0),
+            None
+        );
+        assert_eq!(
+            overlapping_turns(&helix(4.0), 0.2, PipeSection::Circular, 8.0),
+            None
+        );
+        // A full turn reaches the next: refused.
+        assert!(overlapping_turns(&helix(4.0), 0.3, PipeSection::Circular, 8.0).is_some());
+        // Not a helix: nothing to say.
+        let line = line("c1", [0.0; 3], [10.0, 0.0, 0.0]).curve;
+        assert_eq!(
+            overlapping_turns(&line, 1.0, PipeSection::Circular, 8.0),
+            None
+        );
     }
 }

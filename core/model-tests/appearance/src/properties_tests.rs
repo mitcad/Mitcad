@@ -444,6 +444,12 @@ fn an_imported_value_the_user_changes_shows_its_source() {
 #[test]
 fn computed_values_are_answered_and_never_saved() {
     let mut d = design();
+    // Steel as the design's default material: a body without a material
+    // has no mass (mitcad#1817).
+    command(
+        &mut d.doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
     command(
         &mut d.doc,
         json!({"cmd": "set_property", "owner": "Wall", "set": "Identity", "key": "Mark",
@@ -585,6 +591,10 @@ fn search_finds_owners_by_their_values() {
 #[test]
 fn the_parts_list_has_columns_of_chosen_keys() {
     let mut d = design();
+    command(
+        &mut d.doc,
+        json!({"cmd": "set_component_material", "component": "C0", "material": "steel"}),
+    );
     command(
         &mut d.doc,
         json!({"cmd": "set_property", "owner": "Wall", "set": "Identity", "key": "Mark",

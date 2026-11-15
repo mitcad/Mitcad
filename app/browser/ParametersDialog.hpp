@@ -37,7 +37,8 @@ class TablesPage;
 // limited value is marked in its cell (`372 mm → 300 mm ▲max`, the tooltip
 // says why), a parameter with a minimum and a maximum gets a slider, and
 // "Only limited" shows only the parameters a limit changed. The Tables tab
-// (mitcad#667) edits the design's tables that formulas look up.
+// (mitcad#667) edits the design's tables that formulas look up. A column's
+// header sorts the rows within their groups (mitcad#1866).
 class ParametersDialog : public QDialog {
   Q_OBJECT
 
@@ -119,6 +120,19 @@ private:
   // design's tables of data that formulas look up (TablesPage).
   QTabWidget* m_tabs = nullptr;
   TablesPage* m_tablesPage = nullptr;
+
+  // Sorting (mitcad#1866, GitHub mitcad/Mitcad#338): a click on a column's
+  // header sorts the rows by it, again in the reverse order, a third time
+  // back to the creation order. Rows sort within their group; the groups
+  // and Model Parameters' features keep their order. The column and order
+  // are kept in the settings (parameters/sort) for the next opening. A row
+  // renamed or added is selected where the sort puts it.
+  void sortBy(int column, Qt::SortOrder order);
+  void logOrder();
+  int m_sortColumn = -1; // creation order
+  Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
+  QString m_select;      // the row to select at the next refresh
+  QString m_loggedOrder; // the rows' order as shown, told on each opening
 };
 
 } // namespace mitcad

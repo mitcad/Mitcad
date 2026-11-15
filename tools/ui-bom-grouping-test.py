@@ -19,7 +19,9 @@ def prepare(cli, directory, environment=None):
     # an unexpected overwrite question. Remove only this fixture's outputs.
     for name in ("grouped.csv", "separate.csv", "grouped.pdf"):
         (directory / name).unlink(missing_ok=True)
-    commands = []
+    # Steel as the design's default material: a body without a material
+    # lists none (mitcad#1817), and the exported column shows the displayed one.
+    commands = [{"cmd": "set_component_material", "component": "C0", "material": "steel"}]
     for name, length in (("First", 10), ("Second", 10), ("Third", 10), ("Longer", 20)):
         commands += [{"cmd": "create_component", "name": name},
                      {"cmd": "add_feature", "def": {

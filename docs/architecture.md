@@ -57,14 +57,16 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/solidcraft` (`mitcad-solidcraft`) | Rust | `.solidcraft` designs: the JSON document or its container, upgraded from any file format to one by SolidCraft's own steps (`third_party/solidcraft`), typed sketches and feature kinds, expressions in MitCad's language. No geometry. |
 | `core/dxf` | Rust | DXF read and write. |
 | `core/dwg` (`mitcad-dwg`) | Rust | `.dwg` drawings, R13 to R2018: the containers and their compression, header variables, classes, the object map, objects, the data storage; the 3D content (B-rep records parsed by `core/asm`, meshes, blocks and inserts) and the plan of components; the writer of 2D drawings in R2000 for the drawing export (mitcad#728) ([README](../core/dwg/README.md)). No geometry. |
-| `core/3dm` (`mitcad-3dm`) | Rust | `.3dm` models, format versions 5 to 8 (mitcad#1715): the chunks, the settings (units, tolerance), layers, block definitions and the object table with attributes; B-reps, extrusions, NURBS, plane, revolution and sum surfaces, the curve classes, meshes and block instances; their conversion to the neutral B-rep model of `core/asm` in millimetres; a writer of sample models for the tests ([README](../core/3dm/README.md)). No geometry. |
+| `core/3dm` (`mitcad-3dm`) | Rust | `.3dm` models, format versions 5 to 8 (mitcad#1715): the chunks, the settings (units, tolerance), layers, block definitions and the object table with attributes; B-reps, extrusions, NURBS, plane, revolution and sum surfaces, the curve classes, meshes and block instances, SubD objects' control nets (as Form cages, mitcad#1757); their conversion to the neutral B-rep model of `core/asm` in millimetres; a writer of sample models for the tests ([README](../core/3dm/README.md)). No geometry. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts) and a checking reader for tests. |
+| `core/gltf` (`mitcad-gltf`) | Rust | glTF 2.0 reader (mitcad#1826): the binary and JSON forms with their buffers and images embedded or beside them, the node tree, triangles with the texture coordinates of their images (mitcad#1862), metallic-roughness materials and their images, and in words what the import does not take; the model makes the mesh bodies and components (`exchange/gltf_import.rs`). MitCad's own glTF files come from the application's web page writer (`app/web/WebGlb`) ([README](../core/gltf/README.md)). No geometry. |
 | `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; time-sampled transforms of an animated scene (mitcad#1597); a checking reader for tests (mitcad#123). |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
 | `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images). |
 | `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC). No model, no OCCT; offsets by cavalier_contours. |
+| `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
 | `core/ffi-staticlib` (`mitcad-ffi`) | Rust | The static library the application links (CMake target `mitcad_ffi`): `mitcad-ffi-bridges` with every Rust library it uses, no code of its own ([README](../core/ffi-staticlib/README.md)). |
 | `geometry` (`mitcad_geometry`) | C++ | OCCT facade: profiles, features, booleans, name transfer, queries, file formats, ASM bodies, analyses. No Qt. |
@@ -73,7 +75,7 @@ the probe cannot use the document's tools or replace its conversation.
 | `tools/freecad-export` | Python, Bash | FreeCAD macros that make the FreeCAD import's reference models and dumps. |
 
 Dependencies point one way: `app` → `core/ffi` → `core/model-api` → `core/model-build`, `core/model-drawing` → `core/model` (with
-`model-diff`, `solver`, `vec3`, `f3d` (over `f3d-design`, `f3d-decode`, `f3d-file`, `f3d-names`, `asm`, `dump`), `import`, `freecad`, `zip`, `3mf`, `usdz`, `vcs`, `ipt`, `ifc`, `solidcraft`, `dwg`, `expr`, `print-keys`, `import-base`, `import-ifc`, `import-rvt`, `import-fcstd`, `model-base`, `sketch`; `update`
+`model-diff`, `solver`, `vec3`, `subdiv`, `f3d` (over `f3d-design`, `f3d-decode`, `f3d-file`, `f3d-names`, `asm`, `dump`), `import`, `freecad`, `zip`, `3mf`, `usdz`, `vcs`, `ipt`, `ifc`, `solidcraft`, `dwg`, `expr`, `print-keys`, `import-base`, `import-ifc`, `import-rvt`, `import-fcstd`, `model-base`, `sketch`; `update`
 stands alone) and `core/ffi` → `geometry` → OCCT. The model reaches geometry only
 through the `Kernel` trait, so model tests run on a mock kernel.
 
@@ -774,7 +776,18 @@ design in a project.
   rest value) or free within limits; degrees of freedom are the rank of
   the joint equations; a drag query and command move occurrences while
   the joints hold. A joint moves only top-level occurrences of its
-  component (a sub-assembly as a whole). Commands and queries:
+  component (a sub-assembly as a whole), except inside a flexible
+  occurrence (mitcad#1793): its component's joints, constraint rows and
+  links are brought into the parent's solve for it alone (paths through
+  it, its own values; `ActiveJoint::under`), the occurrences they move
+  inside it are units of their own, and their placements for that
+  occurrence are kept apart from the shared ones (`JointsState::flexed`,
+  read by `path_placement`, the instances and the drags). Flexible
+  occurrences nest (mitcad#1805): what one brings into its parent is
+  brought on into the parents of that parent's flexible occurrences, under
+  the chain of them (`ActiveJoint::under` and the `flexed` keys are
+  chains), and linked geometry reads those placements as recorded reads
+  (`Read::Flexed`). Commands and queries:
   [commands.md](../core/model-api/src/commands.md) ("Joints"). In the
   application (phase 3) the ASSEMBLE group's panels add and edit them, a
   preview reports the placements it changes so that panels show the
@@ -972,6 +985,17 @@ design in a project.
   revolution takes one the same way (mitcad#539, `features/revolve.rs`,
   `Kernel::revolve_face`, `geometry/src/face_revolve.cpp`; the FreeCAD
   import's face profiles), by angles only.
+- **Press Pull continued** (mitcad#1850, `features/press_pull.rs`): Press
+  Pull on a face makes `offset_face` (Offset) or `press_pull` (Straight,
+  Along the walls): `Kernel::press_pull` builds the new piece from the
+  face as an extrusion or a revolution of a body face does
+  (`geometry/src/press_pull.cpp` calls `extrude_face` and `revolve_face`,
+  so a Draft taper goes through Extrude's own taper path) and joins it to
+  the body or cuts it; the walls beside the face decide Along's run
+  (`Kernel::face_run`, the `face_run` query: one axis of revolution or one
+  direction), and a Scale taper or a taper along a turn is a loft or a
+  sweep between the face and its end section. The moved end keeps the
+  face's names.
 - **BUILD** (mitcad#375, `core/model/src/build/` for what the design
   file keeps, the planning in the crate `core/model-build/`): the library components the
   BUILD tab places are kept once as the design's **library sources**
@@ -990,7 +1014,11 @@ design in a project.
   `Resolver::mount`). A `bound_length` measures a ray from one part's
   frame to another's face or frame and sets its reference parameter as
   driven dimensions do, before the derived part that takes it as its
-  length. The rules that place, mitre, connect, size panels and list cuts
+  length. An `edge_frame` (mitcad#1814, `features/edge_frame.rs`) publishes
+  two frames along a straight edge on a face, offsets kept as values: a
+  member along an edge has its joint on one and its bound length to the
+  other's plane, so it follows the body the edge is on. The rules that
+  place, mitre, connect, size panels and list cuts
   plan everything against the document and make it in one undo step;
   components record what BUILD made (`build`). They work in the **BUILD
   host** (mitcad#394, `Document::build_host`): the active component when
@@ -1042,6 +1070,15 @@ design in a project.
   tools that hold it; the cells become new bodies or one tool that joins,
   cuts or intersects participants as an extrusion's does
   ([commands.md](../core/model-api/src/commands.md), "Boundary Fill").
+- **Fill Cavity** (mitcad#1818, `features/fill_cavity.rs`): a
+  `fill_cavity` feature fills a closed pocket of a body up to a cap plane
+  with two booleans and no flood: `Kernel::cavity_pieces` gives the empty
+  spaces of a box below the cap (the box less the body,
+  `geometry/src/fill_cavity.cpp`), whose faces' names tell the model what
+  each touches (the cap, a side or the bottom of the box, a seed face);
+  the model chooses the closed ones, refuses one that opens out in words
+  with its places, and joins them to the body
+  ([commands.md](../core/model-api/src/commands.md), "Fill Cavity").
 - **Surface modelling** (mitcad#455, beside Patch, Stitch and Thicken of
   mitcad#456): surface (sheet) bodies are ordinary bodies whose shape is
   open shells; `Kernel::body_kind` tells them from solids. Extrude,
@@ -1506,7 +1543,47 @@ the `Shape` type.
   `BRepBuilderAPI_GTransform`, which converts every face to a B-spline
   (a sphere flattened by 0.1 came out with an unorientable face). A
   face the checker calls unorientable names the problem of its edge or
-  wire in it that made it so (`util.cpp`, `first_problem`).
+  wire in it that made it so (`util.cpp`, `first_problem`), in the
+  error's detail only: a person reads "… produced an invalid shape"
+  (mitcad#1851, `require_valid`'s placed error).
+- A taper whose walls meet or vanish within the extrusion (mitcad#1851,
+  `geometry/src/taper_events.cpp`, called by `sweep.cpp`'s `tapered`)
+  where OCCT's draft fails, comes out invalid, or (a valid draft) the
+  profile's offset at the far end (`BRepOffsetAPI_MakeOffset`) shows walls
+  meeting or vanishing on the way: the prism with (widening) or without
+  (narrowing) the wedge each wall sweeps (a line's a polyhedron, an arc's
+  its section revolved, ending at the centre where the arc vanishes, any
+  other curve's ruled to its offset curve and sewn) and a pyramid at
+  each corner whose offsets part, its sides in the two leaned planes.
+  The booleans resolve the topology events: no slicing at the event
+  heights, whose sections are degenerate (zero-width slits). Results
+  without such an event are the draft's as before. Emboss's projected
+  taper on a plane parallel to the sketch along its normal, and a taper
+  alone along a straight sweep path, fall back to the same extrusion
+  taper where their own offsets lose edges (`emboss_projection.cpp`
+  `planar_tapered`, `path_sweep.cpp` `straight_taper_sweep`).
+- A wrapped Emboss's taper and a taper alone along a smooth curved sweep
+  path whose walls meet or vanish (mitcad#1854) are that extrusion taper
+  built straight and flat, then bent through a smooth map of space
+  (`geometry/src/space_map.cpp`, `mapped_solid`): the emboss's profile
+  laid out on the top's development and a point h up taken h / depth of
+  the way from the foot to the top at its parameters (`emboss.cpp`
+  `wrapped_events`); the sweep's straight taper along the profile's
+  tangent and each place a along it taken to the path's frame a further
+  on (`path_sweep.cpp` `curved_taper_sweep`, its frames as the lofted
+  sweep's). `BRepTools_Modifier` carries the shape face for face: each
+  surface replaced by OCCT's approximation (`GeomConvert_ApproxSurface`,
+  C1, within 1e-7 of the shape's size) of the map of it over the face's
+  own parameters, so that the curves on surfaces stay; each edge's curve
+  likewise (`GeomConvert_ApproxCurve`); the map's derivative by central
+  differences. Caps the map takes onto known surfaces (the foot and top
+  cylinders or cones, the sweep's planes moved rigidly) are laid on them
+  exactly, their curves on the surface refitted, so that a boolean with
+  the body meets them as before. A path of several curves is bent slab by
+  slab (split where the curves meet, where the bend's derivative jumps)
+  and the slabs fused. Where the old construction fails and this one
+  cannot build either, the error says so in words (`the taper closes part
+  of the profile on its way, …`; `taper_events.cpp`).
 - Checks where a boolean changed the body (mitcad#121, `geometry/src/
   util.hpp`, `is_valid_where_changed`): a shape the checker found valid
   says so (`Shape::checked_valid`: boolean results, roundings and
@@ -1624,7 +1701,8 @@ the `Shape` type.
   STEP as an assembly, the others as moved copies). USDZ is written by
   the model from `Kernel::face_meshes` (each face its own vertices with
   the surface's normals, in the order `Kernel::faces` lists them, so
-  face appearances find their triangles): a mesh per placement under
+  face appearances find their triangles; a mesh body's texture
+  coordinates, its UV nodes, as `FaceMeshes::uvs`, mitcad#1874): a mesh per placement under
   `Xform`s of the occurrences, materials from the appearances
   (`core/model/src/exchange/usdz.rs`, `core/usdz`); with `animation`
   (mitcad#1597, `exchange/usdz_animation.rs`) the occurrences' and bodies'
@@ -1699,6 +1777,7 @@ them through operations and derives edge names.
 | Primitives, bounding solid | `top`, `bottom`, `side<i>` |
 | Imported body | `import(<i>)` |
 | Boundary fill | none of its own: a cell's faces keep the names of the tool faces they are pieces of |
+| Fill cavity | `fill(<cap face>)` (`fill` for a plane cap) on the filled top; the box's `fill_side(<k>)` and `fill_bottom` only on the empty spaces it chooses from |
 
 - **Segment:** the part of a sketch curve in a profile,
   `<curve>[<start>,<end>]`, bounded by the curves it ends on in the
@@ -1798,6 +1877,21 @@ is the crate `core/sketch`, mitcad#780) is stored; its evaluation
   sketch (`sketch/placement.rs`; Redefine Sketch Plane moves a sketch to
   another plane and places it there, `sketch.redefine_plane`,
   mitcad#787).
+  Or a cylindrical or conical face in its developed coordinates
+  (`SketchPlane::Developed`, mitcad#1768): the arc length around a
+  cylinder and the distance along its axis, a cone's development. The
+  development (`core/model-base/src/developed.rs`) is worked out from the
+  face at every evaluation (`features/developed.rs`) and kept in
+  `SketchOutput::developed`; the sketch itself is solved and cut into
+  regions on a *carrier plane* parallel to the axis (`SketchOutput::frame`),
+  and every way onto the face is the emboss wrap's map of that plane: the
+  kernel's wrap of profiles (Extrude, Emboss), the sketch's curves as curves
+  on the face (paths, projections into other sketches: lines, circles and
+  helices exactly, other curves as fitted B-splines), Split Face's bands
+  (`Kernel::wrapped_curves`), and back, edges projected into the sketch as
+  their developments and the `sketch_surface` query's rays and points.
+  Features that take profiles or curves in their plane refuse such a
+  sketch.
 - **Entities:** point, line, circle, arc (centre/start/end, CCW), ellipse,
   elliptical arc, spline (fit or control points, degree, weights, knots; a
   fit point spline may be closed: periodic, C2 through its first point,
@@ -2384,7 +2478,13 @@ not recompute.
 - **Commands** ([app/COMMANDS.md](../app/COMMANDS.md)): a UI command is a
   declarative definition; the framework builds the panel, selections,
   preview and add/edit. Editing rolls back to before the feature,
-  previews there, and on OK runs `edit_feature` as one undo step.
+  previews there, and on OK runs `edit_feature` as one undo step. The
+  joints, rigid groups and other features that only place occurrences
+  right after the edited one are previewed with it (`edit_feature`'s
+  `through`, mitcad#1860), and a preview that cannot be shown while a
+  value is typed, or an edit's that fails after one that placed
+  occurrences, leaves the last good one drawn, so an assembly does not
+  come apart in the view while it is edited.
   A feature's preview draws the design as the view shows it with the
   command's result (`app/framework/PreviewBodies.hpp`, mitcad#266): shown
   bodies keep their occurrences' placements, what the command makes comes
@@ -2437,13 +2537,24 @@ not recompute.
   edited sketch's filled profiles are removed from display and picking;
   curves and points stay live. Profile queries and face rebuilding wait
   until release or interruption, including a drag the solver refused.
-  Dimension-text drags keep their profiles.
+  Dimension-text drags keep their profiles. A sketch on a cylindrical or
+  conical face (mitcad#1768, `sketch/SketchSurface`) keeps all of this in
+  the face's developed coordinates: only the view's picture of it lies on
+  the face. Points, highlights and previews go onto the face by the
+  model's own map (the `sketch` query's `surface`), its curves are the
+  `sketch_surface` query's polylines, its profiles the flat regions laid
+  onto the face as triangles, its dimensions' lines bent onto the face by
+  the same map (mitcad#1853), the layout grid not drawn (its layer lies
+  under the bodies), and the pointer comes back into the sketch
+  through the same query's rays, so the app never inverts the map itself.
 - **Navigation settings** (`app/view/Navigation.hpp`): stable preset ids
   share a canonical input table with Custom bindings. Reserved selection
   drags and the orientation cube remain separate. The viewer applies
   orbit acceleration through OCCT, scales pan deltas with fractional
-  carry, and scales wheel/drag zoom; trackpad scrolling has its own
-  multiplier. Settings and the visual guide use the same binding table.
+  carry, and scales wheel/drag zoom; a drag zoom follows the vertical
+  motion only, up zooming in (OCCT's vertical zoom gesture, turned for a
+  drag's steps in `OcctViewer::UpdateZoom`, mitcad#1867); trackpad
+  scrolling has its own multiplier. Settings and the visual guide use the same binding table.
 - **3D mice** (mitcad#951): `app/platform/SpaceMouseDevice.hpp` is the
   small backend interface (six axes in the view's frame, button events,
   hot plug) with the pure parsing of the devices' reports; one backend per
@@ -2551,7 +2662,9 @@ not recompute.
   starts a bounded 150 ms timer; further input does not restart it. While
   a job owns the document, numeric edits replace one pending action per
   field, evaluated only on idle. Structural edits form ordering barriers
-  and invalidate/cancel old work. A completed numeric preview may display
+  and invalidate/cancel old work; a typed (or stepped) value cancels a
+  feature preview that has computed for two seconds or more (mitcad#1788),
+  a quicker one and a drag's are kept. A completed numeric preview may display
   intermediate geometry, but only the latest input's result may update
   operation/target controls or enable OK. Pending values drain before the
   next job, without another debounce delay; a value of the same field
@@ -3097,7 +3210,8 @@ not recompute.
   component tree in the page's data names them), each body meshed once on
   a copy of its shape (`io::triangulate`, the export's tolerances), the
   appearances as metallic-roughness materials with their texture images
-  inside and texture coordinates by the rendered view's projection.
+  inside and texture coordinates by the rendered view's projection (a
+  mesh's own where its appearance lays the image by them, mitcad#1862).
   `WebPage` adds the data (units, tree, named views, Home) and inlines it,
   with the viewer's `viewer.js` and its modules as `data:` URLs of an
   import map, into the viewer's `template.html`; the viewer's files are Qt
@@ -3119,7 +3233,8 @@ not recompute.
   dialogs, menus, sizes, colors, folders), whose `kComponentBrowserAbi`
   both sides check. CEF runs windowless, its loop pumped from Qt's, each
   page painted from its software buffer into a widget (`CefView`) that
-  forwards input; CEF is given the view in physical pixels at a scale of 1
+  forwards input; its GPU process draws WebGL on the GPU, or in software
+  (SwiftShader) where there is none (mitcad#1861, app/COMMANDS.md); CEF is given the view in physical pixels at a scale of 1
   and the page's zoom is the display's scale, as CEF paints windowless
   frames at 1 whatever it is told (mitcad#1657, app/COMMANDS.md). `ComponentBrowser` is a window of its own with
   one browsing profile for the application; its downloads go into
@@ -4496,6 +4611,13 @@ feature per component and layer (`core/ffi/src/import_3dm.rs`; the
 length and count of the untrusted file against its chunk, nests chunks
 64 deep at most and checks the values the B-spline code relies on
 ([its README](../core/3dm/README.md#untrusted-files)).
+A SubD object's control net (level 0, `core/3dm/src/subd.rs`) becomes
+the cage of a Form feature in its component (mitcad#1757): the one place
+an import makes a parametric feature of a `.3dm` model. A control cage
+kept with an `.f3d` Form body maps onto a Form's cage where it is uniform
+(`ControlCage::form_cage`) and opens as a Form on request (`form.create`,
+primitive `kept_cage`); the imported body stays, since the Form's
+Catmull-Clark surface is not the stored faces exactly.
 
 `.rvt` projects and `.rfa` families (mitcad#274, mitcad#275, mitcad#333): `core/rvt`
 reads the container (the compound file module shared with `core/ipt` as
@@ -4535,3 +4657,64 @@ topological names. Components, occurrences, joints, motion links, contact sets, 
 metal map to MitCad's; a feature without a counterpart, or one that fails, is a
 suppressed placeholder with the reason, and the report lists it
 ([core/import-solidcraft/docs/solidcraft.md](../core/import-solidcraft/docs/solidcraft.md#solidcraft-import)).
+
+## Forms: subdivision surfaces
+
+A Form (mitcad#1757, the feature type `form`) is a body whose surface is
+the Catmull-Clark limit surface of a control cage, made an exact B-rep, so
+that fillets, booleans, holes and exports work on it as on any body. The
+cage is the feature's stored data: vertices and faces with ids of their
+own (a face is the loop of its vertices, counter-clockwise from outside),
+creases with a sharpness, corners and an optional symmetry plane, whose
+cage stores one half and mirrors the other. Its edits are JSON commands
+(`form.*`, [commands.md](../core/model-api/src/commands.md), "Form"), each
+one edit of the definition and one undo step
+(`core/model/src/document/forms.rs`); the features after it recompute.
+
+The work is split as everywhere else:
+
+- `core/subdiv` (`mitcad-subdiv`, Rust, no OCCT): the cage and its checks,
+  the edits (a symmetric cage's topological edits are made on the whole
+  cage with their mirror images, and the stored half is cut from the
+  result again), the subdivision (the rules of Catmull and Clark;
+  semi-sharp creases as DeRose, Kass and Truong give them; boundaries as
+  sharp creases), the limit positions of vertices, the limit surface as
+  patches and a preview mesh for editors.
+- `core/model` (`features/form.rs`): the feature evaluates the patches and
+  asks the kernel for the body (`Kernel::patch_body`), then joins, cuts or
+  intersects it like a primitive; an open cage gives a surface body.
+- `geometry/src/form.cpp`: each patch a `Geom_BSplineSurface` and a face,
+  sewn (`BRepBuilderAPI_Sewing`, 1e-6 mm) and, for a closed cage, made a
+  solid with its material inside; each face named by its patch.
+
+**The limit surface as patches.** The cage is subdivided once, so that
+every face is a quad (a cage face of `n` corners gives `n`); each quad is
+one patch, its parameters running from its cage corner, u towards the next
+corner's edge and v towards the previous one's, so that its normal points
+out of the cage. Faces are named per cage face and corner,
+`<feature>:cage(<face id>)#<corner>` (`mirror(...)` on a symmetric cage's
+mirrored half): a reference to `F7:cage(3)` finds all of a cage face's
+patches, and the names stay while the cage is edited.
+
+- A **regular** quad (each corner inside the cage with four edges and four
+  quads, no crease or corner there) has a limit surface that is exactly
+  the uniform bicubic B-spline of the 4 x 4 control points around it. Its
+  patch is that surface, converted to a bicubic Bézier patch.
+- **Other** quads (at an extraordinary vertex, a crease, a corner or the
+  cage's boundary) have no polynomial limit surface. The mesh is
+  subdivided three more times and the exact limit points of the vertices
+  on the quad (an even 9 x 9 grid of the quad's parameters) are
+  interpolated by a clamped bicubic B-spline whose inner knots are the
+  means of successive parameters.
+
+Neighbouring patches meet without a gap, with no tolerance to tune: a
+tensor-product interpolant's boundary curve is the curve through its
+boundary points alone, and the patch across the boundary has the same
+points there. Where that neighbour is regular, its boundary is a cubic,
+which the interpolation gives back exactly (every cubic is in the spline
+space, and the interpolant is unique), so the boundaries agree to
+rounding, far below the sewing's 1e-6 mm. Across a smooth boundary the
+interpolated patches are tangent within the interpolation's error (the
+tests ask less than 8° and find far less); along a crease or the cage's
+boundary both sides follow the crease's limit curve and meet at an angle,
+so a creased edge stays sharp.

@@ -26,3 +26,7 @@ mod same_surface_join_tests;
 mod two_axis_pattern_tests;
 // Coordinate System: frames at a point and exports in them (mitcad#1775).
 mod coordinate_system_tests;
+// Fill Cavity: a closed pocket filled up to a plane (mitcad#1818).
+mod fill_cavity_tests;
+// Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
+mod press_pull_tests;

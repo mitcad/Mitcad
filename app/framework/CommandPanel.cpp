@@ -130,6 +130,7 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "About x, the other way"), QT_TRANSLATE_NOOP("Choice", "About y"),
     QT_TRANSLATE_NOOP("Choice", "About y, the other way"), QT_TRANSLATE_NOOP("Choice", "Along X"),
     QT_TRANSLATE_NOOP("Choice", "Along Y"), QT_TRANSLATE_NOOP("Choice", "Along Z (standing)"),
+    QT_TRANSLATE_NOOP("Choice", "Along an edge: on a face, flush with its edge"),
     QT_TRANSLATE_NOOP("Choice", "Auto"), QT_TRANSLATE_NOOP("Choice", "Auto: from the members"),
     QT_TRANSLATE_NOOP("Choice", "Auto: through"), QT_TRANSLATE_NOOP("Choice", "Auto: through it"),
     QT_TRANSLATE_NOOP("Choice", "Auto: to a face"),
@@ -297,7 +298,21 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Triangular"), QT_TRANSLATE_NOOP("Choice", "Triangular (External)"),
     QT_TRANSLATE_NOOP("Choice", "Triangular (Internal)"),
     // 3D Print.
-    QT_TRANSLATE_NOOP("Choice", "STL"), QT_TRANSLATE_NOOP("Choice", "3MF")};
+    QT_TRANSLATE_NOOP("Choice", "STL"), QT_TRANSLATE_NOOP("Choice", "3MF"),
+    // Form and Edit Form (mitcad#1757).
+    QT_TRANSLATE_NOOP("Choice", "Box"), QT_TRANSLATE_NOOP("Choice", "Cylinder"),
+    QT_TRANSLATE_NOOP("Choice", "Sphere"), QT_TRANSLATE_NOOP("Choice", "Plane"),
+    QT_TRANSLATE_NOOP("Choice", "Face"), QT_TRANSLATE_NOOP("Choice", "Move"),
+    QT_TRANSLATE_NOOP("Choice", "Extrude Faces"), QT_TRANSLATE_NOOP("Choice", "Insert Edge Loop"),
+    QT_TRANSLATE_NOOP("Choice", "Delete Edge Loop"), QT_TRANSLATE_NOOP("Choice", "Crease"),
+    QT_TRANSLATE_NOOP("Choice", "Uncrease"), QT_TRANSLATE_NOOP("Choice", "Delete Faces"),
+    QT_TRANSLATE_NOOP("Choice", "Symmetry"), QT_TRANSLATE_NOOP("Choice", "Edges"),
+    QT_TRANSLATE_NOOP("Choice", "Vertices"),
+    // Edit Form's crease type and its mirror plane (mitcad#1810).
+    QT_TRANSLATE_NOOP("Choice", "Semi-Sharp"),
+    QT_TRANSLATE_NOOP("Choice", "Picked Plane"),
+    // commands/FilletCommands.cpp: Press Pull's Continue and Taper Type (mitcad#1850).
+    QT_TRANSLATE_NOOP("Choice", "Along the Walls (Face Turns)"), QT_TRANSLATE_NOOP("Choice", "Draft")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).

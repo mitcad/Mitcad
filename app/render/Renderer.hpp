@@ -39,6 +39,10 @@ struct MaterialData {
   std::array<float, 2> textureSize{100.0f, 100.0f};
   float textureRotation = 0.0f;
   bool texturePlanar = false;
+  // By the mesh's own texture coordinates (MeshData::uvs, mitcad#1862):
+  // the image once over 0 to 1 of each, its size and rotation not used. A
+  // mesh without them is projected as box.
+  bool textureUv = false;
   // The texture's other maps (mitcad#313, mitcad#314): files as `texture`
   // (empty: none), with its projection, size and rotation, also when the
   // base colour's image is not there. A tangent-space normal map (OpenGL
@@ -49,6 +53,20 @@ struct MaterialData {
   std::string roughnessMap;
   std::string metalnessMap;
   std::string occlusionMap;
+  // The colour channel a grey map's values are in (mitcad#1862: an image
+  // that packs several, as glTF's metalness in blue, roughness in green
+  // and occlusion in red): 0 red, 1 green, 2 blue; -1 the grey value.
+  int roughnessChannel = -1;
+  int metalnessChannel = -1;
+  int occlusionChannel = -1;
+  // The roughness and metalness maps' values multiplied by these
+  // (mitcad#1874: glTF's roughness and metalness factors, which scale
+  // their image's channels); 1: the maps' values as they are.
+  float roughnessFactor = 1.0f;
+  float metalnessFactor = 1.0f;
+  // The appearance's name, for files that keep it (glTF's materials,
+  // mitcad#1826); the renderer does not read it.
+  std::string name;
 
   bool hasMaps() const {
     return !normalMap.empty() || !roughnessMap.empty() || !metalnessMap.empty() || !occlusionMap.empty();
@@ -62,6 +80,10 @@ struct MeshData {
   std::vector<float> positions; // x, y, z per vertex
   std::vector<float> normals;   // per vertex, as positions
   std::vector<std::uint32_t> indices; // three per triangle, counter-clockwise seen from outside
+  // Texture coordinates per vertex (u, v: u to the image's right, v up
+  // it), where the shape's mesh body faces have them (mitcad#1862: an
+  // imported mesh's); zeros for faces without. Empty: none.
+  std::vector<float> uvs;
   // How many triangles each face of the shape has, in the order of its
   // faces (mitcad#53; the triangles come face by face): faces with a
   // material of their own are named by their index here. Empty: one face.

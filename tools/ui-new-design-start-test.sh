@@ -2,37 +2,36 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/OcctViewer.cpp app/OcctViewer.hpp app/MainWindow.cpp app/framework/DocumentSession.cpp
 # check-all sources: app/framework/DocumentSession.hpp core/model/src/document/display.rs app/view/DefaultView.hpp
-# How a new design opens (mitcad#1683), through the real UI, so that a
-# beginner finds the origin for the first sketch:
-#   - The untitled design at the start shows its origin: the design's origin
-#     shown in the view and the Origin folder's light bulb on, with no undo
-#     step (the title has no "*").
-#   - It looks at Top (along -Z, Y up) with the origin in the middle of the
-#     view's free area ("View: new design looks along 0,0,-1, up 0,1,0; the
-#     origin at <x>,<y>, the free area's centre at <x>,<y>", within three
-#     pixels).
-#   - Create Sketch turns the view off Top to the default view before the
-#     plane pick (mitcad#1698: "View: Create Sketch turns a new design's
-#     Top to the default view", the camera then along $DEFAULT_VIEW, a few
-#     degrees off the isometric diagonal), so that every origin plane can
-#     be picked: a click on YZ, edge-on from Top, starts a sketch on YZ; a
-#     rectangle drawn and Finish Sketch return to the default view ("Sketch
-#     left with the view before it" along it), with no second turn. Then a
-#     sketch on XZ and one on XY, each by a click on its own plane in that
-#     view.
+# How a new design opens (mitcad#1683, mitcad#1809), through the real UI:
+#   - The untitled design at the start shows its origin, so that a beginner
+#     finds it for the first sketch: the design's origin shown in the view
+#     and the Origin folder's light bulb on, with no undo step (the title
+#     has no "*").
+#   - It looks from the front right and above, Z up, along the default view
+#     (mitcad#1698: a few degrees off the isometric diagonal), not at Top
+#     (mitcad#1809: mitcad#1683 opened new designs looking at Top, which was
+#     not wanted), with the origin in the middle of the view's free area:
+#     "View: new design looks along -0.568,0.654,-0.5, up -0.328,0.377,0.866;
+#     the origin at <x>,<y>, the free area's centre at <x>,<y>" (within
+#     three pixels), logged once the new design's framing is made on the
+#     next frame, and the camera at rest along it ("Camera direction").
+#   - Create Sketch does not turn that view: every origin plane is picked by
+#     a click on its own area (YZ, XZ, XY), and each sketch, finished,
+#     returns to the default view ("Sketch left with the view before it").
 #   - A view turned to Front (View > Front, on F8 here) before the first
-#     sketch keeps Front through Create Sketch and after Finish Sketch, and
-#     nothing turns it.
+#     sketch keeps Front through Create Sketch and after Finish Sketch.
 #   - A design read from a file keeps the origin it saved: one saved with
 #     the origin hidden opens with it hidden and the light bulb off, one
 #     saved with it shown opens with it shown and the light bulb on. Both
-#     open in the default view, not the start's Top, and no new design's
-#     framing is logged for them.
+#     are seen from the default view, and no new design's framing is logged
+#     for them.
 #   - New Design (Ctrl+N, in the current window) after an opened design
-#     looks at Top again with the origin shown.
+#     turned to Top (View > Top) opens from the default view again, not at
+#     Top, with the origin shown.
 #
 # The other UI tests keep the start they were written for
-# (MITCAD_NEW_DESIGN_VIEW=0, ui-test-lib.sh); this one sets it to 1.
+# (MITCAD_NEW_DESIGN_VIEW=0, ui-test-lib.sh: the exact isometric view, the
+# origin hidden); this one sets it to 1.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-new-design-start-test.sh
@@ -44,7 +43,9 @@ WORK=$(mktemp -d /tmp/mitcad-ui-new-design-start.XXXXXX)
 trap 'ui_cleanup; rm -rf -- "${WORK:?}"' EXIT
 
 # The default view's direction (view/DefaultView.hpp: azimuth 41°,
-# elevation 30°), as "Camera direction" and "Sketch left with" log it.
+# elevation 30°) and its up (Z up, square to it), as "View: new design
+# looks along", "Camera direction" and "Sketch left with" log them.
+DEFAULT_LOOK="-0.568,0.654,-0.5, up -0.328,0.377,0.866; "
 DEFAULT_VIEW="-0.568 0.654 -0.5"
 DEFAULT_ALONG="(-0.568, 0.654, -0.500)"
 SHOWN_ON="Design origin shown in the view; the Origin folder's light bulb on"
@@ -64,15 +65,16 @@ expect_origin() {
   echo "ok   $2"
 }
 
-# expect_top description: the last "View: new design looks along" line
-# since the mark looks along -Z with Y up, and puts the origin within three
-# pixels of the free area's centre.
-expect_top() {
+# expect_default_view description: the last "View: new design looks along"
+# line since the mark looks along the default view with Z up and puts the
+# origin within three pixels of the free area's centre, and the camera
+# comes to rest along the default view.
+expect_default_view() {
   local line
   ui_expect_new "View: new design looks along " "$1: the new design's view is logged"
   line=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -o "View: new design looks along .*" | tail -1)
-  [[ $line == "View: new design looks along 0,0,-1, up 0,1,0; "* ]] ||
-    ui_fail "$1: not looking at Top: '$line'"
+  [[ $line == "View: new design looks along $DEFAULT_LOOK"* ]] ||
+    ui_fail "$1: not the default view from the front right and above: '$line'"
   awk -v line="$line" 'BEGIN {
     if (!match(line, /origin at -?[0-9]+,-?[0-9]+/)) exit 1
     split(substr(line, RSTART + 10, RLENGTH - 10), o, ",")
@@ -81,6 +83,7 @@ expect_top() {
     exit !((o[1] - c[1]) ^ 2 + (o[2] - c[2]) ^ 2 <= 9)
   }' || ui_fail "$1: the origin is not in the middle of the free area: '$line'"
   echo "ok   $1: ${line#View: new design }"
+  ui_expect_new "Camera direction $DEFAULT_VIEW up " "$1: the camera rests along the default view"
 }
 
 # draw_rectangle_and_finish description: a rectangle from the sketch point
@@ -126,47 +129,26 @@ design ', "display": {"origin": true}' > "$WORK/shown.mitcad"
 
 # New replaces the window's design (no second window to follow).
 ui_open_in_current_window
-# View > Front on a key of its own.
-printf '[shortcuts]\nview.front=F8\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
+# View > Front and View > Top on keys of their own.
+printf '[shortcuts]\nview.front=F8\nview.top=F9\n' >> "$UI_CONFIG/Mitcad/Mitcad.conf"
 ui_start_display
 
-echo "--- The untitled design at the start: Top, the origin shown"
+echo "--- The untitled design at the start: the default view, the origin shown"
 ui_start_app
 UI_MARK=0
 expect_origin "$SHOWN_ON" "a new design shows its origin, its light bulb on"
-expect_top "the untitled design at the start"
+expect_default_view "the untitled design at the start"
 TITLE=$(ui_window_title)
 [ "$TITLE" = "Untitled - MitCad" ] || ui_fail "the new design is modified: '$TITLE'"
 echo "ok   showing the origin is no change to the design: '$TITLE'"
 
-echo "--- Create Sketch from Top: the default view first, every origin plane picked"
-ui_mark
-ui_command "Create Sketch"
-ui_expect_new "Create Sketch: select a plane" "Create Sketch asks for a plane"
-ui_expect_new "View: Create Sketch turns a new design's Top to the default view" \
-  "the view turns off Top before the plane pick"
-ui_expect_new "Camera direction $DEFAULT_VIEW up " "the default view: from the front right and above"
-# The planes' pick places are logged again as the camera rests (when they
-# moved), right after its line: the last ones logged are the default view's.
-ui_sync
-BEFORE=$(grep -c "Sketch started on yz" "$UI_LOG")
-ui_step "click YZ"                       ui_click_logged "Datum yz"
-for _ in $(seq 1 25); do
-  [ "$(grep -c "Sketch started on yz" "$UI_LOG")" -gt "$BEFORE" ] && break
-  sleep 0.2
-done
-[ "$(grep -c "Sketch started on yz" "$UI_LOG")" -gt "$BEFORE" ] ||
-  ui_fail "a click on YZ in the default view started no sketch on it"
-echo "ok   YZ, edge-on from Top, picked by a click on it in the default view"
-draw_rectangle_and_finish "the first sketch, on YZ"
-ui_expect_new "Sketch left with the view before it: the view looks along $DEFAULT_ALONG" \
-  "the first sketch returns to the default view"
-! grep -q "View: after the first sketch" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") ||
-  ui_fail "the view turned again after the first sketch"
-echo "ok   no second turn after the first sketch"
-for PLANE in xz xy; do
+echo "--- Create Sketch in the default view: every origin plane picked by a click on it"
+for PLANE in yz xz xy; do
+  ui_mark
   ui_create_sketch "$PLANE"
   echo "ok   a sketch on $PLANE by a click on its plane in the default view"
+  ! grep -q "View: Create Sketch turns" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") ||
+    ui_fail "the view was turned for the plane pick"
   draw_rectangle_and_finish "the sketch on $PLANE"
   ui_expect_new "Sketch left with the view before it: the view looks along $DEFAULT_ALONG" \
     "the sketch on $PLANE returns to the default view"
@@ -176,38 +158,35 @@ ui_stop_app
 echo "--- The view turned to Front before the first sketch keeps Front"
 ui_start_app
 UI_MARK=0
-expect_top "the untitled design at the start, again"
+expect_default_view "the untitled design at the start, again"
+ui_mark
 ui_step "front view (F8)"                ui_key F8
-ui_sync
+ui_expect_new "Camera direction 0 1 0" "looking from the front"
 ui_create_sketch xz
-! grep -q "View: Create Sketch turns" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") ||
-  ui_fail "a view turned to Front was turned to the default view for the plane pick"
-echo "ok   no turn for the plane pick in a view turned to Front"
 draw_rectangle_and_finish "a sketch on XZ from Front"
 ui_expect_new "Sketch left with the view before it: the view looks along (0.000, 1.000, 0.000)" \
   "the sketch returns to Front, the view the user chose"
-! grep -q "View: after the first sketch" < <(tail -n +$((UI_MARK + 1)) "$UI_LOG") ||
-  ui_fail "a view turned to Front was turned to the isometric view after the sketch"
-echo "ok   no turn to the isometric view after the sketch"
 ui_stop_app
 
 echo "--- A design saved with its origin hidden"
 ui_start_app "$WORK/hidden.mitcad"
 expect_origin "$HIDDEN_OFF" "the opened design's origin stays hidden, its light bulb off"
-ui_expect_log "View: an opened design seen from the default view" "the opened design is seen from the default view"
-ui_expect_log "Camera direction $DEFAULT_VIEW up " "the opened design looks along the default view"
+ui_expect_log "Camera direction $DEFAULT_VIEW up " "the opened design is seen from the default view"
 ! grep -q "View: new design" "$UI_LOG" || ui_fail "an opened design was framed as a new one: $(grep "View: new design" "$UI_LOG" | tail -1)"
 echo "ok   no new design's framing for the opened design"
 ui_stop_app
 
-echo "--- A design saved with its origin shown, then New Design"
+echo "--- A design saved with its origin shown, turned to Top, then New Design"
 ui_start_app "$WORK/shown.mitcad"
 expect_origin "$SHOWN_ON" "the opened design's origin stays shown, its light bulb on"
 ! grep -q "View: new design" "$UI_LOG" || ui_fail "an opened design was framed as a new one: $(grep "View: new design" "$UI_LOG" | tail -1)"
 ui_mark
+ui_step "top view (F9)"                  ui_key F9
+ui_expect_new "Camera direction 0 0 -1" "the opened design seen from the top"
+ui_mark
 ui_step "new design (Ctrl+N)"            ui_key ctrl+n
 ui_expect_new "New design in " "New Design replaced the opened design"
-expect_top "New Design after an opened design"
+expect_default_view "New Design after a design turned to Top"
 expect_origin "$SHOWN_ON" "the new design shows its origin, its light bulb on"
 TITLE=$(ui_window_title)
 [ "$TITLE" = "Untitled - MitCad" ] || ui_fail "the new design is modified: '$TITLE'"

@@ -132,6 +132,20 @@ pub(crate) fn resolve_tool<K: Kernel>(
         },
         GeomRef::SketchCurves { sketch, curves } => {
             let output = ctx.sketch(*sketch)?;
+            // A sketch on a curved face (mitcad#1768): its curves laid onto
+            // the face, ruled a little along its normals both ways.
+            if let Some(development) = output.developed.clone() {
+                if direction.is_some() {
+                    return Err(
+                        "a sketch on a curved face splits along the face's normals, not along a \
+                         direction"
+                            .to_owned(),
+                    );
+                }
+                let shape =
+                    super::developed::curves_tool(ctx, *sketch, &development, &output, curves)?;
+                return Ok(Resolved::Body { shape });
+            }
             let regions: Vec<ProfileRegion> = output
                 .regions
                 .iter()

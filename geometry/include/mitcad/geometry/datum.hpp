@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include <Geom_Surface.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <gp_Dir.hxx>
@@ -40,7 +41,10 @@ struct SurfaceDescription {
 };
 
 // The surface of the faces a name resolves to: one face, or the pieces of
-// a split face that lie on one surface. Throws otherwise.
+// a split face that lie on one surface. Throws otherwise. A face stored as
+// another surface within 1e-6 mm of a plane, cylinder, cone, sphere or
+// torus is that one (planar splines: mitcad#1537; analytic_surface:
+// mitcad#1855).
 SurfaceDescription face_geometry(const Shape& shape, const std::string& face);
 
 // The curve of one edge, in the direction of its parameter.
@@ -56,7 +60,8 @@ struct CurveDescription {
 
 // A straight edge that is stored as a spline or a Bezier curve (the walls
 // of sheet bodies, mitcad#1537; imported lines) is a line here, as a planar
-// spline face is a plane to face_geometry.
+// spline face is a plane to face_geometry; one within 1e-6 mm of a circle
+// is that circle (is_circular, mitcad#1855).
 CurveDescription edge_geometry(const Shape& shape, const std::string& edge);
 
 // Whether an edge runs straight: a line, or a spline or Bezier curve whose
@@ -70,15 +75,50 @@ bool is_straight(const TopoDS_Edge& edge);
 // splines). Null for other faces and a mesh body's triangles.
 std::optional<gp_Pln> face_plane(const TopoDS_Face& face);
 
+// The plane, cylinder, cone, sphere or torus a face lies on, in the face's
+// place (its location applied): its own surface, or the one its stored
+// surface lies within 1e-6 mm of all over the face where it is stored as
+// another type (mitcad#1855: an extrusion of a circle, a revolution, a
+// B-spline such as the wall of a hole in a sheet body). Null for other
+// faces and a mesh body's triangles. face_geometry reads faces so.
+occ::handle<Geom_Surface> analytic_surface(const TopoDS_Face& face);
+
+// What the application's picks call a face: "plane", "cylinder", "cone",
+// "sphere" or "torus" for a face on one of them or within 1e-6 mm of one
+// (planar splines as face_plane, the rest as analytic_surface reads them);
+// null for other faces and a mesh body's triangles. The answers for faces
+// stored as other surfaces are kept by the face's shape.
+const char* analytic_kind(const TopoDS_Face& face);
+
+// Whether an edge runs on a circle: a circle or an arc, or a curve stored
+// as another type within 1e-6 mm of one (a spline, mitcad#1855). What the
+// application's picks call a circle, as edge_geometry reads it.
+bool is_circular(const TopoDS_Edge& edge);
+
 // The surfaces of every face and the curves of every edge in one pass, in
 // the shape's face and edge order (Shape::face_names, Shape::edge_name name
 // them): the .f3d import looks for the faces and edges through a point of
 // large bodies (mitcad#87), where finding each by its name takes as long
 // as the whole list. A face whose surface is not a plane, cylinder, cone,
-// sphere or torus has only its type (no planar spline test). A degenerate
+// sphere or torus has only its type (no planar spline test, no
+// analytic_surface), and an edge that is not a line or circle only its
+// type. A degenerate
 // edge has the type "degenerate".
 std::vector<SurfaceDescription> face_geometries(const Shape& shape);
 std::vector<CurveDescription> edge_geometries(const Shape& shape);
+
+// The surfaces of the faces with these indices (Shape::face) and the curves
+// of the edges with these indices (Shape::edge), each read as face_geometry
+// and edge_geometry read one face or edge: a face stored as a spline, a
+// revolution or an extrusion within 1e-6 mm of a plane, cylinder, cone,
+// sphere or torus is that one, an edge stored as a spline within 1e-6 mm of
+// a line or circle that one; the rest have only their type, as in
+// face_geometries and edge_geometries. The `faces` and `edges` queries
+// read the faces and edges stored as other types so (mitcad#1863); a face
+// found to be on none of them is known by its shape afterwards
+// (analytic_kind), so asking again is quick. An index out of range throws.
+std::vector<SurfaceDescription> recognised_face_geometries(const Shape& shape, const std::vector<int>& faces);
+std::vector<CurveDescription> recognised_edge_geometries(const Shape& shape, const std::vector<int>& edges);
 
 gp_Pnt vertex_point(const Shape& shape, const std::string& vertex);
 

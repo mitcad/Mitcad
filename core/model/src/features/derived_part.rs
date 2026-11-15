@@ -315,6 +315,9 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
 #[doc(hidden)]
 pub struct Evaluated<S> {
     pub bodies: Vec<S>,
+    /// Each body's id in the source, when it is a body of the source's
+    /// root component placed as it is (Convert to Features, mitcad#1815).
+    pub ids: Vec<Option<BodyUid>>,
     pub mounts: BTreeMap<String, Transform>,
 }
 
@@ -360,6 +363,7 @@ pub fn evaluate_source<K: Kernel>(
             .collect::<Vec<_>>()
     };
     let mut bodies = Vec::new();
+    let mut ids = Vec::new();
     for instance in assembly.instances(&placement, &owned) {
         let shown = state
             .body_attributes
@@ -371,6 +375,9 @@ pub fn evaluate_source<K: Kernel>(
         let Some(shape) = result.bodies.get(&instance.body) else {
             continue;
         };
+        ids.push(
+            (instance.path.is_empty() && instance.transform.is_identity()).then_some(instance.body),
+        );
         bodies.push(if instance.transform.is_identity() {
             shape.value.clone()
         } else {
@@ -417,7 +424,11 @@ pub fn evaluate_source<K: Kernel>(
         };
         mounts.insert(name.to_owned(), at);
     }
-    Ok(Evaluated { bodies, mounts })
+    Ok(Evaluated {
+        bodies,
+        ids,
+        mounts,
+    })
 }
 
 /// A derived part's mount frame in a recompute's results (for joints and
@@ -445,7 +456,7 @@ pub(crate) fn mount_frame<S>(
 }
 
 /// The box of all the shapes, None when the kernel cannot tell.
-fn bounds_of<K: Kernel>(kernel: &K, shapes: &[K::Shape]) -> Option<BoundingBox> {
+pub(crate) fn bounds_of<K: Kernel>(kernel: &K, shapes: &[K::Shape]) -> Option<BoundingBox> {
     let mut all: Option<BoundingBox> = None;
     for shape in shapes {
         let b = kernel.bounding_box(shape).ok()??;
@@ -459,7 +470,12 @@ fn bounds_of<K: Kernel>(kernel: &K, shapes: &[K::Shape]) -> Option<BoundingBox> 
 
 /// The faces of `shape` on the plane at height `z` facing `normal` (+z or
 /// −z): a square end's faces.
-fn end_faces<K: Kernel>(kernel: &K, shape: &K::Shape, z: f64, up: bool) -> Vec<FaceName> {
+pub(crate) fn end_faces<K: Kernel>(
+    kernel: &K,
+    shape: &K::Shape,
+    z: f64,
+    up: bool,
+) -> Vec<FaceName> {
     let Ok(faces) = kernel.faces(shape) else {
         return Vec::new();
     };

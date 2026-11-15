@@ -5,6 +5,11 @@
 // registered in menu order by registerCreateCommands and
 // registerModifyCommands (Commands.hpp).
 
+#include <utility>
+
+#include <QJsonObject>
+#include <QVector>
+
 #include "../framework/Command.hpp"
 
 namespace mitcad {
@@ -29,6 +34,36 @@ CommandDef helixCommand(const CommandContext& context);
 CommandDef intersectionCurveCommand(const CommandContext& context);
 // Helix Curve: a helical 3D curve about an axis, a path (mitcad#1777).
 CommandDef helixCurveCommand(const CommandContext& context);
+// Helix's sizes, shared by Surface Helix (mitcad#1797): the Type (a size
+// pair), Revolutions, Height and Pitch inputs and Growth, with the texts
+// the values start with and the tooltips that name what rises.
+struct HelixSizeTexts {
+  QString revolutions;
+  QString height;
+  QString pitch;
+  QString heightTooltip;
+  QString growthTooltip;
+};
+QVector<InputDef> helixSizeInputs(const HelixSizeTexts& texts);
+// The definition's pitch and revolutions from the size pair: a height goes
+// in as their ratio ("30 mm / 10 mm" turns, "30 mm / 3" a pitch).
+void addHelixSizes(QJsonObject& definition, const CommandState& state);
+// The size pair, its values and the growth back from a definition.
+void loadHelixSizes(const QJsonObject& feature, CommandState& state, const CommandContext& context);
+// The turns and the pitch the inputs give (for the log).
+std::pair<double, double> helixTurnsAndPitch(const CommandState& state);
+// Whether the Growth is anything but a plain zero.
+bool helixHasGrowth(const CommandState& state);
+// Helix's flat ends, shared by Surface Helix (mitcad#1798): Flat Start,
+// Start Transition, End Transition and Flat End, angles of zero by default.
+QVector<InputDef> helixEndInputs();
+// The definition's `start` and `end` (`flat_angle`, `transition_angle`)
+// for each end whose flat part or transition is not a plain zero.
+void addHelixEnds(QJsonObject& definition, const CommandState& state);
+// The flat ends' angles back from a definition, as their expressions.
+void loadHelixEnds(const QJsonObject& feature, CommandState& state, const CommandContext& context);
+// Whether either end has a flat part or a transition.
+bool helixHasEnds(const CommandState& state);
 
 // HoleCommands.cpp
 CommandDef holeCommand(const CommandContext& context);
@@ -122,5 +157,13 @@ CommandDef convertMeshCommand(const CommandContext& context);
 // EnvelopeCommands.cpp (mitcad#1276): a light outer skin of a component,
 // an occurrence or bodies.
 CommandDef envelopeCommand(const CommandContext& context);
+// FormCommands.cpp (mitcad#1757): a Form, a body whose surface is the
+// smooth limit surface of a control cage started from a box, a cylinder, a
+// sphere, a plane or a planar face; Edit Form changes its cage
+// (registerFormEditCommand).
+CommandDef formCommand(const CommandContext& context);
+// FillCavityCommands.cpp (mitcad#1818): a closed pocket of a body filled
+// up to a plane.
+CommandDef fillCavityCommand(const CommandContext& context);
 
 } // namespace mitcad::cmd

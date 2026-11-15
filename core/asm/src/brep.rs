@@ -48,6 +48,19 @@ pub struct BSplineCurve2d {
     pub weights: Option<Vec<f64>>,
 }
 
+/// The most control points of a surface an importer builds as the
+/// product of two curves (a sum surface, a whole surface of revolution):
+/// each curve is bounded by its file's bytes but their product is not,
+/// and a failed allocation aborts instead of panicking. A surface over
+/// it is refused in words (mitcad#1837).
+pub const MAX_SURFACE_POLES: usize = 1 << 20;
+
+/// The control points of an `nu` by `nv` surface built as a product,
+/// when they are within [`MAX_SURFACE_POLES`].
+pub fn product_poles(nu: usize, nv: usize) -> Option<usize> {
+    nu.checked_mul(nv).filter(|&n| n <= MAX_SURFACE_POLES)
+}
+
 /// Tensor-product B-spline surface; `poles[iu * nv + iv]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BSplineSurface {

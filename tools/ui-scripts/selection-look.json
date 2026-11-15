@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The selection's look (mitcad#1803; tools/ui-selection-look-test.sh and its Windows twin): a block 60 x 40 x 30 (F1.b0) from the origin, whose top edges the test selects; Plane1 (F2) 40 mm above XY, hidden; on it Sketch1 (F3) with a line from (10, 10) to (50, 10), over the block."},
+  {"cmd":"add_feature","def":{"type":"box","plane":"xy","corner":[0,0],"length":60,"width":40,"height":30,"operation":"new_body"}},
+  {"expect":{"feature":"F1","status":"ok"}},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":40}}},
+  {"cmd":"sketch.create","plane":"F2"},
+  {"cmd":"sketch.add_line","sketch":"F3","start":[10,10],"end":[50,10]},
+  {"expect":{"feature":"F3","status":"ok"}},
+  {"cmd":"set_feature_visible","uid":"F2","visible":false}
+]

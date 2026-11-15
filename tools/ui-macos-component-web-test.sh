@@ -37,4 +37,4 @@ ui_expect_log '^TestDriver: quit' 'the STEP, the zip and the PDF were handled'
 ui_expect_no_log 'TestDriver: FAIL' 'all Component from Web assertions passed'
 [ "$UI_FAILURES" = 0 ] || exit 1
 python3 "$here/ui-component-web-test.py" verify "$MITCAD_TEST_WORK" || exit 1
-echo 'PASS: Component from Web: a STEP as a numbered component in Move, a zip'"'"'s picked file, a PDF refused'
+echo 'PASS: Component from Web: a STEP as a numbered component in Move, a zip'"'"'s two checked files with one Move, a PDF refused'

@@ -9,10 +9,14 @@
 #      dimension listed in degrees.
 #   4. Symmetric of two points about a plane of the sketch: p13 and p14,
 #      its plane picked with the palette's YZ.
+#   5. With a value typed in the angle's field and the keyboard left there,
+#      Remove on the Parallel row removes it from the list; the field keeps
+#      the keyboard and the value typed (mitcad#1836).
 #   Each is one edit, listed in words: no shown text has an id, a
 #   topological name or a coordinate. Finish Sketch; the sketch solves.
-# Run by tools/ui-sketch3d-relations-test.sh (Linux) and
-# tools/ui-windows-sketch3d-relations-test.ps1 (Windows).
+# Run by tools/ui-sketch3d-relations-test.sh (Linux),
+# tools/ui-windows-sketch3d-relations-test.ps1 (Windows) and
+# tools/ui-macos-sketch3d-relations-test.sh (macOS).
 expect-ever 'View area'
 wait-idle
 
@@ -32,9 +36,10 @@ wait-log '\[sketch curve c3 of F2\]'
 click-logged '^3D sketch entity F2/c6 at ' ctrl
 wait-log 'Selected: 2 '
 wait-idle
-click-logged '^3D sketch edit control parallel at '
+button '^Parallel$' 'sketch3dEdit parallel'
 wait-log '^3D sketch edit parallel: done, made k[0-9]+'
 wait-log '^3D sketch item k[0-9]+ Parallel c3, c6 [|] shown: Parallel 1 on Line 1, Line 2$'
+capture PARALLEL '^3D sketch item (k[0-9]+) Parallel c3, c6 '
 wait-idle
 
 # 2. Perpendicular.
@@ -44,7 +49,7 @@ wait-log 'Selected: 1 '
 click-logged '^3D sketch entity F2/c9 at ' ctrl
 wait-log 'Selected: 2 '
 wait-idle
-click-logged '^3D sketch edit control perpendicular at '
+button '^Perpendicular$' 'sketch3dEdit perpendicular'
 wait-log '^3D sketch edit perpendicular: done, made k[0-9]+'
 wait-log '^3D sketch item k[0-9]+ Perpendicular c3, c9 [|] shown: Perpendicular 1 on Line 1, Line 3$'
 wait-idle
@@ -56,27 +61,65 @@ wait-log 'Selected: 1 '
 click-logged '^3D sketch entity F2/c12 at ' ctrl
 wait-log 'Selected: 2 '
 wait-idle
-click-logged '^3D sketch edit control angle_relation at '
+button '^Angle$' 'sketch3dEdit angle_relation'
 wait-log '^3D sketch edit angle_relation: done, made k[0-9]+'
 wait-log '^3D sketch item k[0-9]+ Angle c6, c12: [0-9]+[.][0-9]+ deg [|] shown: Angle 1 on Line 2, Line 4: [0-9]+[.][0-9]+°$'
+capture ANGLE '^3D sketch item (k[0-9]+) Angle c6, c12: '
 wait-idle
 
 # 4. Symmetric: two points, then the plane: the sketch's YZ.
 mark
+# Keep the requested geometry clear of the command card at this window size.
+command view.fit
+wait-idle
 click-logged '^3D sketch entity F2/p13 at '
 wait-log 'Selected: 1 '
 click-logged '^3D sketch entity F2/p14 at ' ctrl
 wait-log 'Selected: 2 '
 wait-idle
-click-logged '^3D sketch edit control symmetric at '
+# Address the enabled Qt button after the selection relayout.
+button '^Symmetric$' 'sketch3dEdit symmetric'
 wait-log '^3D sketch symmetric: pick a plane$'
 wait-log '^3D sketch edit control plane YZ at '
 wait-idle
-click-logged '^3D sketch edit control plane YZ at '
+button '^YZ$' 'sketch3dEdit plane YZ'
 wait-log '^3D sketch edit symmetric about [{]"frame":"x"[}]: done, made k[0-9]+'
 wait-log '^3D sketch item k[0-9]+ Symmetric p13, p14 [|] shown: Symmetric 1 on Point 9, Point 10$'
 wait-idle
 expect-no-log '[|] shown: .*([pck][0-9]+([^0-9]|$)|[EV][{]|F[0-9]+[.:]|[0-9][.][0-9]+, -?[0-9])'
+
+# 5. A value typed in the angle's field, the keyboard left there: Remove on
+#    the Parallel row (it takes no keyboard) removes that row from the list,
+#    and the field keeps the keyboard and the value typed; Esc takes the
+#    value back.
+# The places are logged again only when the reveal scrolled the card: a
+# field already in sight keeps its last logged place (a card tall enough
+# for the whole list), so the place is taken from the whole log, the
+# newest line, as for the Remove below.
+reveal-widget 'sketch3dItem ${ANGLE}'
+wait-idle
+expect-ever '^3D sketch item ${ANGLE} field at '
+mark
+click-logged '^3D sketch item ${ANGLE} field at '
+expect-widget-property 'sketch3dItem ${ANGLE}' focus true
+key ctrl+a
+type 45
+expect-widget-property 'sketch3dItem ${ANGLE}' text 45
+reveal-widget 'sketch3dRow ${PARALLEL}'
+expect-ever '^3D sketch item ${PARALLEL} remove at '
+wait-idle
+mark
+click-logged '^3D sketch item ${PARALLEL} remove at '
+wait-log '^3D sketch edit remove ${PARALLEL}: done'
+wait-log '^3D sketch item ${ANGLE} Angle c6, c12: '
+wait-idle
+expect-no-log '^3D sketch item ${PARALLEL} (?!remove)'
+expect-widget-property 'sketch3dItem ${ANGLE}' focus true
+expect-widget-property 'sketch3dItem ${ANGLE}' text 45
+mark
+key Escape
+wait-log '^3D sketch item ${ANGLE}: Esc took the typed value back'
+wait-idle
 
 mark
 command sketch.finish

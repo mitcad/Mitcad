@@ -397,6 +397,9 @@ void Sketch3dController::stopTool() {
   m_ringHover.reset();
   m_loggedHandles.clear();
   m_tool = Sketch3dTool::None;
+  // A Pick Normal under way ends with its tool, or the next 3D sketch
+  // would open with its pick filter (mitcad#1835).
+  m_pickingNormal = false;
   m_pending.clear();
   m_chainPoint.clear();
   m_chainCurve.clear();

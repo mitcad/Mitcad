@@ -194,6 +194,10 @@ pub struct FaceMeshes {
     /// Each face's number of triangles, in the order [`Kernel::faces`]
     /// lists the faces.
     pub face_triangles: Vec<u32>,
+    /// A mesh body's texture coordinates (mitcad#1874: the UV nodes a glTF
+    /// import keeps, mitcad#1862; u to the image's right, v up it): empty
+    /// when no face has them, else one per vertex, zeros on faces without.
+    pub uvs: Vec<[f64; 2]>,
 }
 
 /// STEP application protocol.

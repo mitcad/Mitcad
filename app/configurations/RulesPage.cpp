@@ -223,7 +223,6 @@ RulesPage::RulesPage(RulesSource source, QWidget* parent) : QWidget(parent), m_s
   split->setStretchFactor(1, 1);
   split->setSizes({200, 660});
   auto* layout = new QVBoxLayout(this);
-  layout->setContentsMargins(0, 0, 0, 0);
   layout->addWidget(m_lead);
   layout->addWidget(m_closedNote);
   layout->addWidget(split, 1);

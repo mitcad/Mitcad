@@ -34,12 +34,12 @@ int SketchController::selectEntities(const QStringList& ids, bool reveal, bool f
     if (const PointData* point = m_model.point(id)) {
       item.kind = SelectKind::SketchPoint;
       item.geometry = QStringLiteral("point");
-      places.push_back(toModel(m_model.frame, point->at));
+      places.push_back(m_model.place(point->at));
     } else if (const CurveData* curve = m_model.curve(id)) {
       item.kind = SelectKind::SketchCurve;
       item.geometry = curve->type;
       for (const V2& at : curve->curve.sample(5.0)) {
-        places.push_back(toModel(m_model.frame, at));
+        places.push_back(m_model.place(at));
       }
     } else {
       continue;

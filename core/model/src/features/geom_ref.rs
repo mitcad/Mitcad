@@ -836,6 +836,16 @@ impl GeomRef {
                         "a bearing's mount frames are {}",
                         super::printable_bearing::MOUNTS.join(", ")
                     )),
+                    // An edge frame's frames (mitcad#1814).
+                    super::FeatureDef::EdgeFrame(_)
+                        if super::edge_frame::MOUNTS.contains(&name.as_str()) =>
+                    {
+                        Ok(())
+                    }
+                    super::FeatureDef::EdgeFrame(_) => Err(format!(
+                        "an edge frame's frames are {}",
+                        super::edge_frame::MOUNTS.join(", ")
+                    )),
                     _ => Err(format!(
                         "{} ({feature}) is not a derived part: it has no mount frames",
                         entry.name
@@ -2181,18 +2191,7 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
         sketch: FeatureUid,
         entity: crate::sketch::Ref,
     ) -> Option<Result<crate::kernel::Curve3, String>> {
-        if !matches!(
-            self.env.feature(sketch).map(|f| &f.def),
-            Some(super::FeatureDef::SpatialSketch(_))
-        ) {
-            return None;
-        }
-        let name = self.feature_name(sketch);
-        let found = super::spatial_sketch::sketch_entity_geometry(
-            self,
-            crate::sketch::SketchEntityRef { sketch, entity },
-        )
-        .and_then(|found| found.ok_or_else(|| format!("{name} has no {entity}")));
+        let found = spatial_entity_in(self, sketch, entity)?;
         // A 3D sketch of another component by its link, as a planar
         // sketch's frame is placed.
         Some(found.and_then(|curve| match self.datum_placement(sketch)? {
@@ -2200,6 +2199,32 @@ impl<K: Kernel> Resolver for EvalContext<'_, K> {
             None => Ok(curve),
         }))
     }
+}
+
+/// A point or a curve of a 3D sketch (mitcad#1550) in its own component's
+/// coordinates, as [`Resolver::spatial_entity`] gives it; None when
+/// `sketch` is not a 3D sketch. The resolvers that read another
+/// component's geometry through an evaluation (an occurrence's) give it so
+/// too, and place it as they place its planar sketches (mitcad#1832).
+pub(crate) fn spatial_entity_in<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    sketch: FeatureUid,
+    entity: crate::sketch::Ref,
+) -> Option<Result<crate::kernel::Curve3, String>> {
+    if !matches!(
+        ctx.env.feature(sketch).map(|f| &f.def),
+        Some(super::FeatureDef::SpatialSketch(_))
+    ) {
+        return None;
+    }
+    let name = ctx.feature_name(sketch);
+    Some(
+        super::spatial_sketch::sketch_entity_geometry(
+            ctx,
+            crate::sketch::SketchEntityRef { sketch, entity },
+        )
+        .and_then(|found| found.ok_or_else(|| format!("{name} has no {entity}"))),
+    )
 }
 
 impl<K: Kernel> EvalContext<'_, K> {

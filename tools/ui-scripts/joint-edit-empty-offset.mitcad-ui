@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# A joint edited with its Offset emptied while typing (mitcad#1860, GitHub
+# mitcad/Mitcad#347), on joint-edit-empty-offset.json: Shaft:1 (grounded),
+# Bearing:1 on it by Joint1 (Offset 5 mm), Tube:1 on the bearing by Joint2,
+# the two in RigidGroup1. Joint2 and RigidGroup1 come after Joint1, so its
+# edit rolls them back.
+#   1. Joint1 edited: its preview keeps the joint and the rigid group after
+#      it, the bearing and the tube drawn where the design has them.
+#   2. Offset emptied: the panel says what is wrong, OK is refused, and the
+#      view moves nothing: the last good preview stays drawn, the bearing
+#      and the tube together where they were.
+#   3. 8 mm typed: the preview raises both by 3 mm; OK commits it, and the
+#      design has them there.
+# Run by tools/ui-joint-edit-empty-offset-test.sh (Linux),
+# tools/ui-windows-joint-edit-empty-offset-test.ps1 (Windows) and
+# tools/ui-macos-joint-edit-empty-offset-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+# The design: the bearing 5 mm over the shaft's top, the tube on it.
+expect-shown-body F2.b0 O2 1000 25 0 15 35 10 25
+expect-shown-body F3.b0 O3 1000 25 0 25 35 10 35
+
+# 1. Joint1 edited: the joint and the rigid group after it hold in its
+# preview.
+mark
+dblclick-logged '^Timeline Joint1 at '
+expect-log '^Editing F4 with Joint'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 25 0 15 35 10 25
+expect-shown-body F3.b0 O3 1000 25 0 25 35 10 35
+
+# 2. Offset emptied, as when its value is erased to type another: nothing
+# moves, the panel says what is wrong and OK is refused.
+mark
+focus-widget input_offset
+key ctrl+a
+key Backspace
+wait-log '^Preview Joint: the last good preview kept$' 30
+wait-idle 30
+expect-log '^Panel Joint error: Offset: check the value\.$'
+expect-shown-body F2.b0 O2 1000 25 0 15 35 10 25
+expect-shown-body F3.b0 O3 1000 25 0 25 35 10 35
+expect-no-log '^Preview Joint: ok'
+mark
+key Return
+wait-log '^Joint: OK refused' 30
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 25 0 15 35 10 25
+expect-shown-body F3.b0 O3 1000 25 0 25 35 10 35
+expect-no-log '^Edited F4'
+
+# 3. 8 mm typed: the bearing and the tube 3 mm higher, together; OK
+# commits it.
+mark
+type-in '^Panel Joint input offset at ' '8 mm'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 25 0 18 35 10 28
+expect-shown-body F3.b0 O3 1000 25 0 28 35 10 38
+mark
+button '^OK$'
+wait-log '^Edited F4' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 25 0 18 35 10 28
+expect-shown-body F3.b0 O3 1000 25 0 28 35 10 38
+expect-never 'TestDriver: FAIL'

@@ -21,8 +21,10 @@ use mitcad_model::features::{
 };
 use mitcad_model::ids::{ComponentUid, FeatureUid, OccurrenceUid};
 use mitcad_model::internal::document::status_text;
-use mitcad_model::internal::joints::{frame_parts, limit_values, path_component};
-use mitcad_model::joints::{DofUnit, Dragged, JointKind, JointResult, Motion, SlideAxis};
+use mitcad_model::internal::joints::{find_path_from, frame_parts, limit_values, path_component};
+use mitcad_model::joints::{
+    DofUnit, Dragged, JointKind, JointResult, Motion, SlideAxis, joint_holder,
+};
 use mitcad_model::kernel::Kernel;
 use mitcad_model::transform::Transform;
 
@@ -117,6 +119,10 @@ named_enum! {
         "drive_joint" => DriveJoint {
             joint: String,
             values: BTreeMap<Motion, Option<ValueInput>>,
+            /// A flexible occurrence (mitcad#1793): the joint of its component
+            /// driven for it alone.
+            #[serde(default)]
+            occurrence: Option<String>,
         },
         "drag_occurrence" => DragOccurrence {
             occurrence: String,
@@ -145,6 +151,10 @@ named_enum! {
 pub(crate) struct MotionInput {
     joint: String,
     motion: Motion,
+    /// A joint of a flexible occurrence's component (mitcad#1793): that
+    /// occurrence, placed in the link's component (uid or name).
+    #[serde(default)]
+    occurrence: Option<String>,
 }
 
 /// The fields of `add_motion_link`.
@@ -210,6 +220,24 @@ pub(crate) struct JointPosesQuery {
     motion: Motion,
     /// mm for a slide, radians for a turn.
     values: Vec<f64>,
+    /// A flexible occurrence (mitcad#1805): the joint as it moves inside it,
+    /// for it alone.
+    #[serde(default)]
+    occurrence: Option<String>,
+}
+
+/// The `joint_holder` query (mitcad#1856): the lowest component that holds
+/// a joint's picks, and where a component (the active one) stands to it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JointHolderQuery {
+    /// Each pick's occurrence path from the root (uids or names; empty:
+    /// the root's own geometry).
+    occurrences: Vec<String>,
+    /// The component compared with the holder (the active one when left
+    /// out).
+    #[serde(default)]
+    component: Option<String>,
 }
 
 /// The `joint_frame` query: the frame a joint origin gives at the marker,
@@ -305,6 +333,10 @@ pub(crate) trait JointsCrateOps<K: Kernel> {
 
     /// The `joint_poses` query (mitcad#1701): Animate Joint's frames.
     fn joint_poses_json(&self, query: &JointPosesQuery) -> Result<Value, ApiError>;
+
+    /// The `joint_holder` query (mitcad#1856): the component a joint's
+    /// picks belong in.
+    fn joint_holder_json(&self, query: &JointHolderQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> JointsCrateOps<K> for Document<K> {
@@ -399,7 +431,31 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                 let def = FeatureDef::<ValueInput>::RigidGroup(RigidGroupDef::new(members));
                 self.add_feature_to(&def, name.as_deref(), Some(c))?
             }
-            JointCommand::DriveJoint { joint, values } => {
+            JointCommand::DriveJoint {
+                joint,
+                values,
+                occurrence: Some(occurrence),
+            } => {
+                // For a flexible occurrence alone (mitcad#1793).
+                let uid = self.joint_ref(&joint)?;
+                let o = self.occurrence_ref(&occurrence)?;
+                let contact = self.drive_flexible_joint(o, uid, &values)?;
+                let values = self.flexible_joint_values(o).remove(&uid);
+                let mut result = json!({"uid": uid, "occurrence": o, "parameters": [],
+                                        "values": values_json(values.as_ref())});
+                // Stopped at a contact of a contact set (mitcad#1805), as
+                // the joint's own drive is.
+                if let Some((hit, fraction)) = &contact {
+                    result["contact"] = self.contact_json(hit, *fraction);
+                    result["warnings"] = json!([result["contact"]["message"]]);
+                }
+                return Ok(result);
+            }
+            JointCommand::DriveJoint {
+                joint,
+                values,
+                occurrence: None,
+            } => {
                 let uid = self.joint_ref(&joint)?;
                 let driven = self.drive_joint(uid, &values)?;
                 let mut result = json!({"uid": uid, "parameters": driven.parameters});
@@ -420,8 +476,8 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                 point,
                 target,
             } => {
-                let uid = self.occurrence_ref(&occurrence)?;
-                let dragged = self.drag_occurrence(uid, point, target)?;
+                let path = self.drag_path(&occurrence)?;
+                let dragged = self.drag_occurrence_at(&path, point, target)?;
                 return Ok(self.dragged_json(&dragged));
             }
             JointCommand::AddConstraintSet {
@@ -512,9 +568,62 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
     }
 
     fn joint_drag_json(&self, query: &JointDragQuery) -> Result<Value, ApiError> {
-        let uid = self.occurrence_ref(&query.occurrence)?;
-        let dragged = self.joint_drag(uid, query.point, query.target)?;
+        let path = self.drag_path(&query.occurrence)?;
+        let dragged = self.joint_drag_at(&path, query.point, query.target)?;
         Ok(self.dragged_json(&dragged))
+    }
+
+    fn joint_holder_json(&self, query: &JointHolderQuery) -> Result<Value, ApiError> {
+        let a = self.assembly();
+        let active = match &query.component {
+            Some(c) => self.component_ref(c)?,
+            None => self.active_component(),
+        };
+        let mut paths = Vec::with_capacity(query.occurrences.len());
+        for text in &query.occurrences {
+            let path = find_path_from(a, ComponentUid::ROOT, text)
+                .ok_or_else(|| ApiError(format!("no occurrence {text}")))?;
+            paths.push(path);
+        }
+        let holder = joint_holder(a, &paths, active).map_err(ApiError)?;
+        let path_text = |path: &[OccurrenceUid]| {
+            path.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("/")
+        };
+        // A component's name by an occurrence placed in the holder, the
+        // holder's own for its own geometry.
+        let top_name = |top: Option<OccurrenceUid>| match top.and_then(|o| a.occurrence(o)) {
+            Some(o) => a.name(o.component),
+            None => a.name(holder.component),
+        };
+        let picks: Vec<Value> = holder
+            .picks
+            .iter()
+            .map(|pick| {
+                let top = pick.first().copied();
+                json!({"path": path_text(pick.as_slice()), "top": top, "name": top_name(top),
+                       "occurrence": top.map(|o| a.occurrence_name(o))})
+            })
+            .collect();
+        let mut value = json!({
+            "component": holder.component,
+            "name": a.name(holder.component),
+            "path": path_text(holder.path.as_slice()),
+            "active": active,
+            "active_name": a.name(active),
+            "relation": holder.relation.as_str(),
+            "picks": picks,
+        });
+        if let Some(whole) = holder.whole {
+            value["whole"] = json!(top_name(Some(whole)));
+            value["whole_occurrence"] = json!(whole);
+        }
+        if let Some(error) = &holder.error {
+            value["error"] = json!(error);
+        }
+        Ok(value)
     }
 
     fn joint_frame_json(&self, query: &JointFrameQuery) -> Result<Value, ApiError> {
@@ -602,6 +711,13 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                 joints.push(self.joint_json(entry.uid, self.joint_result(entry.uid)));
             }
         }
+        // The parents of flexible occurrences, whose solves take their
+        // joints (mitcad#1793).
+        for o in a.occurrences.iter().filter(|o| o.flexible.is_some()) {
+            if !components.contains(&o.parent) {
+                components.push(o.parent);
+            }
+        }
         let groups: Vec<Value> = self
             .features()
             .filter(|f| matches!(f.def, FeatureDef::RigidGroup(_)))
@@ -640,8 +756,24 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
                 })
             })
             .collect();
+        // Flexible occurrences (mitcad#1793): their own values of their
+        // components' joints at the marker.
+        let flexible: Vec<Value> = a
+            .occurrences
+            .iter()
+            .filter(|o| o.flexible.is_some())
+            .map(|o| {
+                let values: Map<String, Value> = self
+                    .flexible_joint_values(o.uid)
+                    .iter()
+                    .map(|(uid, v)| (uid.to_string(), values_json(Some(v))))
+                    .collect();
+                json!({"occurrence": o.uid, "name": a.occurrence_name(o.uid),
+                       "component": o.component, "parent": o.parent, "values": values})
+            })
+            .collect();
         json!({"joints": joints, "rigid_groups": groups, "constraints": constraints,
-               "links": links, "dof": dof})
+               "links": links, "dof": dof, "flexible": flexible})
     }
 
     fn joint_dof_json(&self, query: &JointDofQuery) -> Result<Value, ApiError> {
@@ -704,7 +836,12 @@ impl<K: Kernel> JointsCrateOps<K> for Document<K> {
 
     fn joint_poses_json(&self, query: &JointPosesQuery) -> Result<Value, ApiError> {
         let uid = self.joint_ref(&query.joint)?;
-        let poses = self.joint_poses(uid, query.motion, &query.values)?;
+        let occurrence = query
+            .occurrence
+            .as_deref()
+            .map(|o| self.occurrence_ref(o))
+            .transpose()?;
+        let poses = self.joint_poses_in(uid, occurrence, query.motion, &query.values)?;
         let frames: Vec<Value> = poses
             .iter()
             .map(|pose| {
@@ -771,6 +908,19 @@ trait JointsLocal<K: Kernel> {
     fn joint_ref(&self, text: &str) -> Result<FeatureUid, ApiError>;
 
     fn dragged_json(&self, dragged: &Dragged) -> Value;
+
+    /// A link side's flexible occurrence (mitcad#1793), placed in the
+    /// link's component.
+    fn link_occurrence(
+        &self,
+        component: ComponentUid,
+        text: &Option<String>,
+    ) -> Result<Option<OccurrenceUid>, ApiError>;
+
+    /// The occurrence a drag takes: a path from the root (`O1/O3`,
+    /// `Hinge:1/Arm:1`), so that an occurrence inside a flexible one
+    /// drags in its parent (mitcad#1793), or a uid or name alone.
+    fn drag_path(&self, text: &str) -> Result<Vec<OccurrenceUid>, ApiError>;
 
     fn joint_json(&self, uid: FeatureUid, result: Option<&JointResult>) -> Value;
 
@@ -856,10 +1006,12 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             .map_err(|e| ApiError(format!("coupling: {e}")))?;
         Ok(MotionLinkDef {
             a: LinkedMotion {
+                occurrence: self.link_occurrence(component, &a.occurrence)?,
                 joint: self.joint_ref(&a.joint)?,
                 motion: a.motion,
             },
             b: LinkedMotion {
+                occurrence: self.link_occurrence(component, &b.occurrence)?,
                 joint: self.joint_ref(&b.joint)?,
                 motion: b.motion,
             },
@@ -880,7 +1032,16 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             self.feature(f)
                 .map_or_else(|| f.to_string(), |e| e.name.clone())
         };
-        let side = |m: &LinkedMotion| json!({"joint": m.joint, "name": name(m.joint), "motion": m.motion.as_str()});
+        // A joint inside a flexible occurrence (mitcad#1793): `occurrence`.
+        let side = |m: &LinkedMotion| {
+            let mut value =
+                json!({"joint": m.joint, "name": name(m.joint), "motion": m.motion.as_str()});
+            if let Some(o) = m.occurrence {
+                value["occurrence"] = json!(o);
+                value["occurrence_name"] = json!(self.assembly().occurrence_name(o));
+            }
+            value
+        };
         let mut value = json!({
             "uid": uid,
             "name": entry.name,
@@ -950,6 +1111,52 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             .map(|(uid, v)| (uid.to_string(), values_json(Some(v))))
             .collect();
         let mut value = json!({"placements": placements, "values": values});
+        // Inside flexible occurrences (mitcad#1793): the occurrences that
+        // moved there and their joints' values, each for its flexible
+        // occurrence alone.
+        if !dragged.flexed.is_empty() || !dragged.flex_values.is_empty() {
+            value["flexed"] = json!(
+                dragged
+                    .flexed
+                    .iter()
+                    .map(|((within, o), t)| {
+                        let mut entry = json!({"flexible": within.last(), "occurrence": o,
+                                               "name": a.occurrence_name(*o),
+                                               "transform": matrix_rows(t)});
+                        // Inside flexible occurrences nested in each other
+                        // (mitcad#1805): the whole chain, outermost first.
+                        if within.len() > 1 {
+                            entry["within"] = json!(within);
+                        }
+                        entry
+                    })
+                    .collect::<Vec<_>>()
+            );
+            let flex_values: Map<String, Value> = dragged
+                .flex_values
+                .iter()
+                .map(|(f, joints)| {
+                    let joints: Map<String, Value> = joints
+                        .iter()
+                        .map(|(uid, v)| (uid.to_string(), values_json(Some(v))))
+                        .collect();
+                    (f.to_string(), Value::Object(joints))
+                })
+                .collect();
+            value["flexible_values"] = Value::Object(flex_values);
+        }
+        // Where the occurrences that move are in the design, as a preview's
+        // `placements` (a path of uids from the root, 4 x 4).
+        value["design"] = json!(
+            self.dragged_in_design(dragged)
+                .iter()
+                .map(|(path, t)| {
+                    let path: Vec<String> = path.iter().map(ToString::to_string).collect();
+                    json!({"path": path.join("/"),
+                           "transform": mitcad_model::assembly::matrix4(t)})
+                })
+                .collect::<Vec<_>>()
+        );
         // Stopped at a contact of a contact set (mitcad#454).
         if let Some(hit) = &dragged.contact {
             value["contact"] = self.contact_json(hit, 1.0);
@@ -958,6 +1165,33 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
             }
         }
         value
+    }
+
+    fn link_occurrence(
+        &self,
+        component: ComponentUid,
+        text: &Option<String>,
+    ) -> Result<Option<OccurrenceUid>, ApiError> {
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        match self.path_from(component, text)?.as_slice() {
+            [o] => Ok(Some(*o)),
+            _ => Err(ApiError(format!(
+                "{text}: a link's joint is in an occurrence placed in {}",
+                self.assembly().name(component)
+            ))),
+        }
+    }
+
+    fn drag_path(&self, text: &str) -> Result<Vec<OccurrenceUid>, ApiError> {
+        if text.contains('/') {
+            return self
+                .assembly()
+                .find_path(text)
+                .ok_or_else(|| ApiError(format!("no occurrence {text}")));
+        }
+        Ok(vec![self.occurrence_ref(text)?])
     }
 
     fn joint_json(&self, uid: FeatureUid, result: Option<&JointResult>) -> Value {
@@ -1178,13 +1412,22 @@ impl<K: Kernel> JointsLocal<K> for Document<K> {
 
     fn unit_json(&self, unit: &DofUnit) -> Value {
         let a = self.assembly();
-        json!({
+        let mut value = json!({
             "occurrences": unit.occurrences,
             "names": unit.occurrences.iter().map(|o| a.occurrence_name(*o)).collect::<Vec<_>>(),
             "grounded": unit.grounded,
             "dof": unit.dof,
             "mobile": unit.mobile,
             "joints": unit.joints,
-        })
+        });
+        // Inside a flexible occurrence (mitcad#1793); nested in others, the
+        // whole chain, outermost first (mitcad#1805).
+        if let Some(under) = unit.under.last() {
+            value["under"] = json!(under);
+            if unit.under.len() > 1 {
+                value["within"] = json!(unit.under);
+            }
+        }
+        value
     }
 }

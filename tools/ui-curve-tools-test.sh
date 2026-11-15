@@ -3,7 +3,7 @@
 # check-all sources: app/commands app/browser app/framework/CommandSession.cpp
 # check-all sources: core/model/src/features/helix_curve.rs core/model/src/features/intersection_curve.rs
 # check-all sources: core/model/src/features/helix.rs geometry/src/intersection_curve.cpp
-# check-all sources: geometry/src/surface_sweeps.cpp tools/cli core/model
+# check-all sources: geometry/src/surface_sweeps.cpp geometry/src/path_sweep.cpp tools/cli core/model
 # The curve tools (mitcad#1777) through the real UI, each made through its
 # panel:
 #   - Helix Curve on Cylinder1's side face (20 mm diameter, 20 high about
@@ -12,15 +12,18 @@
 #     along it, picked on the timeline: pi 1^2 times the helix's length
 #     4 sqrt((20 pi)^2 + 5^2);
 #   - Surface Helix of Sketch1's line from the axis x = 60 out to x = 75,
-#     about Sketch1's vertical line, 4 turns of pitch 5: a helicoid, a
-#     surface body;
+#     about Sketch1's vertical line, 20 high at pitch 5 (Height and Pitch,
+#     mitcad#1797: 4 turns): a helicoid, a surface body;
 #   - Intersection Curve of the helicoid's body and Cylinder2's (20 mm
 #     diameter about the same axis, 50 high symmetric about XY), picked on
 #     their Browser rows: one helix of radius 10, previewed from (70, 0, 0)
 #     up to (70, 0, 20); a 2 mm Pipe along it of the first pipe's volume;
 #   - the design file keeps the three: the helix curve without a radius of
 #     its own, the surface helix of the line, the intersection of the two
-#     bodies.
+#     bodies;
+#   - the surface helix opens again with its height and pitch (its turns
+#     went in as their ratio) and Helix's flat-end angles, none
+#     (mitcad#1798).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-curve-tools-test.sh
@@ -92,16 +95,17 @@ ui_place_valid "Browser Root/Construction/HelixCurve1" || ui_fail "HelixCurve1 i
 echo "ok   listed under Construction"
 
 echo "--- Pipe along it, picked on the timeline"
-# The size before the path: Pipe's default 8 mm section is wider than the
-# 5 mm pitch, so its turns pass through each other and the first preview
-# would build the folded pipe in pieces (about two minutes) before the
-# 2 mm one.
+# The path first, then the size (mitcad#1788): Pipe's default 8 mm section is
+# wider than the 5 mm pitch, so the first preview is refused at once (the
+# turns would pass through each other) instead of building for minutes, and
+# the 2 mm size typed after it is previewed within the normal wait.
 ui_mark
 ui_step "pipe (search)"                    ui_command "Pipe"
-ui_step "section size 2"                   ui_type_in "Panel Pipe input size" "2"
 ui_step "the path input"                   ui_click_logged "Panel Pipe input path"
 ui_step "pick HelixCurve1"                 ui_click_logged "Timeline HelixCurve1"
 ui_expect_new "Pipe Path: 1 feature [feature F4]" "the helix curve picked as the path"
+ui_expect_new "turns pass through each other" "the 8 mm section refused at once"
+ui_step "section size 2"                   ui_type_in "Panel Pipe input size" "2"
 ui_expect_new "Preview Pipe: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_volume "New body .* (F5.b0): volume \([0-9.]*\) mm3" "$PIPE" "a 2 mm pipe along the helix" 1e-3
@@ -114,8 +118,11 @@ ui_step "the profiles input"               ui_click_logged "Panel Surface Helix 
 ui_step "pick the line"                    ui_click_logged "Sketch entity F2/c1"
 ui_step "the axis input"                   ui_click_logged "Panel Surface Helix input axis"
 ui_step "pick the axis line"               ui_click_logged "Sketch entity F2/c4"
+ui_step "Height and Pitch"                 ui_choose "Panel Surface Helix input type" 1
+ui_expect_new "Surface Helix: Type = Height and Pitch" "height and pitch"
+ui_expect_new "Panel Surface Helix input height at" "the height shown"
+ui_step "height 20"                        ui_type_in "Panel Surface Helix input height" "20"
 ui_step "pitch 5"                          ui_type_in "Panel Surface Helix input pitch" "5"
-ui_step "revolutions 4"                    ui_type_in "Panel Surface Helix input revolutions" "4"
 ui_expect_new "Preview Surface Helix: ok" "previewed"
 ui_step "OK (Enter)"                       ui_key Return
 ui_expect_new "Added surface helix of 0 profiles and 1 curves, 4 turns of 5" "the surface helix added"
@@ -176,6 +183,10 @@ ui_expect_new "Command Helix Curve cancelled" "nothing changed"
 ui_mark
 ui_step "double-click Helix1"              ui_double_click_logged "Timeline Helix1"
 ui_expect_new "Editing F6 with Surface Helix" "editing Helix1 with Surface Helix"
+ui_expect_new "Surface Helix Height: 20 mm" "the height of 20"
+ui_expect_new "Surface Helix Pitch: 5 mm" "the pitch of 5"
+ui_expect_new "Surface Helix Flat Start: 0 deg" "no flat start"
+ui_expect_new "Surface Helix Flat End: 0 deg" "no flat end"
 ui_step "cancel (Esc)"                     ui_key Escape
 ui_expect_new "Command Surface Helix cancelled" "nothing changed"
 ui_mark

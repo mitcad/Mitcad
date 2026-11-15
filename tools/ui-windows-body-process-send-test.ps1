@@ -2,15 +2,18 @@
 # check-all sources: app/files/MainWindowPrint.cpp app/MainWindowMake.cpp app/print/MakeBodyCard.cpp
 # check-all sources: app/framework/PickerComboBox.cpp app/browser/LibraryPicker.cpp app/framework/TestDriver.cpp
 # check-all sources: core/model/src/document/print_settings.rs core/model/src/exchange core/model/src/print_files tools/cli
+# check-all sources: core/model/src/document/print_plates.rs
 # Send to Slicer's Process row shows the process set on the body
 # (mitcad#1799) on Windows, the shared input script
 # tools/ui-scripts/body-process-send.mitcad-ui as
 # tools/ui-body-process-send-test.sh runs it on Linux: a process set on
 # Body1 on the Make card is the row's choice, Body2 with another one gives
 # Per body, and Fixture Fine chosen in the panel is set on both bodies in
-# one undo step; Send (a fixture slicer that does nothing, 3MF) writes the
-# file, read back here: Fixture Fine for both bodies, no part with layers
-# of its own.
+# one undo step. With the bodies on two plates of their own and the plates
+# sent (mitcad#1807) the row is Per body again, and a choice there sets it
+# on both bodies; Send (a fixture slicer that does nothing, 3MF) writes the
+# plates' file, read back here: two plates, Fixture Fine for both bodies,
+# no part with layers of its own.
 param(
   [string]$App,
   [string]$Cli,
@@ -47,10 +50,10 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "Send to Slicer process driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'TestDriver: done' "the body's process is the Process row's choice, Per body for two, a choice sets it on both bodies"
+Ui-ExpectLog 'TestDriver: done' "the body's process is the Process row's choice, Per body for two, a choice sets it on both bodies, also with the plates sent"
 
-# The 3MF written: Fixture Fine for Body1 and Body2, 0.12 mm layers, no
-# part with layers of its own.
+# The plates' 3MF written last: the plates Left and Right, Fixture Fine
+# for Body1 and Body2, 0.12 mm layers, no part with layers of its own.
 $file = Join-Path $printTemp 'mitcad-print\body-process\body-process.3mf'
 if (-not (Test-Path $file)) { Ui-Fail "no 3MF at $file" }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -78,6 +81,14 @@ $layers = {
   }
   $parsed
 }
+$plates = @([regex]::Matches($model, '(?s)<plate>(.*?)</plate>') | ForEach-Object { $_.Groups[1].Value })
+if ($plates.Count -ne 2) { Ui-Fail "$($plates.Count) plates in model_settings.config, not 2" }
+$names = @('Left', 'Right')
+for ($i = 0; $i -lt 2; $i++) {
+  if (-not $plates[$i].Contains("key=`"plater_name`" value=`"$($names[$i])`"")) {
+    Ui-Fail "no plate $($names[$i]) in model_settings.config"
+  }
+}
 foreach ($body in @('Body1', 'Body2')) {
   if (-not $model.Contains("<metadata key=`"name`" value=`"$body`"/>")) { Ui-Fail "no object $body in model_settings.config" }
 }
@@ -93,6 +104,6 @@ foreach ($match in [regex]::Matches($model, 'key="layer_height" value="([^"]*)"'
     Ui-Fail "a part has layers of its own: $($match.Groups[1].Value)"
   }
 }
-Write-Host 'ok   Fixture Fine for Body1 and Body2, 0.12 mm layers'
+Write-Host 'ok   the plates Left and Right, Fixture Fine for Body1 and Body2, 0.12 mm layers'
 Ui-StopApp
 Write-Host "PASS: Send to Slicer's Process row and the bodies' own process"

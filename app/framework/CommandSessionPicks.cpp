@@ -320,13 +320,16 @@ QString CommandSession::markMissingPicks(const QJsonObject& report) {
       lines << goneText(kind, counts.value(static_cast<unsigned>(kind)), label);
     }
     // The panel's list names each pick in words (mitcad#1741), the missing
-    // ones marked.
-    if (std::as_const(m_state).itemWords(slot.key).size() != items.size()) {
-      QStringList words;
-      for (const SelectionItem& item : items) {
-        words << m_host.itemText(item);
-      }
+    // ones marked: from the picks as they are now, never by their count
+    // alone (mitcad#1844: a pick removed and another added left the words
+    // of the earlier picks).
+    QStringList words;
+    for (const SelectionItem& item : items) {
+      words << m_host.itemText(item);
+    }
+    if (words != std::as_const(m_state).itemWords(slot.key)) {
       m_state.setItemWords(slot.key, words);
+      changed = true;
     }
     qDebug().noquote() << QStringLiteral("%1 %2: %3 of %4 pick(s) gone: %5")
                               .arg(m_def.name, slot.def->label)

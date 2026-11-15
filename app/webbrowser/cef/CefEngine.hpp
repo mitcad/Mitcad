@@ -6,7 +6,8 @@
 // (its runtime, resources, locales and subprocess helper) with MitCad's own
 // browsing profile, its message loop pumped from Qt's (external message
 // pump: CEF's browser thread is Qt's main thread), windowless (off-screen)
-// browsers painted in software (no GPU, which test machines and VMs lack),
+// browsers composited in software (no GPU texture; WebGL on the GPU where
+// there is one, else in software, mitcad#1861),
 // and shut down as MitCad ends, its browsers closed first.
 
 #include <QString>

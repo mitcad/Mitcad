@@ -900,6 +900,14 @@ if [ "$save_as_case" = reverse ]; then
   ui_expect_new "Edit lock: Save As returned to part.mitcad, cancelling pending transfer to saved.mitcad" \
     "the obsolete transfer was cancelled" 20
   expect_holder "$SAVEAS" ada@example.invalid "the original lock survives the reversal"
+  # Save As is a command: it made the lock active again and restarted its
+  # idle time (5 s), which passes while its dialogs are typed in and fires
+  # within a second of the last one closing (a modal dialog only defers
+  # it). Its sync finds the same conflict; pressed while that sync runs,
+  # Ctrl+Alt+Y below only says "A sync is running." and opens no Resolve
+  # dialog (mitcad#833). Wait for it, as after the first Save As.
+  ui_expect_new "Edit lock idle: part.mitcad kept, marked idle (sync: conflict)" \
+    "the lock's idle sync after Save As back has run" 30
 fi
 
 ui_mark

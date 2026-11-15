@@ -66,6 +66,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QPainter>
+#include <QScopedValueRollback>
 #include <QScreen>
 #include <QSet>
 #include <QSurfaceFormat>
@@ -445,6 +446,16 @@ Quantity_Color occtColor(const QColor& color) {
   return Quantity_Color(color.redF(), color.greenF(), color.blueF(), Quantity_TOC_sRGB);
 }
 
+// An OCCT colour as Qt's, for the log ("#1f7aff").
+QColor qtColor(const Quantity_Color& color) {
+  double r = 0.0;
+  double g = 0.0;
+  double b = 0.0;
+  color.Values(r, g, b, Quantity_TOC_sRGB);
+  return QColor::fromRgbF(static_cast<float>(std::clamp(r, 0.0, 1.0)), static_cast<float>(std::clamp(g, 0.0, 1.0)),
+                          static_cast<float>(std::clamp(b, 0.0, 1.0)));
+}
+
 // How far a line, point or plane outside the active component (mitcad#420)
 // is faded towards the background, and how see-through its faces are.
 constexpr double kInactiveFade = 0.65;
@@ -593,10 +604,13 @@ QString surfaceType(const TopoDS_Shape& face) {
     return QStringLiteral("sphere");
   case GeomAbs_Torus:
     return QStringLiteral("torus");
-  default:
+  default: {
     // A planar spline (a sheet body's wall, an imported face) is a plane,
-    // as the model reads it (mitcad#1537).
-    return geometry::face_plane(TopoDS::Face(face)) ? QStringLiteral("plane") : QStringLiteral("other");
+    // as the model reads it (mitcad#1537), and a spline within 1e-6 mm of a
+    // cylinder (a hole in a sheet body's flange) a cylinder (mitcad#1855).
+    const char* kind = geometry::analytic_kind(TopoDS::Face(face));
+    return kind != nullptr ? QString::fromLatin1(kind) : QStringLiteral("other");
+  }
   }
 }
 
@@ -610,8 +624,12 @@ QString curveType(const TopoDS_Shape& edge) {
     return QStringLiteral("ellipse");
   default:
     // A straight spline (a sheet body's edge, an imported line) is a line,
-    // as the model reads it (mitcad#1537).
-    return geometry::is_straight(TopoDS::Edge(edge)) ? QStringLiteral("line") : QStringLiteral("other");
+    // as the model reads it (mitcad#1537), and a round one a circle
+    // (mitcad#1855).
+    if (geometry::is_straight(TopoDS::Edge(edge))) {
+      return QStringLiteral("line");
+    }
+    return geometry::is_circular(TopoDS::Edge(edge)) ? QStringLiteral("circle") : QStringLiteral("other");
   }
 }
 
@@ -738,8 +756,6 @@ constexpr float kBrowserHoverThroughTransparency = 0.75f;
 constexpr float kDatumPreviewTransparency = 0.2f;
 // A split's extended tool (mitcad#712): the bodies and the cut show through.
 constexpr float kExtendedToolTransparency = 0.6f;
-// OCCT's own selection highlight; the selections shown are setHighlights'.
-const Quantity_Color kSelectedColor = viewRole(ColorRole::Select);
 // In the sketch points' layer (mitcad#897), a selected point's ball is
 // drawn after the plain markers, which keep the default priority, so that
 // it covers its point's marker at the same depth.
@@ -755,8 +771,10 @@ constexpr Graphic3d_DisplayPriority kSketchPointHighlightPriority = Graphic3d_Di
 // highlight of a face, edge or vertex in the topmost layer, which clears
 // the depth: a face's highlight covered what lay in front of the face). A
 // polygon offset brings a face's highlight just in front of the face.
+// Its lines `edgeWidth` (edges, wires) and `boundaryWidth` (a face's
+// boundary) device pixels wide (OcctViewer::highlightEdgeWidth, mitcad#1803).
 void setHighlightStyle(const occ::handle<Prs3d_Drawer>& style, const Quantity_Color& color,
-                       float transparency) {
+                       float transparency, double edgeWidth, double boundaryWidth) {
   // The colour of lines and marks, and of faces through the fill below;
   // opaque, the faces' transparency is the fill's.
   style->SetColor(color);
@@ -775,11 +793,11 @@ void setHighlightStyle(const occ::handle<Prs3d_Drawer>& style, const Quantity_Co
   style->SetupOwnShadingAspect();
   style->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, 0.0f, -2.0f);
   style->SetFaceBoundaryDraw(true);
-  style->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
-  style->WireAspect()->SetWidth(3.0);
-  style->LineAspect()->SetWidth(3.0);
-  style->FreeBoundaryAspect()->SetWidth(3.0);
-  style->UnFreeBoundaryAspect()->SetWidth(3.0);
+  style->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, boundaryWidth));
+  style->WireAspect()->SetWidth(edgeWidth);
+  style->LineAspect()->SetWidth(edgeWidth);
+  style->FreeBoundaryAspect()->SetWidth(edgeWidth);
+  style->UnFreeBoundaryAspect()->SetWidth(edgeWidth);
 }
 
 // The colour of a body's edges where they are drawn alone (wireframe): its
@@ -937,7 +955,7 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
           // Their edges stay the body's.
           if (visual == VisualStyle::ShadedVisibleEdges) {
             colored->CustomAspects(named.face(face))
-                ->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
+                ->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, kPlainEdgeWidth));
           }
         }
       }
@@ -949,11 +967,11 @@ occ::handle<AIS_Shape> makeBodyObject(const geometry::Shape& named, BodyDisplay:
     // Dark edges. Set after SetColor(), which recolours the
     // face boundaries too.
     drawer->SetFaceBoundaryDraw(true);
-    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, 1.0));
+    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(kEdgeColor, Aspect_TOL_SOLID, kPlainEdgeWidth));
     break;
   case VisualStyle::Wireframe: {
     const Quantity_Color wire = wireColor(color);
-    setEdgeStyle(body, wire, 1.0);
+    setEdgeStyle(body, wire, kPlainEdgeWidth);
     // Edges only, no lines across the faces.
     drawer->SetUIsoAspect(new Prs3d_IsoAspect(wire, Aspect_TOL_SOLID, 1.0, 0));
     drawer->SetVIsoAspect(new Prs3d_IsoAspect(wire, Aspect_TOL_SOLID, 1.0, 0));
@@ -1745,13 +1763,13 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // The hover of a region on offer, in the regions' layer (mitcad#1222).
   m_profileHover = new Prs3d_Drawer();
   m_profileHover->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
+  // The selection's colour and the highlights' line widths (Preferences ›
+  // Display, mitcad#1803) at the ratio of the screen the view starts on.
+  m_selectionLook = savedSelectionLook();
+  m_highlightRatio = devicePixelRatioF() > 0.0 ? devicePixelRatioF() : 1.0;
   setHoverColor(viewColor(ColorRole::Hover, false));
-  // OCCT's own selection is cleared as soon as it is made
-  // (OnSelectionChanged); should it show, it looks as setHighlights' does.
-  for (const Prs3d_TypeOfHighlight type :
-       {Prs3d_TypeOfHighlight_Selected, Prs3d_TypeOfHighlight_LocalSelected}) {
-    setHighlightStyle(m_context->HighlightStyle(type), kSelectedColor, kSelectedTransparency);
-  }
+  setOwnSelectionStyle();
+  logSelectionLook();
   m_grid = new LayoutGrid();
   m_grid->SetZLayer(m_gridLayer);
   setGridColors(*m_grid, m_paper);
@@ -3909,6 +3927,7 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
   }
   m_highlights.clear();
   m_profileHighlights.clear();
+  m_drawnHighlightLine.clear();
   eraseSelectionShadows();
   if (&highlights != &m_shownHighlights) {
     m_shownHighlights = highlights;
@@ -4037,6 +4056,15 @@ void OcctViewer::drawHighlightSlice() {
     m_loggedSketchHighlightLines = loggedLines;
     qDebug().noquote() << QStringLiteral("Sketch highlight lines: %1").arg(loggedLines);
   }
+  // "View highlight line: edge 8 px (4 x ratio 2), color #1f7aff; plain
+  // edges 1 px" (mitcad#1803): how wide and in what colour an edge's or a
+  // curve's highlight is drawn, again after highlights without one.
+  if (m_drawnHighlightLine.isEmpty()) {
+    m_loggedHighlightLine.clear();
+  } else if (m_drawnHighlightLine != m_loggedHighlightLine) {
+    m_loggedHighlightLine = m_drawnHighlightLine;
+    qDebug().noquote() << QStringLiteral("View highlight line: %1").arg(m_drawnHighlightLine);
+  }
   if (done.bodies != m_loggedBodyHighlights) {
     m_loggedBodyHighlights = done.bodies;
     qDebug().noquote() << QStringLiteral("View body highlights: %1").arg(done.bodies);
@@ -4126,7 +4154,8 @@ bool OcctViewer::drawHighlightShadows(const HighlightDisplay& highlight) {
   // The line aspects setHighlightStyle widens are its own (drawBrowserHover).
   look->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
   look->SetOwnLineAspects();
-  setHighlightStyle(look, occtColor(highlight.color), kWholeTransparency);
+  setHighlightStyle(look, occtColor(highlight.color), kWholeTransparency, highlightEdgeWidth(),
+                    highlightBoundaryWidth());
   // Just in front of the faces it covers, as the faces of a highlight are.
   look->BasicFillAreaAspect()->SetPolygonOffsets(Aspect_POM_Fill, -1.0f, -4.0f);
   const occ::handle<Graphic3d_StructureManager> manager = m_viewer->StructureManager();
@@ -4270,7 +4299,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
                                                                        -4.0f);
     const occ::handle<Prs3d_Drawer>& drawer = object->Attributes();
     drawer->SetFaceBoundaryDraw(!highlight.light && (!whole || highlight.wholeBodyBoundaries));
-    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+    drawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, highlightBoundaryWidth()));
     mode = AIS_Shaded;
     break;
   }
@@ -4291,12 +4320,14 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
       // Lighter on a dark background, where the plain selection blue
       // has little contrast (mitcad#957).
       setEdgeStyle(object, m_backgroundDark ? occtColor(kInputLineColorDark) : color, kInputLineWidth);
-    } else if (kind == SelectKind::SketchCurve) {
-      // In the curve's own line type (mitcad#1619): a selected
-      // construction line stays dashed, a centre line dash-dot.
-      setEdgeStyle(object, color, 3.5, sketchCurveLineType(highlight.item));
     } else {
-      setEdgeStyle(object, color, 3.5);
+      // Wider than a plain edge, by the Selected line width and the
+      // device pixel ratio (mitcad#1803). A sketch curve's in its own line
+      // type (mitcad#1619): a selected construction line stays dashed, a
+      // centre line dash-dot.
+      setEdgeStyle(object, color, highlightEdgeWidth(),
+                   kind == SelectKind::SketchCurve ? sketchCurveLineType(highlight.item) : Aspect_TOL_SOLID);
+      noteHighlightLine(kind, object);
     }
     break;
   }
@@ -4325,7 +4356,7 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     through->SetTransparency(kBrowserHoverThroughTransparency);
     const occ::handle<Prs3d_Drawer>& throughDrawer = through->Attributes();
     throughDrawer->SetFaceBoundaryDraw(true);
-    throughDrawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+    throughDrawer->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, highlightBoundaryWidth()));
     PickInfo throughInfo;
     throughInfo.item = highlight.item;
     throughInfo.highlight = true;
@@ -4602,14 +4633,17 @@ void OcctViewer::setHoverColor(const QColor& color) {
   // Whole objects (Dynamic) and faces, edges and vertices (LocalDynamic).
   for (const Prs3d_TypeOfHighlight type :
        {Prs3d_TypeOfHighlight_Dynamic, Prs3d_TypeOfHighlight_LocalDynamic}) {
-    setHighlightStyle(m_context->HighlightStyle(type), occtColor(color), kHoverTransparency);
+    setHighlightStyle(m_context->HighlightStyle(type), occtColor(color), kHoverTransparency, highlightEdgeWidth(),
+                      highlightBoundaryWidth());
   }
   if (!m_sketchPointHover.IsNull()) {
-    setHighlightStyle(m_sketchPointHover, occtColor(color), kHoverTransparency);
+    setHighlightStyle(m_sketchPointHover, occtColor(color), kHoverTransparency, highlightEdgeWidth(),
+                      highlightBoundaryWidth());
     m_sketchPointHover->SetZLayer(m_sketchPointLayer);
   }
   if (!m_profileHover.IsNull()) {
-    setHighlightStyle(m_profileHover, occtColor(color), kHoverTransparency);
+    setHighlightStyle(m_profileHover, occtColor(color), kHoverTransparency, highlightEdgeWidth(),
+                      highlightBoundaryWidth());
     m_profileHover->SetZLayer(m_profileLayer);
   }
   m_hoverColor = color;
@@ -4636,13 +4670,14 @@ void OcctViewer::setHoverChain(const TopoDS_Shape& shape) {
     for (TopExp_Explorer it(shape, TopAbs_FACE); it.More() && !faces; it.Next()) {
       faces = true;
     }
-    setEdgeStyle(m_hoverChain, color, 3.0);
+    setEdgeStyle(m_hoverChain, color, highlightEdgeWidth());
     if (faces) {
       m_hoverChain->SetMaterial(flatMaterial(0.0f));
       m_hoverChain->SetTransparency(kHoverTransparency);
       m_hoverChain->Attributes()->ShadingAspect()->Aspect()->SetPolygonOffsets(Aspect_POM_Fill, 0.0f, -2.0f);
       m_hoverChain->Attributes()->SetFaceBoundaryDraw(true);
-      m_hoverChain->Attributes()->SetFaceBoundaryAspect(new Prs3d_LineAspect(color, Aspect_TOL_SOLID, 2.0));
+      m_hoverChain->Attributes()->SetFaceBoundaryAspect(
+          new Prs3d_LineAspect(color, Aspect_TOL_SOLID, highlightBoundaryWidth()));
     }
     m_context->Display(m_hoverChain, faces ? AIS_Shaded : AIS_WireFrame, -1, false);
     m_context->SetZLayer(m_hoverChain, Graphic3d_ZLayerId_Top);
@@ -4713,8 +4748,9 @@ int OcctViewer::drawBrowserHover() {
       look->SetLink(m_context->HighlightStyle(Prs3d_TypeOfHighlight_Dynamic));
       look->SetOwnLineAspects();
     }
-    setHighlightStyle(looks[0], color, kHoverTransparency);
-    setHighlightStyle(looks[1], color, kBrowserHoverThroughTransparency);
+    setHighlightStyle(looks[0], color, kHoverTransparency, highlightEdgeWidth(), highlightBoundaryWidth());
+    setHighlightStyle(looks[1], color, kBrowserHoverThroughTransparency, highlightEdgeWidth(),
+                      highlightBoundaryWidth());
     const occ::handle<Graphic3d_StructureManager> manager = m_viewer->StructureManager();
     for (const occ::handle<Graphic3d_Structure>& presentation : presentations) {
       for (std::size_t i = 0; i < layers.size(); ++i) {
@@ -5735,19 +5771,6 @@ void OcctViewer::restoreCamera() {
     m_savedCamera.Nullify();
     // Anaglyph 3D switched in the sketch stays as it is (mitcad#1449).
     keepProjection(*m_view->Camera());
-    // The first sketch of a new design that still looks at its Top
-    // (mitcad#1683): the default view then (mitcad#1698), fitted on the
-    // next frame (or when Finish Sketch shows the sketch in the free area),
-    // so that what is made next is seen from the side; a view the user
-    // turned stays. A sketch started through Create Sketch's plane pick
-    // turned there already (turnForPlanePick).
-    if (turnFromNewDesignTop()) {
-      m_fitPending = true;
-      m_framingNewDesign = false;
-      requestFrame();
-      qDebug().noquote() << QStringLiteral("View: after the first sketch, the default view instead of the new "
-                                           "design's Top");
-    }
   }
   sceneChanged();
 }
@@ -5786,64 +5809,24 @@ void lookAlongDefaultView(V3d_View& view) {
 
 } // namespace
 
-void OcctViewer::frameNewDesign(bool top) {
-  // Looking at Top (along -Z, Y up, as View > Top) with the origin in the
-  // middle, so that a beginner finds the origin for the first sketch
-  // (mitcad#1683); otherwise the isometric view from the front right, Z up,
-  // as the view at the start (the start before mitcad#1683, which
-  // MITCAD_NEW_DESIGN_VIEW=0 keeps for the UI tests). The framing waits for
-  // the next frame, so that it is made at the view's size then.
+void OcctViewer::frameNewDesign(bool defaultView) {
+  // From the front right and above, Z up, whatever the view looked at
+  // before (Top, a sketch plane, another design's view): the default view,
+  // a few degrees off the isometric one, so that the origin a new design
+  // shows (mitcad#1683) has its planes apart (mitcad#1698); with
+  // MITCAD_NEW_DESIGN_VIEW=0, the exact isometric view of the start the UI
+  // tests were written for. Never Top: mitcad#1683 opened new designs
+  // looking at Top, which was not wanted (mitcad#1809). The framing waits
+  // for the next frame, so that it is made at the view's size then.
   AbortViewAnimation();
-  m_view->SetProj(top ? V3d_TypeOfOrientation_Zup_Top : V3d_TypeOfOrientation_Zup_AxoRight);
-  if (top) {
-    m_view->Camera()->SetUp(gp_Dir(0.0, 1.0, 0.0)); // Y up, as View > Top
+  m_view->SetProj(V3d_TypeOfOrientation_Zup_AxoRight);
+  if (defaultView) {
+    lookAlongDefaultView(*m_view);
   }
-  m_newDesignTop = top;
-  m_framingNewDesignTop = top;
+  m_logNewDesignLook = defaultView;
   m_fitPending = true;
   m_framingNewDesign = true;
   requestFrame();
-}
-
-bool OcctViewer::turnFromNewDesignTop() {
-  if (!m_newDesignTop) {
-    return false;
-  }
-  // Once: the first sketch or design read decides (mitcad#1683).
-  m_newDesignTop = false;
-  m_framingNewDesignTop = false;
-  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
-  constexpr double kSameDirection = 1.0e-6; // radians
-  if (!camera->Direction().IsEqual(gp_Dir(0.0, 0.0, -1.0), kSameDirection) ||
-      !camera->Up().IsEqual(gp_Dir(0.0, 1.0, 0.0), kSameDirection)) {
-    return false; // turned since: the user's direction stays
-  }
-  AbortViewAnimation();
-  // The default view, a few degrees off the isometric one, so that the
-  // origin planes' edges do not lie on top of each other (mitcad#1698).
-  lookAlongDefaultView(*m_view);
-  m_view->Invalidate();
-  return true;
-}
-
-void OcctViewer::leaveNewDesignTop() {
-  if (turnFromNewDesignTop()) {
-    // For UI tests (mitcad#1683).
-    qDebug().noquote() << QStringLiteral("View: an opened design seen from the default view, not a new design's Top");
-  }
-}
-
-void OcctViewer::turnForPlanePick() {
-  // Seen from Top, XZ and YZ are edge-on: every origin plane can be picked
-  // from the default view (mitcad#1698). Fitted on the next frame, as after
-  // the first sketch.
-  if (turnFromNewDesignTop()) {
-    m_fitPending = true;
-    m_framingNewDesign = false;
-    requestFrame();
-    // For UI tests.
-    qDebug().noquote() << QStringLiteral("View: Create Sketch turns a new design's Top to the default view");
-  }
 }
 
 double OcctViewer::visibleHeight() const { return m_view->Camera()->ViewDimensions().Y(); }
@@ -6095,16 +6078,16 @@ void OcctViewer::applyPendingFit() {
     qInfo().noquote() << QStringLiteral("View: new design framed, scale %1 mm per view height at %2")
                              .arg(visibleHeight(), 0, 'f', 3)
                              .arg(viewSizeText(*this));
-    if (m_framingNewDesignTop) {
-      m_framingNewDesignTop = false;
-      logNewDesignTop();
+    if (m_logNewDesignLook) {
+      m_logNewDesignLook = false;
+      logNewDesignLook();
     }
   }
 }
 
-void OcctViewer::logNewDesignTop() const {
-  // For UI tests (mitcad#1683): where a new design looks and where its
-  // origin is, in window coordinates as the tests' other places.
+void OcctViewer::logNewDesignLook() const {
+  // For UI tests (mitcad#1683, mitcad#1809): where a new design looks and
+  // where its origin is, in window coordinates as the tests' other places.
   const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
   const auto direction = [](const gp_Dir& d) {
     // Rounded, so that -0 and rounding noise read as 0.
@@ -6406,12 +6389,88 @@ void OcctViewer::applyDevicePixelRatio() {
   // in device pixels: at 2x the cube would be half its size among the
   // buttons. The same ratio keeps the pick tolerance as near as it feels.
   const qreal ratio = devicePixelRatioF();
-  if (ratio <= 0.0 || qFuzzyCompare(ratio, m_cubeRatio)) {
+  if (ratio <= 0.0) {
+    return;
+  }
+  // The selection's and the hover's lines too (mitcad#1803): as wide on a
+  // 200 % display as on a 100 % one.
+  if (!qFuzzyCompare(ratio, m_highlightRatio)) {
+    m_highlightRatio = ratio;
+    restyleHighlights();
+  }
+  if (qFuzzyCompare(ratio, m_cubeRatio)) {
     return;
   }
   m_cubeRatio = ratio;
   m_context->SetPixelTolerance(qRound(kPickTolerance * ratio));
   applyCubePlacement();
+}
+
+double OcctViewer::highlightEdgeWidth() const {
+  return selectedEdgeWidth(m_selectionLook.width) * (m_highlightRatio > 0.0 ? m_highlightRatio : 1.0);
+}
+
+double OcctViewer::highlightBoundaryWidth() const {
+  return selectedBoundaryWidth(m_selectionLook.width) * (m_highlightRatio > 0.0 ? m_highlightRatio : 1.0);
+}
+
+void OcctViewer::setSelectionLook(const SelectionLook& look) {
+  if (look == m_selectionLook) {
+    return;
+  }
+  m_selectionLook = look;
+  restyleHighlights();
+}
+
+void OcctViewer::setOwnSelectionStyle() {
+  // OCCT's own selection is cleared as soon as it is made
+  // (OnSelectionChanged); should it show, it looks as setHighlights' does.
+  for (const Prs3d_TypeOfHighlight type :
+       {Prs3d_TypeOfHighlight_Selected, Prs3d_TypeOfHighlight_LocalSelected}) {
+    setHighlightStyle(m_context->HighlightStyle(type), occtColor(m_selectionLook.color), kSelectedTransparency,
+                      highlightEdgeWidth(), highlightBoundaryWidth());
+  }
+}
+
+void OcctViewer::restyleHighlights() {
+  setOwnSelectionStyle();
+  setHoverColor(m_hoverColor); // the hover's styles at the new widths
+  // The highlights shown drawn again at the new widths; their colours are
+  // the caller's (MainWindow::applySelectionLook).
+  if (!m_shownHighlights.empty()) {
+    setHighlights(m_shownHighlights);
+  }
+  logSelectionLook();
+}
+
+void OcctViewer::logSelectionLook() {
+  const QString look = QStringLiteral("%1; edges %2 px (%3 x ratio %4), face boundaries %5 px, plain edges %6 px")
+                           .arg(m_selectionLook.describe())
+                           .arg(highlightEdgeWidth())
+                           .arg(selectedEdgeWidth(m_selectionLook.width))
+                           .arg(m_highlightRatio)
+                           .arg(highlightBoundaryWidth())
+                           .arg(kPlainEdgeWidth);
+  if (look != m_loggedSelectionLook) {
+    m_loggedSelectionLook = look;
+    qDebug().noquote() << QStringLiteral("View selection look: %1").arg(look);
+  }
+}
+
+void OcctViewer::noteHighlightLine(SelectKind kind, const occ::handle<AIS_Shape>& object) {
+  // What OCCT draws the line with, not what was asked for.
+  const occ::handle<Prs3d_LineAspect>& line = object->Attributes()->WireAspect();
+  if (line.IsNull()) {
+    return;
+  }
+  const double drawnWidth = line->Aspect()->Width();
+  m_drawnHighlightLine = QStringLiteral("%1 %2 px (%3 x ratio %4), color %5; plain edges %6 px")
+                             .arg(SelectionItem::kindName(kind))
+                             .arg(drawnWidth)
+                             .arg(selectedEdgeWidth(m_selectionLook.width))
+                             .arg(m_highlightRatio)
+                             .arg(qtColor(line->Aspect()->Color()).name())
+                             .arg(kPlainEdgeWidth);
 }
 
 void OcctViewer::applyCubePlacement() {
@@ -7121,7 +7180,9 @@ void OcctViewer::bindGestures() {
     switch (action) {
     case NavigationAction::Orbit: return AIS_MouseGesture_RotateOrbit;
     case NavigationAction::Pan: return AIS_MouseGesture_Pan;
-    case NavigationAction::Zoom: return AIS_MouseGesture_Zoom;
+    // Up and down (mitcad#1867): OCCT's plain zoom gesture follows the
+    // sideways motion only.
+    case NavigationAction::Zoom: return AIS_MouseGesture_ZoomVertical;
     case NavigationAction::None: return AIS_MouseGesture_NONE;
     }
     return AIS_MouseGesture_NONE;
@@ -7190,7 +7251,21 @@ void OcctViewer::handlePanning(const occ::handle<V3d_View>& view) {
 bool OcctViewer::UpdateZoom(const Aspect_ScrollDelta& delta) {
   Aspect_ScrollDelta scaled = delta;
   scaled.Delta *= m_navigation.zoomSpeed;
+  if (m_pointerMoving && myMouseActiveGesture == AIS_MouseGesture_ZoomVertical) {
+    // A drag zoom (mitcad#1867): OCCT zooms in as the pointer goes down the
+    // window; here up zooms in and down out, about the same point.
+    scaled.Delta = -scaled.Delta;
+  }
   return AIS_ViewController::UpdateZoom(scaled);
+}
+
+// A drag zoom's steps come only from inside this call; the wheel's, the
+// trackpad scroll's and the pinch's zoom come from outside it, also while a
+// zoom drag is held, and keep their direction.
+bool OcctViewer::UpdateMousePosition(const NCollection_Vec2<int>& point, Aspect_VKeyMouse buttons,
+                                     Aspect_VKeyFlags modifiers, bool emulated) {
+  const QScopedValueRollback<bool> moving(m_pointerMoving, true);
+  return AIS_ViewController::UpdateMousePosition(point, buttons, modifiers, emulated);
 }
 
 void OcctViewer::setBackground(const QColor& top, const QColor& bottom, bool gradient) {
@@ -7273,6 +7348,18 @@ void OcctViewer::setGridPlane(const gp_Ax3& plane) {
   sceneChanged();
 }
 
+void OcctViewer::setGridOnCurvedFace(bool curved) {
+  if (curved == m_gridOnCurvedFace) {
+    return;
+  }
+  m_gridOnCurvedFace = curved;
+  // For UI tests (mitcad#1853).
+  qDebug().noquote() << (curved ? QStringLiteral("Layout grid not drawn: the sketch lies on a curved face")
+                                : QStringLiteral("Layout grid drawn on its plane again"));
+  updateGrid(true);
+  sceneChanged();
+}
+
 double OcctViewer::gridStep() const {
   if (m_gridStep > 0.0) {
     return m_gridStep;
@@ -7283,7 +7370,7 @@ double OcctViewer::gridStep() const {
 }
 
 void OcctViewer::updateGrid(bool force) {
-  if (!m_gridShown || m_view->Window().IsNull() || showsRenderedImage()) {
+  if (!m_gridShown || m_gridOnCurvedFace || m_view->Window().IsNull() || showsRenderedImage()) {
     if (m_context->IsDisplayed(m_grid)) {
       m_context->Erase(m_grid, false);
     }
@@ -8886,7 +8973,11 @@ void OcctViewer::trackpadScroll(QWheelEvent* event) {
   // A modest gain for the two-finger orbit; pan and mouse drags retain
   // their one-to-one motion. Apply it to momentum through the same path.
   const qreal gain = mode == ScrollMode::Orbit ? 1.3 : 1.0;
-  m_scrollPoint += delta * ratio * gain;
+  // Reverse horizontal pan, Reverse vertical pan and Reverse scroll orbit
+  // (mitcad#1873): the scroll's own directions, momentum included.
+  const QPointF motion = scrollDragDelta(
+      m_navigation, mode == ScrollMode::Orbit ? NavigationAction::Orbit : NavigationAction::Pan, delta);
+  m_scrollPoint += motion * ratio * gain;
   UpdateMousePosition(devicePixel(m_scrollPoint), Aspect_VKeyMouse_LeftButton, flags, false);
   cameraMoved();
   if (ends) {

@@ -179,6 +179,8 @@ pub enum C {
     Nurbs(usize, Vec<f64>, Vec<P3>),
     /// Segments and their parameters.
     Poly(Vec<C>, Vec<f64>),
+    /// Points and their parameters.
+    Polyline(Vec<P3>, Vec<f64>),
 }
 
 pub fn write_curve(w: &mut Writer, c: &C) {
@@ -227,6 +229,14 @@ pub fn write_curve(w: &mut Writer, c: &C) {
                 write_curve(w, s);
             }
         }),
+        C::Polyline(points, params) => w.object(class::POLYLINE_CURVE, |w| {
+            w.chunk_version(1, 0);
+            w.i32(points.len() as i32);
+            for p in points {
+                w.point(*p);
+            }
+            w.f64_array(params);
+        }),
     }
 }
 
@@ -237,9 +247,11 @@ pub enum S {
     Plane(P3, P3, P3, [[f64; 2]; 2], [[f64; 2]; 2]),
     /// Axis, angles, transposed, curve.
     Rev([P3; 2], [f64; 2], bool, C),
+    /// Base point and the two curves.
+    Sum(P3, C, C),
 }
 
-fn write_surface(w: &mut Writer, s: &S) {
+pub fn write_surface(w: &mut Writer, s: &S) {
     match s {
         S::Plane(o, x, y, domain, extents) => w.object(class::PLANE_SURFACE, |w| {
             w.chunk_version(1, 1);
@@ -259,6 +271,13 @@ fn write_surface(w: &mut Writer, s: &S) {
             w.i32(i32::from(*transposed));
             w.u8(1);
             write_curve(w, curve);
+        }),
+        S::Sum(base, a, b) => w.object(class::SUM_SURFACE, |w| {
+            w.chunk_version(1, 0);
+            w.point(*base);
+            w.bbox();
+            write_curve(w, a);
+            write_curve(w, b);
         }),
     }
 }
@@ -630,6 +649,217 @@ pub fn write_extrusion(
     });
 }
 
+/// A SubD's control net to write (mitcad#1757): its vertices (own id, tag,
+/// point), its faces as loops of vertex indices, and the edges that are
+/// not plain smooth ones (their two vertices in the direction the edge
+/// runs, their tag and the sharpness at their ends). The other edges run
+/// as the first face that has them goes round.
+#[derive(Clone, Debug, Default)]
+pub struct Net {
+    pub vertices: Vec<(u32, u8, P3)>,
+    pub faces: Vec<(u32, Vec<usize>)>,
+    pub edges: Vec<([usize; 2], u8, [f64; 2])>,
+}
+
+/// A SubD object as the format writes it (see `crate::subd`), for a file
+/// of archive version `version`: one level, its components with their
+/// archive ids, each face's edges reversed where it runs along them
+/// against their direction; from version 80 each edge's end sharpness.
+pub fn write_subd(w: &mut Writer, net: &Net, version: u32) {
+    // The edges: (their vertices, tag, sharpness) in order.
+    let mut edges: Vec<([usize; 2], u8, [f64; 2])> = net.edges.clone();
+    let find = |edges: &[([usize; 2], u8, [f64; 2])], a: usize, b: usize| {
+        edges
+            .iter()
+            .position(|(v, _, _)| (v[0] == a && v[1] == b) || (v[0] == b && v[1] == a))
+    };
+    // Each face's edges: (edge index, reversed).
+    let mut face_edges: Vec<Vec<(usize, bool)>> = Vec::new();
+    for (_, lp) in &net.faces {
+        let mut list = Vec::new();
+        for k in 0..lp.len() {
+            let (a, b) = (lp[k], lp[(k + 1) % lp.len()]);
+            let e = match find(&edges, a, b) {
+                Some(e) => e,
+                None => {
+                    edges.push(([a, b], 1, [0.0, 0.0]));
+                    edges.len() - 1
+                }
+            };
+            list.push((e, edges[e].0[0] != a));
+        }
+        face_edges.push(list);
+    }
+    let nv = net.vertices.len() as u32;
+    let ne = edges.len() as u32;
+    let nf = net.faces.len() as u32;
+    let parts = [1, 1 + nv, 1 + nv + ne, 1 + nv + ne + nf];
+    let base = |w: &mut Writer, archive_id: u32, id: u32| {
+        w.u32(archive_id);
+        w.u32(id);
+        w.u16(0);
+        if version >= 70 {
+            w.u8(255);
+        } else {
+            w.u8(0);
+            w.u8(0);
+        }
+    };
+    let end = |w: &mut Writer| w.u8(if version >= 70 { 255 } else { 0 });
+    let list = |w: &mut Writer, items: &[(u32, u8)]| {
+        w.u16(items.len() as u16);
+        for &(archive_id, flags) in items {
+            w.u32(archive_id);
+            w.u8(flags);
+        }
+    };
+    let faces_of_edge = |e: usize| -> Vec<(u32, u8)> {
+        face_edges
+            .iter()
+            .enumerate()
+            .filter_map(|(f, list)| {
+                list.iter()
+                    .find(|(x, _)| *x == e)
+                    .map(|(_, reversed)| (parts[2] + f as u32, u8::from(*reversed)))
+            })
+            .collect()
+    };
+    w.object(class::SUBD, |w| {
+        w.u8(1);
+        w.versioned(1, 0, |w| {
+            w.i32(1);
+            w.i32(net.vertices.iter().map(|v| v.0).max().unwrap_or(0) as i32);
+            w.i32(ne as i32);
+            w.i32(net.faces.iter().map(|f| f.0).max().unwrap_or(0) as i32);
+            w.bbox();
+            w.versioned(1, 1, |w| {
+                w.u16(0);
+                w.u8(4);
+                w.u8(4);
+                w.u8(4);
+                w.bbox();
+                for p in parts {
+                    w.u32(p);
+                }
+                for (i, &(id, tag, point)) in net.vertices.iter().enumerate() {
+                    base(w, parts[0] + i as u32, id);
+                    w.u8(tag);
+                    w.point(point);
+                    let at: Vec<(u32, u8)> = edges
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (v, _, _))| v.contains(&i))
+                        .map(|(e, (v, _, _))| (parts[1] + e as u32, u8::from(v[1] == i)))
+                        .collect();
+                    let on: Vec<(u32, u8)> = net
+                        .faces
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, lp))| lp.contains(&i))
+                        .map(|(f, _)| (parts[2] + f as u32, 0))
+                        .collect();
+                    w.u16(at.len() as u16);
+                    w.u16(on.len() as u16);
+                    w.u8(0);
+                    list(w, &at);
+                    list(w, &on);
+                    end(w);
+                }
+                for (e, &(v, tag, sharpness)) in edges.iter().enumerate() {
+                    base(w, parts[1] + e as u32, e as u32 + 1);
+                    w.u8(tag);
+                    let faces = faces_of_edge(e);
+                    w.u16(faces.len() as u16);
+                    w.f64(0.0);
+                    w.f64(0.0);
+                    w.f64(sharpness[0]);
+                    list(
+                        w,
+                        &[(parts[0] + v[0] as u32, 0), (parts[0] + v[1] as u32, 0)],
+                    );
+                    list(w, &faces);
+                    if version >= 80 {
+                        w.u8(8);
+                        w.f64(sharpness[1]);
+                    }
+                    end(w);
+                }
+                for (f, (id, _)) in net.faces.iter().enumerate() {
+                    base(w, parts[2] + f as u32, *id);
+                    w.i32(0);
+                    w.i32(0);
+                    let items: Vec<(u32, u8)> = face_edges[f]
+                        .iter()
+                        .map(|&(e, reversed)| (parts[1] + e as u32, u8::from(reversed)))
+                        .collect();
+                    w.u16(items.len() as u16);
+                    list(w, &items);
+                    end(w);
+                }
+                w.u8(0);
+            });
+        });
+    });
+}
+
+/// The control net of [`subd`]: a cube of 2 from the origin (ids 11 to
+/// 18, its faces 101 to 106 counter-clockwise seen from outside), the edge
+/// from the vertex at (2, 0, 0) to the one at (2, 2, 0) creased (written
+/// from its second vertex to its first, so that the faces run along it
+/// both ways), the edge from (0, 0, 2) to (2, 0, 2) smooth with a
+/// sharpness of 1 at its start and 2 at its end, the vertex at (2, 2, 2) a
+/// corner, and a vertex (id 19) on no face.
+pub fn subd_net() -> Net {
+    let p = |x: f64, y: f64, z: f64| [x, y, z];
+    let corner = [
+        p(0.0, 0.0, 0.0),
+        p(2.0, 0.0, 0.0),
+        p(2.0, 2.0, 0.0),
+        p(0.0, 2.0, 0.0),
+        p(0.0, 0.0, 2.0),
+        p(2.0, 0.0, 2.0),
+        p(2.0, 2.0, 2.0),
+        p(0.0, 2.0, 2.0),
+    ];
+    // Smooth 1, crease 2, corner 3, dart 4.
+    let tags = [1, 4, 4, 1, 1, 1, 3, 1];
+    let mut vertices: Vec<(u32, u8, P3)> = (0..8)
+        .map(|i| (11 + i as u32, tags[i], corner[i]))
+        .collect();
+    vertices.push((19, 1, p(5.0, 5.0, 5.0)));
+    let loops = [
+        vec![0, 3, 2, 1],
+        vec![4, 5, 6, 7],
+        vec![0, 1, 5, 4],
+        vec![1, 2, 6, 5],
+        vec![2, 3, 7, 6],
+        vec![3, 0, 4, 7],
+    ];
+    Net {
+        vertices,
+        faces: loops
+            .into_iter()
+            .enumerate()
+            .map(|(k, lp)| (101 + k as u32, lp))
+            .collect(),
+        edges: vec![([2, 1], 2, [0.0, 0.0]), ([4, 5], 1, [1.0, 2.0])],
+    }
+}
+
+/// A model in centimetres of archive version `version` with one SubD
+/// object, "blob" on the layer Solids: [`subd_net`].
+pub fn subd(version: u32) -> Vec<u8> {
+    model_of_version(
+        version,
+        |_| {},
+        |w| {
+            record(w, 1, "blob", None, 0, |w| {
+                write_subd(w, &subd_net(), version)
+            })
+        },
+    )
+}
+
 /// A mesh (version 3, its vertices compressed).
 pub fn write_mesh(w: &mut Writer, vertices: &[P3], faces: &[[u32; 4]]) {
     w.object(class::MESH, |w| {
@@ -722,6 +952,11 @@ pub fn record_id(name: &str) -> Uuid {
 }
 
 fn layer(w: &mut Writer, index: i32, name: &str, color: u32) {
+    layer_shown(w, index, name, color, true);
+}
+
+/// A layer, switched on or off.
+fn layer_shown(w: &mut Writer, index: i32, name: &str, color: u32, visible: bool) {
     w.chunk(TCODE_LAYER_RECORD, |w| {
         w.object(class::LAYER, |w| {
             w.chunk_version(1, 6);
@@ -733,7 +968,7 @@ fn layer(w: &mut Writer, index: i32, name: &str, color: u32) {
             w.u32(color);
             w.buf.extend_from_slice(&[0; 20]);
             w.wstring(name);
-            w.bool(true);
+            w.bool(visible);
             w.i32(-1);
             w.u32(0);
             w.f64(0.0);
@@ -800,13 +1035,18 @@ fn definition_in(w: &mut Writer, id: Uuid, name: &str, objects: &[Uuid], flagged
 }
 
 fn instance(w: &mut Writer, def: Uuid, at: P3) {
+    instance_scaled(w, def, at, 1.0);
+}
+
+/// An instance of a block that scales it by `scale` and moves it to `at`.
+fn instance_scaled(w: &mut Writer, def: Uuid, at: P3, scale: f64) {
     w.object(class::INSTANCE_REF, |w| {
         w.chunk_version(1, 0);
         w.uuid(def);
         let m = [
-            [1.0, 0.0, 0.0, at[0]],
-            [0.0, 1.0, 0.0, at[1]],
-            [0.0, 0.0, 1.0, at[2]],
+            [scale, 0.0, 0.0, at[0]],
+            [0.0, scale, 0.0, at[1]],
+            [0.0, 0.0, scale, at[2]],
             [0.0, 0.0, 0.0, 1.0],
         ];
         for row in m {
@@ -824,14 +1064,22 @@ pub const BOLT: Uuid = Uuid::parse("B0B0B0B0-0000-4000-8000-000000000001");
 /// The id of the block in [`block_in_itself`].
 pub const LOOP: Uuid = Uuid::parse("B0B0B0B0-0000-4000-8000-000000000002");
 
+/// The id of the block in [`block_hidden_layer`] and [`block_scaled`].
+pub const BRACKET: Uuid = Uuid::parse("B0B0B0B0-0000-4000-8000-000000000003");
+
 /// A model of the test writer by name: `""` the [`sample`],
 /// `block-in-itself` [`block_in_itself`], `plane-surfaces`
-/// [`plane_surfaces`]; None for another name.
+/// [`plane_surfaces`], `subd` [`subd`] of archive version 80,
+/// `block-hidden-layer` [`block_hidden_layer`], `block-scaled`
+/// [`block_scaled`]; None for another name.
 pub fn test_case(name: &str) -> Option<Vec<u8>> {
     match name {
         "" => Some(sample()),
         "block-in-itself" => Some(block_in_itself()),
         "plane-surfaces" => Some(plane_surfaces()),
+        "subd" => Some(subd(80)),
+        "block-hidden-layer" => Some(block_hidden_layer()),
+        "block-scaled" => Some(block_scaled()),
         _ => None,
     }
 }
@@ -852,6 +1100,15 @@ pub fn plane_surfaces() -> Vec<u8> {
                 });
             }
         },
+    )
+}
+
+/// A model in centimetres with the sample's settings and layers and one
+/// B-rep, `b`, named `name` on layer Solids: for crafted geometry.
+pub fn one_brep(name: &str, b: &B) -> Vec<u8> {
+    model(
+        |_| {},
+        |w| record(w, 1, name, None, 0, |w| write_brep(w, b)),
     )
 }
 
@@ -883,6 +1140,55 @@ pub fn block_in_itself() -> Vec<u8> {
     )
 }
 
+/// A model in centimetres whose block "Bracket" holds two boxes 1 by 1
+/// by 1, one on the layer Solids and one on the switched-off layer
+/// Hidden, placed twice: the block is a component with the first box
+/// only, and the hidden box is left out once (mitcad#1838).
+pub fn block_hidden_layer() -> Vec<u8> {
+    model_in(
+        true,
+        |w| {
+            definition(
+                w,
+                BRACKET,
+                "Bracket",
+                &[record_id("bracket box"), record_id("bracket hidden")],
+            )
+        },
+        |w| {
+            record(w, 1, "bracket box", None, 3, |w| {
+                write_brep(w, &box_brep([0.0; 3], [1.0, 1.0, 1.0]))
+            });
+            record(w, 3, "bracket hidden", None, 3, |w| {
+                write_brep(w, &box_brep([2.0, 0.0, 0.0], [3.0, 1.0, 1.0]))
+            });
+            record(w, 1, "bracket 1", None, 0, |w| {
+                instance(w, BRACKET, [0.0, 0.0, 0.0])
+            });
+            record(w, 1, "bracket 2", None, 0, |w| {
+                instance(w, BRACKET, [0.0, 5.0, 0.0])
+            });
+        },
+    )
+}
+
+/// A model in centimetres whose block "Bracket" holds a box 1 by 1 by 1
+/// (1000 mm3), placed once at scale 2: the import copies it in place, a
+/// solid of 8000 mm3 (mitcad#1838).
+pub fn block_scaled() -> Vec<u8> {
+    model(
+        |w| definition(w, BRACKET, "Bracket", &[record_id("bracket box")]),
+        |w| {
+            record(w, 1, "bracket box", None, 3, |w| {
+                write_brep(w, &box_brep([0.0; 3], [1.0, 1.0, 1.0]))
+            });
+            record(w, 1, "bracket 1", None, 0, |w| {
+                instance_scaled(w, BRACKET, [3.0, 0.0, 0.0], 2.0)
+            });
+        },
+    )
+}
+
 /// The sample model with its block definition in the form of format
 /// version 8 (its name and id in a flagged chunk).
 pub fn sample_v8_block() -> Vec<u8> {
@@ -903,8 +1209,39 @@ pub fn sample() -> Vec<u8> {
 /// A model in centimetres with the sample's settings and layers, its
 /// block definitions and its objects as given.
 fn model(definitions: impl FnOnce(&mut Writer), objects: impl FnOnce(&mut Writer)) -> Vec<u8> {
+    model_in(false, definitions, objects)
+}
+
+/// [`model`], with `hidden_layer` also a switched-off layer Hidden
+/// (index 3).
+fn model_in(
+    hidden_layer: bool,
+    definitions: impl FnOnce(&mut Writer),
+    objects: impl FnOnce(&mut Writer),
+) -> Vec<u8> {
+    model_of(70, hidden_layer, definitions, objects)
+}
+
+/// [`model`] of another archive version (50 or later: chunk values of 8
+/// bytes).
+fn model_of_version(
+    version: u32,
+    definitions: impl FnOnce(&mut Writer),
+    objects: impl FnOnce(&mut Writer),
+) -> Vec<u8> {
+    model_of(version, false, definitions, objects)
+}
+
+/// [`model_in`] of the archive version `version`.
+fn model_of(
+    version: u32,
+    hidden_layer: bool,
+    definitions: impl FnOnce(&mut Writer),
+    objects: impl FnOnce(&mut Writer),
+) -> Vec<u8> {
     let mut w = Writer::default();
-    w.buf.extend_from_slice(b"3D Geometry File Format       70");
+    w.buf
+        .extend_from_slice(format!("3D Geometry File Format {version:>8}").as_bytes());
     w.chunk(0x0000_0001, |w| {
         w.buf.extend_from_slice(b"MitCad test file\n\0")
     });
@@ -933,6 +1270,9 @@ fn model(definitions: impl FnOnce(&mut Writer), objects: impl FnOnce(&mut Writer
         layer(w, 0, "Default", 0x0000_0000);
         layer(w, 1, "Solids", 0x0000_00FF);
         layer(w, 2, "Meshes", 0x0000_FF00);
+        if hidden_layer {
+            layer_shown(w, 3, "Hidden", 0x00FF_0000, false);
+        }
         w.short(TCODE_ENDOFTABLE & !TCODE_SHORT, 0);
     });
     w.chunk(TCODE_INSTANCE_DEFINITION_TABLE, |w| {

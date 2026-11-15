@@ -379,3 +379,75 @@ fn planar_geometry_goes_onto_a_plane_of_a_3d_sketch() {
         "{error}"
     );
 }
+
+/// Where a 3D sketch's text is anchored (local coordinates): on its rotated
+/// plane's x and y at its elevation along the plane's normal.
+fn text_anchor(text: &Value) -> [f64; 3] {
+    let x = xyz(&text["frame"]["x"]);
+    let n = xyz(&text["frame"]["normal"]);
+    let y = [
+        n[1] * x[2] - n[2] * x[1],
+        n[2] * x[0] - n[0] * x[2],
+        n[0] * x[1] - n[1] * x[0],
+    ];
+    let uv = &text["planar"]["at"];
+    let (u, v) = (uv[0].as_f64().unwrap(), uv[1].as_f64().unwrap());
+    let z = text["z"].as_f64().unwrap_or(0.0);
+    [0, 1, 2].map(|k| x[k] * u + y[k] * v + n[k] * z)
+}
+
+/// mitcad#1836: a text on a rotated plane (x along X, normal along -Y, so
+/// its y runs along Z) copied with a point keeps its place relative to the
+/// point when pasted 10 mm along Y, whichever of the two comes first in the
+/// copy (the first item is the copy's base).
+#[test]
+fn a_text_on_a_rotated_plane_keeps_its_place_relative_to_a_point() {
+    let mut doc = Document::new(MockKernel::default());
+    command(&mut doc, json!({"cmd": "sketch3d.create"}));
+    let point = command(
+        &mut doc,
+        json!({"cmd": "sketch3d.add_point", "sketch": "F1", "at": [0, 0, 0]}),
+    );
+    let point = point["made"][0].as_str().unwrap().to_owned();
+    let text = command(
+        &mut doc,
+        json!({"cmd": "sketch3d.add_text", "sketch": "F1", "text": "MITCAD",
+               "at": [5, 0, 3], "height": 4,
+               "plane": {"x": [1, 0, 0], "normal": [0, -1, 0]}}),
+    );
+    let text = text["made"][0].as_str().unwrap().to_owned();
+    let source = sketch(&doc, "F1");
+    assert_eq!(source["texts"][0]["plane"], "rotated", "{source}");
+    assert!(
+        near(text_anchor(&source["texts"][0]), [5.0, 0.0, 3.0]),
+        "{source}"
+    );
+
+    for (target, items, at) in [
+        ("F2", [point.as_str(), text.as_str()], [0.0, 10.0, 0.0]),
+        ("F3", [text.as_str(), point.as_str()], [5.0, 10.0, 3.0]),
+    ] {
+        command(&mut doc, json!({"cmd": "sketch3d.create"}));
+        let copied = copy(&doc, "F1", &items);
+        let base = if items[0] == point {
+            [0.0, 0.0, 0.0]
+        } else {
+            [5.0, 0.0, 3.0]
+        };
+        assert!(near(xyz(&copied["base"]), base), "{copied}");
+        command(
+            &mut doc,
+            json!({"cmd": "sketch3d.paste", "sketch": target,
+                   "fragment": copied["fragment"], "at": at}),
+        );
+        let pasted = sketch(&doc, target);
+        let at = places(&pasted);
+        assert!(at.len() == 1 && near(at[0], [0.0, 10.0, 0.0]), "{pasted}");
+        let texts = pasted["texts"].as_array().unwrap();
+        assert_eq!(texts.len(), 1, "{pasted}");
+        assert!(
+            near(text_anchor(&texts[0]), [5.0, 10.0, 3.0]),
+            "{target}: {pasted}"
+        );
+    }
+}

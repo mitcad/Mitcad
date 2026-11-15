@@ -1145,6 +1145,11 @@ record! {
         /// An edge found: how it lies to its stored curve
         /// (`mitcad_f3d::design::curve::CurveFit::describe`).
         "curve_fit" => curve_fit: String,
+        /// A body: its body object (class `D3937028`, the entity of its
+        /// record in `_f3d.appearance.bodies`), which its body record
+        /// names (mitcad#1802): through it the import finds the stored body
+        /// where neither the producer nor the names find it.
+        "body_entity" => body_entity: u64,
     }
 }
 
@@ -1722,6 +1727,12 @@ record! {
         /// The body's light bulb (false: hidden), where the record gives
         /// it (mitcad#1175).
         "light_bulb" => light_bulb: bool,
+        /// The browser folder the body is in, by its name (mitcad#1802).
+        "folder" => folder: String,
+        /// True for a body the file took out of the design (a removal),
+        /// which its blob still holds: its browser node says so
+        /// (mitcad#1802).
+        "removed" => removed: bool,
         /// The stored body as the replay names it (`StoredBody::source`),
         /// where it is not `blob#record`: an `.ipt` body is `<B-rep
         /// record>/<ASM body record>` (mitcad#1367).

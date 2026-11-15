@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A sketch on a cone's side (mitcad#1853, tools/ui-sketch-cone-face-test.sh): Sketch1's triangle (0, 0), (20, 0), (0, 30) on XY revolved about Y (F2.b0), a cone of base radius 20 on XZ with its apex at (0, 30, 0), half angle atan(20 / 30); its side F2:side(c4[c1,c7])."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[0,0],"end":[20,0]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[20,0],"end":[0,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[0,30],"end":[0,0]},
+  {"cmd":"add_feature","def":{"type":"revolve","profiles":[{"sketch":"F1","region":"r{c1[c7,c4],c4[c1,c7],c7[c4,c1]}"}],
+    "axis":"y","extent":{"type":"full"},"operation":"new_body"}},
+  {"expect":{"feature":"F2","status":"ok","body":"F2.b0","faces":2}}
+]
