@@ -31,6 +31,9 @@ QString chromeStyleName(ChromeStyle style);
 // reads it before the window is made; it takes effect at the next start.
 std::optional<ChromeStyle> layoutPreference();
 void setLayoutPreference(ChromeStyle style);
+// None chosen again, the platform's default (Preferences › Restore
+// Defaults, mitcad#1887).
+void clearLayoutPreference();
 // Whether this run's window has one of the two layouts, so that Preferences
 // offers the choice: not in the native macOS frontend, which has its own.
 bool layoutChoosable();

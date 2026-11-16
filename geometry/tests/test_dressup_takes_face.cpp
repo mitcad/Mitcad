@@ -19,7 +19,13 @@
 // The feet of an octagon prism standing on a disc with its corners on the
 // disc's rim, chamfered as wide as the segments of the disc's top beside
 // them (and a little wider or narrower), take those segments away, cut by
-// the rim (mitcad#1783).
+// the rim (mitcad#1783). A block stepped in its section, its edges beside
+// the side faces rounded as large as those faces are high or deep, so that
+// each rounding ends exactly on a side face's far edge, takes the side
+// faces away at the exact size, its volume exact and no note (GitHub #353).
+// A bore's top rim chamfered from one end wall of a shelf standing out from
+// the bore's wall to the other ends on the end walls' planes (GitHub #353's
+// owner case of mitcad#1819).
 
 #include <algorithm>
 #include <cmath>
@@ -29,20 +35,33 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Common.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
 #include <Standard_ErrorHandler.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
+#include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
+#include <gp_Vec.hxx>
 
 #include "../src/dressup_strips.hpp"
 #include "check.hpp"
@@ -745,6 +764,259 @@ void test_octagon_on_disc() {
   }
 }
 
+// A block 10 x 10 in plan stepped in its section along y: 5 high for
+// y = 0 to 5, 10 high for y = 5 to 10 (GitHub #353's design). Each of its
+// side faces (x = 0, x = 10) is an L; the lower top and the step's wall
+// are 10 wide.
+ShapePtr stepped_block() {
+  const ShapePtr low = extrude("F1", {rectangle(1, 0, 0, 10, 5)}, 0, 5);
+  const ShapePtr high = extrude("F2", {rectangle(5, 0, 5, 10, 5)}, 0, 10);
+  return boolean(BooleanOp::Join, {low.get()}, *high).pieces.at(0).shape;
+}
+
+// The stepped block's edges (by their middles) rounded with 5, as large as
+// the side faces are high below the lower top's edges and deep beside the
+// step's edges: each rounding ends exactly on its side face's far edge (the
+// bottom's or the back's edge), the side face taken away there. The
+// geometry kernel cannot build that at the exact size; it is built as a
+// narrower face is (exactly_wide, GitHub #353), not 0.1 % smaller with a
+// sliver of the side face left: valid, no face under 0.01 mm2, no note and
+// no information, the volume exact.
+void rounded_to_the_far_edges(const char* what, const std::vector<gp_Pnt>& middles, double expected) {
+  const ShapePtr body = stepped_block();
+  CHECK_NEAR_TOL(volume_of(*body), 750.0, 1e-9);
+  FilletSet round;
+  for (const gp_Pnt& m : middles) {
+    round.edges.push_back(edge_at(*body, m));
+    CHECK(!round.edges.back().empty());
+  }
+  round.radius = 5;
+  const ShapePtr rounded = fillet("F3", *body, {round});
+  CHECK(valid(*rounded));
+  CHECK(narrowest_face(*rounded) > 0.01);
+  CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+  CHECK(rounded->notes().empty() && rounded->infos().empty());
+  CHECK(all_faces_named(*rounded));
+  if (!rounded->notes().empty() || !rounded->infos().empty() || !near(volume_of(*rounded), expected, 1e-6)) {
+    std::fprintf(stderr, "%s: volume %.9g, expected %.9g\n", what, volume_of(*rounded), expected);
+  }
+}
+
+void test_stepped_block_rounded_to_the_far_edges() {
+  // The region of the step's foot (x 0 to 10, y 5 to 10, z 0 to 5) where
+  // the roundings of a lower top's edge (a cylinder along y) and of the
+  // step's edge above it (along z) meet: they run on into it and meet as a
+  // mitre, the side face there gone too; what they leave of it is the union
+  // of the two half cylinders, 125 pi - 500/3 (their common part is 500/3).
+  const double foot = 250.0 - (125.0 * kPi - 500.0 / 3.0);
+  const gp_Pnt low_top_right(10, 2.5, 5);
+  const gp_Pnt low_top_left(0, 2.5, 5);
+  const gp_Pnt step_right(10, 5, 7.5);
+  const gp_Pnt step_left(0, 5, 7.5);
+  const gp_Pnt front_left(0, 0, 2.5);
+  rounded_to_the_far_edges("a lower top's edge", {low_top_right}, 750.0 - 5 * fillet_loss(5));
+  // (The two roundings also meet on the lower top: a full round.)
+  rounded_to_the_far_edges("both lower top's edges", {low_top_right, low_top_left}, 750.0 - 10 * fillet_loss(5));
+  rounded_to_the_far_edges("a lower top's and the step's edge", {low_top_right, step_right},
+                           750.0 - 10 * fillet_loss(5) - foot / 2);
+  // GitHub #353's first design: all four, the body 250 pi - 500/3.
+  rounded_to_the_far_edges("both sides", {low_top_right, low_top_left, step_right, step_left},
+                           750.0 - 20 * fillet_loss(5) - foot);
+  // The front's and the step's upright edges on one side: chains whose ends'
+  // faces (the lower top's plane) hold the space past the side face's far
+  // edge on opposite sides, each clipped by its own ends (fill_overflow).
+  rounded_to_the_far_edges("the front's and the step's upright edges", {front_left, step_left},
+                           750.0 - 10 * fillet_loss(5));
+  // GitHub #353's second design: every edge round the side faces but their
+  // bottom and back edges, so that the chains end on those far edges (the
+  // front's upright edge on the bottom's, the upper top's edge on the
+  // back's): the space past them is filled too (fill_overflow's
+  // `past_ends`). The front half (y 0 to 5, z 0 to 5) and the upper part
+  // (y 5 to 10, z 5 to 10) are each the common part of two half cylinders
+  // (on one side the quarter of it, 500/6, and the other side whole), the
+  // step's foot as above.
+  const gp_Pnt front_right(10, 0, 2.5);
+  const gp_Pnt high_top_left(0, 7.5, 10);
+  const gp_Pnt high_top_right(10, 7.5, 10);
+  rounded_to_the_far_edges("one side all round", {front_left, low_top_left, step_left, high_top_left},
+                           375.0 + 250.0 / 3.0 + 62.5 * kPi);
+  rounded_to_the_far_edges("both sides all round",
+                           {front_left, low_top_left, step_left, high_top_left, front_right, low_top_right,
+                            step_right, high_top_right},
+                           500.0 / 3.0 + 125.0 * kPi);
+}
+
+// The volume `shape` has in common with `tool`, on a copy of the shape (a
+// boolean adds curves to its inputs, which the input checks would take for
+// a change of the body).
+double common_volume(const Shape& shape, const TopoDS_Shape& tool) {
+  return volume_of(BRepAlgoAPI_Common(BRepBuilderAPI_Copy(shape.occt()).Shape(), tool).Shape());
+}
+
+// A cube of 10 rounded on all its edges by `radius` at (or within 2e-4 of)
+// half its side (GitHub #353's third design at 5 mm): the corners' balls at
+// both ends of each edge meet in its middle, every face taken away; the
+// geometry kernel's fillet never returned there and a cancel did not reach
+// it. Refused before the kernel (corners_meet), it is built 0.1 % smaller,
+// with the warning that says so, at once: the volume of the cube rounded
+// by 0.999 `radius`, 1000 - 12 (10 - 2r) r^2 (1 - pi/4) - 8 r^3 (1 - pi/6).
+void test_cube_rounded_at_half_its_side(double radius) {
+  const ShapePtr cube = extrude("F1", {rectangle(1, 0, 0, 10, 10)}, 0, 10);
+  FilletSet round;
+  for (int e = 0; e < cube->edge_count(); ++e) {
+    round.edges.push_back(cube->edge_name(e));
+  }
+  CHECK(round.edges.size() == 12);
+  round.radius = radius;
+  const ShapePtr rounded = fillet("F2", *cube, {round});
+  CHECK(valid(*rounded));
+  CHECK(!rounded->notes().empty());
+  const double r = radius * (1.0 - 1.0e-3);
+  const double expected = 1000.0 - 12 * (10 - 2 * r) * fillet_loss(r) - 8 * r * r * r * (1 - kPi / 6);
+  CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+}
+
+// GitHub #375: the stepped block rounded by 5 on both sides (as GitHub
+// #353's first design), then its back's bottom edge (y = 10, z = 0)
+// chamfered or rounded by 5. Its faces there were slivers of the 0.1 %
+// smaller rounding, which the bevel left untrimmed; now the rounding takes
+// the side faces away at its size and the bevel cuts the bent half round
+// cleanly: valid, no face under 0.01 mm2, no note, and the volume the
+// rounded block's less its common part with the bevel's wedge (the
+// triangle y - 5 > z) or with the rounding's corner (the square less the
+// circle about y = 5, z = 5), along x.
+void test_stepped_block_rounded_then_its_back_edge_dressed() {
+  const ShapePtr body = stepped_block();
+  FilletSet round;
+  for (const gp_Pnt& m : {gp_Pnt(10, 2.5, 5), gp_Pnt(0, 2.5, 5), gp_Pnt(10, 5, 7.5), gp_Pnt(0, 5, 7.5)}) {
+    round.edges.push_back(edge_at(*body, m));
+  }
+  round.radius = 5;
+  const ShapePtr rounded = fillet("F3", *body, {round});
+  CHECK_NEAR_TOL(volume_of(*rounded), 250.0 * kPi - 500.0 / 3.0, 1e-6);
+  const std::string back = edge_at(*rounded, gp_Pnt(5, 10, 0));
+  CHECK(!back.empty());
+  // (The triangle y - 5 > z, 0 < z < 5, along x past the body.)
+  BRepBuilderAPI_MakePolygon triangle(gp_Pnt(-5, 5, 0), gp_Pnt(-5, 10, 0), gp_Pnt(-5, 10, 5), true);
+  const TopoDS_Shape wedge =
+      BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(triangle.Wire()).Face(), gp_Vec(20, 0, 0)).Shape();
+  ChamferSet bevel;
+  bevel.edges = {back};
+  bevel.spec.distance = 5;
+  const ShapePtr bevelled = chamfer("F4", *rounded, {bevel});
+  CHECK(valid(*bevelled));
+  CHECK(narrowest_face(*bevelled) > 0.01);
+  CHECK(bevelled->notes().empty() && bevelled->infos().empty());
+  CHECK_NEAR_TOL(volume_of(*bevelled),
+                 volume_of(*rounded) - common_volume(*rounded, wedge), 1e-6);
+  const ShapePtr round_back = fillet("F4", *rounded, {back}, 5);
+  CHECK(valid(*round_back));
+  CHECK(narrowest_face(*round_back) > 0.01);
+  CHECK(round_back->notes().empty() && round_back->infos().empty());
+  const TopoDS_Shape square = BRepPrimAPI_MakeBox(gp_Pnt(-5, 5, 0), gp_Pnt(15, 10, 5)).Shape();
+  const TopoDS_Shape ball =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(-5, 5, 5), gp_Dir(1, 0, 0)), 5, 20).Shape();
+  const TopoDS_Shape corner = BRepAlgoAPI_Cut(square, ball).Shape();
+  CHECK_NEAR_TOL(volume_of(*round_back),
+                 volume_of(*rounded) - common_volume(*rounded, corner), 1e-6);
+}
+
+// A tube 10 high round a bore of radius 26, its outer radius `outer`, with
+// a shelf standing out from the bore's wall flush with the top: a block
+// from x = -8 to 8, y = 24.1 to 27.5 (into the wall), joined. The bore's top
+// rim runs round from one end wall of the shelf to the other; each end wall
+// is 0.64 wide where the rim meets it, on the bore's side of the wall.
+ShapePtr tube_with_shelf(double outer) {
+  const ShapePtr tube = extrude("F1", {circle(1, 0, 0, outer)}, 0, 10);
+  const ShapePtr bore = extrude("F2", {circle(2, 0, 0, 26)}, -1, 11);
+  const ShapePtr cut = boolean(BooleanOp::Cut, {tube.get()}, *bore).pieces.at(0).shape;
+  const ShapePtr shelf = extrude("F3", {rectangle(5, -8, 24.1, 16, 3.4)}, 0, 10);
+  return boolean(BooleanOp::Join, {cut.get()}, *shelf).pieces.at(0).shape;
+}
+
+// The bore's top rim: the arc of radius 26 at z = 10.
+std::string bore_rim(const Shape& body) {
+  for (int i = 0; i < body.edge_count(); ++i) {
+    const BRepAdaptor_Curve curve(body.edge(i));
+    if (curve.GetType() == GeomAbs_Circle && std::abs(curve.Circle().Radius() - 26) < 1e-6 &&
+        std::abs(curve.Circle().Location().Z() - 10) < 1e-6) {
+      return body.edge_name(i);
+    }
+  }
+  return {};
+}
+
+// The bore's top rim chamfered by `size` (equal distances), its chain
+// ending against the shelf's end walls (GitHub #353, mitcad#1819). The
+// geometry kernel finds no face to end the bevel on there, at any size: the
+// end wall lies on the bore's side of the wall, the bevel in the wall. It
+// is ended on the end walls' planes, as a modeller would, the end walls
+// grown out along their planes to meet it (ended_on_end_planes); where the
+// top beside the rim is narrower than the bevel (outer radius 28.28: the
+// ring 2.28 wide) the bevel also takes the top away there and meets the
+// outer wall. The reference: the tube less the cone's ring (the triangle
+// of the bevel's section revolved) outside the shelf's slab (|x| < 8 on
+// the shelf's side).
+void test_bore_rim_chamfered_against_a_shelf(double outer, double size) {
+  const ShapePtr body = tube_with_shelf(outer);
+  const std::string rim = bore_rim(*body);
+  CHECK(!rim.empty());
+  ChamferSet bevel;
+  bevel.edges = {rim};
+  bevel.spec.distance = size;
+  const ShapePtr bevelled = chamfer("F4", *body, {bevel});
+  CHECK(valid(*bevelled));
+  CHECK(narrowest_face(*bevelled) > 0.01);
+  CHECK(bevelled->notes().empty() && bevelled->infos().empty());
+  CHECK(faces_holding(*bevelled, "F4:chamfer(" + rim + ")") >= 1);
+  BRepBuilderAPI_MakePolygon section(gp_Pnt(26, 0, 10), gp_Pnt(26 + size, 0, 10), gp_Pnt(26, 0, 10 - size), true);
+  const TopoDS_Shape ring =
+      BRepPrimAPI_MakeRevol(BRepBuilderAPI_MakeFace(section.Wire()).Face(), gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)))
+          .Shape();
+  const TopoDS_Shape slab = BRepPrimAPI_MakeBox(gp_Pnt(-8, 0, -1), gp_Pnt(8, 40, 11)).Shape();
+  const TopoDS_Shape bevel_ring = BRepAlgoAPI_Cut(ring, slab).Shape();
+  const double expected = volume_of(*body) - common_volume(*body, bevel_ring);
+  CHECK_NEAR_TOL(volume_of(*bevelled), expected, 1e-6);
+  if (!near(volume_of(*bevelled), expected, 1e-6)) {
+    std::fprintf(stderr, "rim against a shelf (outer %g, size %g): volume %.9g, expected %.9g\n", outer, size,
+                 volume_of(*bevelled), expected);
+  }
+}
+
+void test_bore_rim_chamfered_against_a_shelf() {
+  test_bore_rim_chamfered_against_a_shelf(30, 1);
+  test_bore_rim_chamfered_against_a_shelf(30, 2.7);
+  test_bore_rim_chamfered_against_a_shelf(28.28, 2.7);
+}
+
+// The same rim rounded by `radius`: ended on the end walls' planes alike.
+// The reference: the tube less the ring the rounding takes off (the
+// section's square less the ball's circle, revolved) outside the slab.
+void test_bore_rim_rounded_against_a_shelf(double radius) {
+  const ShapePtr body = tube_with_shelf(30);
+  const std::string rim = bore_rim(*body);
+  CHECK(!rim.empty());
+  const ShapePtr rounded = fillet("F4", *body, {rim}, radius);
+  CHECK(valid(*rounded));
+  CHECK(narrowest_face(*rounded) > 0.01);
+  CHECK(rounded->notes().empty() && rounded->infos().empty());
+  CHECK(faces_holding(*rounded, "F4:fillet(" + rim + ")") >= 1);
+  const gp_Ax1 axis(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1));
+  BRepBuilderAPI_MakePolygon square(gp_Pnt(26, 0, 10), gp_Pnt(26 + radius, 0, 10), gp_Pnt(26 + radius, 0, 10 - radius),
+                                    gp_Pnt(26, 0, 10 - radius), true);
+  const TopoDS_Shape block = BRepPrimAPI_MakeRevol(BRepBuilderAPI_MakeFace(square.Wire()).Face(), axis).Shape();
+  const TopoDS_Shape ball =
+      BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 10 - radius), gp_Dir(0, 0, 1)), 26 + radius, radius).Shape();
+  const TopoDS_Shape slab = BRepPrimAPI_MakeBox(gp_Pnt(-8, 0, -1), gp_Pnt(8, 40, 11)).Shape();
+  const TopoDS_Shape loss = BRepAlgoAPI_Cut(BRepAlgoAPI_Cut(block, ball).Shape(), slab).Shape();
+  const double expected = volume_of(*body) - common_volume(*body, loss);
+  CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+  if (!near(volume_of(*rounded), expected, 1e-6)) {
+    std::fprintf(stderr, "rim rounded against a shelf (radius %g): volume %.9g, expected %.9g\n", radius,
+                 volume_of(*rounded), expected);
+  }
+}
+
 } // namespace
 
 void dressup_takes_face_tests() {
@@ -759,6 +1031,17 @@ void dressup_takes_face_tests() {
   guarded("wedge of 45 degrees", test_wedge_of_45_degrees);
   guarded("strip removed", test_strip_removed);
   guarded("strip with many faces beside it stays", test_strip_with_many_faces_beside_it_stays);
+  guarded("stepped block rounded to the far edges", test_stepped_block_rounded_to_the_far_edges);
+  guarded("bore rim chamfered against a shelf", [] { test_bore_rim_chamfered_against_a_shelf(); });
+  guarded("cube rounded at half its side", [] {
+    test_cube_rounded_at_half_its_side(5);
+    test_cube_rounded_at_half_its_side(4.9998);
+  });
+  guarded("stepped block rounded then its back edge dressed", test_stepped_block_rounded_then_its_back_edge_dressed);
+  guarded("bore rim rounded against a shelf", [] {
+    test_bore_rim_rounded_against_a_shelf(1);
+    test_bore_rim_rounded_against_a_shelf(2.7);
+  });
 }
 
 } // namespace test

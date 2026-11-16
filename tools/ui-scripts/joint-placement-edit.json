@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the joint and placement edit UI test (mitcad#1885, GitHub mitcad/Mitcad#354; tools/ui-joint-placement-edit-test.sh): Upright (C1, Upright:1 O1, its derived part F1), the test library's profile (LIBRARY_URL, replaced by the test) placed by BUILD standing at the origin, 500 long; Block (C2, Block:1 O2) with a 10 mm cube (F2.b0) joined by Cap joint (F3, rigid) onto the upright's end B mount frame with a frame override (its x turned to Y and its origin shifted 30 up: the cube from z = 530 to 540); Arm (C3, Arm:1 O3, its derived part F4, its slider joint F5), the same profile 200 long on the upright's y+ side, 100 past the side's middle (from z = 340 to 360). All geometry is synthetic."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-slot-test"},
+   "at": {"point": [0, 0, 0]}, "length": 500, "name": "Upright"},
+  {"cmd": "create_component", "name": "Block"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+    "corner": [0, 0], "length": 10, "width": 10, "height": 10, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "add_joint", "kind": "rigid", "flip": true, "name": "Cap joint",
+    "a": {"occurrence": "Block:1", "geometry": {"body": "F2.b0", "face": "F2:bottom"}},
+    "b": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(end_b)"},
+          "frame_override": {"z_axis": [0, 0, 1], "x_axis": [0, 1, 0], "shift": [0, 0, 30]}}},
+  {"cmd": "build_place", "part": {"source": "S1"},
+   "at": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(slot_y+_1)"}, "offset": 100, "from": "middle"},
+   "length": 200, "name": "Arm"},
+  {"expect": {"feature": "F3", "status": "ok"}},
+  {"expect": {"feature": "F5", "status": "ok"}},
+  {"expect": {"bodies": 3}}
+]

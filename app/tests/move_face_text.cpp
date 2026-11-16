@@ -2,6 +2,7 @@
 // Move Face's summary (mitcad#531): each kind of motion in words, values
 // as numbers or through the parameters they name, a free move's matrix as
 // its turn and translation.
+#include "UnitTests.hpp"
 #include "commands/MoveFaceText.hpp"
 
 #include <cmath>
@@ -90,3 +91,4 @@ int moveFaceTextTests() {
   otherMotionTests();
   return failures;
 }
+MITCAD_UNIT_TEST(moveFaceTextTests);

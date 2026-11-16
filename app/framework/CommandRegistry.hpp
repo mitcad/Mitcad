@@ -42,6 +42,9 @@ public:
   // The feature command that can edit a definition (the `feature` query's
   // def), or null.
   const CommandDef* editorOf(const QJsonObject& def) const;
+  // Why the feature command of a definition's type cannot edit it, in words
+  // (CommandDef::editRefusal, mitcad#1885); empty when none says.
+  QString editRefusal(const QJsonObject& def) const;
 
   // Makes an action per command, with window-wide shortcuts on `owner`;
   // triggering one calls `trigger` with the command's id.
@@ -95,6 +98,11 @@ public:
   void setShortcut(const QString& id, const QKeySequence& shortcut);
   // Changes a shortcut in one context.
   void setShortcut(const QString& id, unsigned context, const QKeySequence& shortcut);
+
+  // The actions' keys as the settings have them now, after the settings
+  // changed outside this registry (Preferences › Import Settings,
+  // mitcad#1889); logs "Shortcuts reloaded from the settings: N saved".
+  void reloadShortcuts();
 
   // Enables the actions of the commands `available` accepts.
   void updateEnabled(const std::function<bool(const CommandDef&)>& available);

@@ -96,6 +96,10 @@ if(BUILD_TESTING)
   foreach(script f2_fillet_chamfer f2_shell_draft f2_face_ops f2_names_follow_parameters f2_failures)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
   endforeach()
+  # Offset Face on a piece of a split face: the seam becomes a step (mitcad#1928).
+  foreach(script offset_split_face)
+    add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
+  endforeach()
 
   # The general sketch (S1): drawing tools, planes, frames and projections
   # extruded, with analytic volumes.
@@ -243,6 +247,16 @@ if(BUILD_TESTING)
   add_test(NAME cli.occt_crash_section COMMAND mitcad-cli run "${scripts}/analysis.json")
   set_tests_properties(cli.occt_crash_section PROPERTIES ENVIRONMENT "MITCAD_TEST_OCCT_CRASH=section"
     PASS_REGULAR_EXPRESSION "steps\\[[0-9]+\\]: .*${crash_error}")
+  # A fillet whose kernel call does not return (a test hang of a minute,
+  # deaf to any cancel, mitcad#1917) is given up at the kernel's time limit:
+  # the feature fails in words, the bodies are reported, and the process
+  # ends at once although the call still runs (without its static
+  # destructors).
+  add_test(NAME cli.kernel_time_limit COMMAND mitcad-cli info "${scripts}/v1_boss.mitcad")
+  set_tests_properties(cli.kernel_time_limit PROPERTIES
+    ENVIRONMENT "MITCAD_TEST_KERNEL_HANG=60;MITCAD_KERNEL_TIME_LIMIT=1" TIMEOUT 30
+    PASS_REGULAR_EXPRESSION
+      "F6 Fillet1 \\(fillet\\): error: the geometry kernel did not finish within 1 s. the operation was given up.*Body1 \\(F2\\.b0\\): volume")
 
   # Saving the result of a script, then reading it back.
   set(saved "${CMAKE_CURRENT_BINARY_DIR}/join.mitcad")
@@ -458,7 +472,7 @@ if(BUILD_TESTING)
             --accept-deviations 2)
   set_tests_properties(cli.import_f3d_deviation_kept PROPERTIES FIXTURES_REQUIRED cli_f3d_deviation
     PASS_REGULAR_EXPRESSION
-    "Fillet1 +FilletFeature +parametric -> F3 \\(not verified\\): its result deviates from the file's; kept parametric at the user's choice: volume change -8\\.5841.*F3 Fillet1 \\(fillet\\): warning: Deviation from the file accepted at import.*Body1 \\(F2\\.b0\\): volume 991\\.416 mm3")
+    "Fillet1 +FilletFeature +parametric -> F3 \\(not verified\\): its result deviates from the file's. kept parametric at the user's choice: volume change -8\\.5841.*F3 Fillet1 \\(fillet\\): warning: Deviation from the file accepted at import.*Body1 \\(F2\\.b0\\): volume 991\\.416 mm3")
   add_test(NAME cli.import_f3d_deviation_refused
     COMMAND mitcad-cli import-f3d "${exchange}/deviation/Rounding.f3d" --accept-deviations 2,,3)
   set_tests_properties(cli.import_f3d_deviation_refused PROPERTIES FIXTURES_REQUIRED cli_f3d_deviation
@@ -535,7 +549,7 @@ if(BUILD_TESTING)
   add_test(NAME cli.import_ipt COMMAND mitcad-cli import-ipt "${exchange}/part.ipt" --save "${exchange}/part.mitcad")
   set_tests_properties(cli.import_ipt PROPERTIES FIXTURES_REQUIRED cli_ipt FIXTURES_SETUP cli_ipt_saved
     PASS_REGULAR_EXPRESSION
-    "Imported 2 bodies of part\\.ipt \\(2 solids, 2 valid; 0 not built\\).*part number: MITCAD-TEST-1; material: Aluminum \\(Mitcad's aluminum\\); units: in.*Body1 \\(F1\\.b0\\): valid solid, volume 1000\\.000 mm3.*Body2 \\(F2\\.b0\\): valid solid, volume 6283\\.185 mm3")
+    "Imported 2 bodies of part\\.ipt \\(2 solids, 2 valid. 0 not built\\).*part number: MITCAD-TEST-1. material: Aluminum \\(MitCad's aluminum\\). units: in.*Body1 \\(F1\\.b0\\): valid solid, volume 1000\\.000 mm3.*Body2 \\(F2\\.b0\\): valid solid, volume 6283\\.185 mm3")
   add_test(NAME cli.info_ipt COMMAND mitcad-cli info "${exchange}/part.mitcad")
   set_tests_properties(cli.info_ipt PROPERTIES FIXTURES_REQUIRED cli_ipt_saved
     PASS_REGULAR_EXPRESSION "F1 Base1 \\(base\\): ok.*F2 Base2 \\(base\\): ok.*Body2 \\(F2\\.b0\\): volume 6283\\.185 mm3")
@@ -558,6 +572,25 @@ if(BUILD_TESTING)
   add_test(NAME cli.import_ipt_design COMMAND mitcad-cli import-ipt "${exchange}/designed.ipt")
   set_tests_properties(cli.import_ipt_design PROPERTIES FIXTURES_REQUIRED cli_ipt_design PASS_REGULAR_EXPRESSION
     "Imported 1 bodies of designed\\.ipt.*parameters: 4 model, 1 user.*expressions: 5 translated, 5 agree.*2 timeline items: 2 parametric, 0 partial, 0 fallback, 0 skipped.*F1 Sketch1 \\(sketch\\): ok.*F2 Extrusion1 \\(extrude\\): ok")
+  # Design files of other formats as components (mitcad#1894): both test
+  # parts imported and saved, then inserted as copies into one design, the
+  # app's Import into this design; one undo step takes both out.
+  add_test(NAME cli.import_ipt_design_saved
+    COMMAND mitcad-cli import-ipt "${exchange}/designed.ipt" --save "${exchange}/designed.mitcad")
+  set_tests_properties(cli.import_ipt_design_saved PROPERTIES FIXTURES_REQUIRED cli_ipt_design
+    FIXTURES_SETUP cli_ipt_design_saved)
+  add_test(NAME cli.import_into_design COMMAND mitcad-cli run "${scripts}/import_into_design.json")
+  set_tests_properties(cli.import_into_design PROPERTIES WORKING_DIRECTORY "${exchange}"
+    FIXTURES_REQUIRED "cli_ipt_saved;cli_ipt_design_saved")
+  # Dropped on a face while a component that is not the root is active: the
+  # placement in that component's coordinates lands at the drop point.
+  add_test(NAME cli.import_into_design_cube
+    COMMAND mitcad-cli run "${PROJECT_SOURCE_DIR}/tools/ui-scripts/import-into-design.json"
+            --save "${exchange}/cube.mitcad")
+  set_tests_properties(cli.import_into_design_cube PROPERTIES FIXTURES_SETUP cli_import_into_design_cube)
+  add_test(NAME cli.import_into_design_drop COMMAND mitcad-cli run "${scripts}/import_into_design_drop.json")
+  set_tests_properties(cli.import_into_design_drop PROPERTIES WORKING_DIRECTORY "${exchange}"
+    FIXTURES_REQUIRED cli_import_into_design_cube)
   add_test(NAME ipt.corpus
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/ipt-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/ipt-corpus.cmake")
@@ -574,7 +607,7 @@ if(BUILD_TESTING)
     COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --save "${exchange}/iam/top.mitcad")
   set_tests_properties(cli.import_iam PROPERTIES FIXTURES_REQUIRED cli_iam FIXTURES_SETUP cli_iam_saved
     PASS_REGULAR_EXPRESSION
-    "Imported assembly top\\.iam: 7 occurrences placed \\(1 suppressed, 1 hidden, 1 of missing files, 0 not placed\\); 4 part files \\(3 imported, 1 missing, 0 failed; 3 identities confirmed, 0 differ\\), 1 sub-assemblies; units: mm.*files found: 1 by name, 1 missing, 3 relative to the assembly.*check: 7 of 7 placements agree with the displayed ones.*check: 5 of 5 parts. bodies lie within their stored range boxes")
+    "Imported assembly top\\.iam: 7 occurrences placed \\(1 suppressed, 1 hidden, 1 of missing files, 0 not placed\\). 4 part files \\(3 imported, 1 missing, 0 failed. 3 identities confirmed, 0 differ\\), 1 sub-assemblies. units: mm.*files found: 1 by name, 1 missing, 3 relative to the assembly.*check: 7 of 7 placements agree with the displayed ones.*check: 5 of 5 parts. bodies lie within their stored range boxes")
   add_test(NAME cli.info_iam COMMAND mitcad-cli info "${exchange}/iam/top.mitcad")
   set_tests_properties(cli.info_iam PROPERTIES FIXTURES_REQUIRED cli_iam_saved
     PASS_REGULAR_EXPRESSION "F1 Base1 \\(base\\): ok.*Bodies: 5")
@@ -582,7 +615,7 @@ if(BUILD_TESTING)
   # extrusion.
   add_test(NAME cli.import_iam_history COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --history)
   set_tests_properties(cli.import_iam_history PROPERTIES FIXTURES_REQUIRED cli_iam PASS_REGULAR_EXPRESSION
-    "part [^\n]*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\); features 2 parametric")
+    "part [^\n]*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\). features 2 parametric")
   # The parts' outcomes with --history (mitcad#507): the three part files
   # counted before the first is imported and traced (part n of 3), the cube
   # replayed, the pair (twice) as its stored bodies, having no design; and
@@ -590,14 +623,38 @@ if(BUILD_TESTING)
   add_test(NAME cli.import_iam_history_parts COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --history)
   set_tests_properties(cli.import_iam_history_parts PROPERTIES FIXTURES_REQUIRED cli_iam
     ENVIRONMENT "MITCAD_IMPORT_TRACE=1" PASS_REGULAR_EXPRESSION
-    "part [123] of 3: cube\\.ipt: replayed in [0-9.]+ s.*parts with their design history: 1 replayed, 2 as their stored bodies.*cube\\.ipt [^\n]*features 2 parametric; replayed: 2 items, [0-9]+ verified")
+    "part [123] of 3: cube\\.ipt: replayed in [0-9.]+ s.*parts with their design history: 1 replayed, 2 as their stored bodies.*cube\\.ipt [^\n]*features 2 parametric. replayed: 2 items, [0-9]+ verified")
   add_test(NAME cli.import_iam_history_fallback COMMAND mitcad-cli import-iam "${exchange}/iam/top.iam" --history)
   set_tests_properties(cli.import_iam_history_fallback PROPERTIES FIXTURES_REQUIRED cli_iam
     ENVIRONMENT "MITCAD_IMPORT_TRACE=1;MITCAD_TEST_IAM_REPLAY_FAIL=cube.ipt" PASS_REGULAR_EXPRESSION
-    "part [123] of 3: cube\\.ipt: bodies in [0-9.]+ s.*parts with their design history: 0 replayed, 3 as their stored bodies.*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\); bodies only: the replay failed: MITCAD_TEST_IAM_REPLAY_FAIL names it")
+    "part [123] of 3: cube\\.ipt: bodies in [0-9.]+ s.*parts with their design history: 0 replayed, 3 as their stored bodies.*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\). bodies only: the replay failed: MITCAD_TEST_IAM_REPLAY_FAIL names it")
   add_test(NAME cli.import_ipt_iam COMMAND mitcad-cli import-ipt "${exchange}/iam/sub/sub.iam")
   set_tests_properties(cli.import_ipt_iam PROPERTIES FIXTURES_REQUIRED cli_iam PASS_REGULAR_EXPRESSION
     "Imported assembly sub\\.iam: 2 occurrences placed.*1 part files \\(1 imported, 0 missing.*check: 2 of 2 placements agree.*check: 2 of 2 parts. bodies lie within their stored range boxes")
+  # Placements that mirror or scale (mitcad#1903): the cube mirrored and
+  # scaled, the sub-assembly mirrored, each a copy of the bodies where the
+  # file has them, with a warning; the placed bodies' boxes from the saved
+  # design.
+  add_test(NAME cli.import_iam_mirrored
+    COMMAND mitcad-cli import-iam "${exchange}/iam/mirrored.iam" --save "${exchange}/iam/mirrored.mitcad")
+  set_tests_properties(cli.import_iam_mirrored PROPERTIES FIXTURES_REQUIRED cli_iam FIXTURES_SETUP cli_iam_mirrored
+    PASS_REGULAR_EXPRESSION
+    "Imported assembly mirrored\\.iam: 6 occurrences placed \\(0 suppressed, 0 hidden, 0 of missing files, 0 not placed\\).*check: 5 of 5 placements agree with the displayed ones.*check: 5 of 5 parts. bodies lie within their stored range boxes.*warning: cube:2: the placement mirrors or scales it. a copy is placed where the file has it.*warning: cube:3: the placement mirrors or scales it.*warning: sub:1: the placement mirrors or scales it")
+  add_test(NAME cli.info_iam_mirrored COMMAND mitcad-cli info "${exchange}/iam/mirrored.mitcad")
+  set_tests_properties(cli.info_iam_mirrored PROPERTIES FIXTURES_REQUIRED cli_iam_mirrored
+    PASS_REGULAR_EXPRESSION "cube \\(1\\):1/[^\n]*\n *bounding box \\[40\\.000, 0\\.000, 0\\.000\\] - \\[50\\.000, 10\\.000, 10\\.000\\].*cube \\(2\\):1/[^\n]*volume 8000\\.000 mm3[^\n]*\n *bounding box \\[0\\.000, 200\\.000, 0\\.000\\] - \\[20\\.000, 220\\.000, 20\\.000\\].*sub:1/pair:1/[^\n]*\n *bounding box \\[0\\.000, -110\\.000, 0\\.000\\] - \\[10\\.000, -100\\.000, 10\\.000\\]")
+  # An assembly converted from a building model whose parts got no bodies
+  # (mitcad#1913): each part without geometry says so, the one its
+  # translation report lists with what the report says of it, and the part
+  # whose result lists a body its B-rep record lacks as bodies not found.
+  add_test(NAME cli.import_iam_converted COMMAND mitcad-cli import-iam "${exchange}/iam/converted.iam")
+  set_tests_properties(cli.import_iam_converted PROPERTIES FIXTURES_REQUIRED cli_iam
+    PASS_REGULAR_EXPRESSION
+    "Imported assembly converted\\.iam: 5 occurrences placed \\(0 suppressed, 0 hidden, 0 of missing files, 0 not placed\\). 4 part files \\(4 imported, 0 missing, 0 failed.*\n  parts without geometry: 2 \\(1 as a translation report says\\). parts that list bodies not found: 1\n.*part [^\n]*cube\\.ipt [^\n]*imported: 1 bodies \\(1 valid, 0 not built\\)\n.*part [^\n]*empty\\.ipt [^\n]*2 occurrences[^\n]*imported: 0 bodies \\(0 valid, 0 not built\\). no geometry: the translation report says: No Bodies Read From File\\.\n.*part [^\n]*bare\\.ipt [^\n]*imported: 0 bodies \\(0 valid, 0 not built\\). no geometry in the file\n.*part [^\n]*listed\\.ipt [^\n]*imported: 0 bodies \\(0 valid, 0 not built\\). the bodies it lists were not found\n.*warning: parts without geometry: 1: the translation report the assembly keeps, of its conversion from a \\.rvt file, says of each: No Bodies Read From File\\.\n.*warning: parts without geometry: 1: their files hold no bodies[^\n]*\n.*warning: parts that list bodies the import did not find in them: 1")
+  # The part alone: its listed body not found, said in words.
+  add_test(NAME cli.import_ipt_listed COMMAND mitcad-cli import-ipt "${exchange}/iam/listed.ipt")
+  set_tests_properties(cli.import_ipt_listed PROPERTIES FIXTURES_REQUIRED cli_iam PASS_REGULAR_EXPRESSION
+    "Imported 0 bodies of listed\\.ipt.*warning: the part lists 1 bodies that neither its B-rep record nor a mesh feature holds: they were not imported")
   add_test(NAME iam.corpus
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/iam-corpus" -P "${CMAKE_CURRENT_SOURCE_DIR}/iam-corpus.cmake")
@@ -655,7 +712,7 @@ if(BUILD_TESTING)
   add_test(NAME cli.import_rvt_building
     COMMAND mitcad-cli import-rvt "${exchange}/rvt-building/building.rvt" --save "${exchange}/rvt-building/building.mitcad")
   set_tests_properties(cli.import_rvt_building PROPERTIES FIXTURES_REQUIRED cli_rvt_building PASS_REGULAR_EXPRESSION
-    "Built 6 elements as features \\(2 floor, 4 wall\\), checked against the geometry the file keeps of them \\(else their stored boxes\\); of those kinds none came in as meshes or boxes.*4 level planes, 2 grid axes, 0 grid arcs, 2 appearances.*link linked\\.rvt: linked\\.rvt, 4 elements")
+    "Built 6 elements as features \\(2 floor, 4 wall\\), checked against the geometry the file keeps of them \\(else their stored boxes\\). of those kinds none came in as meshes or boxes.*4 level planes, 2 grid axes, 0 grid arcs, 2 appearances.*link linked\\.rvt: linked\\.rvt, 4 elements")
   # The corpus's project and its link check run in child processes at once
   # (mitcad_run_parallel, mitcad#875), as do the .dwg corpus's drawings.
   add_test(NAME rvt.corpus
@@ -678,7 +735,7 @@ if(BUILD_TESTING)
       COMMAND mitcad-cli import-dwg "${dwg}/test-${version}.dwg" --save "${dwg}/test-${version}.mitcad" --check
               --expect "length_mm=82.732,chord_distance_mm=44,tube_diameter_mm=2,mass_kg=0.0306,density_kg_m3=1000000,solids=3,components=2")
     set_tests_properties(cli.import_dwg_${version} PROPERTIES FIXTURES_REQUIRED cli_dwg_${version} PASS_REGULAR_EXPRESSION
-      "Imported test-${version}\\.dwg \\(dwg ${version} \\(AC[0-9]+\\)\\): 6 bodies \\(3 solids, 3 meshes; 6 valid\\), 2 components.*Component Segment: 1 bodies, 2 occurrences \\(2 placements\\).*Component Brace: 1 bodies, 8 occurrences \\(10 placements\\).*Left out: 1 LINE.*Checks: 11 of 11 pass")
+      "Imported test-${version}\\.dwg \\(dwg ${version} \\(AC[0-9]+\\)\\): 6 bodies \\(3 solids, 3 meshes. 6 valid\\), 2 components.*Component Segment: 1 bodies, 2 occurrences \\(2 placements\\).*Component Brace: 1 bodies, 8 occurrences \\(10 placements\\).*Left out: 1 LINE.*Checks: 11 of 11 pass")
   endforeach()
   # A solid none of whose faces can be built (its point records hold no
   # positions, so every loop is lost) is left out as not built, and the
@@ -689,7 +746,7 @@ if(BUILD_TESTING)
   set_tests_properties(cli.dwg_file_empty_solid PROPERTIES FIXTURES_SETUP cli_dwg_empty_solid)
   add_test(NAME cli.import_dwg_empty_solid COMMAND mitcad-cli import-dwg "${dwg}/empty-solid.dwg")
   set_tests_properties(cli.import_dwg_empty_solid PROPERTIES FIXTURES_REQUIRED cli_dwg_empty_solid PASS_REGULAR_EXPRESSION
-    "Imported empty-solid\\.dwg \\(dwg R2018 \\(AC1032\\)\\): 6 bodies \\(3 solids, 3 meshes; 6 valid\\), 2 components.*Not built: 3DSOLID 64: its B-rep record holds no body with faces.*Check every body built: FAIL")
+    "Imported empty-solid\\.dwg \\(dwg R2018 \\(AC1032\\)\\): 6 bodies \\(3 solids, 3 meshes. 6 valid\\), 2 components.*Not built: 3DSOLID 64: its B-rep record holds no body with faces.*Check every body built: FAIL")
   add_test(NAME dwg.corpus
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/dwg-corpus"
@@ -711,14 +768,14 @@ if(BUILD_TESTING)
   add_test(NAME cli.import_3dm
     COMMAND mitcad-cli import-3dm "${dir_3dm}/sample.3dm" --save "${dir_3dm}/sample.mitcad" --check)
   set_tests_properties(cli.import_3dm PROPERTIES FIXTURES_REQUIRED cli_3dm PASS_REGULAR_EXPRESSION
-    "Imported sample\\.3dm \\(\\.3dm version 70, MitCad test file\\): 6 bodies \\(5 solids, 1 meshes; 6 valid\\), 1 components.*Units: centimeters \\(10 mm per unit\\).*Component Bolt: 1 bodies, 2 occurrences.*Left out: 1 curve.*Checks: 3 of 3 pass")
+    "Imported sample\\.3dm \\(\\.3dm version 70, MitCad test file\\): 6 bodies \\(5 solids, 1 meshes. 6 valid\\), 1 components.*Units: centimeters \\(10\\.0 mm per unit\\).*Component Bolt: 1 bodies, 2 occurrences.*Left out: 1 curve.*Checks: 3 of 3 pass")
   add_test(NAME cli.3dm_file_block_in_itself
     COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/block-in-itself.3dm" --case block-in-itself)
   set_tests_properties(cli.3dm_file_block_in_itself PROPERTIES FIXTURES_SETUP cli_3dm_block_in_itself)
   add_test(NAME cli.import_3dm_block_in_itself COMMAND mitcad-cli import-3dm "${dir_3dm}/block-in-itself.3dm")
   set_tests_properties(cli.import_3dm_block_in_itself PROPERTIES FIXTURES_REQUIRED cli_3dm_block_in_itself
     PASS_REGULAR_EXPRESSION
-    "Imported block-in-itself\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 1 components.*Component Loop: 1 bodies, 1 occurrences.*Left out: 1 block instance \\(a block placed inside itself\\).*Checks: 2 of 3 pass")
+    "Imported block-in-itself\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes. 1 valid\\), 1 components.*Component Loop: 1 bodies, 1 occurrences.*Left out: 1 block instance \\(a block placed inside itself\\).*Checks: 2 of 3 pass")
   # A SubD object (mitcad#1757): the test writer's cube net of archive
   # version 80 (a creased edge, a semi-sharp edge, a corner, a vertex on no
   # face) comes in as an editable Form feature named after its object, its
@@ -748,7 +805,7 @@ if(BUILD_TESTING)
     COMMAND mitcad-cli import-3dm "${dir_3dm}/block-hidden-layer.3dm" --check)
   set_tests_properties(cli.import_3dm_block_hidden_layer PROPERTIES FIXTURES_REQUIRED cli_3dm_block_hidden_layer
     PASS_REGULAR_EXPRESSION
-    "Imported block-hidden-layer\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 1 components.*Component Bracket: 1 bodies, 2 occurrences.*Objects taken: B-rep 1, block instance 2\n.*Left out: 1 B-rep \\(hidden in the file\\).*Volume of the solids: 1000\\.0 mm3.*Checks: 3 of 3 pass")
+    "Imported block-hidden-layer\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes. 1 valid\\), 1 components.*Component Bracket: 1 bodies, 2 occurrences.*Objects taken: B-rep 1, block instance 2\n.*Left out: 1 B-rep \\(hidden in the file\\).*Volume of the solids: 1000\\.0 mm3.*Checks: 3 of 3 pass")
   add_test(NAME cli.3dm_file_block_scaled
     COMMAND mitcad-cli import-3dm --write-test "${dir_3dm}/block-scaled.3dm" --case block-scaled)
   set_tests_properties(cli.3dm_file_block_scaled PROPERTIES FIXTURES_SETUP cli_3dm_block_scaled)
@@ -756,7 +813,7 @@ if(BUILD_TESTING)
     COMMAND mitcad-cli import-3dm "${dir_3dm}/block-scaled.3dm" --check)
   set_tests_properties(cli.import_3dm_block_scaled PROPERTIES FIXTURES_REQUIRED cli_3dm_block_scaled
     PASS_REGULAR_EXPRESSION
-    "Imported block-scaled\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes; 1 valid\\), 0 components.*Objects taken: B-rep 1, block instance 1\n.*Volume of the solids: 8000\\.0 mm3.*Checks: 3 of 3 pass")
+    "Imported block-scaled\\.3dm \\(\\.3dm version 70, MitCad test file\\): 1 bodies \\(1 solids, 0 meshes. 1 valid\\), 0 components.*Objects taken: B-rep 1, block instance 1\n.*Volume of the solids: 8000\\.0 mm3.*Checks: 3 of 3 pass")
   add_test(NAME 3dm.corpus
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DRUNNER=$<TARGET_FILE:mitcad_run_parallel>"
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/3dm-corpus"
@@ -775,6 +832,31 @@ if(BUILD_TESTING)
             "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/gltf-corpus"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/gltf-corpus.cmake")
   set_tests_properties(gltf.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "gltf corpus: skipped")
+  # The .serp import (mitcad#1870) through OCCT: the test file of
+  # serp-test-file (B-reps OCCT wrote in its binary format: a box, a
+  # B-spline surface, a block placed twice; a mesh, a hidden object, a
+  # text and a point cloud, layout and history record left out; in
+  # centimetres) imported with import_file and checked by
+  # tests/serp_sample.json; the same file as a newer format version is
+  # refused in words. Real files listed under MITCAD_SERP_CORPUS
+  # (serp-corpus.cmake): skipped without it.
+  set(dir_serp "${CMAKE_CURRENT_BINARY_DIR}/serp")
+  file(MAKE_DIRECTORY "${dir_serp}")
+  add_test(NAME cli.serp_file COMMAND mitcad-cli serp-test-file "${dir_serp}/sample.serp")
+  set_tests_properties(cli.serp_file PROPERTIES FIXTURES_SETUP cli_serp)
+  add_test(NAME cli.import_serp COMMAND mitcad-cli run "${scripts}/serp_sample.json")
+  set_tests_properties(cli.import_serp PROPERTIES FIXTURES_REQUIRED cli_serp WORKING_DIRECTORY "${dir_serp}")
+  add_test(NAME cli.serp_file_newer
+    COMMAND mitcad-cli serp-test-file "${dir_serp}/newer.serp" --case newer)
+  set_tests_properties(cli.serp_file_newer PROPERTIES FIXTURES_SETUP cli_serp_newer)
+  add_test(NAME cli.import_serp_newer COMMAND mitcad-cli import "${dir_serp}/newer.serp")
+  set_tests_properties(cli.import_serp_newer PROPERTIES FIXTURES_REQUIRED cli_serp_newer
+    PASS_REGULAR_EXPRESSION "newer\\.serp: the file was made by a newer version of its program")
+  add_test(NAME serp.corpus
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/serp-corpus"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/serp-corpus.cmake")
+  set_tests_properties(serp.corpus PROPERTIES SKIP_REGULAR_EXPRESSION "serp corpus: skipped")
   # Plane surfaces in the ground's plane (mitcad#1738): the test writer's
   # three plane surfaces drawn facing up at z 0, each in another of the
   # file's forms, come in facing up and render lit from above, not black
@@ -889,6 +971,16 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-hems-test.cmake")
   set_tests_properties(f3d.reference_hems PROPERTIES SKIP_REGULAR_EXPRESSION "reference hems: skipped")
 
+  # An inserted design moved by a joint on a part inside it (mitcad#1892),
+  # found by its content id in MITCAD_F3D_BACKUP with its reference folder:
+  # the inserted design lands where the file places it, not where the path
+  # to one of its parts does; skipped without the design.
+  add_test(NAME f3d.placed_inside
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/f3d-placed-inside"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-placed-inside-test.cmake")
+  set_tests_properties(f3d.placed_inside PROPERTIES SKIP_REGULAR_EXPRESSION "f3d placed inside: skipped")
+
   # Recompute speed (P10): a generated model with the joins, patterns and
   # fillets that slowed down imported designs, saved, then opened with the
   # time of each feature reported (ctest -V, or Testing/Temporary/
@@ -951,9 +1043,12 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME cli.perf_holes_mesh COMMAND mitcad-cli mesh-compare "${perf}/perf_holes.mitcad" --a checked
                                             --b checked)
+  # No plane redone: the five square notch walls, whose corners are
+  # cocircular, failed in Delabella where long double has 53 bits (MSVC,
+  # ARM) until OCCT port patch 1082 (mitcad#1919).
   set_tests_properties(cli.perf_holes_mesh PROPERTIES FIXTURES_REQUIRED cli_perf_holes
     TIMEOUT ${perf_holes_mesh_limit} RUN_SERIAL TRUE
-    PASS_REGULAR_EXPRESSION "1 bodies, 1257 faces \\(42 planes\\), without a triangulation a 0 b 0;.*planes redone a 0 b 0 \\(a checked, b checked\\)")
+    PASS_REGULAR_EXPRESSION "1 bodies, 1257 faces \\(42 planes\\), without a triangulation a 0 b 0..*planes redone a 0 b 0 \\(a checked, b checked\\)")
   if(WIN32)
     set_property(TEST cli.perf_holes_mesh APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -993,18 +1088,18 @@ if(BUILD_TESTING)
                                        --result-store "${store}" --persist-min-ms 0)
   set_tests_properties(cli.store_fill PROPERTIES FIXTURES_REQUIRED "cli_perf;cli_store_clean"
     FIXTURES_SETUP cli_store
-    PASS_REGULAR_EXPRESSION "restored from store: 0, evaluated: 12; stored: 8 .*${volume}")
+    PASS_REGULAR_EXPRESSION "restored from store: 0, evaluated: 12. stored: 8 .*${volume}")
   add_test(NAME cli.store_hit COMMAND mitcad-cli info "${perf}/perf_model.mitcad"
                                       --result-store "${store}" --persist-min-ms 0)
   set_tests_properties(cli.store_hit PROPERTIES FIXTURES_REQUIRED cli_store
-    PASS_REGULAR_EXPRESSION "restored from store: 8, evaluated: 4; stored: 0 .*F12 Fillet2 \\(fillet\\): ok.*${volume}")
+    PASS_REGULAR_EXPRESSION "restored from store: 8, evaluated: 4. stored: 0 .*F12 Fillet2 \\(fillet\\): ok.*${volume}")
   add_test(NAME cli.store_edit_file COMMAND mitcad-cli run "${scripts}/store_edit.json"
                                             --open "${perf}/perf_model.mitcad" --save "${perf}/perf_edit.mitcad")
   set_tests_properties(cli.store_edit_file PROPERTIES FIXTURES_REQUIRED cli_perf FIXTURES_SETUP cli_store_edited)
   add_test(NAME cli.store_edit COMMAND mitcad-cli info "${perf}/perf_edit.mitcad"
                                        --result-store "${store}" --persist-min-ms 0)
   set_tests_properties(cli.store_edit PROPERTIES FIXTURES_REQUIRED "cli_store;cli_store_edited"
-    PASS_REGULAR_EXPRESSION "restored from store: 7, evaluated: 5; stored: 1 .*F12 Fillet2 \\(fillet\\): ok")
+    PASS_REGULAR_EXPRESSION "restored from store: 7, evaluated: 5. stored: 1 .*F12 Fillet2 \\(fillet\\): ok")
   # The caches' diagnostics (the cache query): where the results came from,
   # the process's memory and the store's files.
   add_test(NAME cli.store_diagnostics COMMAND mitcad-cli info "${perf}/perf_model.mitcad"
@@ -1266,6 +1361,15 @@ if(BUILD_TESTING)
   add_test(NAME cli.sheet_open_corner COMMAND mitcad-cli run "${scripts}/sheet_open_corner.json")
   # Corner joints of a closing flange: Open and Half Open (mitcad#1410).
   add_test(NAME cli.sheet_flange_corner COMMAND mitcad-cli run "${scripts}/sheet_flange_corner.json")
+  # A flange on several connected edges with mitred corners and a corner
+  # gap (mitcad#1872): a box's three edges Inside and Outside, gaps 0 and 1,
+  # turned down, a wall running past, refusals; the sides of two faces a
+  # bend joins, walls in one plane mitred on the bend's bisecting line.
+  add_test(NAME cli.sheet_flange_edges COMMAND mitcad-cli run "${scripts}/sheet_flange_edges.json")
+  add_test(NAME cli.sheet_flange_edges_bend COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_bend.json")
+  # A new flange whose free end meets an existing flange across a bend
+  # stops the Corner Gap short of its wall, never cutting it (mitcad#1877).
+  add_test(NAME cli.sheet_flange_edges_existing COMMAND mitcad-cli run "${scripts}/sheet_flange_edges_existing.json")
   # A face joined to a sheet in its panel's plane (mitcad#242).
   add_test(NAME cli.sheet_face_join COMMAND mitcad-cli run "${scripts}/sheet_face_join.json")
   # The sheet-domain adapter of ordinary features (mitcad#242).
@@ -1495,6 +1599,14 @@ if(BUILD_TESTING)
     set_property(TEST cli.mcp_selections APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
   endif()
+  # References between the entries of a command array (mitcad#1897).
+  add_test(NAME cli.mcp_array_refs
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>" "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/mcp-array-refs"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/mcp-array-refs-test.cmake")
+  if(WIN32)
+    set_property(TEST cli.mcp_array_refs APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
   # The memory guard of model commands with a lowered limit (mitcad#1480):
   # a refused command, the document as it was, the next calls answered.
   add_test(NAME cli.mcp_memory
@@ -1669,7 +1781,7 @@ if(BUILD_TESTING)
   add_test(NAME cli.mesh_compare_checked COMMAND mitcad-cli mesh-compare
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/holed_block.json" --b checked)
   set_tests_properties(cli.mesh_compare_checked PROPERTIES PASS_REGULAR_EXPRESSION
-    "1 bodies, 7 faces \\(6 planes\\), without a triangulation a 0 b 0;.*planes redone a 0 b 0 \\(a default, b checked\\)")
+    "1 bodies, 7 faces \\(6 planes\\), without a triangulation a 0 b 0..*planes redone a 0 b 0 \\(a default, b checked\\)")
   if(WIN32)
     set_property(TEST cli.mesh_compare_checked APPEND PROPERTY ENVIRONMENT_MODIFICATION
       "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -2361,4 +2473,134 @@ if(BUILD_TESTING)
         "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
   endif()
+endif()
+
+# Assembly paths (mitcad#1737): a peg slid through a hole 0.2 mm larger, a
+# peg whose lug rests on the rim, a keyed shaft turned in its keyway, on
+# the OCCT kernel.
+if(BUILD_TESTING)
+  add_test(NAME cli.assembly_path COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/assembly_path.json")
+  if(WIN32)
+    set_property(TEST cli.assembly_path APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A rounding as large as the side faces beside its edges (GitHub #353,
+# mitcad#1819): the three reported designs' roundings are built at their size,
+# with no warning or information, the side faces taken away (skipped without
+# the report's archives under MITCAD_MITCAD_REPORTED; the synthetic cases are
+# geometry.suite.dressup_takes_face's stepped block).
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_exact_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fillet-exact-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fillet-exact-reported-test.cmake")
+  set_tests_properties(cli.fillet_exact_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fillet exact reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.fillet_exact_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# A chamfer whose chain ends against a shelf's end wall (mitcad#1819): the
+# owner's rebuilt case (skipped without `ip65-1819-chamfer/` under
+# MITCAD_MITCAD_REPORTED; the synthetic cases are
+# geometry.suite.dressup_takes_face's tube with a shelf in its bore).
+if(BUILD_TESTING)
+  add_test(NAME cli.chamfer_end_wall_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/chamfer-end-wall-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/chamfer-end-wall-reported-test.cmake")
+  set_tests_properties(cli.chamfer_end_wall_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "chamfer end wall reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.chamfer_end_wall_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Extrude of a sketch on a cylinder's side with Join and Cut and their
+# bodies (mitcad#1908, GitHub mitcad/Mitcad#362): a rectangle and a circle
+# raised as a Join with its participant and the panel's dormant cut
+# targets, sunk as a Cut with its cut_scope, thin walls refused in words.
+if(BUILD_TESTING)
+  add_test(NAME cli.face_sketch_operations COMMAND mitcad-cli run "${scripts}/face_sketch_operations.json")
+  if(WIN32)
+    set_property(TEST cli.face_sketch_operations APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# STEP files keep the design's components (mitcad#1915): a design whose
+# Arm sub-assembly (placing a Pin twice) is placed twice, the second turned,
+# written to STEP (cli.step_tree_export) and read back into a new design
+# (cli.step_tree_import): the same tree of occurrences, both Arms one
+# component, every placed copy where the design had it within 1e-6 mm.
+if(BUILD_TESTING)
+  set(step_tree_dir "${CMAKE_CURRENT_BINARY_DIR}/step-tree")
+  file(MAKE_DIRECTORY "${step_tree_dir}")
+  add_test(NAME cli.step_tree_export
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/step_tree_export.json")
+  set_tests_properties(cli.step_tree_export PROPERTIES WORKING_DIRECTORY "${step_tree_dir}"
+    FIXTURES_SETUP cli_step_tree)
+  add_test(NAME cli.step_tree_import
+    COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/step_tree_import.json")
+  set_tests_properties(cli.step_tree_import PROPERTIES WORKING_DIRECTORY "${step_tree_dir}"
+    FIXTURES_REQUIRED cli_step_tree)
+  if(WIN32)
+    foreach(test cli.step_tree_export cli.step_tree_import)
+      set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+        "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+  endif()
+endif()
+
+# A FreeCAD document's bend radius changed after the import (mitcad#1930)
+# on the reported bent guide of GitHub #372 under MITCAD_MITCAD_REPORTED
+# (unpacked into the build folder): the profile sketch on a coordinate
+# system that the radius moves follows it, nothing that rebuilt fails, and
+# the body reaches 5 mm further (skipped without the report's archive).
+if(BUILD_TESTING)
+  add_test(NAME cli.fcstd_bend_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/fcstd-bend-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/fcstd-bend-reported-test.cmake")
+  set_tests_properties(cli.fcstd_bend_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "fcstd bend reported: skipped" TIMEOUT 900)
+  if(WIN32)
+    set_property(TEST cli.fcstd_bend_reported APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
+# Edits of an imported .f3d design recompute (mitcad#1904, GitHub #371):
+# the reported design imported, a cut that starts on a construction plane
+# parametric, and the tower's height and two other dimensions edited
+# (skipped without the report's archive under MITCAD_MITCAD_REPORTED).
+if(BUILD_TESTING)
+  add_test(NAME cli.f3d_edit_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/f3d-edit-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/f3d-edit-reported-test.cmake")
+  set_tests_properties(cli.f3d_edit_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "f3d edit reported: skipped" TIMEOUT 900)
+endif()
+
+# A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it
+# into alternatives of which any one passes, so that the test no longer
+# checks what it says (mitcad#1913). Write '.' for a ';' of the output.
+if(BUILD_TESTING)
+  get_property(cli_tests DIRECTORY PROPERTY TESTS)
+  foreach(test IN LISTS cli_tests)
+    get_test_property(${test} PASS_REGULAR_EXPRESSION pass)
+    list(LENGTH pass alternatives)
+    if(alternatives GREATER 1)
+      message(SEND_ERROR "${test}: its PASS_REGULAR_EXPRESSION holds a ';', which makes it ${alternatives} alternatives of which any one passes: write '.' for it")
+    endif()
+  endforeach()
 endif()

@@ -448,6 +448,19 @@ transform, so the last one is where the file shows the occurrence. A
 nested occurrence whose path the file does not name gets them only where
 the tree has one node of it.
 
+An occurrence of a component of another document also gets
+`_f3d.inside_placements` where the file stores placements of paths through
+it to occurrences inside that component (mitcad#1892: a joint on a part
+inside it, which moves the whole occurrence): per path `{inner,
+placements}`, `inner` the levels inside, the object ids of the occurrences
+in that document's file from the outermost down, and `placements` as
+above, the whole path's placement in the root component. These are not
+the occurrence's own placements: those are each path's placements with
+the inner levels' placements in the other document taken off, so only
+that document's file gives them (the import does so where it has the
+file). Its own `_f3d.placements` come only from the objects that name no
+level inside.
+
 Components of other documents (mitcad#196): an occurrence with
 `isReferencedComponent` has `_f3d.external_key` and
 `_f3d.external_document` (the document's key in this design and its URN,

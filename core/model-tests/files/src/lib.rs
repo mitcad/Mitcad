@@ -28,3 +28,5 @@ mod design_preview_tests;
 mod design_package_tests;
 // glTF files as mesh bodies and components (mitcad#1826).
 mod gltf_tests;
+// .serp files as bodies by layer, blocks as components (mitcad#1870).
+mod serp_tests;

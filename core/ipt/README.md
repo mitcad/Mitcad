@@ -49,8 +49,9 @@ but not understood further.
 | `sheet` | Sheet metal (mitcad#211): the sheet-metal style's K-factor, faces, flanges, cuts, corners, bends and folds as the dump's sheet items (*Sheet metal* below). |
 | `naming` | Topological names (mitcad#242): the items features name edges and faces by, the naming table's names, the naming attributes of the ASM entities at a history state, and the edge a name names there (*Topological names* below). |
 | `testdata`, `testdesign` | Small parts made by these writers: two bodies of MitCad's own ASM writer (a cube and a cylinder), part number, material, inches; the cube with the records of a parameter, a sketch and an extrusion that make it; a part of a mesh feature's tetrahedron; an empty part; the cube and the cylinder with a result list that keeps the cylinder hidden; a cube of keyed faces with styles, face colours and a `Protein` package (mitcad#1367). |
-| `testassembly` | Small assemblies made by these writers and a test project of them (a top assembly as saved on another machine, a sub-assembly, parts found relative to it and by name, a missing one; hidden, grounded and suppressed occurrences). |
-| `bin/mitcad-ipt-inspect` | `list`, `properties`, `segments`, `records`, `record [--raw]`, `data`, `dump`, `labels`, `stream [--raw]`, `asm`, `bodies [-v|-f]`, `result`, `history`, `parameters`, `typed`, `show`, `constraints`, `prefix`, `flags`, `design [--json]`, `profile [-v]`, `slots` (a sheet-metal group's parts too), `tree`, `find`, `assembly`, `write-test`; for the names (mitcad#242) `words` (a segment's records as u32 words), `nodes`, `names` (each feature's items with their names), `entry`, `brepnames <state>` (the faces and edges of a history state with their naming attributes), `study` (every item resolved in the state before its feature, checked against the file's own `matched` marks); `texts` (the sketch texts, their fonts and glyph contours, mitcad#414); `appearances [--json]` (the styles, defaults, assets and face colours, or the dump's appearance data, mitcad#1367). |
+| `testassembly` | Small assemblies made by these writers and a test project of them (a top assembly as saved on another machine, a sub-assembly, parts found relative to it and by name, a missing one; hidden, grounded and suppressed occurrences; placements that mirror or scale; an assembly converted from a building model with its translation report (the page and its OLE package written here) and parts without bodies, mitcad#1913). |
+| `translation` | The translation report a converted file keeps as an embedded OLE package: its source, translator and the documents made with their messages (*Converted files and their translation reports* below, mitcad#1913). |
+| `bin/mitcad-ipt-inspect` | `list`, `properties`, `segments`, `records`, `record [--raw]`, `data`, `dump`, `labels`, `stream [--raw]`, `asm`, `bodies [-v|-f]`, `result`, `history`, `parameters`, `typed`, `show`, `constraints`, `prefix`, `flags`, `design [--json]`, `profile [-v]`, `slots` (a sheet-metal group's parts too), `tree`, `find`, `assembly`, `write-test`; for the names (mitcad#242) `words` (a segment's records as u32 words), `nodes`, `names` (each feature's items with their names), `entry`, `brepnames <state>` (the faces and edges of a history state with their naming attributes), `study` (every item resolved in the state before its feature, checked against the file's own `matched` marks); `texts` (the sketch texts, their fonts and glyph contours, mitcad#414); `appearances [--json]` (the styles, defaults, assets and face colours, or the dump's appearance data, mitcad#1367); `translation` (a converted file's translation report, mitcad#1913). |
 
 ## The container
 
@@ -163,7 +164,9 @@ reads it as the newer one *(verified on the one such file)*.
 A B-rep record may hold no bodies at all: an empty part (only the origin's
 work features), or a part whose body is a mesh feature's (*Mesh features*
 below). The import opens an empty part as an empty document, with a
-warning.
+warning that says why: its file holds no bodies, or its result list
+names bodies that neither its B-rep records nor its mesh features hold
+(*Converted files and their translation reports* below, mitcad#1913).
 
 The ASM files of the test corpus are save versions 226 to 229 with
 centimetres as the model unit (the header's 10 mm per unit), which the
@@ -1703,6 +1706,12 @@ variable length (not decoded; a part's hold its version id). The reader
 finds the table's entries by their heads (a file of the list, a key not
 yet seen, plausible numbers) *(verified: every key of the corpus found;
 the version id within the entry for all but 2 of 6,329 part entries)*.
+The zero byte before a head can read as a head of its own (file 256,
+key 512: numbers 256 times the head's) when the list has 256 files or
+more and as many occurrences: a head a byte later is taken instead
+*(verified: three such misread heads in one assembly of 418 files and
+1,251 occurrences took three keys from their files and hid three more,
+mitcad#1903)*.
 
 Sub-assemblies are occurrences of `.iam` files, whose own occurrences are
 in those files: the import follows them (each file once). Placements of
@@ -1715,6 +1724,41 @@ their own and come in as such), design views and positional
 representations (the stored placements are the active ones), the
 occurrence table's properties and the model state an occurrence uses
 (read: its name).
+
+### Converted files and their translation reports
+
+`translation` (mitcad#1913). An assembly made by converting another
+format (the authoring application's import of a building model) keeps
+the conversion's report as an embedded object: the stream
+`RSeStorage/RSeEmbeddings/Embedding 1/\x01Ole10Native` (the reader takes
+any stream of that name), an OLE 1.0 package (a u32 size, a u16 2, the
+label and the source path as zero-terminated texts, a u32 `0x00030000`,
+the temporary path with a u32 length, then the data with a u32 size)
+whose data is an HTML page in
+UTF-16 with a byte order mark, marked by the namespace
+`xmlns:TranslationData` *(seen: one assembly)*. The page names the
+source file (`Source File:`), the translator (`Translator Type:`) and the
+conversion's options, and lists each document it made in a row
+`component-row<n>` (the file name, its path, a status) with a details row
+`component-details<n>` whose table gives the document's messages
+(severity, entity id, message). The reader takes the source, the
+translator and each document's name, status and messages.
+
+What it explained: every one of the 431 parts of an assembly converted
+from a `.rvt` building model (saved by a 2023 release from a model of a
+newer release) came in without bodies. Each part's B-rep record holds no
+bodies (an ASM file with one history state), its result list is empty,
+it has no mesh feature, and the part files are 57 to 58 kB whatever they
+stand for; the assembly's own report gives every one of them the status
+`Warning` and the message `No Bodies Read From File.`: the conversion read
+no geometry, and the files hold none. The import says so: the part line
+and the report's `translation` give what the report says, and a warning
+names how many parts it says it of.
+
+A part whose result list names bodies that neither its B-rep records nor
+its mesh features hold would be geometry kept where the reader does not
+look: the `.ipt` import says so in a warning of its own, and the corpus
+tests fail on it.
 
 ### Results on the assemblies
 
@@ -1774,7 +1818,8 @@ to 2023, sub-assemblies nested up to seven deep):
   `ipt_design_tests.rs`, ctest `core.model.imports`); the
   assemblies written by `testassembly` (files, occurrences, keys, flags,
   labels, placements, range boxes, display transforms, the occurrence
-  table, a part's own version id).
+  table, a part's own version id); the translation report of the
+  converted assembly and its OLE package (mitcad#1913).
 - `tests/corpus.rs`: every file under `MITCAD_IPT_CORPUS` opens, its B-rep
   records split out of their segments and every body converts cleanly;
   every segment splits; every parameter reads and its expression
@@ -1786,7 +1831,10 @@ to 2023, sub-assemblies nested up to seven deep):
   `cli.ipt_design_file`, `ipt.corpus`
   ([tools/cli/ipt-corpus.cmake](../../tools/cli/ipt-corpus.cmake)) and
   `ui-import-test.sh`; see [core/import/docs/ipt.md](../import/docs/ipt.md#ipt-import).
-  Assemblies: `cli.import_iam`, `cli.info_iam`, `cli.import_ipt_iam` (the
-  `testassembly` project) and `iam.corpus`
+  Assemblies: `cli.import_iam`, `cli.info_iam`, `cli.import_ipt_iam`,
+  `cli.import_iam_converted` and `cli.import_ipt_listed` (the
+  `testassembly` project; the last two parts without geometry, what the
+  translation report says of them and a listed body not found,
+  mitcad#1913) and `iam.corpus`
   ([tools/cli/iam-corpus.cmake](../../tools/cli/iam-corpus.cmake): every
   `.iam` under `MITCAD_IPT_CORPUS`).

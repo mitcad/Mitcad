@@ -14,6 +14,7 @@ none of them and on no file reader.
 | `scaffold` | The `$k` placeholders of a candidate's definitions, the core of a candidate, and the end of an import (its timeline notes and undo step). |
 | `memory_guard` | `ImportMemoryGuard`: what the memory guard's measurements (`mitcad-ffi` measures the process against its limits) tell an import's `Progress`: tight at 70 %, low at 85 % or, from 50 % on, when growth kept up over two measurements would get there within 0.1 s, recovered below 70 %; measured every 0.02 s with the look-ahead of the guard of model commands (`mitcad_model::monitor::memory_guard`, mitcad#1505). Tested with fake measurements. |
 | `names`, `notes`, `sketch` | A free MitCad name for a file's parameter name, the timeline notes' texts (a base feature standing in for items, an item imported partly, a note as a sentence; mitcad#170), and the sketch definitions' driven-dimension references and inactive constraints and dimensions (mitcad#721). |
+| `report_status` | The status of every row of an import's report (`ok`, `warning`, `error`, with its meaning in plain words) and the verdict of each design and of the import, added to every import command's result (`annotate`, called by `mitcad-ffi`); a body within 0.01 % of the file's volume (`BODY_VOLUME_TOLERANCE`) and 0.01 mm of its bounding box (`BODY_BOX_TOLERANCE`) matches it; `plain_words` says the import's own notes plainly for the report's `note_message` (mitcad#1893). |
 
 `DEFAULT_GEOMETRIC_TOLERANCE` (0.01 mm, mitcad#224) is the default of the
 imports' geometric tolerance.

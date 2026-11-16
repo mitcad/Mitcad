@@ -7,7 +7,8 @@
 // browsing profile, its message loop pumped from Qt's (external message
 // pump: CEF's browser thread is Qt's main thread), windowless (off-screen)
 // browsers composited in software (no GPU texture; WebGL on the GPU where
-// there is one, else in software, mitcad#1861),
+// there is one, else in software, mitcad#1861; in software only after the
+// GPU path failed in an earlier session, mitcad#1906),
 // and shut down as MitCad ends, its browsers closed first.
 
 #include <QString>
@@ -36,6 +37,17 @@ void addView(CefView* view);
 void removeView(CefView* view);
 void browserCreated(CefRefPtr<CefBrowser> browser);
 void browserClosed(CefRefPtr<CefBrowser> browser);
+
+// What Help › Send Feedback's diagnostics carry of the browser (mitcad#1906,
+// webbrowser/BrowserDiagnostics.hpp): a message of a page's console (kept
+// when it is the page's own error or about WebGL), and a line of MitCad's
+// own scripts that is the WebGL probe's or a lost context's (true; false
+// for any other, which the view hands on). CEF's log is read every 2 s for
+// the GPU process's failures.
+void notePageMessage(const QString& pageUrl, bool error, const QString& message, const QString& source, int line);
+bool noteScriptMessage(const QString& message);
+// The GPU path failed this run: WebGL in software from the next start.
+bool gpuFailed();
 
 } // namespace cef
 } // namespace mitcad

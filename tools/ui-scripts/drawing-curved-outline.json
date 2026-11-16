@@ -1,0 +1,14 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-curved-outline.mitcad-ui (mitcad#1909): a solid pipe bend, Body1 (F2.b0): Sketch1's circle of radius 20 at (50, 0) on XY turned 120 degrees about the Y axis the negative way (Revolve1, F2), from its end on XY (z 0, x 30 to 70) over the top (its outer side, a torus of 70 about Y, highest at x 0, z 70: no end of an edge there, the revolution's seam runs on through it) round to its other end (x -35 to -15). Drawing1 (D1, A3) has its front view at 1:1 with its box (x -35 to 70, z 0 to 70) in the middle at (147.5, 150): the model's (x, z) on the sheet at (130 + x, 115 + z), whole millimetres; and a section through it at x 20 (sheet x 150), view 2, beside it at (330, 150). All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [50, 0]},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 20}]}},
+  {"cmd": "add_feature", "def": {"type": "revolve", "profiles": [{"sketch": "F1", "region": "r{c2}"}],
+    "axis": "y", "extent": {"type": "angle", "angle": "-120 deg"}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front", "at": [147.5, 150], "scale": "1:1"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "section", "parent": 1, "line": [[150, 100], [150, 200]],
+    "at": [330, 150]}
+]

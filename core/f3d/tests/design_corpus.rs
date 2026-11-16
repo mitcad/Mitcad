@@ -494,6 +494,13 @@ const DECODER_ONLY: &[&str] = &[
     ".occurrences[].children[]._f3d.placements",
     ".occurrences[].children[].children[]._f3d.placements",
     ".occurrences[].children[].children[].children[]._f3d.placements",
+    // The placements of the paths to parts inside an inserted design, kept
+    // apart (mitcad#1892), which the reference decoder did not read;
+    // checked by `f3d.placed_inside` and the f3d-design unit tests.
+    ".occurrences[]._f3d.inside_placements",
+    ".occurrences[].children[]._f3d.inside_placements",
+    ".occurrences[].children[].children[]._f3d.inside_placements",
+    ".occurrences[].children[].children[].children[]._f3d.inside_placements",
     ".timeline.items[].detail.occurrences",
     // Inputs read from the learning dump (mitcad#96): profile loops, a
     // pattern's axis line, a hole's through-all flag beside its depth, a

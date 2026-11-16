@@ -462,10 +462,10 @@ std::optional<QJsonObject> MainWindow::projectWrite(const QString& root, QJsonOb
                                                     QJsonObject* refused) {
   const QString name = command.value(QStringLiteral("cmd")).toString();
   const bool current = m_project.hasHistory() && sameFolderPath(m_project.root, root);
-  if (current) {
-    // A sync moves the project's branch: the change waits for it, as Save does.
-    m_remote->waitForBranch();
-  }
+  // A sync moves the project's branch: the change waits for it, as Save
+  // does (another project's too: a design's edit lock closed in the
+  // background syncs it, mitcad#1895).
+  m_remote->waitForBranch(current ? QString() : root);
   QJsonObject answer;
   try {
     const rust::Box<Project> project = open_project(rustStr(root.toUtf8()));
@@ -481,7 +481,9 @@ std::optional<QJsonObject> MainWindow::projectWrite(const QString& root, QJsonOb
       // Whose edit locks are this window's.
       command.insert(QStringLiteral("session"), m_autosave->session());
     }
-    answer = parseObject(project->command(rustStr(compactJson(command))));
+    // Aside (mitcad#1895): the window keeps painting while the version is
+    // recorded; sending it is the background's work below.
+    answer = projectCommandAside(root, command);
   } catch (const std::exception& e) {
     const QString message = tr("%1 failed: %2").arg(title, errorText(e));
     qWarning().noquote() << QStringLiteral("Projects panel: %1 failed: %2").arg(name, errorText(e));
@@ -522,7 +524,9 @@ void MainWindow::sendPanelProjectVersions(const QString& root) {
   if (row == nullptr || row->kind != ProjectRow::Kind::Cloud || !RemoteSettings::load().autoPush) {
     return;
   }
-  // Another Cloud project's version: sent in the background.
+  // Another Cloud project's version: sent in the background, in the
+  // project's version queue (mitcad#1895).
+  qInfo().noquote() << QStringLiteral("Projects panel: sending the versions of %1").arg(root);
   RemoteTask* task = RemoteTask::command(root, {{QStringLiteral("cmd"), QStringLiteral("push")}}, this);
   connect(task, &RemoteTask::finished, this, [this, task, root] {
     const QJsonObject pushed = task->answer();

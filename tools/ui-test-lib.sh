@@ -648,7 +648,9 @@ ui_panel_reveal() {
       return 0
     top=${BASH_REMATCH[1]} bottom=${BASH_REMATCH[2]} bx=${BASH_REMATCH[3]} by=${BASH_REMATCH[4]}
     place=$(grep -F -- "$1 at " "$UI_LOG" | tail -1)
-    [[ $place =~ \ at\ ([0-9]+),([0-9]+) ]] && [[ $place != *"(hidden)" ]] || return 0
+    # A place above the view is negative ("at 878,-98"): a new message
+    # scrolled into view (mitcad#1884) can leave the panel's top rows there.
+    [[ $place =~ \ at\ (-?[0-9]+),(-?[0-9]+) ]] && [[ $place != *"(hidden)" ]] || return 0
     y=${BASH_REMATCH[2]}
     [ "$y" -ge $((top + margin)) ] && [ "$y" -le $((bottom - margin)) ] && return 0
     count=$(wc -l < "$UI_LOG")

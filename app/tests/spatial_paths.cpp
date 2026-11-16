@@ -6,6 +6,7 @@
 // pick takes, a closed one too, and the panel's listing of a route, open or
 // closed, from answers in the form
 // core/model-api/src/sketch3d.rs gives them.
+#include "UnitTests.hpp"
 #include "commands/SpatialPaths.hpp"
 
 #include <cstdio>
@@ -155,3 +156,4 @@ int spatialPathsTests() {
   listingTests();
   return failures;
 }
+MITCAD_UNIT_TEST(spatialPathsTests);

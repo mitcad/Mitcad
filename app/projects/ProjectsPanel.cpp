@@ -37,6 +37,7 @@
 #include <QtLogging>
 
 #include "../files/RemoteTask.hpp"
+#include "../files/SyncState.hpp"
 #include "../framework/AppSettings.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/Dialogs.hpp"
@@ -99,7 +100,22 @@ RowMarks projectState(const ProjectRow& row, const ProjectIndicator::Remote* rem
     problem = remote->problem;
     conflict = remote->conflict;
   }
-  return projectMarks(row, ahead, behind, problem, conflict);
+  RowMarks marks = projectMarks(row, ahead, behind, problem, conflict);
+  if (remote != nullptr && row.kind == ProjectRow::Kind::Cloud) {
+    // The current project's sync state in words in its tooltip
+    // (mitcad#1895): sending, up to date with the last sync's time,
+    // offline with the versions kept.
+    SyncState state;
+    state.ahead = ahead;
+    state.behind = behind;
+    state.problem = problem;
+    state.busy = remote->busy;
+    state.queued = remote->queued;
+    state.conflict = conflict;
+    state.lastDone = remote->lastDone;
+    marks.full += QStringLiteral(" · ") + syncWords(state).text;
+  }
+  return marks;
 }
 
 RowMarks designState(const ProjectDesignRow& design) { return designMarks(design); }

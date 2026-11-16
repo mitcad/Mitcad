@@ -253,6 +253,26 @@ record! {
         /// placement in the root component after each, mitcad#81), in
         /// timeline order: the item that made it first.
         "placements" => placements: Vec<PlacementStep>,
+        /// Of an occurrence of a component of another document: where the
+        /// items put the paths through it to occurrences inside that
+        /// component (a joint on a part inside it moves them, mitcad#1892),
+        /// one entry per path. The occurrence's own placements are then
+        /// these with the inner levels' placements taken off, which only
+        /// the other document's file gives.
+        "inside_placements" => inside_placements: Vec<InsidePlacements>,
+    }
+}
+
+record! {
+    /// The placements of one path through an occurrence of a component of
+    /// another document to an occurrence inside it (mitcad#1892).
+    pub struct InsidePlacements {
+        /// The levels inside the other document, from the outermost down:
+        /// the object ids of the occurrences in that document's file.
+        "inner" => inner: Vec<u64>,
+        /// The path's placement in the root component after each item, as
+        /// [`OccurrenceF3d::placements`].
+        "placements" => placements: Vec<PlacementStep>,
     }
 }
 

@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# The session log (mitcad#1896), the second run, after session-log.mitcad-ui
+# killed the first, with MITCAD_UNEXPECTED_END_NOTICE=1 and the same log
+# folder:
+#   1. The start finds the first run's lock without its process: that
+#      session ended unexpectedly, and the window says so in words.
+#   2. The notice's Open Log Folder opens the logs folder.
+#   3. A clean end (quit): the wrappers check the file's last line and that
+#      no lock is left.
+# The hang marker is off (the tests' default).
+expect-ever 'View area'
+expect-ever '^Previous session ended unexpectedly: session-[0-9]{8}-[0-9]{6}-[0-9]+$' 10
+expect-never '^Hang watchdog: '
+
+# 1. The notice.
+wait-log '^Unexpected end notice shown: session-[0-9]{8}-[0-9]{6}-[0-9]+; MitCad ended unexpectedly the last time it ran' 30
+focus-dialog '^Last Session$'
+
+# 2. Open Log Folder.
+mark
+button '^Open Log Folder$'
+expect-log '^Unexpected end notice: Open Log Folder$'
+expect-log '^Open Log Folder: '
+expect-log '^Open URL \(test, not opened\): file:'
+focus-main
+wait-idle
+expect-session-log 'info +Unexpected end notice: Open Log Folder$'
+
+# 3. A clean end.
+quit

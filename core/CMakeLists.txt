@@ -149,7 +149,9 @@ corrosion_add_cxxbridge(mitcad_bridge CRATE mitcad_ffi_bridges_sources FILES
   # Fill Cavity: the empty spaces of a body below a cap plane (mitcad#1818).
   kernel/fill_cavity.rs
   # Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
-  kernel/press_pull.rs)
+  kernel/press_pull.rs
+  # STEP files of a design's component tree (mitcad#1915).
+  kernel/step_tree.rs)
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/boolean.cpp
   cpp/bridge/boolean.hpp
@@ -354,6 +356,10 @@ target_sources(mitcad_bridge PRIVATE
 target_sources(mitcad_bridge PRIVATE
   cpp/bridge/press_pull.cpp
   cpp/bridge/press_pull.hpp)
+# STEP files of a design's component tree (mitcad#1915).
+target_sources(mitcad_bridge PRIVATE
+  cpp/bridge/step_tree.cpp
+  cpp/bridge/step_tree.hpp)
 target_include_directories(mitcad_bridge PUBLIC cpp)
 # What corrosion_add_cxxbridge links for a CRATE that Corrosion imported
 # (mitcad#792): the bridge with the Rust library, both ways.
@@ -721,6 +727,10 @@ if(BUILD_TESTING)
     set_tests_properties(core.cam_${sim}_sim PROPERTIES FIXTURES_REQUIRED cargo_tests_debug
       SKIP_REGULAR_EXPRESSION "the controller simulator: skipped" TIMEOUT 1200)
   endforeach()
+  # The .serp reader (mitcad#1870; no OCCT): files of its test writer in
+  # both forms and every version, a newer one, meshes, layers, colours and
+  # blocks, damaged and cut-short files.
+  mitcad_cargo_test(core.serp mitcad-serp)
 
   # The fixtures that build the test binaries, and the documentation tests
   # (cargo with the fixture's packages, so that it builds nothing again).

@@ -92,6 +92,11 @@
 #      beside the first one, its Length to a face, To Face the first
 #      one's top: level with it, bound; Face Offset 10 ends it 10 above;
 #      the saved design keeps the bound length to the face.
+#  14. In line with another profile (mitcad#1886): a cross member on one
+#      side of a profile 405 from end A (typed); on another side a click
+#      at the marker "in line with ..." snaps the new profile's center
+#      plane onto the cross member's (marked as taken; From End B, Offset
+#      165, the nearer end) and places it there.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-build-test.sh
@@ -1644,6 +1649,69 @@ walk(json.load(open(sys.argv[1])))
 sys.exit(0 if found else 1)
 EOF
 echo "ok   the saved design keeps the bound length to the face"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
+ui_stop_app
+
+echo "--- 14. In line with another profile: a profile on a side lines up with one on another side"
+# mitcad#1886: a side 600 long (grid 20); a cross member (30 wide) on one
+# of its sides, its near face 405 from end A (its center plane at 420, on
+# no grid point); on another side the click at the marker in line with it
+# puts the new profile's center plane on the cross member's: its near
+# face at 405, its far face (30 wide) 165 from end B, the nearer end.
+ui_start_app --open "$WORK/start.mitcad" --no-native-dialogs
+ui_step "the BUILD tab"                    ui_click_logged "Ribbon tab BUILD"
+ui_mark
+ui_step "Profile (command search)"         ui_command "Profile"
+ui_expect_new "Command Profile started" "Profile started"
+ui_step "a typed length of 600"            ui_type_in "Panel Profile input length" "600"
+ui_show_origin
+ui_step "on the XY plane"                  ui_click_logged "Datum xy"
+ui_expect_new "Inspect Profile: place " "the preview"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the side placed" 30
+B15=$(placed_body)
+[ -n "$B15" ] || ui_fail "no body of the side"
+refresh_picks "Profile"
+mapfile -t SIDES15 < <(faces_of "$B15" "$SIDE")
+[ "${#SIDES15[@]}" -ge 2 ] || ui_fail "fewer than two sides of the profile ($B15) to pick"
+ui_mark
+ui_step "one of its sides"                 pick_face "$B15" "${SIDES15[0]}"
+ui_expect_new "Inspect Profile: place side" "on the side"
+ui_step "length 100"                       ui_type_in "Panel Profile input length" "100"
+ui_mark
+ui_step "from end A"                       ui_choose_text "Panel Profile input from" "End A"
+ui_step "offset 405"                       ui_type_in "Panel Profile input offset" "405"
+expect_inspect " at 405.0 mm from a" "the cross member 405 mm from end A"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the cross member placed" 30
+refresh_picks "Profile"
+ui_mark
+ui_step "another side"                     pick_face "$B15" "${SIDES15[1]}"
+ui_expect_new "Inspect Profile: place side" "on another side"
+ui_mark
+INLINE15=$(marker_in_middle "in line with .*")
+[ -n "$INLINE15" ] || ui_fail "no in line with marker in the middle of the view"
+ui_mark
+ui_step "a click in line"                  xdotool mousemove $INLINE15 click 1
+ui_expect_new "BUILD side click: From End B, Offset 165 mm (inline with " \
+  "the click lines up with the cross member: From End B, Offset 165"
+expect_inspect "; snap inline at 165.0 mm from b" "the preview in line with the cross member"
+taken=""
+for _ in $(seq 1 25); do
+  tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -q "^Preview marker Profile > in line with .* world " && {
+    taken=1
+    break
+  }
+  sleep 0.2
+done
+[ -n "$taken" ] || ui_fail "the snap taken is not marked (> in line with ...)"
+echo "ok   the snap taken is marked"
+ui_mark
+ui_step "Place (Enter)"                    ui_key Return
+ui_expect_new "Placed " "the profile placed in line with the cross member" 30
+ui_step "Close (Escape)"                   ui_key Escape
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_stop_app
 ui_finish "the BUILD tab"

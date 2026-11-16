@@ -9,8 +9,11 @@
 //! the same curvature) and passes through the points given. The loop is
 //! named edges of the body, or one of its openings: a loop of free edges
 //! (an open boundary of a surface body, whose edges have no names), found
-//! by the faces it runs along. The body itself is not changed. The new
-//! bodies are the regions' in their order, then the loop's.
+//! by the faces it runs along. The body itself is not changed, unless the
+//! loop has `stitch` (mitcad#1927): then the patch is sewn onto it, as
+//! Stitch sews, and the body becomes a solid where the patch closes it. The
+//! new bodies are the regions' in their order, then the loop's (none when
+//! it is stitched).
 
 use std::marker::PhantomData;
 
@@ -23,6 +26,7 @@ use super::face_refs::{add_faces, check_faces, kernel_error};
 use super::mapping::map_params;
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
+    is_false,
 };
 use crate::ids::BodyUid;
 use crate::kernel::Kernel;
@@ -68,6 +72,10 @@ pub struct PatchLoop {
     /// Points the patch passes through (mm, in the component's coordinates).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub points: Vec<[f64; 3]>,
+    /// Sews the patch onto the body (mitcad#1927): the body becomes the
+    /// sewn one, a solid where the patch closes it, and no new body is made.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub stitch: bool,
 }
 
 /// A loop of a body's free edges: the `index`-th, in the kernel's
@@ -165,7 +173,7 @@ impl FeatureInfo for PatchDef {
     }
 
     fn creates_bodies(&self) -> bool {
-        true
+        !self.profiles.is_empty() || self.boundary.as_ref().is_none_or(|b| !b.stitch)
     }
 
     fn profiles(&self) -> &[ProfileRef] {
@@ -188,11 +196,27 @@ impl<K: Kernel> Evaluate<K> for PatchDef {
         }
         if let Some(boundary) = &self.boundary {
             let patch = fill_loop(ctx, boundary)?;
-            output.changes.push(BodyChange::Set(ctx.new_body(), patch));
+            if boundary.stitch {
+                // Sewn onto the body it fills, as Stitch sews: a solid where
+                // the patch closes the body's last opening.
+                let shape = ctx.surface_body(boundary.body)?;
+                let sewn = ctx
+                    .kernel
+                    .stitch(&[&shape, &patch], STITCH_TOLERANCE)
+                    .map_err(kernel_error)?;
+                output.tool = Some(patch);
+                output.changes.push(BodyChange::Set(boundary.body, sewn));
+            } else {
+                output.changes.push(BodyChange::Set(ctx.new_body(), patch));
+            }
         }
         Ok(output)
     }
 }
+
+/// The patch's edges are the loop's own, fitted where the patch is not
+/// planar: they are sewn onto the body within this (mm), as a blend's.
+const STITCH_TOLERANCE: f64 = 0.01;
 
 /// The surface body that fills the loop.
 fn fill_loop<K: Kernel>(

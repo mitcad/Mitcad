@@ -41,12 +41,15 @@
 #include "framework/CommandRegistry.hpp"
 #include "framework/DebugLog.hpp"
 #include "framework/Dialogs.hpp"
+#include "framework/HangWatchdog.hpp"
+#include "framework/SessionLog.hpp"
 #include "framework/TestSync.hpp"
 #include "report/CrashHandler.hpp"
 #include "report/ReportDialogs.hpp"
 #include "mcp/LogRing.hpp"
 #include "render/RenderDevice.hpp"
 #include "render/RenderWorkerChoice.hpp"
+#include "webbrowser/BrowserDiagnostics.hpp"
 
 // The Rust panic hook's sink (core/ffi/src/panic_note.rs).
 extern "C" void mitcad_set_panic_sink(void (*sink)(const char* message, std::size_t length));
@@ -119,6 +122,16 @@ void ReportCenter::prepareCrashReports() {
   qputenv("MITCAD_CRASH_DIR", QFile::encodeName(directory));
 #endif
   qputenv("MITCAD_CRASH_PARENT", QByteArray::number(QCoreApplication::applicationPid()));
+  // Windows minidumps beside the session logs (mitcad#1896), the workers'
+  // too.
+  const QString dumps = DebugLog::defaultFolder();
+  QDir().mkpath(dumps);
+#ifdef _WIN32
+  crash::setDumpDirectory(QDir::toNativeSeparators(dumps).toUtf8().constData());
+  _wputenv_s(L"MITCAD_CRASH_DUMP_DIR", reinterpret_cast<const wchar_t*>(QDir::toNativeSeparators(dumps).utf16()));
+#else
+  crash::setDumpDirectory(QFile::encodeName(dumps).constData());
+#endif
   notePanics();
 }
 
@@ -157,7 +170,10 @@ void ReportCenter::startUp() {
   m_offerTimer = new QTimer(this);
   m_offerTimer->setInterval(250);
   connect(m_offerTimer, &QTimer::timeout, this, &ReportCenter::offerNext);
-  QTimer::singleShot(0, this, [this] { scanCrashes(g_offerEarlier); });
+  QTimer::singleShot(0, this, [this] {
+    scanCrashes(g_offerEarlier);
+    offerEndedSession();
+  });
 
   // Test crashes (MITCAD_TEST_CRASH), once the window shows.
   if (crash::testCrashRequested("app")) {
@@ -186,6 +202,8 @@ void ReportCenter::noteAction(const QString& action) {
     m_actions.removeFirst();
   }
   crash::noteAction(action.toUtf8().constData());
+  // What a hang's line names (mitcad#1896).
+  HangWatchdog::noteActivity(action);
 }
 
 void ReportCenter::setGraphics(const QString& renderer, const QString& version) {
@@ -217,6 +235,9 @@ QString ReportCenter::diagnostics() const {
                .arg(m_window.height())
                .arg(screen != nullptr ? screen->devicePixelRatio() : 1.0);
   lines << QStringLiteral("Locale: %1").arg(QLocale::system().name());
+  // Component from Web's browser when the window was used this run (mitcad#1906):
+  // how it draws WebGL, the GPU process's failures, the pages' last errors.
+  lines << browserdiag::componentBrowserDiagnostics(QCoreApplication::instance());
   return lines.join(QLatin1Char('\n'));
 }
 
@@ -246,7 +267,7 @@ void ReportCenter::sendFeedback() {
     }
     report.sections << report::Section{QStringLiteral("diagnostics"), QStringLiteral("Diagnostics"), diagnostics(),
                                        feedback.diagnostics, true, true};
-    return previewAndSend(report, feedback.screenshot, form, feedback.includeDesign);
+    return previewAndSend(report, feedback.screenshot, form, feedback.includeDesign, feedback.includeLogs);
   };
   report::FeedbackDialog dialog(screenshot, designOpen, preview, &m_window);
   form = &dialog;
@@ -265,7 +286,7 @@ QString ReportCenter::reportsFolder() {
 }
 
 bool ReportCenter::previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent,
-                                  bool includeDesign) {
+                                  bool includeDesign, bool includeLogs) {
   // Masked before anyone sees it.
   const report::MaskContext context = report::currentMaskContext();
   report::Report masked = report;
@@ -287,6 +308,9 @@ bool ReportCenter::previewAndSend(const report::Report& report, const QImage& sc
                                        report::mask(lines.join(QLatin1Char('\n')), context), false, true, true};
   }
   const QString logFile = DebugLog::instance().latestFile();
+  // Include the logs (mitcad#1896): this session's file and the previous
+  // session's, asked for in the form.
+  const QStringList sessionLogs = includeLogs ? SessionLog::instance().recentFiles(1) : QStringList();
   const QString tracker = issueTracker();
   const QUrl trackerUrl(tracker);
   const QString destination = trackerUrl.host().isEmpty() ? tracker : trackerUrl.host();
@@ -306,9 +330,10 @@ bool ReportCenter::previewAndSend(const report::Report& report, const QImage& sc
       shot.close();
       shotFile = shot.fileName();
     }
-    design = writeDesignZip(design.path, report::reportBody(named, QApplication::applicationVersion()), shotFile);
+    design = writeDesignZip(design.path, report::reportBody(named, QApplication::applicationVersion()), shotFile,
+                            sessionLogs);
   }
-  report::ReportPreviewDialog dialog(masked, screenshot, destination, parent, logFile, design);
+  report::ReportPreviewDialog dialog(masked, screenshot, destination, parent, logFile, design, sessionLogs);
   prepareModal(&dialog);
   const bool sent = execDialog(&dialog) == QDialog::Accepted;
   const bool withDesign = sent && dialog.designIncluded();
@@ -321,12 +346,13 @@ bool ReportCenter::previewAndSend(const report::Report& report, const QImage& sc
     qInfo().noquote() << QStringLiteral("Report not sent: the preview was cancelled");
     return false;
   }
-  deliver(dialog.report(), dialog.screenshot(), parent, dialog.logFile(), withDesign ? design.path : QString());
+  deliver(dialog.report(), dialog.screenshot(), parent, dialog.logFile(), withDesign ? design.path : QString(),
+          dialog.sessionLogs());
   return true;
 }
 
 report::DesignZip ReportCenter::writeDesignZip(const QString& path, const QString& markdown,
-                                               const QString& screenshotFile) const {
+                                               const QString& screenshotFile, const QStringList& sessionLogs) const {
   report::DesignZip zip;
   zip.path = path;
   if (!m_host.query) {
@@ -348,6 +374,11 @@ report::DesignZip ReportCenter::writeDesignZip(const QString& path, const QStrin
   if (!lines.isEmpty()) {
     extra.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("mitcad-report/log.txt")},
                              {QStringLiteral("text"), lines.join(QLatin1Char('\n')) + QLatin1Char('\n')}});
+  }
+  // The session logs asked for (mitcad#1896), as they are on disk.
+  for (const QString& log : sessionLogs) {
+    const QString name = QStringLiteral("mitcad-report/logs/") + QFileInfo(log).fileName();
+    extra.append(QJsonObject{{QStringLiteral("name"), name}, {QStringLiteral("path"), log}});
   }
   QJsonObject request{{QStringLiteral("query"), QStringLiteral("design_package")},
                       {QStringLiteral("zip"), path},
@@ -384,7 +415,7 @@ report::DesignZip ReportCenter::writeDesignZip(const QString& path, const QStrin
 }
 
 void ReportCenter::deliver(const report::Report& sent, const QImage& screenshot, QWidget* parent,
-                           const QString& logFile, const QString& designZip) {
+                           const QString& logFile, const QString& designZip, const QStringList& sessionLogs) {
   report::Report report = sent;
   // The screenshot's file first: the design's zip takes it.
   QString shotPath;
@@ -403,7 +434,8 @@ void ReportCenter::deliver(const report::Report& sent, const QImage& screenshot,
   report::DesignZip zip;
   if (!designZip.isEmpty()) {
     report.designZip = QFileInfo(designZip).fileName();
-    zip = writeDesignZip(designZip, report::reportBody(report, QApplication::applicationVersion()), shotPath);
+    zip = writeDesignZip(designZip, report::reportBody(report, QApplication::applicationVersion()), shotPath,
+                         sessionLogs);
     if (!zip.error.isEmpty()) {
       report.designZip.clear();
     }
@@ -438,6 +470,30 @@ void ReportCenter::deliver(const report::Report& sent, const QImage& screenshot,
   if (!logFile.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Report debug log: %1").arg(logFile);
     notes << tr("The debug log is %1: drag it into the form to attach it.").arg(QDir::toNativeSeparators(logFile));
+  }
+  // The session logs (mitcad#1896): in the design's zip when it was made,
+  // else copied into a folder of their own, opened in the file manager.
+  if (!sessionLogs.isEmpty() && (designZip.isEmpty() || !zip.error.isEmpty())) {
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    const QString folder = QDir(reportsFolder()).filePath(QStringLiteral("logs-%1").arg(stamp));
+    QDir().mkpath(folder);
+    QStringList copied;
+    for (const QString& log : sessionLogs) {
+      const QString target = QDir(folder).filePath(QFileInfo(log).fileName());
+      QFile::remove(target);
+      if (QFile::copy(log, target)) {
+        copied << QFileInfo(log).fileName();
+      }
+    }
+    qInfo().noquote() << QStringLiteral("Report session logs: %1 in %2").arg(copied.join(QStringLiteral(", ")), folder);
+    if (!copied.isEmpty()) {
+      openExternalUrl(QUrl::fromLocalFile(folder));
+      notes << tr("The session logs are copied to %1, open in your file manager: drag them into the form to attach "
+                  "them.")
+                   .arg(QDir::toNativeSeparators(folder));
+    }
+  } else if (!sessionLogs.isEmpty()) {
+    qInfo().noquote() << QStringLiteral("Report session logs: in the design zip");
   }
   if (!designZip.isEmpty()) {
     if (!zip.error.isEmpty()) {
@@ -542,6 +598,44 @@ void ReportCenter::scanCrashes(bool atStart) {
   for (const report::CrashReport& crash : earlier) {
     offer.files << crash.file;
   }
+  // The crash is how the last session ended: its offer says so, with the
+  // logs folder's button, in place of the notice of an unexpected end.
+  m_crashOfferedAtStart = true;
+  queue(offer);
+}
+
+void ReportCenter::offerEndedSession() {
+  // Once per run, however many windows start.
+  static bool offered = false;
+  if (offered || !g_offerEarlier) {
+    return;
+  }
+  offered = true;
+  const EndedSession ended = SessionLog::instance().endedUnexpectedly();
+  if (ended.session.isEmpty()) {
+    return;
+  }
+  // MITCAD_UNEXPECTED_END_NOTICE=0|1; off under the UI tests unless a test
+  // asks for it: a test that kills MitCad and starts it again would get it.
+  const QString setting = qEnvironmentVariable("MITCAD_UNEXPECTED_END_NOTICE").trimmed();
+  const bool underTest = !qEnvironmentVariableIsEmpty("MITCAD_TEST_INPUT") ||
+                         qEnvironmentVariableIntValue("MITCAD_TEST_SYNC") == 1 ||
+                         qEnvironmentVariableIntValue("MITCAD_TEST_LOG_URLS") == 1;
+  if (setting == QStringLiteral("0") || (setting.isEmpty() && underTest)) {
+    qInfo().noquote() << QStringLiteral("Unexpected end notice not shown (off): %1").arg(ended.session);
+    return;
+  }
+  if (m_crashOfferedAtStart) {
+    qInfo().noquote() << QStringLiteral("Unexpected end notice not shown: a crash report is offered");
+    return;
+  }
+  Offer offer;
+  offer.kind = QStringLiteral("ended");
+  offer.message = ended.dump.isEmpty()
+                      ? tr("MitCad ended unexpectedly the last time it ran: it may have stopped responding and been "
+                           "closed, or crashed.")
+                      : tr("MitCad ended unexpectedly the last time it ran, and a crash dump was saved.");
+  offer.report.key = ended.session;
   queue(offer);
 }
 
@@ -633,7 +727,9 @@ bool ReportCenter::offersOn() const {
 }
 
 void ReportCenter::queue(const Offer& offer) {
-  if (!offersOn()) {
+  // The notice of an unexpected end is no report: Don't Offer Again does
+  // not turn it off.
+  if (offer.kind != QStringLiteral("ended") && !offersOn()) {
     qInfo().noquote() << QStringLiteral("Error report not offered (turned off): %1").arg(oneLine(offer.message));
     markOffered(offer.files);
     return;
@@ -666,6 +762,10 @@ void ReportCenter::offerNext() {
 }
 
 bool ReportCenter::showOffer(const Offer& offer) {
+  if (offer.kind == QStringLiteral("ended")) {
+    showEndedNotice(offer);
+    return false;
+  }
   QMessageBox box(&m_window);
   box.setObjectName(QStringLiteral("errorReportOffer"));
   // A crash or an internal error: an error (mitcad#1040), the Critical icon.
@@ -676,6 +776,9 @@ bool ReportCenter::showOffer(const Offer& offer) {
                             "and can change it, before anything is sent."));
   QPushButton* review = box.addButton(tr("&Review Report…"), QMessageBox::AcceptRole);
   box.addButton(tr("&Don't Send"), QMessageBox::RejectRole);
+  // The session logs and crash dumps (mitcad#1896); the offer stays open.
+  QPushButton* logs = m_host.openLogFolder ? box.addButton(tr("Open &Log Folder"), QMessageBox::ActionRole)
+                                           : nullptr;
   box.setDefaultButton(review);
   auto* never = new QCheckBox(tr("Do &not offer error reports again"), &box);
   box.setCheckBox(never);
@@ -686,6 +789,11 @@ bool ReportCenter::showOffer(const Offer& offer) {
   qInfo().noquote() << QStringLiteral("Error report offered (%1): %2; key mitcad-%3")
                            .arg(offer.kind, oneLine(offer.message), offer.report.key);
   execDialog(&box);
+  while (logs != nullptr && box.clickedButton() == logs) {
+    qInfo().noquote() << QStringLiteral("Error report: Open Log Folder");
+    m_host.openLogFolder();
+    execDialog(&box);
+  }
   if (never->isChecked()) {
     QSettings().setValue(QStringLiteral("reports/offerErrors"), false);
     qInfo().noquote() << QStringLiteral("Error reports: no more offers");
@@ -695,6 +803,31 @@ bool ReportCenter::showOffer(const Offer& offer) {
     return false;
   }
   return previewAndSend(offer.report, QImage(), &m_window);
+}
+
+void ReportCenter::showEndedNotice(const Offer& offer) {
+  QMessageBox box(&m_window);
+  box.setObjectName(QStringLiteral("endedSessionNotice"));
+  box.setIcon(QMessageBox::Warning);
+  box.setWindowTitle(tr("Last Session"));
+  box.setText(offer.message);
+  box.setInformativeText(tr("Its log is kept in the logs folder and may tell what MitCad was doing. Help › Send "
+                            "Feedback can attach it to a report."));
+  QPushButton* open =
+      m_host.openLogFolder ? box.addButton(tr("&Open Log Folder"), QMessageBox::ActionRole) : nullptr;
+  QPushButton* close = box.addButton(tr("&Close"), QMessageBox::RejectRole);
+  box.setDefaultButton(close);
+  box.setEscapeButton(close);
+  prepareModal(&box);
+  qInfo().noquote() << QStringLiteral("Unexpected end notice shown: %1; %2")
+                           .arg(offer.report.key, oneLine(offer.message));
+  execDialog(&box);
+  if (open != nullptr && box.clickedButton() == open) {
+    qInfo().noquote() << QStringLiteral("Unexpected end notice: Open Log Folder");
+    m_host.openLogFolder();
+  } else {
+    qInfo().noquote() << QStringLiteral("Unexpected end notice closed");
+  }
 }
 
 void ReportCenter::markOffered(const QStringList& files) {

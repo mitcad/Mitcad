@@ -4,6 +4,7 @@
 // arc, one across or back a normal arc, from a curve that takes one; a
 // normal arc leaves the end square to the curve on the end's side, its
 // centre on the curve's line; typed radius and sweep place the arc's end.
+#include "UnitTests.hpp"
 #include "sketch/LineArcs.hpp"
 
 #include <algorithm>
@@ -181,3 +182,4 @@ int lineArcsTests() {
   sweepTests();
   return failures;
 }
+MITCAD_UNIT_TEST(lineArcsTests);

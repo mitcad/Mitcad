@@ -27,6 +27,7 @@
 #include "framework/Theme.hpp"
 #include "platform/MacChrome.hpp"
 #include "framework/Diagnostics.hpp"
+#include "framework/OpeningEdges.hpp"
 #include "framework/TestSync.hpp"
 #include "mitcad/geometry/datum.hpp"
 #include "mitcad/geometry/import.hpp"
@@ -1538,7 +1539,9 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // and would write the hidden line's depth). Immediate, as the layers
   // around it are: after the points' layer the picking groups change only
   // where they did (the input lines' layer that follows writes no depth
-  // either), and it holds nothing that can be picked.
+  // either), and it holds nothing that can be picked. Outside sketch mode it
+  // holds every shown sketch's copies and its profiles' faint fills
+  // (mitcad#1931, setSketchesThroughBodies).
   Graphic3d_ZLayerSettings sketchThrough;
   sketchThrough.SetName("edited sketch, through the bodies");
   sketchThrough.SetImmediate(true);
@@ -2410,6 +2413,7 @@ void OcctViewer::applyInactiveGhosts(bool faded) {
     if (restyle(profile)) {
       styleProfile(profile);
       m_context->Redisplay(profile, false);
+      updateProfileThrough(key, profile); // its copy as pale (mitcad#1931)
     }
   }
   for (const occ::handle<AIS_Shape>& datum : m_datums) {
@@ -2917,6 +2921,8 @@ void OcctViewer::setProfiles(const std::vector<std::pair<ProfileKey, TopoDS_Shap
   for (const auto& [key, profile] : shown) {
     remove(profile);
   }
+  updateProfilesThrough(); // mitcad#1931
+  logSketchThrough();
   timing.setDetail(QStringLiteral("%1 profiles, %2 new").arg(profiles.size()).arg(made));
   sceneChanged();
 }
@@ -2932,6 +2938,8 @@ void OcctViewer::removeSketchProfiles(const QString& sketch) {
       ++it;
     }
   }
+  updateProfilesThrough(); // mitcad#1931
+  logSketchThrough();
   sceneChanged();
 }
 
@@ -3176,14 +3184,88 @@ void OcctViewer::setSketchThrough(const QString& sketch) {
       updateSketchThrough(object, look->second);
     }
   }
+  updateProfilesThrough(); // none in sketch mode (mitcad#1931)
   logSketchThrough();
   sceneChanged();
 }
 
+void OcctViewer::setSketchesThroughBodies(bool on) {
+  if (on == m_sketchesThroughBodies) {
+    return;
+  }
+  m_sketchesThroughBodies = on;
+  for (const occ::handle<AIS_Shape>& object : m_sketchEntities) {
+    const auto look = m_sketchEntityLooks.find(object.get());
+    if (look != m_sketchEntityLooks.end()) {
+      updateSketchThrough(object, look->second);
+    }
+  }
+  updateProfilesThrough();
+  logSketchThrough();
+  sceneChanged();
+}
+
+bool OcctViewer::sketchDrawnThrough(const QString& sketch) const {
+  if (!m_throughSketch.isEmpty()) {
+    return sketch == m_throughSketch; // sketch mode: the edited sketch only (mitcad#1762)
+  }
+  return m_sketchesThroughBodies; // every shown sketch (mitcad#1931)
+}
+
+void OcctViewer::updateProfileThrough(const ProfileKey& key, const occ::handle<AIS_Shape>& profile) {
+  // Outside sketch mode, and not while an input takes profiles: then the
+  // regions themselves are drawn through the bodies (setProfilesFirst).
+  const bool wanted = m_sketchesThroughBodies && m_throughSketch.isEmpty() && !m_profilesFirst && !profile.IsNull();
+  auto existing = m_profileThrough.find(key);
+  if (existing != m_profileThrough.end() && (!wanted || !existing->second->Shape().IsEqual(profile->Shape()))) {
+    m_context->Remove(existing->second, false);
+    m_profileThrough.erase(existing);
+    existing = m_profileThrough.end();
+  }
+  if (!wanted) {
+    return;
+  }
+  // Half the profile's own opacity (a pale one's too), as the curves'
+  // copies are half of theirs, blended in place as they are; its boundary
+  // is the curves' copies.
+  const double opacity = kSketchThroughOpacity * (1.0 - profile->Transparency());
+  occ::handle<AIS_Shape> through;
+  const bool made = existing == m_profileThrough.end();
+  if (made) {
+    through = new AIS_Shape(profile->Shape());
+    through->Attributes()->SetFaceBoundaryDraw(false);
+    through->SetColor(kProfileFill);
+  } else {
+    through = existing->second;
+  }
+  through->SetTransparency(1.0 - opacity);
+  through->Attributes()->ShadingAspect()->Aspect()->SetAlphaMode(Graphic3d_AlphaMode_MaskBlend, 0.01f);
+  if (made) {
+    display(through, AIS_Shaded, PickInfo(), false);
+    m_context->SetZLayer(through, m_sketchThroughLayer);
+    m_profileThrough[key] = through;
+  } else {
+    m_context->Redisplay(through, false);
+  }
+}
+
+void OcctViewer::updateProfilesThrough() {
+  for (auto it = m_profileThrough.begin(); it != m_profileThrough.end();) {
+    if (m_profiles.count(it->first) == 0) {
+      m_context->Remove(it->second, false);
+      it = m_profileThrough.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (const auto& [key, profile] : m_profiles) {
+    updateProfileThrough(key, profile);
+  }
+}
+
 void OcctViewer::updateSketchThrough(const occ::handle<AIS_Shape>& object, const SketchEntityLook& look) {
   const auto info = m_pickInfo.find(object.get());
-  const bool wanted = !m_throughSketch.isEmpty() && !look.hidden && info != m_pickInfo.end() &&
-                      info->second.item.owner == m_throughSketch;
+  const bool wanted = !look.hidden && info != m_pickInfo.end() && sketchDrawnThrough(info->second.item.owner);
   const auto existing = m_sketchEntityThrough.find(object.get());
   if (!wanted) {
     if (existing != m_sketchEntityThrough.end()) {
@@ -3220,7 +3302,11 @@ void OcctViewer::logSketchThrough() {
   int points = 0;
   for (const auto& [object, through] : m_sketchEntityThrough) {
     const auto look = m_sketchEntityLooks.find(object);
-    if (look != m_sketchEntityLooks.end()) {
+    const auto info = m_pickInfo.find(object);
+    // The edited sketch's only (other sketches' copies are logged by
+    // logSketchesThrough, mitcad#1931).
+    if (look != m_sketchEntityLooks.end() && info != m_pickInfo.end() &&
+        info->second.item.owner == m_throughSketch) {
       ++(look->second.point ? points : curves);
     }
   }
@@ -3233,6 +3319,55 @@ void OcctViewer::logSketchThrough() {
   if (line != m_loggedSketchThrough) {
     m_loggedSketchThrough = line;
     qDebug().noquote() << QStringLiteral("Sketch through the bodies: %1").arg(line);
+  }
+  logSketchesThrough();
+}
+
+void OcctViewer::logSketchesThrough() {
+  QString line;
+  if (!m_sketchesThroughBodies) {
+    line = QStringLiteral("off");
+  } else if (!m_throughSketch.isEmpty()) {
+    line = QStringLiteral("the edited sketch only");
+  } else {
+    // Per sketch, in uid order: its curves, points and profiles drawn
+    // through, with the profiles' regions.
+    struct Counts {
+      int curves = 0;
+      int points = 0;
+      QStringList regions;
+    };
+    std::map<QString, Counts> counts;
+    for (const auto& [object, through] : m_sketchEntityThrough) {
+      const auto look = m_sketchEntityLooks.find(object);
+      const auto info = m_pickInfo.find(object);
+      if (look != m_sketchEntityLooks.end() && info != m_pickInfo.end()) {
+        Counts& sketch = counts[info->second.item.owner];
+        ++(look->second.point ? sketch.points : sketch.curves);
+      }
+    }
+    for (const auto& [key, through] : m_profileThrough) {
+      counts[QString::fromStdString(key.first)].regions << QString::fromStdString(key.second);
+    }
+    QStringList parts;
+    for (const auto& [sketch, shown] : counts) {
+      QString part = QStringLiteral("%1 %2 curve(s), %3 point(s), %4 profile(s)")
+                         .arg(sketch)
+                         .arg(shown.curves)
+                         .arg(shown.points)
+                         .arg(shown.regions.size());
+      if (!shown.regions.isEmpty()) {
+        part += QStringLiteral(" [%1]").arg(shown.regions.join(QStringLiteral(", ")));
+      }
+      parts << part;
+    }
+    line = parts.isEmpty() ? QStringLiteral("none")
+                           : parts.join(QStringLiteral("; ")) +
+                                 QStringLiteral("; dimmed, curves dashed, profiles faint");
+  }
+  if (line != m_loggedSketchesThrough) {
+    m_loggedSketchesThrough = line;
+    qDebug().noquote() << QStringLiteral("Sketches through the bodies: %1").arg(line);
   }
 }
 
@@ -3813,6 +3948,10 @@ void OcctViewer::setProfilesFirst(bool on) {
   for (const occ::handle<AIS_Shape>& highlight : m_profileHighlights) {
     m_context->SetZLayer(highlight, profileHighlightLayer());
   }
+  // The regions themselves are drawn through the bodies meanwhile: no
+  // faint copies of them (mitcad#1931).
+  updateProfilesThrough();
+  logSketchThrough();
   // The hover drawn before belongs to the old layer.
   m_context->ClearDetected(false);
   qDebug().noquote() << QStringLiteral("View profiles first: %1")
@@ -3936,9 +4075,10 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
   build.clock.start();
   QStringList bodies; // highlighted whole, for the log
   QStringList profiles; // "F1/r{...} 2 faces", for the log
-  // Where faces, edges, vertices and datums are highlighted, for UI tests
-  // ("face F2.b0/F2:side(c1) in O1 at 60.0,0.0,10.0": the middle of its
-  // bounding box in the design, mitcad#432).
+  // Where faces, edges, vertices, datums and profiles are highlighted, for
+  // UI tests ("face F2.b0/F2:side(c1) in O1 at 60.0,0.0,10.0": the middle
+  // of its bounding box in the design, mitcad#432; a profile of a sketch on
+  // a curved face on that face, mitcad#1908).
   build.logPlaces = qEnvironmentVariableIsSet("MITCAD_LOG_PICKS");
   QStringList places;
   // The sketch curves and points highlighted, for the log (mitcad#897).
@@ -3951,7 +4091,8 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
     ++build.asked;
     const SelectKind kind = highlight.item.kind;
     if (build.logPlaces && (kind == SelectKind::Face || kind == SelectKind::Edge || kind == SelectKind::Vertex ||
-                            kind == SelectKind::Plane || kind == SelectKind::Axis || kind == SelectKind::Point)) {
+                            kind == SelectKind::Plane || kind == SelectKind::Axis || kind == SelectKind::Point ||
+                            kind == SelectKind::Profile)) {
       Bnd_Box box;
       BRepBndLib::Add(highlight.shape, box);
       if (!box.IsVoid()) {
@@ -4819,6 +4960,13 @@ OcctViewer::itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   case TopAbs_EDGE: {
     const auto name = body.name_of_edge(part);
     if (!name) {
+      // A free edge of a surface body has no name: while an input takes
+      // openings, it is picked as its opening (mitcad#1927).
+      if (m_openingEdges) {
+        if (const auto opening = openingOfEdge(body, body.edge_index(part))) {
+          return openingEdgeItem(item.owner, *opening, item.occurrence);
+        }
+      }
       return std::nullopt;
     }
     item.kind = SelectKind::Edge;
@@ -5141,7 +5289,17 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     }
     if (kinds.testFlag(SelectKind::Edge)) {
       for (int i = 0; i < body.edge_count(); ++i) {
-        if (!takes(SelectKind::Edge, body.edge_name(i), curveType(body.edge(i)))) {
+        // A free edge, which has no name, by its opening's while an input
+        // takes openings (mitcad#1927), as itemFor names it.
+        std::string name = body.edge_name(i);
+        QString shapeType = curveType(body.edge(i));
+        if (name.empty() && m_openingEdges) {
+          if (const auto opening = openingOfEdge(body, i)) {
+            name = openingEdgeItem(QString(), *opening).name.toStdString();
+            shapeType = QStringLiteral("other");
+          }
+        }
+        if (!takes(SelectKind::Edge, name, shapeType)) {
           continue;
         }
         const BRepAdaptor_Curve curve(body.edge(i));
@@ -5150,7 +5308,7 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
         // (mitcad#656: a shaft's top edge).
         for (const double at : {0.5, 0.75, 0.25}) {
           if (probe(curve.Value(curve.FirstParameter() + (curve.LastParameter() - curve.FirstParameter()) * at),
-                    SelectKind::Edge, body.edge_name(i))) {
+                    SelectKind::Edge, name)) {
             break;
           }
         }

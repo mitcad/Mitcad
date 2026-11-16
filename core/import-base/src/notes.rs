@@ -36,13 +36,14 @@ pub fn stands_in_for(items: &[(String, Option<String>)]) -> String {
             items.len() - NAMED_ITEMS
         ));
     }
-    format!("Stands in for {text}")
+    // The import's own wording said plainly (mitcad#1893).
+    crate::report_status::plain_words(&format!("Stands in for {text}"))
 }
 
 /// The note of an item that came in partly.
 pub fn partly(note: Option<&str>) -> String {
     match note.map(str::trim).filter(|n| !n.is_empty()) {
-        Some(note) => format!("Partly imported: {note}"),
+        Some(note) => crate::report_status::plain_words(&format!("Partly imported: {note}")),
         None => "Partly imported".to_owned(),
     }
 }

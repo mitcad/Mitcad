@@ -37,6 +37,13 @@ contacts lie on their faces, and the corners at both ends failed
   a curve bounding that face and Bn (Bn grows up to it). Bn's edges with
   N at V, and the spine's edge at V, lie under the chamfer and bound no
   face any more; the spine's end is a free boundary.
+  Only where the contact on N leaves N inside the end edge's own range,
+  more than 1 % of the chamfer's width (and 10 tol3d) from both of its
+  ends (mitcad#1898): a contact that reaches the end's section, where the
+  face at the end meets the edge, keeps OCCT's corner (a box's corner:
+  OCCT's chamfer sequences A1 A4 A6 A8 C2 failed or came out invalid), and
+  one that leaves N along the edge before, on a spine of several edges, is
+  no case for pieces of the end edge (bugs/moddata_2 bug354_2 failed).
 - ChFi3d_KPartCutPiece keeps a given end at a vertex of its own, and
   ChFi3d_MakeExtremities and ChFi3d_FilDS take a blend's end in a point at
   a vertex that is no vertex of the spine as an end in a point that is no
@@ -346,7 +353,7 @@ Upstream: new.
          }
        }
        for (int f = 2; f < n; f++)
-@@ -9650,6 +9818,604 @@
+@@ -9650,6 +9818,615 @@
    return true;
  }
  
@@ -518,6 +525,17 @@ Upstream: new.
 +    }
 +  }
 +  if (ons == 0)
++  {
++    return false;
++  }
++  // (The contact leaves its face within the end edge's own range and
++  // before the edge's end: a contact that reaches the end's section, where
++  // the face at the end meets it, keeps its corner as before (OCCT's
++  // chamfer sequences A1 A4 C2 failed there), and one that leaves its face
++  // already along the edge before, on a spine of several edges, is not cut
++  // by pieces of the end edge (OCCT's bug354_2 failed).)
++  const double aMargin = std::max(10. * tol3d, 0.01 * aWidth);
++  if (WP <= wA + aMargin || WP >= wB - aMargin)
 +  {
 +    return false;
 +  }
@@ -951,7 +969,7 @@ Upstream: new.
  //=======================================================================
  // function : WalkedBridgeOverGap
  // purpose  : The walk stopped where the contact on face N (side ons of
-@@ -14288,7 +15054,12 @@
+@@ -14288,7 +15065,12 @@
        {
          // (The face at the end cuts the blend before its contact comes back
          // into its face over a gap.)
@@ -965,7 +983,7 @@ Upstream: new.
        }
      }
    }
-@@ -16124,7 +16895,19 @@
+@@ -16124,7 +16906,19 @@
      }
      aNarrowCut = true;
    }

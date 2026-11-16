@@ -4,6 +4,7 @@
 //! monitor evaluates a feature, the geometry asks the monitor whether to
 //! stop, inside OCCT's algorithms too, and a stopped operation fails.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use mitcad_model::RecomputeMonitor;
@@ -54,7 +55,55 @@ impl CancelCheck {
 /// progress of the .f3d import running on this thread (mitcad#82: a long
 /// boolean that advances is not stuck).
 pub fn interruptible<R>(monitor: &Arc<RecomputeMonitor>, f: impl FnOnce() -> R) -> R {
-    let check = CancelCheck(Arc::clone(monitor), mitcad_import::current_progress());
+    interruptible_with(monitor, mitcad_import::current_progress(), f)
+}
+
+/// [`interruptible`] with the progress given: on a thread of its own that
+/// runs a kernel call for an evaluation's thread (mitcad#1917,
+/// `kernel/abandon.rs`), the progress of the import running there.
+pub(crate) fn interruptible_with<R>(
+    monitor: &Arc<RecomputeMonitor>,
+    progress: Option<Arc<mitcad_import::Progress>>,
+    f: impl FnOnce() -> R,
+) -> R {
+    let check = CancelCheck(Arc::clone(monitor), progress.clone());
     let _scope = ffi::enter_cancel_scope(Box::new(check));
+    let _current = Current::enter(Arc::clone(monitor), progress);
     f()
+}
+
+/// The monitor this thread's kernel calls stop with, and the progress of
+/// the import running here, while [`interruptible`] runs (mitcad#1917: a
+/// kernel call run on a thread of its own takes them there).
+pub(crate) type Stopping = (Arc<RecomputeMonitor>, Option<Arc<mitcad_import::Progress>>);
+
+thread_local! {
+    static CURRENT: RefCell<Vec<Stopping>> = const { RefCell::new(Vec::new()) };
+}
+
+/// What stops this thread's kernel calls now ([`interruptible`]), if
+/// anything does.
+pub(crate) fn current() -> Option<Stopping> {
+    CURRENT.with(|c| c.borrow().last().cloned())
+}
+
+/// Names the monitor of [`current`] until dropped.
+struct Current;
+
+impl Current {
+    fn enter(
+        monitor: Arc<RecomputeMonitor>,
+        progress: Option<Arc<mitcad_import::Progress>>,
+    ) -> Self {
+        CURRENT.with(|c| c.borrow_mut().push((monitor, progress)));
+        Self
+    }
+}
+
+impl Drop for Current {
+    fn drop(&mut self) {
+        CURRENT.with(|c| {
+            c.borrow_mut().pop();
+        });
+    }
 }

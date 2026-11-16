@@ -31,8 +31,10 @@ public:
   MainWindow* findByPath(const QString& path) const;
   // Opens `path` in a window of its own beside `source` (a new tab), or
   // brings forward the window that has it open already; never replaces
-  // `source`'s design (Open Linked Design, mitcad#1416).
-  MainWindow* openFileBeside(MainWindow* source, const QString& path, QString& error);
+  // `source`'s design (Open Linked Design, mitcad#1416). `askChoices`: an
+  // import asks its choices, as File › Open's (Import as a new design,
+  // mitcad#1894).
+  MainWindow* openFileBeside(MainWindow* source, const QString& path, QString& error, bool askChoices = false);
   // `source` saved its design to `path` (mitcad#1416): the other windows
   // whose designs link that file offer to take it.
   void designSaved(MainWindow* source, const QString& path);

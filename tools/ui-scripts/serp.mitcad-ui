@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# .serp files through the real UI (mitcad#1870), the shared input script of
+# tools/ui-serp-test.sh (Linux), tools/ui-windows-serp-test.ps1 and
+# tools/ui-macos-serp-test.sh: the application started with --open of the
+# import's test file (mitcad-cli serp-test-file: B-reps OCCT wrote, a
+# mesh, a hidden object, a block placed twice) opens it as a new document,
+# nothing asked:
+#   1. its five bodies, the block a component placed twice;
+#   2. File > Import of the same file into the design with content: asked
+#      where it goes, into a component of its own named after the file;
+#      one undo step takes it back.
+wait-log 'Imported sample\.serp as .*: 5 body\(ies\), 1 component\(s\), 2 occurrence\(s\)$' 60
+wait-idle
+expect-no-log 'Import place dialog opened'
+
+# 2. Into the design with content: asked where it goes (mitcad#1629);
+# Enter makes a component named after the file.
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/sample.serp"
+sleep 300
+key Return
+wait-log 'Import place dialog opened: sample\.serp'
+# Message boxes have no window title on macOS; match the same question.
+focus-dialog '^Import sample\.serp into a new component named sample, or into the active component\?$'
+key Return
+wait-log 'Import place: new component'
+focus-main
+wait-log 'Imported sample\.serp as .*: 5 body\(ies\), 1 component\(s\), 2 occurrence\(s\), into component sample$'
+mark
+key ctrl+z
+wait-log 'Undo: Import sample\.serp'
+expect-never 'TestDriver: FAIL|Could not import'

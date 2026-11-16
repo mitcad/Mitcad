@@ -3,6 +3,7 @@
 # check-all sources: app/view/SpaceMouseNavigation.hpp app/view/SpaceMouseView.cpp app/platform/SpaceMouseDevice.hpp
 # check-all sources: app/platform/windows/SpaceMouseWindows.cpp app/framework/TestDriver.cpp tools/ui-scripts/space-mouse.mitcad-ui
 # check-all sources: app/view/NavigationPreferences.hpp app/view/SpaceMouseCamera.hpp app/view/SpaceMouseTiming.hpp
+# check-all sources: app/view/ViewController.cpp app/framework/TestDriverNavigation.cpp
 # A 3D mouse (mitcad#951) in the build VM, through the test driver's input
 # (tools/ui-scripts/space-mouse.mitcad-ui, the same script as the Linux
 # test's): no device logs "3D mouse: none" (Raw Input finds none in the
@@ -10,7 +11,8 @@
 # button runs Fit, in Object mode, each motion's log line with its
 # duration, frame rate, longest frame and grid rebuilds (mitcad#1023); the
 # 3D Mouse tab of Preferences has its Navigation mode and Lock horizon
-# (mitcad#978).
+# (mitcad#978); Lock Rotation on the second button locks and frees the
+# rotation, also in a sketch, where it starts locked (mitcad#1910).
 param(
   [string]$App,
   [string]$Out = (Join-Path $env:TEMP 'mitcad-ui-windows-space-mouse'),
@@ -19,6 +21,7 @@ param(
 Ui-Init $App $Out $QtBin @{}
 $env:MITCAD_TEST_INPUT = Join-Path $PSScriptRoot 'ui-scripts/space-mouse.mitcad-ui'
 $env:MITCAD_TEST_STEP_MS = '70'
+$env:MITCAD_TEST_PREFERENCES_DONE = 'Return' # OK of the Preferences dialog
 Ui-StartApp 'space-mouse' @('--ui=qt', '--no-mcp', '--demo')
 # The handle read while the app runs: without it ExitCode stays empty after
 # the exit (Start-Process -PassThru).
@@ -32,5 +35,7 @@ Ui-ExpectLog 'TestDriver: done' 'the 3D mouse turned, panned and zoomed the view
 Ui-ExpectLog ' fps, longest frame ' "the 3D mouse motion's log line gives its frame rate and longest frame"
 Ui-ExpectLog ' grid rebuild(s), turned ' "the 3D mouse motion's log line counts its grid rebuilds"
 Ui-ExpectLog 'strongest ry: in Object mode the model turns counter-clockwise' 'the 3D mouse axes line names what the spin did to the model'
+Ui-ExpectLog 'Status info: 3D mouse rotation locked' "Lock Rotation on a button locked the 3D mouse's rotation"
+Ui-ExpectLog '3D mouse: rotation unlocked in the sketch' 'Lock Rotation freed the rotation in a sketch'
 Ui-StopApp
 Write-Host 'PASS: space-mouse'

@@ -6,6 +6,7 @@
 // a reader (hashAll, digestMatches) tells a changed file apart. The
 // start-up check names OCCT DLLs of another build (mitcad#1454). The
 // updater names the programs it offers to end (mitcad#1584).
+#include "UnitTests.hpp"
 #include "update/BuildStamp.hpp"
 #include "update/UpdateInstaller.hpp"
 #include "update/UpdaterChecks.hpp"
@@ -477,3 +478,4 @@ int updateInstallerTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(updateInstallerTests);

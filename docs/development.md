@@ -1127,6 +1127,52 @@ declared beyond what the file holds, in `tests/malformed.rs` of the
 `cut_packages_and_other_files_are_refused`; the design file's are
 `model-tests/files` (`malformed_files_are_rejected`, `limits_tests.rs`).
 
+### Adding a test without a shared list
+
+Parallel branches used to append to the same lists and conflict at every
+merge. These tests now register themselves, each in a file of its own
+(mitcad#1925); a new test adds files and edits none of the lists:
+
+- **A Windows UI test** (`app.ui-windows-<name>`): its `add_test` and
+  `set_tests_properties`, with the comment that says what it checks, in
+  `cmake/ui-tests/windows/ui-windows-<name>.cmake`.
+  `cmake/MesaRuntime.cmake` includes every file there, in sorted order,
+  where `MITCAD_MESA_DIR` and `BUILD_TESTING` are set; the file needs no
+  condition of its own beyond its test's (an `if(TARGET …)` for a target it
+  needs).
+- **A macOS UI test** (`app.ui-macos-<name>`): likewise in
+  `cmake/ui-tests/macos/ui-macos-<name>.cmake`, which
+  `cmake/MacUiTests.cmake` includes in sorted order. Each file carries its
+  own whole condition, as the existing ones do (`if(APPLE AND
+  BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND TARGET
+  mitcad-cli AND BASH_EXECUTABLE)`; `BASH_EXECUTABLE` and Python are found
+  before the files are included). A test of the AppKit frontend goes in
+  the same file as its Qt twin, under `if(MITCAD_MACOS_NATIVE_UI)`; the
+  native labels and the harness scheduling run after every file.
+- **An app.unit test** (`test_app`, `app/tests/`): the test file
+  `app/tests/<file>.cpp` ends its entry point with
+  `MITCAD_UNIT_TEST(<entry point>);` (`#include "UnitTests.hpp"`; the
+  entry point is `int <name>Tests()` and returns its failed checks), and
+  its sources go in `app/tests/unit/<file>.cmake`
+  (`target_sources(test_app PRIVATE tests/<file>.cpp …)` and anything it
+  links), which `app/CMakeLists.txt` includes at its end. `test_app.cpp`
+  runs the registered entry points in the order of their names, so an
+  entry point must not depend on another one having run before it. The
+  application's own sources still go in `app/CMakeLists.txt`.
+
+A file name is the test's name (without `app.`) or the test file's stem,
+so a test is found by its name. Linux UI tests are scripts
+(`tools/ui-*-test.sh`) and need no registration. The selection-card tests
+(`cmake/SelectionUiTests.cmake`) stay in their own module: one
+registration there serves Linux, Windows and macOS alike.
+
+**Translations:** a branch that adds or changes texts does not refresh
+`app/translations/*.ts` itself. The catalogues are refreshed once at the
+merge into the target branch (`tools/translations-update.cmake`, the
+target `update_translations`, [translations.md](translations.md)), so that
+two branches' new texts do not conflict in the same files; only a
+translation's own work (filling in `<translation>` entries) edits them.
+
 ### The test runner (mitcad-testrun)
 
 `mitcad-testrun` (`tools/testrun`, mitcad#790; built with the project
@@ -1265,6 +1311,7 @@ file's format and what is left: [tools/testrun/README.md](../tools/testrun/READM
 | `MITCAD_TEST_RECOMPUTE_DELAY_MS=n[,job=m...]` | Every feature computed in a job takes n ms longer (`400,undo=800`), to exercise the progress dialog. |
 | `MITCAD_COMPUTE_INLINE=1` | Jobs on the UI thread, for a debugger. |
 | `MITCAD_TEST_OCCT_CRASH=<operation>` | That kernel operation (e.g. `fillet`, or Section Analysis' `clip` and `section`) crashes like an access violation in OCCT; also in `mitcad-cli`. |
+| `MITCAD_TEST_KERNEL_HANG=<seconds>` | Every kernel call that may not return (fillets, chamfers, shells and offsets, sweeps, lofts, healing: `core/ffi/src/kernel/abandon.rs`, mitcad#1922) first waits that long, deaf to any cancel and limit, as a call that does not return; with `MITCAD_KERNEL_TIME_LIMIT=<seconds>` (0: none, 300 by default) it is given up at that limit (mitcad#1917; `cli.kernel_time_limit`, `tools/ui-kernel-cancel-test.sh`). |
 | `MITCAD_TEST_OCCT_OUT_OF_MEMORY=<operation>` | An allocation in that kernel operation (e.g. `extrude`) fails with `std::bad_alloc`: the operation fails "out of memory" (mitcad#80). |
 | `MITCAD_TEST_OCCT_ALLOCATION_FAILS=<operation>` | An allocation of OCCT's collections fails in that kernel operation (e.g. `extrude`) or in the healing of a body built from B-rep data (`heal`), and is caught there as OCCT's checker catches its failures: only OCCT's count of failed allocations tells, and the operation or the body's build fails "out of memory" (mitcad#132). |
 | `MITCAD_DRAWING_TRACE=1` | Print a line per drawing view projected, sheet drawn and view added on standard error, with the phases of the hidden-line removal (`compare` and `parts` also time the other algorithm and each body alone; [performance](performance.md#drawing-views-mitcad962), mitcad#962). |
@@ -1661,6 +1708,22 @@ and images; the bodies and components the import makes, their
 placements, volumes and bounding boxes; the materials as appearances).
 A row whose `check` is empty or `no` is only imported. Skipped without
 the variable; not one of the release's required corpora.
+
+### .serp corpus
+
+Real `.serp` files are never committed (the import's test file is
+written by `mitcad-cli serp-test-file`). `MITCAD_SERP_CORPUS` points at a
+folder of the files' writer's published examples (subfolders too), each
+with its source and licence in an `index.tsv` (mitcad#1870). The ctest
+`serp.corpus` (`tools/cli/serp-corpus.cmake`) imports each file an
+`index.tsv` lists (column `file`) through OCCT with `mitcad-cli run`, in
+the index's folder. The column `check` names the file's script of
+commands and expectations beside the index: it imports the file and
+checks facts read from the file itself (as many bodies as it holds
+solids, surfaces and meshes, their volumes and bounding boxes, the
+components of its blocks). A row whose `check` is empty or `no` is only
+imported. Skipped without the variable; not one of the release's
+required corpora.
 
 ### FreeCAD reference models and corpus
 

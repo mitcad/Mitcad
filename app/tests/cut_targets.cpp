@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include "framework/CutTargetsPanel.hpp"
 
 #include <cstdio>
@@ -263,3 +264,4 @@ int cutTargetsTests() {
   failures += movingTargetsTests();
   return failures;
 }
+MITCAD_UNIT_TEST(cutTargetsTests);

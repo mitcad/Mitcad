@@ -6,6 +6,7 @@
 // shape as well as colour, also as the failures' and warnings' buttons'
 // icons; the card's line of a failed feature; a red text's colour for the
 // card it sits on, and a message box's fill with it (mitcad#1152).
+#include "UnitTests.hpp"
 #include "browser/FeatureStatus.hpp"
 
 #include <algorithm>
@@ -431,3 +432,4 @@ int featureStatusTests() {
   autoFixHintTests();
   return failures;
 }
+MITCAD_UNIT_TEST(featureStatusTests);

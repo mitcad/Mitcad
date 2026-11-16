@@ -25,6 +25,12 @@ or Import in the application (the import process, as for parts).
   part found so is checked to be the referenced document by the version
   id both files store. Files that are not found are empty components,
   placed, and reported.
+- A part without bodies says why (mitcad#1913): its file holds none, or
+  its result lists bodies the import did not find. An assembly converted
+  from another format (a building model) keeps the conversion's
+  translation report; what it says of such a part (that no bodies were
+  read from the source file) is on the part's line of the report and in
+  a warning.
 - Checks against the file: each placement against the transform the file
   displays the occurrence with, each part's bodies within the range box
   the file stores for it (parts saved again after the assembly only
@@ -41,7 +47,10 @@ import-iam`, the corpus folders searched by name, each in a child process
 of its own, several at once (as `ipt.corpus`). Every occurrence that is
 not suppressed must be placed, every part file found must import, every
 placement must agree with the displayed one and every part's bodies must
-lie within their stored range box; files that are not in the corpus
+lie within their stored range box, and every part whose result lists
+bodies must bring them (a part without geometry is one whose file holds
+none; the import says why, with what a converted assembly's translation
+report says of it, mitcad#1913); files that are not in the corpus
 (library parts, files of other projects) are reported, not failed.
 
 Results (dev build, 2026-10-09) on a private project tree of 166

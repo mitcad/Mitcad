@@ -260,6 +260,28 @@ between (`Captures::placement_at`). The captured positions come in as
 `capture_position` features at the end. It is all one undo step with the
 import.
 
+**Occurrences moved by a part inside them (mitcad#1892).** A joint whose
+side is on a part inside an inserted design (the valve servo design: the
+servo's output horn jointed to the holder's face) moves the whole
+occurrence, but the file keeps no placement of the occurrence's own path
+after it: it keeps one placements object per path through the occurrence
+to each occurrence inside it, the levels inside named through the key
+(`01 id 01 key 00 str8(CE2913AA…) 00`, the occurrence's id in the other
+document's file), and the occurrence's own object has only the item that
+inserted it. The decoder took those paths for the occurrence's own (the
+levels inside were invisible to it), each overwriting the one before, so
+the occurrence took the placement of the path to the last part inside: the
+servo landed turned and away from the holder by that part's placement in
+the servo design. The decoder now gives them apart
+(`_f3d.inside_placements`, SCHEMA.md §5.2), and the replay, where it has
+the document's file, takes each path's placements with its inner levels'
+placement in that document taken off (the document's import gives its
+occurrences by their object ids, `ComponentReport::occurrence_objects`)
+as the occurrence's own placements (`references::outer_placements`; the
+paths agree in the designs read; where they part, the placement most of
+them give). Without the document's file the occurrence keeps its own
+placements: its component is empty then anyway.
+
 The replay matches the design's own history, which holds none of the
 copies' bodies, so while it runs the document's body view leaves the
 filled components (and the components inside them) out

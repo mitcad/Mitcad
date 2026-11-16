@@ -47,7 +47,7 @@ use super::compose::{
 };
 use super::sheet::{Anchor, Group, Item, Pen, text_width};
 use mitcad_model::Characteristic;
-use mitcad_model::datum::{CurveGeometry, Vec3};
+use mitcad_model::datum::{CurveGeometry, SurfaceGeometry, Vec3};
 use mitcad_model::topo::{EdgeName, FaceName};
 
 /// A dimension line's distance from what it measures (paper mm) when it is
@@ -177,6 +177,19 @@ pub struct BodyGeometry {
     /// Its torus faces (mitcad#1694: a fillet round a turned part, seen
     /// from the side, picked on its outline).
     pub tori: Vec<TorusFace>,
+    /// Its curved faces other than cylinders (mitcad#1909: a torus, a
+    /// sphere, a cone, a free-form face), whose silhouettes a view's picks
+    /// are found on.
+    pub curved: Vec<CurvedFace>,
+}
+
+/// A curved face that is no cylinder (mitcad#1909): its name (and its
+/// others) and its surface, in its body's coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurvedFace {
+    pub face: FaceName,
+    pub names: Vec<FaceName>,
+    pub surface: SurfaceGeometry,
 }
 
 /// A torus face: its name (and its others), its centre, its unit axis and
@@ -442,6 +455,76 @@ impl Seen {
                 Some(add2(center, mul2([a.cos(), a.sin()], radius)))
             }
             Self::Circle { .. } => None,
+        }
+    }
+
+    /// Its point that lies furthest along a direction of the view
+    /// (mitcad#1909: an extreme point, the top of an arc for an overall
+    /// size): a point itself; a line's end furthest that way (a circle's
+    /// seen from the side likewise), its middle when it runs square to the
+    /// direction; a circle's point where it faces that way, an arc's there
+    /// or its end furthest that way; a round face's outline on that side,
+    /// as a line.
+    pub fn extreme(&self, d: P2) -> P2 {
+        let d = unit2(d);
+        let line = |a: P2, b: P2| {
+            let (da, db) = (dot2(a, d), dot2(b, d));
+            if (da - db).abs() <= 1e-9 * len2(sub2(b, a)).max(1.0) {
+                mid(a, b)
+            } else if da > db {
+                a
+            } else {
+                b
+            }
+        };
+        match *self {
+            Self::Point(p) => p,
+            Self::Line(a, b) => line(a, b),
+            Self::Circle {
+                center,
+                radius,
+                end_on: true,
+                arc,
+                ..
+            } => {
+                let on = |a: f64| add2(center, mul2([a.cos(), a.sin()], radius));
+                let angle = d[1].atan2(d[0]);
+                match arc {
+                    Some((start, end)) if !in_sweep(angle, start, end) => {
+                        // Off its sweep: its end furthest that way.
+                        let (s, e) = (on(start), on(end));
+                        if dot2(e, d) > dot2(s, d) + 1e-12 * radius.max(1.0) {
+                            e
+                        } else {
+                            s
+                        }
+                    }
+                    _ => on(angle),
+                }
+            }
+            Self::Circle {
+                center,
+                radius,
+                across,
+                arc,
+                ..
+            } => {
+                let (low, high) = arc.unwrap_or((-radius, radius));
+                line(
+                    add2(center, mul2(across, low)),
+                    add2(center, mul2(across, high)),
+                )
+            }
+            Self::Axis { a, b, radius } => {
+                let n = perp(unit2(sub2(b, a)));
+                let facing = dot2(n, d);
+                if facing.abs() <= 1e-12 {
+                    // Along its axis: the end of the axis that way.
+                    return line(a, b);
+                }
+                let side = mul2(n, radius * facing.signum());
+                line(add2(a, side), add2(b, side))
+            }
         }
     }
 }
@@ -3404,6 +3487,8 @@ mod tests {
             on_cut: None,
             drawn: None,
             side: None,
+            outline: None,
+            extreme: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, vec![pick.clone()]);
         assert!(d.check().unwrap_err().contains("takes 2 picks"));
@@ -3724,6 +3809,8 @@ mod tests {
             on_cut: None,
             drawn: None,
             side: None,
+            outline: None,
+            extreme: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Linear, Vec::new());
         d.along = Some(Along::Horizontal);
@@ -4364,6 +4451,8 @@ mod tests {
             on_cut: None,
             drawn: None,
             side: None,
+            outline: None,
+            extreme: None,
         };
         let picked = |a: &ViewAnnotation| {
             let mut a = a.clone();
@@ -4505,6 +4594,8 @@ mod tests {
             on_cut: None,
             drawn: None,
             side: None,
+            outline: None,
+            extreme: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![pick.clone()]);
         d.letter = Some("A".to_owned());
@@ -4591,6 +4682,8 @@ mod tests {
             on_cut: None,
             drawn: None,
             side: None,
+            outline: None,
+            extreme: None,
         };
         let mut d = ViewAnnotation::new(1, AnnotationType::Datum, vec![face.clone()]);
         d.letter = Some("B".to_owned());

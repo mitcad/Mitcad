@@ -320,6 +320,8 @@ vcpkg_from_github(
         1690-brepblend-line-points-read-by-index-in-constant-time.patch
         1691-intcurvesurface-surface-polyhedra-made-once-per-face.patch
         1695-inttools-wline-decomposition-reads-no-point-past-the-line-ends.patch
+        1700-chfi3d-walked-end-runs-on-over-the-flat-stretch-beyond-a-curved-wall.patch
+        1082-brepmesh-delabella-cocircular-start-beyond-any-contour-edge.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

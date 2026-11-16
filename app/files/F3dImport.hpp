@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+class QDialog;
 class QMessageBox;
 class QTimer;
 class QWidget;
@@ -67,6 +68,24 @@ public:
   void setAskChoices(bool ask) { m_ask = ask; }
   // The options the import ran with (the documents chosen, ...).
   const QJsonObject& options() const { return m_options; }
+  // A file of several imported one after another into the open design
+  // (mitcad#1894), set before start(): the progress names it "file
+  // <index> of <count>" (from 1).
+  void setBatch(int index, int count) {
+    m_batchIndex = index;
+    m_batchCount = count;
+  }
+  // The progress dialog stays shown when the import ends well, for the
+  // next file of the batch (takeProgress, adoptProgress): one dialog for
+  // the whole batch.
+  void setKeepProgress(bool keep) { m_keepProgress = keep; }
+  // The import's progress dialog, which it no longer owns (null when it
+  // has none): its buttons do nothing until an import adopts it; the
+  // caller deletes it otherwise.
+  QDialog* takeProgress();
+  // Shows the progress in `dialog`, an import's from takeProgress, which
+  // this import then owns; set before start().
+  void adoptProgress(QDialog* dialog);
   // The store the worker hands the import's evaluation over in (every
   // result a store takes, mitcad#413), while this object lives: the
   // application reads the imported design with it rather than evaluating
@@ -159,6 +178,9 @@ private:
   int m_partsDone = 0;
   QString m_partName;
   bool m_ask = false;  // setAskChoices
+  int m_batchIndex = 0; // setBatch
+  int m_batchCount = 0;
+  bool m_keepProgress = false; // setKeepProgress
   QString m_lastLine;  // the worker's last other line (a crash's)
   QString m_failure;   // the worker's own message why it failed (import-failed)
   bool m_stopping = false;

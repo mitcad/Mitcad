@@ -261,6 +261,16 @@ pub(super) fn is_datum(t: &str) -> bool {
     )
 }
 
+/// A coordinate system (a datum one or a local one, mitcad#1930).
+pub(super) fn is_coordinate_system(t: &str) -> bool {
+    matches!(
+        t,
+        "PartDesign::CoordinateSystem"
+            | "Part::LocalCoordinateSystem"
+            | "App::LocalCoordinateSystem"
+    )
+}
+
 /// A PartDesign feature of a Body's chain of solids (not a datum, a binder
 /// or a boolean's group).
 pub(super) fn is_solid_feature(t: &str) -> bool {

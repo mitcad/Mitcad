@@ -245,6 +245,12 @@ void NavigationBar::movePin(const QString& id, int index) {
   }
 }
 
+void NavigationBar::reloadPins() {
+  m_commandPins = NavigationBarPins::load([this](const QString& id) { return pinOf(id); });
+  updatePinnedButtons();
+  emit pinsChanged();
+}
+
 void NavigationBar::updatePinnedButtons() {
   for (QToolButton* old : std::as_const(m_pinButtons)) {
     layout()->removeWidget(old);

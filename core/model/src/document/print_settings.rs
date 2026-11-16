@@ -685,10 +685,14 @@ impl<K: Kernel> Document<K> {
                 let def = print_keys::key(key)
                     .filter(|d| d.set == layer)
                     .ok_or_else(|| {
-                        invalid(format!(
-                            "{key} is no key of the {} set (the print_keys query lists them)",
-                            layer.property_set()
-                        ))
+                        let name = layer.property_set();
+                        invalid(match print_keys::key_hint(key, layer, Some(value)) {
+                            // A slicer's own key (mitcad#1897).
+                            Some(hint) => format!("{key} is no key of the {name} set{hint}"),
+                            None => format!(
+                                "{key} is no key of the {name} set (the print_keys query lists them)"
+                            ),
+                        })
                     })?;
                 if def.per_dialect {
                     return Err(invalid(format!(

@@ -179,6 +179,12 @@ void setCustomAgentArguments(const QString& arguments) {
   }
 }
 
+void resetAgentConnections() {
+  QSettings settings;
+  settings.remove(QStringLiteral("chat/api"));
+  settings.remove(QStringLiteral("chat/acp"));
+}
+
 bool chatAgentOffered(const QString& agent) {
   return !QSettings().value(QStringLiteral("chat/off")).toStringList().contains(agent);
 }

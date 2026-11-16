@@ -57,14 +57,14 @@ const QString kAgentSuffix = QStringLiteral(" (agent)");
 [[noreturn]] void refuse(const QString& reason) {
   // A refusal can repeat a client's text: its log line keeps the start
   // (mitcad#935).
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(agentText(reason), mcp::kRefusalLogChars));
   throw std::runtime_error(reason.toStdString());
 }
 
 // A refusal with fields of its own beside the error (mitcad#689: which
 // entry of a command array).
 [[noreturn]] void refuseWith(const QString& reason, const QJsonObject& fields) {
-  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(reason, mcp::kRefusalLogChars));
+  qInfo().noquote() << QStringLiteral("MCP refused: %1").arg(mcp::echoed(agentText(reason), mcp::kRefusalLogChars));
   throw mcp::Refusal(reason, fields);
 }
 
@@ -227,13 +227,34 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
       idleDocument().validate_mcp_document_command(rustStr(compactJson(entries[i])));
     } catch (const std::exception& error) {
       if (!array) {
-        refuse(agentErrorText(error));
+        refuse(modelText(error));
       }
       // Nothing of the array has run.
-      refuseWith(entryName(i) + agentErrorText(error),
+      refuseWith(entryName(i) + modelText(error),
                  {{QStringLiteral("entry"), static_cast<qint64>(i)},
                   {QStringLiteral("applied"), false},
                   {QStringLiteral("undone"), 0}});
+    }
+  }
+  // Names and references between the entries (mitcad#1897), checked before
+  // any entry runs; each entry's references are replaced right before it.
+  QJsonArray listed;
+  for (const QJsonObject& entry : std::as_const(entries)) {
+    listed.append(entry);
+  }
+  const QByteArray listText = QJsonDocument(listed).toJson(QJsonDocument::Compact);
+  {
+    const QJsonObject refused = parseObject(mcp_check_refs(rustStr(listText)));
+    if (refused.contains(QStringLiteral("error"))) {
+      const qsizetype at = static_cast<qsizetype>(refused.value(QStringLiteral("entry")).toInteger());
+      const QString error = refused.value(QStringLiteral("error")).toString();
+      if (!array) {
+        refuse(error);
+      }
+      // Nothing of the array has run.
+      refuseWith(entryName(at) + error, {{QStringLiteral("entry"), static_cast<qint64>(at)},
+                                         {QStringLiteral("applied"), false},
+                                         {QStringLiteral("undone"), 0}});
     }
   }
   if (arguments.contains(QStringLiteral("hints")) && !arguments.value(QStringLiteral("hints")).isBool()) {
@@ -253,10 +274,32 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
   QJsonArray results;
   QJsonArray times;
   qsizetype stopped = -1;
+  // The entries as they ran, their references replaced (mitcad#1897).
+  QList<QJsonObject> resolved;
   for (qsizetype i = 0; i < entries.size(); ++i) {
     QJsonObject answer;
     QString reason;
-    const bool ran = inSketch ? mcpSketchStep(entries[i], &answer, reason) : mcpModelStep(entries[i], &answer, reason);
+    // The entry without its name, its references to the results of the
+    // entries before it replaced and checked again as the command they
+    // make (mitcad#1897); one that names nothing refuses the entry.
+    bool ran = false;
+    QJsonObject entry;
+    try {
+      const QByteArray resultsText = QJsonDocument(results).toJson(QJsonDocument::Compact);
+      entry = parseObject(mcp_resolve_entry(rustStr(listText), static_cast<std::size_t>(i), rustStr(resultsText)));
+      QJsonObject plain = entries[i];
+      plain.remove(QStringLiteral("as"));
+      if (entry != plain) {
+        idleDocument().validate_mcp_document_command(rustStr(compactJson(entry)));
+      }
+      ran = true;
+    } catch (const std::exception& error) {
+      reason = agentErrorText(error);
+    }
+    if (ran) {
+      resolved.append(entry);
+      ran = inSketch ? mcpSketchStep(entry, &answer, reason) : mcpModelStep(entry, &answer, reason);
+    }
     if (!ran) {
       if (!array) {
         refuse(reason);
@@ -295,9 +338,10 @@ QJsonObject MainWindow::mcpCommand(const QJsonObject& arguments) {
   result.insert(QStringLiteral("result"), results.last());
   if (hints) {
     result.insert(QStringLiteral("hints"), QJsonArray());
+    // The entries that ran as they ran (mitcad#1897), the others as given.
     QJsonArray commands;
-    for (const QJsonObject& entry : std::as_const(entries)) {
-      commands.append(entry);
+    for (qsizetype i = 0; i < entries.size(); ++i) {
+      commands.append(i < resolved.size() ? resolved[i] : entries[i]);
     }
     try {
       const QByteArray commandText = QJsonDocument(commands).toJson(QJsonDocument::Compact);
@@ -350,11 +394,11 @@ bool MainWindow::mcpModelStep(const QJsonObject& request, QJsonObject* answer, Q
   try {
     command = parseObject(idleDocument().mcp_resolve_command(rustStr(compactJson(request))));
   } catch (const std::exception& error) {
-    reason = agentErrorText(error);
+    reason = modelText(error);
     return false;
   }
   if (!runModelCommand(command, answer)) {
-    reason = lastError().isEmpty() ? QStringLiteral("The model command was refused.") : lastError();
+    reason = m_lastModelError.isEmpty() ? QStringLiteral("The model command was refused.") : m_lastModelError;
     return false;
   }
   return true;
@@ -473,7 +517,7 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     plan = parseObject(idleDocument().mcp_export_plan(rustStr(compactJson(arguments)), rustStr(path.toUtf8()),
                                                       rustStr(title.toUtf8()), rustStr(folder.toUtf8())));
   } catch (const std::exception& error) {
-    refuse(agentErrorText(error));
+    refuse(modelText(error));
   }
   // The other files it writes (an OBJ's .mtl) by the same rule.
   for (const QJsonValue& output : plan.value(QStringLiteral("outputs")).toArray()) {
@@ -489,10 +533,10 @@ QJsonObject MainWindow::mcpExport(const QJsonObject& arguments) {
     try {
       result = parseObject(idleDocument().mcp_export_drawing(rustStr(compactJson(command)), overwrite));
     } catch (const std::exception& error) {
-      refuse(agentErrorText(error));
+      refuse(modelText(error));
     }
   } else if (!runCommand(command, &result)) {
-    refuse(lastError().isEmpty() ? QStringLiteral("The export failed.") : lastError());
+    refuse(m_lastModelError.isEmpty() ? QStringLiteral("The export failed.") : m_lastModelError);
   }
   qInfo().noquote() << QStringLiteral("MCP: an agent exported %1 (%2)")
                            .arg(path, arguments.value(QStringLiteral("format")).toString());
@@ -511,8 +555,10 @@ QJsonObject MainWindow::mcpRender(const QJsonObject& arguments) const {
   const QString given = arguments.value(QStringLiteral("path")).toString();
   if (!given.isEmpty()) {
     QString reason;
+    // Line art writes an SVG (mitcad#1736).
+    const bool svg = arguments.value(QStringLiteral("format")).toString() == QStringLiteral("svg");
     path = mcp::agentOutputPath(given, arguments.value(QStringLiteral("overwrite")).toBool(false), reason,
-                                {QStringLiteral("png")});
+                                {svg ? QStringLiteral("svg") : QStringLiteral("png")});
     if (path.isEmpty()) {
       refuse(reason);
     }
@@ -523,7 +569,7 @@ QJsonObject MainWindow::mcpRender(const QJsonObject& arguments) const {
     result = parseObject(idleDocument().mcp_render(rustStr(compactJson(arguments)), rustStr(m_mcpDocumentId.toUtf8()),
                                                    rustStr(path.toUtf8())));
   } catch (const std::exception& error) {
-    refuse(agentErrorText(error));
+    refuse(modelText(error));
   }
   if (result.contains(QStringLiteral("error"))) {
     const QString error = result.take(QStringLiteral("error")).toString();

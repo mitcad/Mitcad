@@ -7,6 +7,7 @@
 // over every project and the recent list (a recent design in a project
 // listed once, by its project key), a preview found on this computer, and
 // the logs' lines.
+#include "UnitTests.hpp"
 #include "files/StartBrowser.hpp"
 
 #include <cstdio>
@@ -272,3 +273,4 @@ int startBrowserTests() {
   QSettings::setDefaultFormat(format);
   return failures;
 }
+MITCAD_UNIT_TEST(startBrowserTests);

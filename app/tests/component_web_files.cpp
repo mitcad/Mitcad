@@ -3,6 +3,7 @@
 // part-number rule, the component's name, the format filter by name and by
 // content, typed addresses, the sites kept in the settings, and the
 // downloads' temporary folders (this run's held, an earlier run's removed).
+#include "UnitTests.hpp"
 #include "webbrowser/ComponentWebFiles.hpp"
 
 #include <cstdio>
@@ -66,7 +67,7 @@ void nameTests() {
 void nameFilterTests() {
   using mitcad::WebFileKind;
   using mitcad::checkWebFileName;
-  for (const char* name : {"a.step", "a.STP", "a.iges", "a.igs", "a.brep", "a.stl", "a.obj", "a.mitcad"}) {
+  for (const char* name : {"a.step", "a.STP", "a.iges", "a.igs", "a.brep", "a.stl", "a.obj", "a.mitcad", "a.serp"}) {
     CHECK(checkWebFileName(text(name)).kind == WebFileKind::Component);
     CHECK(checkWebFileName(text(name)).note.isEmpty());
   }
@@ -257,3 +258,4 @@ int componentWebFilesTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(componentWebFilesTests);

@@ -36,10 +36,10 @@ point, the face beyond growing over it.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index b869f0c..2bae158 100644
+index 7fa82c1c..90e54f3c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -2903,6 +2903,108 @@ static void cherche_edge1(const TopoDS_Face&   F1,
+@@ -2908,6 +2908,108 @@ static void cherche_edge1(const TopoDS_Face&   F1,
    cherche_edge1(F1, F2, Edge);
  }
  
@@ -148,7 +148,7 @@ index b869f0c..2bae158 100644
  //=======================================================================
  // function : containV
  // purpose  : return true if vertex V belongs to F1
-@@ -3870,6 +3972,44 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3875,6 +3977,44 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    F1 = TopoDS::Face(DStr.Shape(Fd->IndexOfS1()));
    F2 = TopoDS::Face(DStr.Shape(Fd->IndexOfS2()));
    F3 = F1;
@@ -193,23 +193,23 @@ index b869f0c..2bae158 100644
    // A seam counts as an edge of the vertex where the walk round it passes
    // it: not when it lies on a face at the end only and both contacts end on
    // edges away from the vertex (the faces at the end are then found along
-@@ -4145,6 +4285,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4152,6 +4292,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
            V1        = V2;
            Ei        = E;
            ChFi3d_cherche_face1(myEFMap(E), F1, Face[nb]);
 +          InsertFacesBetween(Vedge[nb], F1, nb);
-           cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
-           nb++;
-           if (nb >= nn)
-@@ -4186,6 +4327,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           // (Roundings: OCCT's first common edge for chamfers, whose
+           // corners it made invalid where it took another, as in OCCT's
+           // chamfer sequences A5.)
+@@ -4203,6 +4344,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
            Ei        = E;
            V1        = V2;
            ChFi3d_cherche_face1(myEFMap(E), F2, Face[nb]);
 +          InsertFacesBetween(Vedge[nb], F2, nb);
-           cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
-           nb++;
-           if (nb >= nn)
-@@ -5054,174 +5196,194 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+           // (Roundings: OCCT's first common edge for chamfers, whose
+           // corners it made invalid where it took another, as in OCCT's
+           // chamfer sequences A5.)
+@@ -5083,174 +5225,194 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
      Parfin(3) = pfac2.X();
      Parfin(4) = pfac2.Y();
  
@@ -551,7 +551,7 @@ index b869f0c..2bae158 100644
      }
  
      //////////////////////////////////////////////////////////////////////
-@@ -5245,7 +5407,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5274,7 +5436,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        Interfedge[0] =
          ChFi3d_FilPointInDS(CV1.TransitionOnArc(), Iarc1, indpoint1, paredge1, Isvtx1);
        // DStr.ChangeShapeInterferences(Edge[0]).Append(Interfp1);
@@ -560,7 +560,7 @@ index b869f0c..2bae158 100644
            && ProlongOnSameEdge(
              DStr, Edge[0], Face[0], F1, Vtx, EdgeSpine, paredge1, indpoint1, tolapp3d))
        {
-@@ -5258,7 +5420,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5287,7 +5449,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        Interfedge[nb] =
          ChFi3d_FilPointInDS(CV2.TransitionOnArc(), Iarc2, indpoint2, paredge2, Isvtx2);
        // DStr.ChangeShapeInterferences(Edge[nb]).Append(Interfp2);
@@ -572,7 +572,7 @@ index b869f0c..2bae158 100644
            && ProlongOnSameEdge(
              DStr, Edge[nb], Face[nb - 1], F2, Vtx, EdgeSpine, paredge2, indpoint2, tolapp3d))
        {
-@@ -5311,6 +5476,14 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5340,6 +5505,14 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
              ori = TopAbs_REVERSED;
            }
          }
@@ -587,7 +587,7 @@ index b869f0c..2bae158 100644
        }
        else
        {
-@@ -5381,6 +5554,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5410,6 +5583,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          bool          vtx1 = false;
          bool          vtx2 = false;
          par1               = ext.Point(1).Parameter();
@@ -609,7 +609,7 @@ index b869f0c..2bae158 100644
          ParVtx             = par1;
          if (oneintersection1 || oneintersection2)
          {
-@@ -5401,6 +5589,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5430,6 +5618,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          {
            par2 = paredge2;
            ind  = indpoint2;
@@ -622,7 +622,7 @@ index b869f0c..2bae158 100644
          }
          if (par1 > par2)
          {
-@@ -5419,17 +5613,40 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5448,17 +5642,40 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          }
          occ::handle<Geom_Curve> Ct = new Geom_TrimmedCurve(csau, par1, par2);
          TopAbs_Orientation      orient;
@@ -670,7 +670,7 @@ index b869f0c..2bae158 100644
          }
          if (oneintersection1 || oneintersection2)
          {
-@@ -5578,6 +5795,15 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5607,6 +5824,15 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        }
      }
  
@@ -686,7 +686,7 @@ index b869f0c..2bae158 100644
      if (checkShrink
          && IsShrink(Ps, p1, p2, checkShrParam, isUShrink, Precision::Parametric(tolreached)))
      {
-@@ -5644,8 +5870,11 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -5673,8 +5899,11 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    for (nb = 1; nb <= nbface; nb++)
    {
      int indice = DStr.AddShape(Face[nb - 1]);

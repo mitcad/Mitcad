@@ -61,6 +61,9 @@ use dwg_import::{dwg_report_passes, dwg_report_text, dwg_write_test_file};
 // The .3dm import (mitcad#1715).
 mod import_3dm;
 use import_3dm::{import_3dm_report_passes, import_3dm_report_text, import_3dm_write_test_file};
+// The .serp import's test file (mitcad#1870).
+mod serp_test;
+use serp_test::serp_write_test_file;
 // The AI chat panel's logic (mitcad#947).
 mod chat;
 use chat::{ChatStream, agent_chat, new_chat_stream};
@@ -105,6 +108,8 @@ use mcp::{
     mcp_command_document, mcp_command_hint_query, mcp_command_hints, mcp_entry_failed,
     mcp_recomputed, mcp_snapshot_queries,
 };
+// Live MCP's references between array entries (mitcad#1897).
+use mcp::{mcp_check_refs, mcp_resolve_entry};
 // The rolled-back features evaluated in the background (mitcad#1267).
 mod background;
 use background::BackgroundRun;
@@ -116,6 +121,8 @@ use mcp::run_mcp_raytraced;
 // The component browser's zip downloads (mitcad#1579).
 mod web_downloads;
 use web_downloads::{zip_extract, zip_list};
+// Kernel calls given up by a Cancel or the time limit (mitcad#1917).
+use kernel::abandon::bridge::{kernel_time_limit, set_kernel_time_limit, set_test_kernel_hang};
 
 #[cxx::bridge(namespace = "mitcad")]
 mod ffi {
@@ -196,6 +203,12 @@ mod ffi {
         fn mcp_command_hints(review: &str) -> Result<String>;
         fn mcp_entry_failed(result: &str) -> bool;
         fn mcp_recomputed(result: &str) -> bool;
+        /// Live MCP's references between array entries (mitcad#1897):
+        /// why the names and references refuse the array before any entry
+        /// runs (`{"entry", "error"}`, or `{}`), and an entry as it runs,
+        /// its references replaced by the earlier entries' results.
+        fn mcp_check_refs(entries: &str) -> Result<String>;
+        fn mcp_resolve_entry(entries: &str, index: usize, results: &str) -> Result<String>;
         fn mcp_export_plan(
             self: &Document,
             arguments: &str,
@@ -403,6 +416,10 @@ mod ffi {
         fn import_3dm_report_text(json: &str) -> String;
         /// Whether an `import_3dm` report given as JSON passes its checks.
         fn import_3dm_report_passes(json: &str) -> bool;
+        /// Writes the .serp import's test file (mitcad#1870): the reader's
+        /// sample scene around B-reps OCCT wrote, or a test case (`newer`:
+        /// a format version newer than the reader knows; empty for none).
+        fn serp_write_test_file(path: &str, test_case: &str) -> Result<()>;
     }
 
     // Background computation (P7, jobs.rs): the application computes a
@@ -852,6 +869,25 @@ mod ffi {
         /// one over the reader's limits.
         fn zip_extract(zip: &str, name: &str, target: &str) -> Result<()>;
     }
+
+    // Kernel calls given up by a Cancel or the time limit (mitcad#1917,
+    // kernel/abandon.rs).
+
+    extern "Rust" {
+        /// The kernel's time limit in seconds (0: none): a kernel call of
+        /// those that may not return (fillets, chamfers, shells and
+        /// offsets, sweeps, lofts, healing: kernel/abandon.rs, mitcad#1922)
+        /// that runs longer is given up and the feature fails "the
+        /// geometry kernel did not finish within N s".
+        /// From MITCAD_KERNEL_TIME_LIMIT, 300 s by default.
+        fn kernel_time_limit() -> f64;
+        /// Sets it for the whole process (0: none).
+        fn set_kernel_time_limit(seconds: f64);
+        /// For tests: every such call first waits `seconds` (0: none),
+        /// deaf to every cancel and limit, as a call that does not return
+        /// (MITCAD_TEST_KERNEL_HANG).
+        fn set_test_kernel_hang(seconds: f64);
+    }
 }
 
 /// The document of the application and `mitcad-cli`.
@@ -1108,6 +1144,9 @@ impl Document {
         // Every import's warnings as notices too (mitcad#1040), beside
         // those of its outcomes.
         mitcad_model::notice::add_notices(&mut result);
+        // Every row of the report with its status, and the verdict
+        // (mitcad#1893): the Import Report draws them, agents read them.
+        mitcad_import::report_status::annotate(&mut result);
         Ok(result)
     }
 

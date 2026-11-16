@@ -1,0 +1,119 @@
+# SPDX-License-Identifier: MIT
+# The Browser's width in the Floating layout (mitcad#1932, GitHub
+# mitcad/Mitcad#365), on the design of tools/ui-scripts/browser-widths.json:
+# a 200 x 200 mm plate in the root (Body1) and an empty component Short
+# placed once (Short:1). The window 1260 px wide, the plate seen from the
+# top and zoomed in until it fills the view.
+#   1. Rows (Preferences › Display, the limit 33 % by default): a component
+#      renamed to a long name widens the rows and the card so that the name
+#      shows in full (the card as wide as its widest row, more than 260 px).
+#   2. A longer name: the card stops at 33 % of the view and the name is
+#      elided; its tooltip has the name in full.
+#   3. Rows at most 60 % in Preferences: at once the card widens and
+#      the longer name shows in full.
+#   4. Short again: the card shrinks back to 260 px; a click beside the
+#      rows reaches the view (the plate's face behind them).
+#   5. Card: the card has a width grip; dragged 120 px wider, the card is
+#      380 px wide and the width is remembered (the restart is
+#      browser-widths-restart.mitcad-ui).
+# Preferences is a dialog on Windows and Linux (applied with OK) and the
+# Settings window on macOS (applied as it changes).
+wait-idle
+window-resize 1260 860
+wait-idle
+command view.top
+command view.fit
+wait-idle
+wheel 50 50 15
+wait-idle
+sleep 300
+
+# 1. Rows, the limit at its default.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice browserBackground 'Rows'
+expect-widget-property browserRowsShare value 33
+key Return
+focus-main
+expect-ever '^Browser background: rows$'
+# No width grip with Rows.
+expect-ever '^Browser card edge: none$'
+mark
+model-command '{"cmd":"rename_component","component":"Short","name":"Bracket-for-the-left-side-motor-unit"}'
+wait-log '^Browser Root/Bracket-for-the-left-side-motor-unit:1 at '
+# As wide as its widest row with the whole name: more than 260 px, less
+# than the limit.
+wait-log '^Browser rows width (26[1-9]|2[7-9][0-9]|[3-9][0-9][0-9]) [(]widest row \1, at most 33% of [0-9]+: [0-9]+[)]$'
+wait-log '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ (26[1-9]|2[7-9][0-9]|[3-9][0-9][0-9])x'
+wait-idle
+sleep 500
+capture elided '^Browser names elided: ([0-9]+)$'
+expect-near ${elided} 0 0 0
+
+# 2. A longer name: the card at the limit, the name elided, in full in its
+# tooltip.
+mark
+model-command '{"cmd":"rename_component","component":"Bracket-for-the-left-side-motor-unit","name":"Bracket-for-the-left-side-motor-unit-with-the-mounting-plate"}'
+wait-log '^Browser rows width ([0-9]+) [(]widest row [0-9]+, at most 33% of [0-9]+: \1[)]$'
+wait-log '^Browser name elided Root/Bracket-for-the-left-side-motor-unit-with-the-mounting-plate:1: tooltip "Bracket-for-the-left-side-motor-unit-with-the-mounting-plate[^"]*"$'
+wait-idle
+sleep 500
+capture elided '^Browser names elided: ([0-9]+)$'
+expect-near ${elided} 1 0 0
+
+# 3. At most 60 % of the view: the longer name in full.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+focus-widget browserRowsShare
+invoke-widget browserRowsShare selectAll
+type 60
+key Return
+wait-log '^Preferences: browser rows at most 60%$'
+focus-main
+expect-setting appearance/browserRowsShare 60
+wait-log '^Browser rows width ([0-9]+) [(]widest row \1, at most 60% of [0-9]+: [0-9]+[)]$'
+wait-idle
+sleep 500
+capture elided '^Browser names elided: ([0-9]+)$'
+expect-near ${elided} 0 0 0
+
+# 4. Short again: back to 260 px, and a click beside the rows reaches the
+# view.
+mark
+model-command '{"cmd":"rename_component","component":"Bracket-for-the-left-side-motor-unit-with-the-mounting-plate","name":"Short"}'
+wait-log '^Browser rows width 260 [(]widest row [0-9]+, at most 60% of [0-9]+: [0-9]+[)]$'
+wait-log '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ 260x'
+wait-idle
+sleep 500
+mark
+click-logged '^Browser view beside the rows at '
+wait-log '^Selected: 1 face '
+mark
+click-logged '^Browser Root/Short:1 at '
+wait-log '^Selected: 1 '
+expect-no-log '^Selected: 1 face '
+
+# 5. Card: the width grip, dragged 120 px wider and remembered.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice browserBackground 'Card'
+key Return
+wait-log '^Preferences: browser background card$'
+focus-main
+wait-log '^Browser background: card$'
+wait-log '^Browser card edge at '
+# Still 260 px wide (as with Rows before it: no new "Floating cards" line).
+expect-ever '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ 260x'
+wait-idle
+sleep 300
+mark
+drag-from '^Browser card edge at ' 120 0
+wait-log '^Browser card width 380 remembered$'
+wait-log '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ 380x'
+expect-setting appearance/browserCardWidth 380
+expect-setting appearance/browserBackground card
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

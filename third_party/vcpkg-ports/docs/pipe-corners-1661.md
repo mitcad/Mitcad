@@ -20,9 +20,11 @@ from square by the corner's angle (`geometry/src/spine.cpp`, `pipe_shell`).
   when the two sides' seams do not cross each other (sides swept along
   curves other than lines and circles), and matches the ends of the
   section edges' curves on the faces in 3D within the edges' tolerance.
-- **1662** makes a turn of the spine's tangent from 1e-4 rad on a mitred
-  corner (it was 1e-2 rad): through a smaller one the section keeps its
-  frame and leans by the turn. Rounded corners keep 1e-2 rad.
+- **1662** lets a caller ask for corners from a smaller turn of the
+  spine's tangent than 1e-2 rad (`SetTransitionMode(Mode, theAngleMin)`);
+  MitCad's pipes and surface sweeps ask for mitred corners from 1e-4 rad
+  on: through a smaller turn the section keeps its frame and leans by the
+  turn. Rounded corners keep 1e-2 rad.
 - **1663** cuts a mitre along the bisector plane where the intersection
   of the two sides breaks up (sides of one section touch at two points of
   the corner, and meet at a shallow angle along a small one), joining the
@@ -39,6 +41,9 @@ from square by the corner's angle (`geometry/src/spine.cpp`, `pipe_shell`).
   keeps each side's end where it does not reach the plane, for the round
   to turn about the corner.
 
+Each of them leaves OCCT's own cases as OCCT makes them (mitcad#1899;
+[below](#occts-own-tests-mitcad1899)).
+
 ## 1661-brepfill-trim-shell-corner-each-seam-ends-where-it-crosses-the-other-side
 
 The trim intersects the two sides (`BOPAlgo_PaveFiller`) and, for each
@@ -54,7 +59,11 @@ is found, the face keeps its end and the corner comes out invalid. Each
 seam now ends where it crosses the other side's faces when the two have
 no common vertex: of the vertices the intersection put on it, the one
 nearest to the bisector plane. Each side's loop round the section then
-starts at its own seam's vertex, on section edges both sides share.
+starts at its own seam's vertex, on section edges both sides share. Only
+where the two seams' crossings are distinct vertices within a tenth of
+their distance from the corner of the bisector plane: one vertex of both
+is the seams' own crossing, which OCCT refused by its direction, and a
+crossing further off is not where the seams pass each other.
 
 `CheckAndOrientEdges`, walking the section edges from vertex to vertex,
 decided which end of an edge's curve on the face lies at the seam by
@@ -62,20 +71,23 @@ comparing points on the face within the resolution of the vertex's
 tolerance there. The curves of approximated section edges on swept faces
 end up to 1.2e-6 off in the face's parameters (4.7e-6 mm on a circle of
 4 mm, where the vertex's tolerance was 1e-5 mm), so no loop was accepted.
-The ends are now compared in 3D within twice the vertex's or the edge's
-tolerance, whichever is wider, and on the face only for which of the two
-points they are nearer (the two curves of a closed face's seam are one
-line in 3D).
+Where that comparison finds neither point, the ends are now compared in
+3D within twice the vertex's or the edge's tolerance, whichever is wider,
+and on the face only for which of the two points they are nearer (the two
+curves of a closed face's seam are one line in 3D).
 
 ## 1662-brepoffsetapi-pipe-shell-mitred-corners-from-a-ten-thousandth-radian
 
-`BRepOffsetAPI_MakePipeShell::SetTransitionMode` passed
+`BRepOffsetAPI_MakePipeShell::SetTransitionMode` passes
 `BRepFill_PipeShell::SetTransition`'s default angles. Under its `Angmin`,
 `BRepFill_LocationLaw::TransformInCompatibleLaw` joins two edges' laws by
 turning the second's whole frame onto the first's end frame, and the
 sweep builds no corner there: through a kink of up to 1e-2 rad (0.57
 degrees) the section kept the first edge's frame and leaned by the kink
-all along the second edge. For mitred corners the angle is now 1e-4 rad
+all along the second edge. The patch adds
+`SetTransitionMode(Mode, theAngleMin)`, and MitCad's `pipe_shell`
+(`geometry/src/spine.cpp`) and surface sweeps
+(`geometry/src/surface_sweeps.cpp`) ask for mitred corners from 1e-4 rad
 (0.0057 degrees). The pieces of an intersection curve of chains joined
 tangentially meet at some 2e-6 rad, from the approximation of the
 crossing, and stay joined as before.
@@ -86,7 +98,9 @@ arcs, whose arcs meet two of its lines at 0.12 degrees (their plane turned
 by that), came out invalid where MitCad's pipe fell back to rounded
 corners (its mitre between an arc's torus and the closing line's cylinder
 does not close). The first version of this patch changed the default of
-`SetTransition` itself, for both.
+`SetTransition` itself, for both; the second that of `SetTransitionMode`
+for mitred corners, which gave OCCT's own sweeps along divided splines
+corners at their kinks of 0.02 to 0.2 degrees (mitcad#1899).
 
 ## 1663-brepfill-trim-shell-corner-mitre-along-the-bisector-plane-where-the-sides-intersection-breaks-up
 
@@ -124,6 +138,9 @@ With 1664, the halved section's trim met two parallel section edges in
 asking for them crashed. Parallel edges are now taken as edges without an
 extremum.
 
+An exception in the cut along the bisector plane refuses it (the corner
+is then left as OCCT leaves it).
+
 ## 1664-brepfill-sweep-sides-extended-past-a-corner-as-the-prisms-of-their-end-sections
 
 For a mitred corner `BRepFill_Sweep::BuildShell` extends each side past the
@@ -135,8 +152,10 @@ bisector plane, too far for 1663's mitre. A B-spline side is now extended
 straight along the normal of its section at the law's end: rows of poles
 of the end row translated along it, with the end row's weights, so that
 the extension is the prism of the end section, joined at C0. Other
-surfaces (the analytic ones of lines and circles) are extended as before.
-The cuts of that corner then lie 2.7e-5 mm apart.
+surfaces (the analytic ones of lines and circles) are extended as before,
+and so is every side at a corner between two pieces of the path that are
+both lines or circles, where the trim along the intersection makes the
+corner. The cuts of that corner then lie 2.7e-5 mm apart.
 
 ## 1665-bopds-paves-of-an-edge-whose-blocks-do-not-chain
 
@@ -206,11 +225,12 @@ tolerance: likely the edge the checker refused in the halved section's round of 
 sine as 10 lines (its volume within 0.00004 % of the round's, one edge's
 curve on a face refused). The edge's tolerance now covers how far its
 curve lies from the turn's up to twice the sweep's tolerance (each side's
-end is approximated within it); further off the piece is not the turned
-end (8 mm, a diameter, off at the whole circle's 26 and 28 degree corners,
-where the trim along the intersection kept the other half of one side's
-end) and no turn is made, so that the try fails instead of building a
-solid through itself. A row's turn reuses the edge the previous row's
+end is approximated within it); off by a tenth of the end's extent or
+more the piece is not the turned end (8 mm, a diameter, off at the whole
+circle's 26 and 28 degree corners, where the trim along the intersection
+kept the other half of one side's end) and no turn is made, so that the
+try fails instead of building a solid through itself. In between the turn
+is made as OCCT makes it. A row's turn reuses the edge the previous row's
 turn made at their common end with that row's angle, so that the two
 meet there (each row's angle is measured at its own farthest point, and
 they differ by the sides' approximation). `Oriente`, which orients a
@@ -245,7 +265,8 @@ checker's first problem with what it built and its volume.
 Refused, so that the corner is left as before, where the two cuts lie
 further apart than 5e-4 of the section's extent (as 1663), where the
 bounds do not cross the plane, where a bound crosses it within 1e-6 of a
-face's width of a U-edge, and for a section that is not closed.
+face's width of a U-edge, for a section that is not closed, and where the
+cut throws (a construction it cannot make).
 
 ## Tests
 
@@ -297,3 +318,29 @@ circle more; geometry.pipe_corners has it for a quarter turn). That
 correction is 0.03 % for the ten lines' corners: the volume alone does
 not tell a round from a mitre, the turning faces do. The patch was
 written without a build; the figures of its first run belong here.
+
+## OCCT's own tests (mitcad#1899)
+
+The run of OCCT 8.0.1's own tests over its dataset (mitcad#1875, see
+[occt-master-comparison.md](occt-master-comparison.md#the-run-over-occts-dataset))
+found these patches changing 19 of OCCT's pipe cases. Each patch now acts
+only where OCCT's own route fails or does not apply, so that the cases
+give stock 8.0.1's results again:
+
+| Case | What the patch did | Now |
+|---|---|---|
+| pipe/specific H4 H6 I5 I7 J6 J8 (rectangle along a polyline, rounded) | 1661 ended an inner seam where it crosses the other side's face 8 mm off the bisector plane: 34 vertices for 32, H6 I7 J8 5.3 % of the volume lost | a crossing must lie within a tenth of its distance from the corner of the plane |
+| bugs/modalg_7 bug32444 (sweep along a divided spline, slight kinks) | 1661 took the seams' own crossing, which OCCT refuses by its direction, for their ends: not done | the two ends must be distinct vertices |
+| bugs/modalg_7 bug32445, bug32447_1 | 1662 made the kinks of 0.02 to 0.2 degrees between a divided spline's edges mitred corners: invalid, other face areas | the mode alone keeps 1e-2 rad; MitCad asks for 1e-4 rad |
+| pipe/bugs bug32807 (B-spline section along a half circle and a line) | 1664's prisms: not done | OCCT's extension at a corner between lines and circles |
+| bugs/modalg_1 bug1477_9 bug1477_10 (mitred), bug1477_11 (rounded) | the cut along the bisector plane threw Standard_ConstructionError: no result where stock gives an invalid one (all three are known problems of OCCT, `TODO`) | an exception refuses the cut |
+| pipe/specific Z5 Z7 ZA8 ZB1 ZC2 ZC4 (rectangle along a closed polyline, rounded) | 1666 refused the turns whose second end lies 0.07 mm off the turned first: 30 to 32 faces for 42, Z7's solid invalid | refused only from a tenth of the end's extent |
+
+All 19 give stock's status and values again (the three bug1477 cases
+their known failure, with stock's invalid shells). OCCT's groups pipe, evolved, thrusection and draft:
+no case fails that passes on stock (647 the same, 50 failing on both,
+pipe/bugs bug24909_2 passing with the patches only); against the patched
+dataset run 13 cases pass again and none fails anew. MitCad's
+geometry.pipe_square_section (all its paths and the stirrup),
+geometry.pipe_corners, geometry.pipe_folds, geometry.helical_joins and
+geometry.suite.sweeps.* and thread.* pass with the narrowed patches.

@@ -752,6 +752,10 @@ private:
   // several of them (mitcad#837): a press on it drags them together.
   // Empty otherwise.
   QStringList selectionDraggedWith(const QString& entity) const;
+  // A selected text of this sketch under the press (mitcad#1911): the box
+  // round its outline, a pick margin round it; a press there drags it.
+  // Not a text on a path, which follows its curve. Empty when none.
+  QString selectedTextAt(const QPointF& screen) const;
   // A single point dragged (mitcad#1538): where the pointer at `position`
   // snaps it to, as the Line tool snaps (points, curve ends, centres,
   // midpoints, quadrants, intersections, curves and the origin; not to the
@@ -928,6 +932,12 @@ private:
   QSet<QString> m_dragSkipCurves;
   Snap m_dropSnap;
   QString m_loggedDragSnap;
+  // A text dragged (mitcad#1911): its anchor at the press and where the
+  // last step put it; the anchor snaps as a dragged point does, and each
+  // step moves the text by the model's sketch.move.
+  bool m_dragText = false;
+  V2 m_dragAnchor;
+  V2 m_dragAnchorLast;
   std::optional<std::pair<QString, V2>> m_textOverride;
   QTimer m_dragTimer;
 

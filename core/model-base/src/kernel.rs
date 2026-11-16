@@ -2151,6 +2151,62 @@ pub trait Kernel: Send {
     ) -> Result<Vec<CurveGeometry>, KernelError> {
         Err(KernelError::Unsupported("recognised edge geometries"))
     }
+
+    // Remarks: what the panel points out while it is open (mitcad#1914).
+
+    /// What the geometry points out of how it built a shape that the user
+    /// accepts with the result (a fillet's or a chamfer's tangent chain
+    /// that stops where other sharp edges meet, the edges that continue it
+    /// left sharp), each with its places as [`Kernel::note_places`] gives
+    /// a note's. The feature's panel shows them as information while it
+    /// is open; they are no warning and mark nothing once it is accepted.
+    /// None for most shapes.
+    fn remarks(&self, _shape: &Self::Shape) -> Vec<(String, Vec<crate::notice::NoticePlace>)> {
+        Vec::new()
+    }
+
+    // STEP export of the component tree (mitcad#1915;
+    // `mitcad_model::exchange::step_tree`).
+
+    /// Writes a STEP file of a design's component tree
+    /// ([`ExportTree`](crate::exchange::ExportTree)): `definitions[0]` as
+    /// the top assembly named after the file, every other definition once,
+    /// instanced by each of its instances (named after them) at their
+    /// placements. A definition that holds bodies only is a part named
+    /// after it (one body, or bodies that are each one solid, kept apart
+    /// by name and colour); any other is an assembly whose instances come
+    /// first, then a part per body (named after the body) at each of the
+    /// body's placements. `options.format` is STEP; its schema and unit
+    /// apply.
+    fn write_step_tree(
+        &self,
+        _path: &str,
+        _tree: &crate::exchange::ExportTree<'_, Self::Shape>,
+        _options: &ExportOptions,
+    ) -> Result<(), KernelError> {
+        Err(KernelError::Unsupported("STEP component trees"))
+    }
+
+    // Silhouettes of curved faces on drawings' views: dimensions to a
+    // curved outline and its extreme points (mitcad#1909;
+    // `api/drawing_silhouettes.rs`).
+
+    /// The silhouettes of the faces `face` resolves to seen along
+    /// `direction` (a unit vector in the shape's coordinates): the curves
+    /// on each face along which its normal is at right angles to
+    /// `direction`, clipped to the face, in model space, as
+    /// [`Kernel::face_outline`] gives them after the face's boundary edges
+    /// (a cylinder's or a cone's generator lines where it turns away, other
+    /// curved faces' outline curves; a plane has none). Empty when the
+    /// shape has nothing by that name. The shape is left as it is.
+    fn face_silhouettes(
+        &self,
+        _shape: &Self::Shape,
+        _face: &FaceName,
+        _direction: [f64; 3],
+    ) -> Result<Vec<Curve3>, KernelError> {
+        Err(KernelError::Unsupported("face silhouettes"))
+    }
 }
 
 /// [`Kernel::shape_unpacker`]: `unpack` makes a shape of

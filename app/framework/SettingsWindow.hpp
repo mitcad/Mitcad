@@ -9,6 +9,7 @@
 #include <QWidget>
 
 class QGraphicsOpacityEffect;
+class QHBoxLayout;
 class QLabel;
 class QListWidget;
 class QPropertyAnimation;
@@ -37,6 +38,11 @@ public:
   // Adds a pane under a button; the window owns the page.
   void addPane(const QString& title, const QIcon& icon, QWidget* page);
   void showPane(int index);
+  // The pane shown (from 0).
+  int currentPane() const;
+  // A button at the left of the footer, across from the saved note
+  // (Restore Defaults, mitcad#1887); the window owns it.
+  void addFooterButton(QWidget* button);
   // Called when the window is closed (to take what is still being typed).
   void setClosedHandler(std::function<void()> handler) { m_closed = std::move(handler); }
   // A change was saved (mitcad#1479): the footer's quiet note says so,
@@ -56,6 +62,7 @@ private:
   QListWidget* m_list = nullptr;
   QStackedWidget* m_pages = nullptr;
   QLabel* m_savedNote = nullptr;
+  QHBoxLayout* m_footer = nullptr;
   QGraphicsOpacityEffect* m_savedOpacity = nullptr;
   QPropertyAnimation* m_savedFade = nullptr;
   QTimer* m_savedHold = nullptr;

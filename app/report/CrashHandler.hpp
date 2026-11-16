@@ -45,6 +45,14 @@ void install(const char* process, const char* version);
 // only noted on standard error).
 void setDirectory(const char* directory);
 
+// Windows: the folder minidumps go to (UTF-8), crash-<time>-<pid>.dmp
+// beside the session logs (framework/SessionLog.hpp, mitcad#1896); empty:
+// none. A worker takes it from MITCAD_CRASH_DUMP_DIR, which the
+// application sets for its children. Elsewhere nothing: the text report
+// holds the stack, and the system keeps its own crash reports (macOS's
+// DiagnosticReports, Linux's core dumps where they are set up).
+void setDumpDirectory(const char* directory);
+
 // A recent action for the report: a command's or a menu entry's id, never
 // design content. The last 32 are kept.
 void noteAction(const char* action);

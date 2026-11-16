@@ -17,6 +17,9 @@ namespace mitcad::sketch {
 // libraries set it, so that their drawn sketches keep their sizes).
 bool scaleToFirstDimension();
 void saveScaleToFirstDimension(bool on);
+// No saved value (Preferences › Restore Defaults, mitcad#1887): the
+// default above applies again.
+void resetScaleToFirstDimension();
 
 // `command` with `scale_sketch` when it is a `sketch.add_dimension` and the
 // preference is on; any other command as it is.

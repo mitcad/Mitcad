@@ -115,8 +115,11 @@ Toolkit: `TKGeomBase`.
 
 The grid of a point's projection onto a B-spline holds at most 1001
 parameters in a direction (as many as `Adaptor3d_TopolTool::BSplSamplePnts`
-samples at most), evenly spaced, where the degree's number of parameters in
-each knot span would be more; every projection computes the distances to all
+samples at most), taken evenly through the list of the degree's number of
+parameters in each knot span where that list would be longer, so the grid
+stays dense where the knots are (spaced evenly over the range, it missed a
+surface whose knots crowd into a hundredth of its range: OCCT's buc60555_3
+cut a part away, mitcad#1902); every projection computes the distances to all
 of the grid's nodes, edges and cells, and each face's grid was kept in every
 thread's context.
 

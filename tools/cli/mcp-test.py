@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from xml.etree import ElementTree
 import zipfile
 
 
@@ -2104,6 +2105,90 @@ class McpTest(unittest.TestCase):
             render(client, dict(arguments, quality="raytrace"), error=True)
             refused, _ = render(client, dict(arguments, overlay="curvature"), error=True)
             self.assertIn("curvature", refused["error"])
+            client.finish()
+
+    def test_model_render_line_art(self):
+        """mitcad#1736: format svg, the edges seen as SVG paths, hidden ones dashed."""
+        def line_art(client, arguments, error=False):
+            response = client.request("tools/call", {"name": "model_render", "arguments": arguments})
+            assert "error" not in response, response
+            result = response["result"]
+            self.assertEqual(bool(result.get("isError", False)), error, result)
+            # Text only: no image block.
+            self.assertEqual(len(result["content"]), 1, result)
+            content = result["structuredContent"]
+            self.assertEqual(json.loads(result["content"][0]["text"]), content)
+            return content
+
+        def groups(svg):
+            root = ElementTree.fromstring(svg)
+            found = {}
+            for g in root.iter("{http://www.w3.org/2000/svg}g"):
+                if g.get("id"):
+                    found[g.get("id")] = (g, g.findall("{http://www.w3.org/2000/svg}path"))
+            return root, found
+
+        with Session(self.workspace) as client:
+            client.initialize()
+            document = client.tool("document_create", {})["document"]
+            client.tool("model_command", {"document": document, "command": BOX})
+            arguments = {"document": document, "view": "iso", "size": [400, 300], "format": "svg"}
+            # The box from the iso camera: nine edges seen, each one path.
+            plain = line_art(client, arguments)
+            self.assertEqual(plain["format"], "svg")
+            self.assertEqual(plain["mime_type"], "image/svg+xml")
+            self.assertEqual(plain["camera"]["projection"], "orthographic")
+            self.assertEqual(plain["bodies"], ["F1.b0"])
+            self.assertEqual(plain["warnings"], [])
+            self.assertEqual(plain["paths"], {"visible": 9, "hidden": 0, "highlight": 0})
+            self.assertEqual(plain["bytes"], len(plain["svg"].encode()))
+            root, found = groups(plain["svg"])
+            self.assertEqual((root.get("width"), root.get("height")), ("400", "300"))
+            self.assertEqual(len(found["visible"][1]), 9)
+            self.assertNotIn("hidden", found)
+            # With hidden edges: the same nine, and three dashed.
+            dashed = line_art(client, dict(arguments, hidden_edges=True))
+            self.assertEqual(dashed["paths"], {"visible": 9, "hidden": 3, "highlight": 0})
+            self.assertEqual(dashed["camera"], plain["camera"])
+            _, found = groups(dashed["svg"])
+            self.assertEqual(len(found["visible"][1]), 9)
+            self.assertEqual(len(found["hidden"][1]), 3)
+            self.assertTrue(found["hidden"][0].get("stroke-dasharray"))
+            self.assertFalse(found["visible"][0].get("stroke-dasharray"))
+            # The same arguments, the same text; the PNG's orthographic camera.
+            self.assertEqual(line_art(client, arguments)["svg"], plain["svg"])
+            picture, _ = render(client, {"document": document, "view": "iso", "size": [400, 300],
+                                         "projection": "orthographic"})
+            self.assertEqual(picture["camera"], plain["camera"])
+            # highlight: the body's lines in the selection blue.
+            lit = line_art(client, dict(arguments, highlight=["F1.b0"]))
+            _, found = groups(lit["svg"])
+            self.assertEqual({p.get("stroke") for p in found["visible"][1]}, {"#1f7aff"})
+            # An edge: a line over the rest.
+            edges = client.tool("model_query", {"document": document, "query": {
+                "query": "edges", "body": "F1.b0"}})["result"]
+            edge = max(edges, key=lambda e: e["length"])["name"]
+            line = line_art(client, dict(arguments, highlight=[edge]))
+            self.assertEqual(line["paths"]["highlight"], 1)
+            # path writes the .svg; a .png path, a perspective and the PNG's
+            # options are refused, and so is the ray tracer.
+            written = line_art(client, dict(arguments, path="box.svg"))
+            self.assertEqual((self.workspace / "box.svg").read_text(encoding="utf-8"), written["svg"])
+            line_art(client, dict(arguments, path="box.png"), error=True)
+            refused = line_art(client, dict(arguments, projection="perspective"), error=True)
+            self.assertIn("orthographic", refused["error"])
+            refused = line_art(client, dict(arguments, section={"origin": [0, 0, 5], "normal": [0, 0, 1]}),
+                               error=True)
+            self.assertIn("section", refused["error"])
+            line_art(client, dict(arguments, quality="raytrace"), error=True)
+            refused = line_art(client, {"document": document, "hidden_edges": True}, error=True)
+            self.assertIn("svg", refused["error"])
+            # views: an SVG per view.
+            sheet = line_art(client, dict(arguments, views=["iso", "top"]))
+            self.assertEqual(len(sheet["views"]), 2)
+            self.assertEqual(sheet["views"][0]["svg"], plain["svg"])
+            self.assertGreaterEqual(sheet["views"][1]["paths"]["visible"], 4)
+            self.assertNotEqual(sheet["views"][1]["svg"], plain["svg"])
             client.finish()
 
     def test_reference_in_parts_and_errors_that_give_the_choices(self):

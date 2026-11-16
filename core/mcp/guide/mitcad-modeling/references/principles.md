@@ -19,7 +19,9 @@ that looks right once is only part of that result.
    result; make ordinary implementation choices yourself.
 3. Describe a short plan: references, main shape, functional details,
    finishing features, then verification. Look up unfamiliar features
-   and their fields with `model_reference` before using them.
+   and their fields with `model_reference` before using them; a
+   command's lookup also gives its JSON Schema where it has one (every
+   sketch command does): its fields, types, defaults and examples.
 
 Keep every requested hole, groove, clip, relation and component in that
 plan. A modeling failure is a reason to repair the construction or report
@@ -63,8 +65,10 @@ the relation better. Read [references](references.md) before choosing
 support geometry.
 
 Use `model_command` arrays for a small, coherent stage whose inputs are
-already known. An array is one undo step. Query between stages to obtain
-new ids and verify the result before building on it. A refused array
+already known. An array is one undo step; its entries take what earlier
+ones made by name, never by predicted ids (see [sketches](sketches.md)).
+Query between stages for topology an array cannot name ahead, such as a
+new body's faces and edges, and verify the result before building on it. A refused array
 rolls back its earlier entries; a feature that fails after being applied
 remains in the timeline. Inspect and repair a failed stage before
 continuing.

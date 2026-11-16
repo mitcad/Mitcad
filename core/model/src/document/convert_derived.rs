@@ -898,6 +898,8 @@ impl<K: Kernel> Document<K> {
                     number: None,
                     first_face: None,
                     cage: None,
+                    material: None,
+                    appearance: None,
                 });
             }
             let base_def = FeatureDef::Base(BaseDef {

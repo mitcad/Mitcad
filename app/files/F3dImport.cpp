@@ -184,8 +184,12 @@ public:
       button->setDefault(false);
       button->setFocusPolicy(Qt::NoFocus);
     }
-    connect(m_stopButton, &QPushButton::clicked, this, [this] { m_stop(); });
-    connect(cancelButton, &QPushButton::clicked, this, [this] { m_cancel(); });
+    connect(m_stopButton, &QPushButton::clicked, this, [this] {
+      if (m_stop) {
+        m_stop();
+      }
+    });
+    connect(cancelButton, &QPushButton::clicked, this, [this] { reject(); });
     layout->addWidget(buttons);
   }
 
@@ -202,16 +206,30 @@ public:
   // A stop was asked for: once is enough.
   void setStopping() { m_stopButton->setEnabled(false); }
 
+  // The import its buttons stop and cancel: the next file of a batch's
+  // (mitcad#1894), with the bar busy and Stop enabled again; empty: none
+  // (the dialog between two imports).
+  void setActions(std::function<void()> stop, std::function<void()> cancel) {
+    m_stop = std::move(stop);
+    m_cancel = std::move(cancel);
+    m_stopButton->setEnabled(true);
+    m_bar->setRange(0, 0);
+  }
+
   // An import that cannot stop early (a FreeCAD document's bodies, an
   // .ipt part's) has only Cancel.
   void setStoppable(bool stoppable) { m_stopButton->setVisible(stoppable); }
 
 protected:
-  void reject() override { m_cancel(); }
+  void reject() override {
+    if (m_cancel) {
+      m_cancel();
+    }
+  }
 
   void closeEvent(QCloseEvent* event) override {
     event->ignore();
-    m_cancel();
+    reject();
   }
 
 private:
@@ -531,8 +549,12 @@ void F3dImport::start() {
     return;
   }
   const QString name = QFileInfo(m_path).fileName();
-  m_dialog = new ImportProgress(
-      m_window, [this] { stop(); }, [this] { cancel(); });
+  // (A batch's next file shows its progress in the dialog of the one
+  // before, adoptProgress.)
+  if (m_dialog == nullptr) {
+    m_dialog = new ImportProgress(
+        m_window, [this] { stop(); }, [this] { cancel(); });
+  }
   m_ticker = new QTimer(this);
   m_ticker->setInterval(500);
   connect(m_ticker, &QTimer::timeout, this, &F3dImport::tick);
@@ -639,6 +661,25 @@ void F3dImport::startImport() {
     }
   }
   startWorker(arguments);
+}
+
+QDialog* F3dImport::takeProgress() {
+  ImportProgress* dialog = m_dialog;
+  m_dialog = nullptr;
+  if (dialog != nullptr) {
+    dialog->setActions({}, {});
+  }
+  return dialog;
+}
+
+void F3dImport::adoptProgress(QDialog* dialog) {
+  if (dialog == nullptr) {
+    return;
+  }
+  delete m_dialog;
+  // (Only an import's progress dialog is given, takeProgress.)
+  m_dialog = static_cast<ImportProgress*>(dialog);
+  m_dialog->setActions([this] { stop(); }, [this] { cancel(); });
 }
 
 void F3dImport::setOptions(const QJsonObject& options) {
@@ -986,7 +1027,13 @@ void F3dImport::tick() {
   }
   const QString time = m_stopping ? tr("Stopping: the remaining items come in as the file's bodies (%1 s)").arg(seconds)
                                   : tr("%1 s elapsed").arg(seconds);
-  m_dialog->showProgress(tr("Importing %1").arg(QFileInfo(m_path).fileName()), item,
+  // A batch's file (mitcad#1894): which of how many.
+  const QString file = m_batchCount > 1 ? tr("Importing %1 (file %2 of %3)")
+                                              .arg(QFileInfo(m_path).fileName())
+                                              .arg(m_batchIndex)
+                                              .arg(m_batchCount)
+                                        : tr("Importing %1").arg(QFileInfo(m_path).fileName());
+  m_dialog->showProgress(file, item,
                          m_parts > 0 ? m_partsDone : m_done, m_parts > 0 ? m_parts : m_items, time);
 }
 
@@ -1047,7 +1094,10 @@ void F3dImport::processFinished(int exitCode, QProcess::ExitStatus status) {
   }
   m_finished = true;
   m_ticker->stop();
-  m_dialog->hide();
+  // A batch's next file shows its progress in it (mitcad#1894).
+  if (!m_keepProgress) {
+    m_dialog->hide();
+  }
   if (m_question != nullptr) {
     m_question->reject(); // (the import no longer waits for the answer)
   }

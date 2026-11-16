@@ -200,6 +200,17 @@ ComponentBrowser::ComponentBrowser(ComponentBrowserHost* host, QWidget* parent) 
                                 .arg(message.mid(int(qstrlen("mitcad:nolink:"))));
     }
   });
+  // WebGL failed on the GPU this run (mitcad#1906): CEF starts once per
+  // process, so the software path comes with the next start.
+  const auto gpuNote = [this] {
+    qDebug().noquote() << QStringLiteral("Component browser: the GPU note shows");
+    showNote(tr("3D previews failed on this computer's graphics card. Restart MitCad to draw them in software."),
+             true);
+  };
+  connect(m_view, &CefView::gpuFailed, this, gpuNote);
+  if (cef::gpuFailed()) {
+    gpuNote();
+  }
   connect(m_view, &CefView::downloadUpdated, this, &ComponentBrowser::downloadUpdated);
   connect(this, &QDialog::finished, this, [] { qDebug().noquote() << QStringLiteral("Component browser closed"); });
   // The temporary files go as MitCad ends, even when its windows are not

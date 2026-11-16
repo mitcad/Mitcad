@@ -95,7 +95,32 @@ pub mod ffi {
         /// a JSON array of places as the model's notices give them
         /// (`{"kind": "face", "name": …}`, `{"kind": "point", "at": […]}`).
         fn shape_note_places(shape: &Shape) -> Vec<String>;
+        /// What the panel points out while it is open but the user
+        /// accepts with the result (mitcad#1914: a tangent chain that
+        /// stops short), for the feature's remarks.
+        fn shape_remarks(shape: &Shape) -> Vec<String>;
+        /// The places of each of its remarks, in their order, as
+        /// `shape_note_places` gives a note's.
+        fn shape_remark_places(shape: &Shape) -> Vec<String>;
     }
+}
+
+/// A shape's remarks with their places (mitcad#1914), from their JSON; a
+/// remark whose places cannot be read has none.
+pub(crate) fn remarks(
+    shape: &crate::kernel::shape::ffi::Shape,
+) -> Vec<(String, Vec<mitcad_model::notice::NoticePlace>)> {
+    let mut places = ffi::shape_remark_places(shape).into_iter();
+    ffi::shape_remarks(shape)
+        .into_iter()
+        .map(|remark| {
+            let at = places
+                .next()
+                .and_then(|json| serde_json::from_str(&json).ok())
+                .unwrap_or_default();
+            (remark, at)
+        })
+        .collect()
 }
 
 /// The places of a shape's notes (mitcad#1327), from their JSON; a note

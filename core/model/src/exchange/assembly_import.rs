@@ -76,16 +76,19 @@ pub struct ImportWrapper {
 }
 
 /// Whether a file at `path` is of the formats an import wraps in a
-/// component by default (mitcad#1629): STEP, IGES and BRep, and glTF
-/// (mitcad#1826), whose node trees are components too, by the extension.
+/// component by default (mitcad#1629): STEP, IGES and BRep, glTF
+/// (mitcad#1826), whose node trees are components too, and `.serp`
+/// (mitcad#1870), by the extension.
 fn wrapped_format(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| {
-            ["step", "stp", "iges", "igs", "brep", "brp", "glb", "gltf"]
-                .iter()
-                .any(|known| e.eq_ignore_ascii_case(known))
+            [
+                "step", "stp", "iges", "igs", "brep", "brp", "glb", "gltf", "serp",
+            ]
+            .iter()
+            .any(|known| e.eq_ignore_ascii_case(known))
         })
 }
 
@@ -289,6 +292,11 @@ impl<K: Kernel> Document<K> {
         // components whatever `structure` says (their unit is the metre).
         if super::gltf_import::is_gltf_path(path) {
             return self.import_gltf(path, name, wrap);
+        }
+        // .serp files (mitcad#1870): read by the model, their blocks as
+        // components whatever `structure` says.
+        if super::serp_import::is_serp_path(path) {
+            return self.import_serp(path, name, wrap);
         }
         let keep = structure == ImportStructure::Components;
         let read = match self.kernel().read_file_structure(path, options, keep) {

@@ -11,6 +11,7 @@
 // manipulator's free rotation (mitcad#1661): the frame after a turn about
 // each axis, the placement on the rotated plane, along a rotated axis and
 // its normal, the handles' rings and the angle a drag turns, and the reset.
+#include "UnitTests.hpp"
 #include "sketch/Sketch3dDraw.hpp"
 
 #include <cmath>
@@ -833,3 +834,4 @@ int sketch3dDrawTests() {
   shapeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketch3dDrawTests);

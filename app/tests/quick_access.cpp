@@ -10,6 +10,7 @@
 // characters. Whether the group shows at all (mitcad#1189) is a setting of
 // its own, shown by default, told to the group when it changes, and leaves
 // the choice of commands as it is.
+#include "UnitTests.hpp"
 #include "files/FileCommands.hpp"
 #include "framework/CommandRegistry.hpp"
 #include "framework/QuickAccess.hpp"
@@ -266,3 +267,4 @@ int quickAccessTests() {
   QSettings::setDefaultFormat(format);
   return failures;
 }
+MITCAD_UNIT_TEST(quickAccessTests);

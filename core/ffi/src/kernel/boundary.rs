@@ -236,9 +236,14 @@ pub(super) fn boundary_body(
         history_step: 0,
     };
     let data = to_ffi(&source, &converted);
-    let mut list = super::shape::ffi::new_shape_list();
-    let built = crate::kernel::exchange::ffi::build_brep_body(&data, list.pin_mut());
-    let shape = list.at(list.size() - 1);
+    // The build heals the body with OCCT's ShapeFix, which has no progress
+    // range and whose repair of intersecting wires once never returned
+    // (mitcad#495): a call that does not return is given up (mitcad#1922).
+    let (built, shape) = super::abandon::abandonable(move || {
+        let mut list = super::shape::ffi::new_shape_list();
+        let built = crate::kernel::exchange::ffi::build_brep_body(&data, list.pin_mut());
+        Ok((built, list.at(list.size() - 1)))
+    })?;
     if !built.built || shape.is_null() {
         let error = built.error.to_string();
         if KernelError::is_out_of_memory(&error) {

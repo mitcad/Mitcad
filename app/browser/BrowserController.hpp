@@ -67,6 +67,15 @@ public:
   // Shared issue navigation, anchored by either frontend's actual badge.
   void showIssues(bool warnings, const QPoint& globalPosition);
 
+  // Show All Sketches / Hide All Sketches (mitcad#1931): every sketch's
+  // light bulb in the design (`occurrence` empty: the root's menu and the
+  // command search) or in an occurrence's component and the components
+  // placed in it, set in one undo step; Show All Sketches also shows the
+  // Sketches folders hidden by their eyes and View › Show › Sketches, so
+  // that what it shows is in the view. Logs "All sketches <path>: shown
+  // (n)" / "hidden (n)", or "... already shown" when nothing changes.
+  void setAllSketches(const QString& occurrence, bool show);
+
   // After the model or the origin's visibility changed.
   void refresh(const DocumentSnapshot& snapshot);
   // A design was opened (mitcad#426), before its refresh: the browser is

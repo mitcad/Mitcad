@@ -4,6 +4,7 @@
 // mouse orbit's centre, on OCCT's cameras of both projections: the axis,
 // the angle and the way it turns, the centre kept where it is, the zoom
 // (scale, distance) unchanged, and back again with the opposite key.
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -150,3 +151,4 @@ int cameraTurnTests() {
   refusedTests();
   return failures;
 }
+MITCAD_UNIT_TEST(cameraTurnTests);

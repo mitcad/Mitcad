@@ -5,6 +5,7 @@
 // the Construct commands or Extrude), when a pick activates, the panel's
 // Activate button for picks of several components and the notice; the
 // parts placed by a pick and their linked shafts (mitcad#1752).
+#include "UnitTests.hpp"
 #include "browser/ActivateOnPick.hpp"
 
 #include <cstdio>
@@ -300,3 +301,4 @@ int activateOnPickTests() {
   partTests();
   return failures;
 }
+MITCAD_UNIT_TEST(activateOnPickTests);

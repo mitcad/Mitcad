@@ -108,7 +108,10 @@ constant radius R and tries each as A:
 - B's spine past that section runs over edges between W and a tube of R
   about a curve through C: a cylinder of R whose axis passes through C, or
   a torus of minor radius R whose centre circle does (the ball stays put
-  there).
+  there); at least one such edge: a B that ends at the section, as two
+  roundings of one fillet meeting at a box's corner in OCCT's
+  boolean/bcutblend A1, is no still ball's (it was joined into an invalid
+  body, mitcad#1902).
 
 Then A's cylinder piece is run on to that section (its contact lines'
 parameters, its points B's, its spine parameter in proportion), A's

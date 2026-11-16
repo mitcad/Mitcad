@@ -17,6 +17,7 @@
 // explains itself (mitcad#967): a tooltip of its own per palette entry,
 // the lead line and the status line's words. Qt Widgets on the offscreen
 // platform.
+#include "UnitTests.hpp"
 #include <cstdio>
 #include <functional>
 #include <optional>
@@ -908,3 +909,4 @@ int ruleBlocksTests() {
   placeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(ruleBlocksTests);

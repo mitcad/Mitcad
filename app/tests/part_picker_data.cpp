@@ -9,6 +9,7 @@
 // `library_usage` answer (core/model-tests/links/src/library_tests.rs and
 // build/source_tests.rs check the model's side), and the grid's Supplier
 // filter (mitcad#949).
+#include "UnitTests.hpp"
 #include "library/PartFavourites.hpp"
 #include "library/PartGroups.hpp"
 #include "library/PartSuppliers.hpp"
@@ -710,3 +711,4 @@ int partPickerDataTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(partPickerDataTests);

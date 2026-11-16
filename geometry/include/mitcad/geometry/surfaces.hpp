@@ -39,6 +39,17 @@ struct OpenBoundary {
 // The body's open boundaries in a deterministic geometric order.
 std::vector<OpenBoundary> open_boundaries(const Shape& body);
 
+// The free edges of each open boundary (edge indices of `body`) and the
+// faces they bound, as OpenBoundary::faces, in the order of
+// open_boundaries, without its points (mitcad#1927: the view picks a free
+// edge as the opening it lies on, which a definition names by its faces
+// and its index among the openings along the same faces).
+struct OpenBoundaryEdges {
+  NameList faces;
+  std::vector<int> edges;
+};
+std::vector<OpenBoundaryEdges> open_boundary_edges(const Shape& body);
+
 // How a patch meets the face beside an edge of its loop: through the edge,
 // tangent to the face, or tangent and of the same curvature.
 enum class Continuity { G0, G1, G2 };

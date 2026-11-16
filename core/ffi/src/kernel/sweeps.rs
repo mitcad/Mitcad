@@ -234,6 +234,19 @@ use mitcad_model::sweeps::ProfileFace;
 
 use super::shape::ffi::new_shape_list;
 use super::{Shape, failed, occt, profile};
+// Sweeps given up by a Cancel or the time limit (mitcad#1922).
+use super::abandon::abandonable;
+
+/// The shapes in a list of the bridge, made where the kernel call runs: the
+/// sweeps', lofts' and helices' calls run on a thread of their own
+/// ([`abandonable`]), and a list of the bridge does not go between threads.
+fn shape_list(shapes: &[SharedPtr<Shape>]) -> cxx::UniquePtr<super::shape::ffi::ShapeList> {
+    let mut list = new_shape_list();
+    for shape in shapes {
+        list.pin_mut().push(shape.clone());
+    }
+    list
+}
 
 pub(crate) fn curve(piece: &PathCurve) -> ffi::SweepCurve {
     let mut input = ffi::SweepCurve {
@@ -347,21 +360,21 @@ fn sweep_with(
     surfaces: &[GuideSurface<'_, SharedPtr<Shape>>],
     face: Option<&ProfileFace<'_, SharedPtr<Shape>>>,
 ) -> Result<SharedPtr<Shape>, KernelError> {
-    let mut bodies = new_shape_list();
+    let mut bodies = Vec::new();
     let mut guide_faces = Vec::new();
     let mut guide_bodies = Vec::new();
     for surface in surfaces {
         occt(surface.body)?;
         guide_faces.push(surface.face.to_string());
-        guide_bodies.push(bodies.size());
-        bodies.pin_mut().push(surface.body.clone());
+        guide_bodies.push(bodies.len());
+        bodies.push(surface.body.clone());
     }
     // A body face as the profile (mitcad#543): its body after the guide
     // surfaces'.
-    let profile_body = bodies.size();
+    let profile_body = bodies.len();
     if let Some(face) = face {
         occt(face.body)?;
-        bodies.pin_mut().push(face.body.clone());
+        bodies.push(face.body.clone());
     }
     let regions: Vec<profile::ffi::Region> = spec.regions.iter().map(profile::region).collect();
     let input = ffi::SweepInput {
@@ -410,20 +423,19 @@ fn sweep_with(
             _ => [0.0, 0.0, 1.0],
         },
     };
-    ffi::sweep_solid(
-        &spec.feature.to_string(),
-        &profile::frame(&spec.frame),
-        &regions,
-        &input,
-        &bodies,
-    )
-    .map_err(failed)
+    // OCCT's pipe shell does not look at its progress range: a call that
+    // does not return is given up (mitcad#1922).
+    let feature = spec.feature.to_string();
+    let frame = profile::frame(&spec.frame);
+    abandonable(move || {
+        ffi::sweep_solid(&feature, &frame, &regions, &input, &shape_list(&bodies)).map_err(failed)
+    })
 }
 
 pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, KernelError> {
     let mut frames = Vec::new();
     let mut regions = Vec::new();
-    let mut bodies = new_shape_list();
+    let mut bodies = Vec::new();
     let mut sections = Vec::new();
     for section in &spec.sections {
         let mut input = ffi::LoftSectionInput {
@@ -441,9 +453,9 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
             LoftSection::Face { body, face } => {
                 occt(body)?;
                 input.kind = 1;
-                input.index = bodies.size();
+                input.index = bodies.len();
                 input.face = face.to_string();
-                bodies.pin_mut().push((*body).clone());
+                bodies.push((*body).clone());
             }
             LoftSection::Point(point) => {
                 input.kind = 2;
@@ -497,14 +509,12 @@ pub fn loft(spec: &LoftSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, K
         },
         parallel: spec.centerline_parallel,
     };
-    ffi::loft_solid(
-        &spec.feature.to_string(),
-        &input,
-        &frames,
-        &regions,
-        &bodies,
-    )
-    .map_err(failed)
+    // OCCT's lofts (through sections, the pipe shell along a centerline) do
+    // not look at their progress range (mitcad#1922).
+    let feature = spec.feature.to_string();
+    abandonable(move || {
+        ffi::loft_solid(&feature, &input, &frames, &regions, &shape_list(&bodies)).map_err(failed)
+    })
 }
 
 pub fn pipe(spec: &PipeSpec<'_>) -> Result<SharedPtr<Shape>, KernelError> {
@@ -524,7 +534,10 @@ pub fn pipe(spec: &PipeSpec<'_>) -> Result<SharedPtr<Shape>, KernelError> {
             PipeCorners::Rounded => 1,
         },
     };
-    ffi::pipe_solid(&spec.feature.to_string(), &input).map_err(failed)
+    // OCCT's pipe shell does not look at its progress range; a pipe along a
+    // tight helix ran for minutes (mitcad#1788, mitcad#1922).
+    let feature = spec.feature.to_string();
+    abandonable(move || ffi::pipe_solid(&feature, &input).map_err(failed))
 }
 
 pub fn coil(spec: &CoilSpec) -> Result<SharedPtr<Shape>, KernelError> {
@@ -548,12 +561,10 @@ pub fn coil(spec: &CoilSpec) -> Result<SharedPtr<Shape>, KernelError> {
         },
         size: spec.size,
     };
-    ffi::coil_solid(
-        &spec.feature.to_string(),
-        &profile::frame(&spec.frame),
-        &input,
-    )
-    .map_err(failed)
+    // A coil's helical sweep has no progress range either (mitcad#1922).
+    let feature = spec.feature.to_string();
+    let frame = profile::frame(&spec.frame);
+    abandonable(move || ffi::coil_solid(&feature, &frame, &input).map_err(failed))
 }
 
 /// FreeCAD's helices (mitcad#4): the profiles turned about the axis as they
@@ -561,10 +572,10 @@ pub fn coil(spec: &CoilSpec) -> Result<SharedPtr<Shape>, KernelError> {
 pub fn helix(
     spec: &mitcad_model::HelixSpec<'_, SharedPtr<Shape>>,
 ) -> Result<SharedPtr<Shape>, KernelError> {
-    let mut bodies = new_shape_list();
+    let mut bodies = Vec::new();
     for body in spec.bodies {
         occt(body)?;
-        bodies.pin_mut().push(body.clone());
+        bodies.push(body.clone());
     }
     let regions: Vec<profile::ffi::Region> = spec.regions.iter().map(profile::region).collect();
     let input = ffi::HelixInput {
@@ -579,14 +590,12 @@ pub fn helix(
         ends: spec.ends,
         piece_shift: spec.piece_shift,
     };
-    ffi::helix_solid(
-        &spec.feature.to_string(),
-        &profile::frame(&spec.frame),
-        &regions,
-        &input,
-        &bodies,
-    )
-    .map_err(failed)
+    // A helical sweep, as a coil's (mitcad#1922).
+    let feature = spec.feature.to_string();
+    let frame = profile::frame(&spec.frame);
+    abandonable(move || {
+        ffi::helix_solid(&feature, &frame, &regions, &input, &shape_list(&bodies)).map_err(failed)
+    })
 }
 
 pub fn rib(spec: &RibSpec<'_, SharedPtr<Shape>>) -> Result<SharedPtr<Shape>, KernelError> {

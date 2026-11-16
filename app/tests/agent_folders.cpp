@@ -4,6 +4,7 @@
 // path inside the allowed folder is taken (relative ones too), '..', other
 // folders, other suffixes, missing folders and files, an existing file
 // without overwrite and links out of the folder are refused.
+#include "UnitTests.hpp"
 #include "mcp/AgentFolders.hpp"
 
 #include <cstdio>
@@ -162,3 +163,4 @@ int agentFolderTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(agentFolderTests);

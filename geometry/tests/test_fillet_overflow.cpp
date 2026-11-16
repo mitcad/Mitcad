@@ -26,6 +26,7 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
+#include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -35,10 +36,15 @@
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -1735,6 +1741,80 @@ void test_boss_top_rounded_after_its_foot_rounded_as_high_as_it() {
   }
 }
 
+// A box 10 x 20 x 30 rounded along two of its long edges, as in OCCT's
+// draft/angle A2: each rounding is tangent to both its faces, and its
+// straight edges with them keep their regularity (G1). Patch 0350 checked
+// the tangency with the faces oriented as in the fillet's data structure,
+// where a rounding and one of its faces are opposite, and dropped the G1 on
+// half of them (mitcad#1880); a draft of the faces beside the roundings,
+// which carries the drafted face on to the rounding along its tangent
+// edges, then failed ("Impossible edge recomputation").
+void test_box_roundings_keep_their_tangent_edges_and_take_a_draft() {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(10, 20, 30).Shape();
+  BRepFilletAPI_MakeFillet maker(box);
+  maker.Add(2, edge_near(box, gp_Pnt(5, 0, 30)));
+  maker.Add(3, edge_near(box, gp_Pnt(5, 20, 0)));
+  maker.Build();
+  CHECK(maker.IsDone());
+  if (!maker.IsDone()) {
+    return;
+  }
+  const TopoDS_Shape rounded = maker.Shape();
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> around;
+  TopExp::MapShapesAndAncestors(rounded, TopAbs_EDGE, TopAbs_FACE, around);
+  int tangent = 0;
+  int sharp = 0;
+  for (int i = 1; i <= around.Extent(); ++i) {
+    const NCollection_List<TopoDS_Shape>& faces = around.FindFromIndex(i);
+    const TopoDS_Face f1 = TopoDS::Face(faces.First());
+    const TopoDS_Face f2 = TopoDS::Face(faces.Last());
+    const TopoDS_Edge edge = TopoDS::Edge(around.FindKey(i));
+    const bool rounding = BRepAdaptor_Surface(f1).GetType() != GeomAbs_Plane ||
+                          BRepAdaptor_Surface(f2).GetType() != GeomAbs_Plane;
+    if (rounding && BRepAdaptor_Curve(edge).GetType() == GeomAbs_Line) {
+      ++(BRep_Tool::Continuity(edge, f1, f2) == GeomAbs_C0 ? sharp : tangent);
+    }
+  }
+  CHECK(tangent == 4);
+  CHECK(sharp == 0);
+  // The faces facing -y and -z, each beside one rounding, drafted by 10 and
+  // 5 degrees about the plane x = 0.
+  const auto plane_facing = [&rounded](const gp_Dir& normal) {
+    for (TopExp_Explorer f(rounded, TopAbs_FACE); f.More(); f.Next()) {
+      const TopoDS_Face& face = TopoDS::Face(f.Current());
+      BRepAdaptor_Surface surface(face);
+      if (surface.GetType() != GeomAbs_Plane) {
+        continue;
+      }
+      gp_Dir n = surface.Plane().Axis().Direction();
+      if (face.Orientation() == TopAbs_REVERSED) {
+        n.Reverse();
+      }
+      if (n.IsEqual(normal, 1e-9)) {
+        return face;
+      }
+    }
+    return TopoDS_Face();
+  };
+  const TopoDS_Face front = plane_facing(gp_Dir(0, -1, 0));
+  const TopoDS_Face bottom = plane_facing(gp_Dir(0, 0, -1));
+  CHECK(!front.IsNull());
+  CHECK(!bottom.IsNull());
+  if (front.IsNull() || bottom.IsNull()) {
+    return;
+  }
+  const gp_Pln neutral(gp_Pnt(0, 0, 0), gp_Dir(1, 0, 0));
+  BRepOffsetAPI_DraftAngle draft(rounded);
+  draft.Add(front, gp_Dir(1, 0, 0), 10.0 * kPi / 180.0, neutral);
+  draft.Add(bottom, gp_Dir(1, 0, 0), 5.0 * kPi / 180.0, neutral);
+  CHECK(draft.AddDone());
+  draft.Build();
+  CHECK(draft.IsDone());
+  if (draft.IsDone()) {
+    CHECK(BRepCheck_Analyzer(draft.Shape()).IsValid());
+  }
+}
+
 // The name of the edge of `shape` nearest to the point.
 std::string edge_at(const Shape& shape, const gp_Pnt& point) {
   const TopoDS_Shape vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
@@ -1839,6 +1919,8 @@ void fillet_overflow_tests() {
           test_top_rounding_larger_than_the_rounded_corners_walks_round_them);
   guarded("test_boss_top_rounded_after_its_foot_rounded_as_high_as_it",
           test_boss_top_rounded_after_its_foot_rounded_as_high_as_it);
+  guarded("test_box_roundings_keep_their_tangent_edges_and_take_a_draft",
+          test_box_roundings_keep_their_tangent_edges_and_take_a_draft);
   guarded("test_rounding_rolled_on_a_ribs_far_edge_is_a_cylinder",
           test_rounding_rolled_on_a_ribs_far_edge_is_a_cylinder);
 }

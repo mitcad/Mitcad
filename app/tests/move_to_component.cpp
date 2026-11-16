@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Exercise the actual modal destination dialog with a model boundary that
 // records every mutation. Geometry and transactional behavior have core tests.
+#include "UnitTests.hpp"
 #include "framework/HybridAssembly.hpp"
 
 #include <cstdio>
@@ -295,3 +296,4 @@ int moveToComponentTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(moveToComponentTests);

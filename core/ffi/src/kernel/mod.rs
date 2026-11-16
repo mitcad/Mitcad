@@ -106,6 +106,10 @@ pub mod form;
 pub mod fill_cavity;
 // Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
 pub mod press_pull;
+// STEP files of a design's component tree (mitcad#1915).
+pub mod step_tree;
+// Kernel calls given up by a Cancel or the time limit (mitcad#1917).
+pub mod abandon;
 
 use std::sync::Arc;
 
@@ -394,13 +398,15 @@ impl Kernel for OcctKernel {
                 out
             })
             .collect();
-        dressup::ffi::fillet(
-            &feature.to_string(),
-            occt(body)?,
-            &sets,
-            rolling_ball_corners,
-        )
-        .map_err(failed)
+        // OCCT's fillet does not look at its progress range everywhere: a
+        // call that does not return is given up (mitcad#1917).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        abandon::abandonable(move || {
+            dressup::ffi::fillet(&feature, occt(&body)?, &sets, rolling_ball_corners)
+                .map_err(failed)
+        })
     }
 
     fn chamfer(
@@ -447,7 +453,13 @@ impl Kernel for OcctKernel {
             ChamferCorner::Miter => dressup::ffi::ChamferCornerKind::Miter,
             ChamferCorner::Blend => dressup::ffi::ChamferCornerKind::Blend,
         };
-        dressup::ffi::chamfer(&feature.to_string(), occt(body)?, &sets, corner).map_err(failed)
+        // As a fillet's (mitcad#1917).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        abandon::abandonable(move || {
+            dressup::ffi::chamfer(&feature, occt(&body)?, &sets, corner).map_err(failed)
+        })
     }
 
     // Face operations (F2).
@@ -464,13 +476,15 @@ impl Kernel for OcctKernel {
             tangent_chain: spec.tangent_chain,
             rounded: spec.rounded,
         };
-        faceops::ffi::shell(
-            &feature.to_string(),
-            occt(body)?,
-            &face_names(spec.faces),
-            &params,
-        )
-        .map_err(failed)
+        // OCCT's offsets look at their progress range only between their
+        // steps: a call that does not return is given up (mitcad#1922).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        let faces = face_names(spec.faces);
+        abandon::abandonable(move || {
+            faceops::ffi::shell(&feature, occt(&body)?, &faces, &params).map_err(failed)
+        })
     }
 
     fn draft(
@@ -505,13 +519,14 @@ impl Kernel for OcctKernel {
         faces: &[FaceName],
         distance: f64,
     ) -> Result<Self::Shape, KernelError> {
-        faceops::ffi::offset_faces(
-            &feature.to_string(),
-            occt(body)?,
-            &face_names(faces),
-            distance,
-        )
-        .map_err(failed)
+        // As a shell's (mitcad#1922).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        let faces = face_names(faces);
+        abandon::abandonable(move || {
+            faceops::ffi::offset_faces(&feature, occt(&body)?, &faces, distance).map_err(failed)
+        })
     }
 
     fn delete_faces(
@@ -520,8 +535,17 @@ impl Kernel for OcctKernel {
         body: &Self::Shape,
         faces: &[FaceName],
     ) -> Result<Self::Shape, KernelError> {
-        faceops::ffi::delete_faces(&feature.to_string(), occt(body)?, &face_names(faces))
-            .map_err(failed)
+        // Healing the body over the deleted faces is OCCT's defeaturing,
+        // which looks at its progress range only between its steps; in a
+        // fillet's retry it ran 300 s without returning (mitcad#1337): a
+        // call that does not return is given up (mitcad#1922).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        let faces = face_names(faces);
+        abandon::abandonable(move || {
+            faceops::ffi::delete_faces(&feature, occt(&body)?, &faces).map_err(failed)
+        })
     }
 
     fn replace_faces(
@@ -1961,8 +1985,13 @@ impl Kernel for OcctKernel {
         thickness: f64,
         symmetric: bool,
     ) -> Result<Self::Shape, KernelError> {
-        surfaces::ffi::thicken(&feature.to_string(), occt(shape)?, thickness, symmetric)
-            .map_err(failed)
+        // An offset of the surface, as a shell's (mitcad#1922).
+        occt(shape)?;
+        let shape = shape.clone();
+        let feature = feature.to_string();
+        abandon::abandonable(move || {
+            surfaces::ffi::thicken(&feature, occt(&shape)?, thickness, symmetric).map_err(failed)
+        })
     }
 
     // Surface modelling, surface sweeps (mitcad#455; surface_sweeps.rs).
@@ -2057,16 +2086,16 @@ impl Kernel for OcctKernel {
         let normal = spec.frame.normal();
         let o = spec.frame.origin;
         let plane = [o[0], o[1], o[2], normal[0], normal[1], normal[2]];
-        surface_sweeps::ffi::sweep_sheet(
-            &spec.feature.to_string(),
-            &curves,
-            &counts,
-            &path,
-            &plane,
-            &[spec.extent1, spec.extent2],
-            spec.orientation == mitcad_model::SweepOrientation::Parallel,
-        )
-        .map_err(failed)
+        // OCCT's pipe shell does not look at its progress range (mitcad#1922).
+        let feature = spec.feature.to_string();
+        let extents = [spec.extent1, spec.extent2];
+        let parallel = spec.orientation == mitcad_model::SweepOrientation::Parallel;
+        abandon::abandonable(move || {
+            surface_sweeps::ffi::sweep_sheet(
+                &feature, &curves, &counts, &path, &plane, &extents, parallel,
+            )
+            .map_err(failed)
+        })
     }
 
     fn loft_sheet(
@@ -2077,8 +2106,12 @@ impl Kernel for OcctKernel {
         closed: bool,
     ) -> Result<Self::Shape, KernelError> {
         let (curves, counts) = surface_sweeps::chains(sections);
-        surface_sweeps::ffi::loft_sheet(&feature.to_string(), &curves, &counts, ruled, closed)
-            .map_err(failed)
+        // OCCT's loft does not look at its progress range (mitcad#1922).
+        let feature = feature.to_string();
+        abandon::abandonable(move || {
+            surface_sweeps::ffi::loft_sheet(&feature, &curves, &counts, ruled, closed)
+                .map_err(failed)
+        })
     }
 
     // Surface modelling: Offset Surface, Ruled Surface and Extend
@@ -2092,14 +2125,15 @@ impl Kernel for OcctKernel {
         distance: f64,
         chain: bool,
     ) -> Result<Self::Shape, KernelError> {
-        surface_offsets::ffi::offset_surface(
-            &feature.to_string(),
-            occt(body)?,
-            &face_names(faces),
-            distance,
-            chain,
-        )
-        .map_err(failed)
+        // As a shell's (mitcad#1922).
+        occt(body)?;
+        let body = body.clone();
+        let feature = feature.to_string();
+        let faces = face_names(faces);
+        abandon::abandonable(move || {
+            surface_offsets::ffi::offset_surface(&feature, occt(&body)?, &faces, distance, chain)
+                .map_err(failed)
+        })
     }
 
     fn ruled_surface(
@@ -3102,6 +3136,100 @@ impl Kernel for OcctKernel {
             datum::ffi::datum_recognised_edge_geometries(occt(shape)?, &item_indices(edges)?)
                 .map_err(failed)?;
         Ok(found.into_iter().map(datum::curve).collect())
+    }
+
+    // Remarks: what the panel points out while it is open (mitcad#1914;
+    // dressup.rs).
+
+    fn remarks(
+        &self,
+        shape: &Self::Shape,
+    ) -> Vec<(String, Vec<mitcad_model::notice::NoticePlace>)> {
+        occt(shape).map_or_else(|_| Vec::new(), dressup::remarks)
+    }
+
+    // STEP files of a design's component tree (mitcad#1915; step_tree.rs).
+
+    fn write_step_tree(
+        &self,
+        path: &str,
+        tree: &mitcad_model::exchange::ExportTree<'_, Self::Shape>,
+        options: &ExportOptions,
+    ) -> Result<(), KernelError> {
+        use step_tree::ffi::{TreeBody, TreeDefinition, TreeInstance, TreePlacement, TreeUnit};
+        // Only STEP has component trees (the model asks for STEP alone).
+        if options.format != ExportFormat::Step {
+            return Err(KernelError::Unsupported("STEP component trees"));
+        }
+        let placement = |transform: &Transform, name: &str| TreePlacement {
+            rotation: std::array::from_fn(|i| transform.linear[i / 3][i % 3]),
+            translation: transform.translation,
+            name: name.to_owned(),
+        };
+        let mut list = shape::ffi::new_shape_list();
+        let mut bodies = Vec::new();
+        let mut definitions = Vec::with_capacity(tree.definitions.len());
+        for definition in &tree.definitions {
+            let first_body = bodies.len();
+            for body in &definition.bodies {
+                occt(body.shape)?;
+                list.pin_mut().push(body.shape.clone());
+                bodies.push(TreeBody {
+                    name: body.name.to_owned(),
+                    has_color: body.color.is_some(),
+                    color: body.color.unwrap_or_default(),
+                    placements: body
+                        .placements
+                        .iter()
+                        .map(|p| placement(&p.transform, &p.name))
+                        .collect(),
+                });
+            }
+            definitions.push(TreeDefinition {
+                name: definition.name.clone(),
+                first_body,
+                body_count: definition.bodies.len(),
+                instances: definition
+                    .instances
+                    .iter()
+                    .map(|i| TreeInstance {
+                        definition: i.definition,
+                        placement: placement(&i.transform, &i.name),
+                    })
+                    .collect(),
+            });
+        }
+        let unit = match options.unit {
+            LengthUnit::Millimeter => TreeUnit::Millimeter,
+            LengthUnit::Centimeter => TreeUnit::Centimeter,
+            LengthUnit::Meter => TreeUnit::Meter,
+            LengthUnit::Inch => TreeUnit::Inch,
+            LengthUnit::Foot => TreeUnit::Foot,
+        };
+        step_tree::ffi::write_step_tree(
+            path,
+            &list,
+            &bodies,
+            &definitions,
+            options.step_schema == StepSchema::Ap242,
+            unit,
+        )
+        .map_err(failed)
+    }
+
+    // Silhouettes of curved faces on drawings' views (mitcad#1909;
+    // face_outline.rs).
+
+    fn face_silhouettes(
+        &self,
+        shape: &Self::Shape,
+        face: &FaceName,
+        direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model::Curve3>, KernelError> {
+        let name = face.to_string();
+        let curves =
+            face_outline::ffi::face_silhouettes(occt(shape)?, &name, direction).map_err(failed)?;
+        Ok(curves.iter().map(face_outline::curve).collect())
     }
 }
 

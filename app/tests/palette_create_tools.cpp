@@ -4,6 +4,7 @@
 // the commands pinned on the Sketch tab first, always in the ribbon's order
 // and at most 14; each start of a tool is counted in the settings
 // (sketchToolCounts/<id>).
+#include "UnitTests.hpp"
 #include "sketch/PaletteCreateTools.hpp"
 
 #include <cstdio>
@@ -217,3 +218,4 @@ int paletteCreateToolsTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(paletteCreateToolsTests);

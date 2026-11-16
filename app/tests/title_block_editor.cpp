@@ -4,6 +4,7 @@
 // moves kept inside the block, deletes, the selected field's label, text
 // and height, and the block given back as `edit_drawing_title_block` takes
 // it; the sheet sizes' text forms of the dialogs.
+#include "UnitTests.hpp"
 #include "drawings/DrawingTemplates.hpp"
 #include "drawings/TitleBlockEditor.hpp"
 
@@ -174,3 +175,4 @@ int titleBlockEditorTests() {
   CHECK(templateChoices(listed).at(0).size == QStringLiteral("500x300"));
   return failures;
 }
+MITCAD_UNIT_TEST(titleBlockEditorTests);

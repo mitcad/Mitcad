@@ -2,6 +2,7 @@
 // Numbers on a shared decimal axis in the parameter table (mitcad#566): a
 // text split into its integer part, fraction and unit; the layout of a
 // column's numbers; the table delegate's placement of them.
+#include "UnitTests.hpp"
 #include "browser/DecimalAlign.hpp"
 #include "browser/DecimalAlignDelegate.hpp"
 
@@ -342,3 +343,4 @@ int decimalAlignTests() {
 #endif
   return failures;
 }
+MITCAD_UNIT_TEST(decimalAlignTests);

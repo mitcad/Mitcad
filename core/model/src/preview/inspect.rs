@@ -305,7 +305,7 @@ impl<K: Kernel> Document<K> {
 
     /// Each face's names, in the order the kernel lists the faces (the
     /// display mesh's).
-    fn face_names(&self, body: crate::ids::BodyUid) -> Vec<Vec<FaceName>> {
+    pub(super) fn face_names(&self, body: crate::ids::BodyUid) -> Vec<Vec<FaceName>> {
         self.body_shape(body)
             .and_then(|shape| self.kernel().faces(shape).ok())
             .unwrap_or_default()

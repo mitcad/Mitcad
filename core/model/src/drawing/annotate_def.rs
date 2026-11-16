@@ -339,6 +339,22 @@ pub struct ViewPick {
     /// that way, in its body's coordinates. The pick is then that arc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<[f64; 3]>,
+    /// A silhouette of a curved face (mitcad#1909): the outline a view
+    /// draws where the face turns away from the eye (a torus seen along
+    /// its axis, a sphere, a cone, a free-form face), picked by a point of
+    /// it in its body's coordinates. The pick is then that outline: of the
+    /// face's silhouettes seen along the view's direction, the one nearest
+    /// the point, so it follows the model while the face keeps an outline
+    /// there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<[f64; 3]>,
+    /// An extreme point (mitcad#1909): a direction in its body's
+    /// coordinates. The pick is then the point of what the rest of it
+    /// names (an edge, a round face, a torus face's side, a silhouette)
+    /// that lies furthest that way as its view sees it: the top of a
+    /// curved outline for an overall size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extreme: Option<[f64; 3]>,
 }
 
 impl ViewPick {
@@ -365,6 +381,35 @@ impl ViewPick {
             }
             if side.iter().any(|v| !v.is_finite()) {
                 return Err("a side of an axis is three numbers".to_owned());
+            }
+        }
+        if let Some(on) = self.outline {
+            if self.face.is_none()
+                || self.edge.is_some()
+                || self.side.is_some()
+                || self.on_face.is_some()
+                || self.on_cut.is_some()
+                || matches!(self.point, Some(PickPoint::Start | PickPoint::End))
+            {
+                return Err("an outline is a pick of a curved face alone".to_owned());
+            }
+            if on.iter().any(|v| !v.is_finite()) {
+                return Err("a point of an outline is three numbers".to_owned());
+            }
+        }
+        if let Some(toward) = self.extreme {
+            if self.point.is_some()
+                || self.on_face.is_some()
+                || self.on_cut.is_some()
+                || self.drawn.is_some()
+            {
+                return Err(
+                    "an extreme point is of an edge, a round face or an outline picked whole"
+                        .to_owned(),
+                );
+            }
+            if toward.iter().any(|v| !v.is_finite()) || toward.iter().all(|v| *v == 0.0) {
+                return Err("the direction of an extreme point is three numbers".to_owned());
             }
         }
         if let Some(on) = self.on_face {

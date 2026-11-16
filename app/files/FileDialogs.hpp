@@ -162,6 +162,21 @@ std::optional<QString> askStepStructure(QWidget* parent, const QString& file, bo
 // `wrap`; nothing when cancelled.
 std::optional<bool> askImportPlace(QWidget* parent, const QString& file);
 
+// Import of design files of other formats (.ipt, .iam, .f3d, .FCStd;
+// mitcad#1894) while a design with content is open, or of several at once:
+// into this design as components (the default) or each as a new design.
+// In a project with versions (`inProject`), its Linked box (on by default,
+// remembered) saves each imported design in the project as a design of its
+// own and links it; else, or unchecked, each is a copy. Nothing when
+// cancelled. Logs "Where to Import dialog opened: <files>" and "Where to
+// Import: this design (copy|linked)", "Where to Import: new design" or
+// "Where to Import: cancelled".
+struct DesignImportPlace {
+  bool intoDesign = true;
+  bool linked = false;
+};
+std::optional<DesignImportPlace> askDesignImportPlace(QWidget* parent, const QStringList& files, bool inProject);
+
 // File > Open or Import of an .iam assembly (mitcad#507): Parts with
 // their design history (true, the default) or the parts' stored bodies
 // only (false); the choice is remembered (iamPartsHistory). Nothing when

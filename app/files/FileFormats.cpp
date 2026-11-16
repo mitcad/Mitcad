@@ -25,6 +25,11 @@ FileKind fileKind(const QString& path) {
           .contains(suffix)) {
     return FileKind::Cad;
   }
+  // .serp files (mitcad#1870): bodies by layer, blocks as components,
+  // through import_file as STEP's.
+  if (suffix == QStringLiteral("serp")) {
+    return FileKind::Cad;
+  }
   if (suffix == QStringLiteral("stl") || suffix == QStringLiteral("obj")) {
     return FileKind::Mesh;
   }
@@ -60,18 +65,22 @@ FileKind fileKind(const QString& path) {
   return FileKind::None;
 }
 
+bool importsAsComponent(FileKind kind) {
+  return kind == FileKind::F3d || kind == FileKind::FreeCad || kind == FileKind::Ipt;
+}
+
 namespace {
 
 // The CAD formats, one filter: designs with a history (FreeCAD, .f3d),
 // part and assembly files (.ipt, .iam), IFC building models (.ifc,
 // .ifczip), building projects and families (.rvt, .rfa, .rte, .rft), SolidCraft
 // designs (.sc, .solidcraft), drawings' 3D content (.dwg), NURBS models
-// (.3dm), then STEP, IGES and BRep. Both spellings of .FCStd, .ipt, .iam,
-// .ifc, .rvt, .rfa, .sc, .dwg and .3dm: name filters match case-sensitively
-// on Linux.
+// (.3dm), .serp files (mitcad#1870), then STEP, IGES and BRep. Both
+// spellings of .FCStd, .ipt, .iam, .ifc, .rvt, .rfa, .sc, .dwg, .3dm and
+// .serp: name filters match case-sensitively on Linux.
 const char* const kCad = "*.FCStd *.fcstd *.f3d *.f3z *.ipt *.IPT *.iam *.IAM *.ifc *.IFC *.ifczip *.rvt *.RVT *.rfa *.RFA "
-                         "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.3dm *.3DM *.step *.stp *.iges *.igs *.brep "
-                         "*.brp";
+                         "*.rte *.rft *.sc *.SC *.solidcraft *.dwg *.DWG *.3dm *.3DM *.serp *.SERP *.step *.stp *.iges "
+                         "*.igs *.brep *.brp";
 // glTF files (mitcad#1826) in both spellings, as the others.
 const char* const kMesh = "*.stl *.obj *.glb *.GLB *.gltf *.GLTF";
 const char* const kDrawing = "*.dxf *.svg";

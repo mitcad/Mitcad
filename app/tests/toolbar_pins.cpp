@@ -9,6 +9,7 @@
 // themselves; an old per-tab pin list is read into the groups, a command
 // kept under another tab than its own going to its own; unpinned, it is
 // gone from its group.
+#include "UnitTests.hpp"
 #include "framework/ToolbarPins.hpp"
 
 #include <cstdio>
@@ -308,3 +309,4 @@ int toolbarPinsTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(toolbarPinsTests);

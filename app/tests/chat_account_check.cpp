@@ -11,6 +11,7 @@
 // for an agent whose sign-in MitCad knows only; its commands quoted for
 // people, its scripts, and each platform's terminal; a second agent's
 // start while one terminal runs (mitcad#1610).
+#include "UnitTests.hpp"
 #include "agent/AccountCheck.hpp"
 #include "agent/SignInCommands.hpp"
 
@@ -213,3 +214,4 @@ int chatAccountCheckTests() {
   CHECK(signInStart(true, codexId, claudeId) == SignInStart::ReplaceOther);
   return failures;
 }
+MITCAD_UNIT_TEST(chatAccountCheckTests);

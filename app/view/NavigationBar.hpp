@@ -83,6 +83,9 @@ public:
   void pin(const QString& id);
   void unpin(const QString& id);
   void movePin(const QString& id, int index);
+  // The pins read again from the settings, after they changed outside the
+  // bar (Preferences › Import Settings, mitcad#1889).
+  void reloadPins();
 
 signals:
   // The pins changed (pinned, unpinned or reordered).

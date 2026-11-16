@@ -319,6 +319,14 @@ const char* const kUsage = R"(usage:
       another of the file's forms; block-hidden-layer: a block with a member
       on a switched-off layer, placed twice; block-scaled: a block placed
       once at scale 2).
+  mitcad-cli serp-test-file <out.serp> [--case newer]
+      Writes the .serp import's test file (tests): the reader's sample scene
+      in centimetres around B-reps OCCT wrote in its binary format (a box, a
+      B-spline surface, a block placed twice), a mesh, a hidden object, a
+      text and a point cloud, layout and history record left out; --case
+      newer writes it as a format version newer than the reader knows.
+      .serp files themselves are imported with import_file (run, or the
+      application's File > Open and Import).
   mitcad-cli export <file.mitcad> <out> [--bodies <b>,...] [--schema ap214|ap242]
                     [--unit mm|cm|m|in|ft] [--refinement low|medium|high]
                     [--deviation MM --angle DEG] [--ascii]
@@ -1480,6 +1488,9 @@ int run(int argc, char* argv[]) {
     }
     if (mode == "import-3dm") {
       return import_3dm(args);
+    }
+    if (mode == "serp-test-file") {
+      return mitcad::cli::serp_test_file(args);
     }
     if (mode == "export") {
       return export_bodies(args);

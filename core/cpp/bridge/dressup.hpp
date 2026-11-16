@@ -26,5 +26,8 @@ rust::Vec<rust::String> shape_notes(const geometry::Shape& shape);
 rust::Vec<rust::String> shape_infos(const geometry::Shape& shape);
 // The places of each note as a JSON array (mitcad#1327).
 rust::Vec<rust::String> shape_note_places(const geometry::Shape& shape);
+// Its remarks and the places of each as a JSON array (mitcad#1914).
+rust::Vec<rust::String> shape_remarks(const geometry::Shape& shape);
+rust::Vec<rust::String> shape_remark_places(const geometry::Shape& shape);
 
 } // namespace mitcad::bridge

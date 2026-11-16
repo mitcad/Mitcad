@@ -171,7 +171,17 @@ before the spine's end, whose face beyond does not hold the end vertex, for
 an obstacle: the walk ends there, and `PerformSetOfSurfOnElSpine` goes on
 with a piece rolling on the edge, as where a walk meets an edge in the
 middle of a rounding. Edges of faces at the end vertex, concave or tangent
-edges and edges at the spine's end are handled as before.
+edges and edges at the spine's end are handled as before, and so is a
+contact more than ten radii from the spine's point at its guide parameter
+(mitcad#1883): beside a cone's apex at the spine's start (OCCT's
+blend/simple H9, a revolve of 270 degrees whose cone's edge with the end
+plane is rounded from the apex) the first section put the cone's contact on
+its base edge round the far side, 280 from the spine, and the walk, taking
+that edge for an obstacle, failed (`test_fillet_occt_cases.cpp`). Nor
+does a chamfer's contact (mitcad#1901): a chamfer has no piece that rolls
+on an edge (`ChFi3d_ChBuilder`'s `PerformSurf` on an arc is not
+implemented), and OCCT's chamfer sequences dist_angle B3 B4 and
+equal_dist B3 failed.
 
 ## 0650 and 0651: a flange under teeth and a thread's crests
 
@@ -271,7 +281,14 @@ is not computed again as a walked chamfer over a narrow face. MitCad's
 chamfer joins the contacts' pieces at the vertices they leave between them
 (`piece_vertices` in `geometry/src/dressup.cpp`): the files keep one edge
 there, and OCCT's roundings of the crests beside them failed at those
-vertices.
+vertices. Only where the contact leaves its face inside the end edge's own
+range, more than 1 % of the chamfer's width from both of its ends
+(mitcad#1898): at a box's corner the contact leaves its face at the end's
+section, where the face at the end meets the edge, and OCCT's corner
+handles it (OCCT's chamfer sequences A1 A4 A6 A8 C2 failed or came out
+invalid); on a spine of several edges a contact leaving its face along the
+edge before the end edge is no case for the end edge's pieces (OCCT's
+bug354_2 failed).
 
 ## 0690: an end along the line of a seam
 

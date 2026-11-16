@@ -3,6 +3,7 @@
 // a manifest's `mounts` block (each name once, the kind and joint
 // defaults), their labels and the cells of a grid placement's answer
 // (core/model-tests/joints/src/mount_tests.rs checks the model's side).
+#include "UnitTests.hpp"
 #include "library/MountFrames.hpp"
 
 #include <cstdio>
@@ -61,3 +62,4 @@ int mountFramesTests() {
   CHECK(mountCellsText(QJsonArray()).isEmpty());
   return failures;
 }
+MITCAD_UNIT_TEST(mountFramesTests);

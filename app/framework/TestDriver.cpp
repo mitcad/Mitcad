@@ -62,6 +62,7 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QStyleHints>
+#include <QThread>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -82,6 +83,7 @@
 #include "../DocumentFrame.hpp"
 #include "../MainWindow.hpp"
 #include "../WindowManager.hpp"
+#include "../update/UpdateController.hpp"
 #include "../view/SpaceMouseController.hpp"
 #include "../view/ViewEdges.hpp"
 #include "../sketch/SketchController.hpp"
@@ -90,6 +92,8 @@
 #include "../browser/TimelineWidget.hpp"
 #include "GlassCard.hpp"
 #include "TestSync.hpp"
+#include "HangWatchdog.hpp"
+#include "SessionLog.hpp"
 #include "Dialogs.hpp"
 #include "DisplayMeshes.hpp"
 #include "Icons.hpp"
@@ -370,6 +374,8 @@ const StepSpec kSpecs[] = {
     {"collapse-card", 2, 2, kInputOfMain},
     {"expect-setting", 2, 2, kIdle},
     {"set-setting", 2, 2, kIdle},
+    // The update tests' fake offer (mitcad#1890).
+    {"update-fake-offer", 1, 1, kIdle},
     {"expect-dialog-gone", 1, 1, kIdle},
     {"dialog-resize", 2, 2, kInputOfTarget},
     {"expect-dialog-appearance", 1, 1, kIdle},
@@ -391,6 +397,9 @@ const StepSpec kSpecs[] = {
     {"expect-near", 2, 4, kPlain},
     {"wait-idle", 0, 1, kPlain},
     {"sleep", 1, 1, kPlain},
+    // The hang marker and the session log (mitcad#1896).
+    {"freeze-ui", 1, 1, kIdle},
+    {"expect-session-log", 1, 2, kPlain},
     {"expect-file", 1, 2, kPlain},
     {"expect-files", 3, 4, kPlain},
     {"screenshot", 1, 1, kIdle},
@@ -823,20 +832,25 @@ QWidget* namedWidget(QWidget* scope, const QString& name, bool forInput = false)
 // input <key> at x,y", "Panel <name> action <key>.<index> at x,y"),
 // scrolled into the panel's view first (mitcad#1643: Send to Slicer's rows
 // below the fold were logged where the scrolled panel no longer shows
-// them): its middle now, in `top`'s coordinates; false when the line
-// names no such widget or it is in view, and the logged place stands.
+// them), and its message ("Panel <name> message at x,y", mitcad#1877: a
+// long Flange panel's refusal below the fold, hovered for its places):
+// its middle now, in `top`'s coordinates; false when the line names no
+// such widget or it is in view, and the logged place stands.
 bool revealedPanelPlace(QWidget* main, QWidget* top, const QString& logged, QPoint& at) {
   static const QRegularExpression line(QStringLiteral("^Panel .* (input|action) (\\S+?)(?:[.](\\d+))? at "));
+  static const QRegularExpression message(QStringLiteral("^Panel .* message at "));
   const QRegularExpressionMatch match = line.match(logged);
-  if (!match.hasMatch() || main == nullptr || top == nullptr) {
+  const bool isMessage = !match.hasMatch() && message.match(logged).hasMatch();
+  if ((!match.hasMatch() && !isMessage) || main == nullptr || top == nullptr) {
     return false;
   }
-  QWidget* row = namedWidget(main, QStringLiteral("input_") + match.captured(2));
+  QWidget* row = isMessage ? namedWidget(main, QStringLiteral("commandMessage"))
+                           : namedWidget(main, QStringLiteral("input_") + match.captured(2));
   if (row == nullptr || !row->isVisible()) {
     return false;
   }
   QWidget* target = row;
-  if (match.captured(1) == QStringLiteral("action")) {
+  if (!isMessage && match.captured(1) == QStringLiteral("action")) {
     target = namedWidget(row, QStringLiteral("note_action_") + match.captured(3));
     if (target == nullptr || !target->isVisible()) {
       return false;
@@ -1255,11 +1269,14 @@ void TestDriver::leave(int code) {
   QObject::disconnect(m_nativeJobHistoryDragConnection);
   m_nativeJobHistoryDragLabel.clear();
   m_finished = true;
+  m_left = true;
+  m_exitStatus = code;
   if (m_timer != nullptr) {
     m_timer->stop();
   }
   // Closes no window (no closeEvent, no question about unsaved work); every
-  // event loop that runs, a dialog's too, ends.
+  // event loop that runs, a dialog's too, ends. Before the main event loop
+  // runs, main() reads left() instead (mitcad#1933).
   QCoreApplication::exit(code);
 }
 
@@ -5898,6 +5915,15 @@ void TestDriver::run(const Step& step) {
     // A saved QSettings value, as Preferences would save it (text).
     QSettings().setValue(a.at(0), a.at(1));
     qInfo().noquote() << QStringLiteral("TestDriver: setting %1 = %2").arg(a.at(0), a.at(1));
+  } else if (name == QLatin1String("update-fake-offer")) {
+    // The update offered from now on is the tests' fake one (mitcad#1890):
+    // no request, "downloaded" in the seconds given, never installed.
+    double offerSeconds = 0;
+    if (!toNumber(a.at(0), offerSeconds) || offerSeconds < 1) {
+      fail(line, QStringLiteral("update-fake-offer <seconds of its download, 1 or more>"));
+      return;
+    }
+    UpdateController::application().useTestFakeOffer(static_cast<int>(offerSeconds));
   } else if (name == QLatin1String("expect-dialog-gone")) {
     QRegularExpression re;
     if (!regex(a.at(0), re)) return;
@@ -6364,6 +6390,47 @@ void TestDriver::run(const Step& step) {
     clock->start();
     whenReady([clock, milliseconds] { return clock->elapsed() >= milliseconds; }, milliseconds / 1000.0 + 5,
               QStringLiteral("sleep"));
+  } else if (name == QLatin1String("freeze-ui")) {
+    // A hang of the UI thread for the hang marker (mitcad#1896): the event
+    // loop does not run for the time.
+    double milliseconds = 0;
+    if (!toNumber(a.at(0), milliseconds) || milliseconds < 0 || milliseconds > 60000) {
+      fail(line, QStringLiteral("freeze-ui <0..60000 ms>, not '%1'").arg(a.at(0)));
+      return;
+    }
+    const int ms = static_cast<int>(milliseconds);
+    HangWatchdog::noteActivity(QStringLiteral("test step freeze-ui %1 ms").arg(ms));
+    qDebug().noquote() << QStringLiteral("TestDriver: freezing the UI thread for %1 ms").arg(ms);
+    QThread::msleep(static_cast<unsigned long>(ms));
+  } else if (name == QLatin1String("expect-session-log")) {
+    // A line of this run's session log file (mitcad#1896).
+    QRegularExpression re;
+    double limit = 6;
+    if (!regex(a.at(0), re) || !seconds(1, 6, limit)) {
+      return;
+    }
+    whenReady(
+        [this, re] {
+          const QString path = SessionLog::instance().currentFile();
+          if (path.isEmpty()) {
+            m_waitDetail = QStringLiteral("no session log is written");
+            return false;
+          }
+          QFile file(path);
+          if (!file.open(QIODevice::ReadOnly)) {
+            m_waitDetail = QStringLiteral("%1 cannot be read").arg(path);
+            return false;
+          }
+          const QStringList lines = QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'));
+          for (const QString& text : lines) {
+            if (re.match(text).hasMatch()) {
+              return true;
+            }
+          }
+          m_waitDetail = QStringLiteral("%1 lines in %2").arg(lines.size()).arg(path);
+          return false;
+        },
+        limit, QStringLiteral("'%1' is not in the session log").arg(a.at(0)));
   } else if (name == QLatin1String("color-scheme")) {
     // As MITCAD_TEST_COLOR_SCHEME at start (main.cpp), at this step
     // (mitcad#1104): after rows were styled, say.

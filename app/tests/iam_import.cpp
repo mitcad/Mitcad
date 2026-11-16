@@ -3,6 +3,7 @@
 // their design history on by default and remembered across a new settings
 // object (a restart); the worker's part progress lines read, other lines
 // not; each part's outcome as the Import Report shows it.
+#include "UnitTests.hpp"
 #include "files/IamImport.hpp"
 
 #include <cstdio>
@@ -103,3 +104,4 @@ int iamImportTests() {
 
   return failures;
 }
+MITCAD_UNIT_TEST(iamImportTests);

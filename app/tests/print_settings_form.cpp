@@ -5,6 +5,7 @@
 // the key's own unit; Advanced off hides an advanced key unless it is set,
 // a tab with nothing to show is hidden, the search finds the plain names
 // only; a field commits what is typed, in its range.
+#include "UnitTests.hpp"
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -459,3 +460,4 @@ int printSettingsFormTests() {
   CHECK(!withoutSlicers.keyShown(QStringLiteral("filament_settings_id")));
   return failures;
 }
+MITCAD_UNIT_TEST(printSettingsFormTests);

@@ -4,6 +4,7 @@
 // a place's sub-folders first and then its designs, folders that only a
 // design's path names, the search by part of a design's name in every
 // project or in one, the path bar's parts and a step up.
+#include "UnitTests.hpp"
 #include "projects/ProjectBrowserData.hpp"
 
 #include <cstdio>
@@ -188,3 +189,4 @@ int projectBrowserTests() {
   searchTests();
   return failures;
 }
+MITCAD_UNIT_TEST(projectBrowserTests);

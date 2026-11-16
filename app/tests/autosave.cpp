@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Publish real snapshots and read them through the normal recovery path.
+#include "UnitTests.hpp"
 #include "files/Autosave.hpp"
 #include "files/Recovery.hpp"
 #include "framework/AppSettings.hpp"
@@ -257,3 +258,4 @@ int autosaveTests() {
   else qunsetenv("MITCAD_AUTOSAVE_DIR");
   return failures;
 }
+MITCAD_UNIT_TEST(autosaveTests);

@@ -1256,7 +1256,13 @@ impl Material {
 pub fn check_filament_value(key: &str, value: &Value) -> Result<(), String> {
     let def = print_keys::key(key)
         .filter(|def| def.set == PrintSet::Filament)
-        .ok_or_else(|| format!("{key} is no key of the Print Filament set"))?;
+        .ok_or_else(
+            || match print_keys::key_hint(key, PrintSet::Filament, Some(value)) {
+                // A slicer's own key (mitcad#1897).
+                Some(hint) => format!("{key} is no key of the Print Filament set{hint}"),
+                None => format!("{key} is no key of the Print Filament set"),
+            },
+        )?;
     if key == "filament_density" {
         return Err("the filament's density is the material's density".to_owned());
     }

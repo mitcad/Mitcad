@@ -24,8 +24,14 @@ ChFi3d_StripeEdgeInter).
   everywhere in the data structure (redirectPoint), so that the face's
   wire and the face at the end close there. The face keeps its part past
   the line's ends and loses the part between the line and the edges.
+- Neither pair (0153's nor this) is recorded where another stripe reaches
+  a vertex of the two edges (mitcad#1883): a box's top rounded to a full
+  round, two vertical edges at its ends rounded with it (OCCT's bug119),
+  came out invalid, the corners there built round the face that vanishes.
+  Without the ride the corners cut the roundings by each other: valid, the
+  volume of the two roundings each cut by the other.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index a7da6776..68ca4c06 100644
+index a7da6776..21dd214b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -305,6 +305,41 @@ static TopoDS_Edge spineEdgeOf(const occ::handle<ChFiDS_Spine>& Sp, const TopoDS
@@ -160,33 +166,12 @@ index a7da6776..68ca4c06 100644
        }
      }
    }
-@@ -1113,29 +1215,13 @@ void ChFi3d_Builder::Compute()
+@@ -1113,29 +1215,47 @@ void ChFi3d_Builder::Compute()
                continue;
              }
              // F vanishes: its other edges join a vertex of EA to one of EB.
 -            bool strip = true;
 -            for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More() && strip; ex.Next())
--            {
--              const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
--              if (E.IsSame(EA) || E.IsSame(EB) || BRep_Tool::Degenerated(E))
--              {
--                continue;
--              }
--              bool toA = false, toB = false;
--              for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
--              {
--                for (TopExp_Explorer exa(EA, TopAbs_VERTEX); exa.More(); exa.Next())
--                {
--                  toA = toA || exa.Current().IsSame(exv.Current());
--                }
--                for (TopExp_Explorer exb(EB, TopAbs_VERTEX); exb.More(); exb.Next())
--                {
--                  toB = toB || exb.Current().IsSame(exv.Current());
--                }
--              }
--              strip = toA && toB;
--            }
--            if (!strip)
 +            // Or F goes on past the line's ends (a rib as wide as the two
 +            // roundings, its top one face with the top it stands out of):
 +            // two open stripes, ending at the line's ends, whose corners
@@ -194,6 +179,52 @@ index a7da6776..68ca4c06 100644
 +            if (!isStripBetween(F, EA, EB)
 +                && (A->Spine()->IsPeriodic() || B->Spine()->IsPeriodic()
 +                    || A->Spine()->IsClosed() || B->Spine()->IsClosed()))
++            {
++              continue;
++            }
++            // Not where another rounding reaches a vertex of the two edges
++            // (a box's top rounded to a full round, two vertical edges at
++            // its ends rounded too): the corners there were built round a
++            // face that vanishes, and the body came out invalid. Without
++            // the ride the corners cut the roundings by each other.
++            bool otherAtEnds = false;
++            for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itC(myListStripe);
++                 itC.More() && !otherAtEnds;
++                 itC.Next())
+             {
+-              const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
+-              if (E.IsSame(EA) || E.IsSame(EB) || BRep_Tool::Degenerated(E))
++              const occ::handle<ChFiDS_Stripe>& C = itC.Value();
++              if (C == A || C == B || C->Spine().IsNull() || myDroppedStripes.Contains(C))
+               {
+                 continue;
+               }
+-              bool toA = false, toB = false;
+-              for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++              for (int ie = 1; ie <= C->Spine()->NbEdges() && !otherAtEnds; ie++)
+               {
+-                for (TopExp_Explorer exa(EA, TopAbs_VERTEX); exa.More(); exa.Next())
+-                {
+-                  toA = toA || exa.Current().IsSame(exv.Current());
+-                }
+-                for (TopExp_Explorer exb(EB, TopAbs_VERTEX); exb.More(); exb.Next())
++                for (TopExp_Explorer exc(C->Spine()->Edges(ie), TopAbs_VERTEX); exc.More() && !otherAtEnds;
++                     exc.Next())
+                 {
+-                  toB = toB || exb.Current().IsSame(exv.Current());
++                  for (const TopoDS_Edge& Eab : {EA, EB})
++                  {
++                    for (TopExp_Explorer exe(Eab, TopAbs_VERTEX); exe.More(); exe.Next())
++                    {
++                      otherAtEnds = otherAtEnds || exe.Current().IsSame(exc.Current());
++                    }
++                  }
+                 }
+               }
+-              strip = toA && toB;
+             }
+-            if (!strip)
++            if (otherAtEnds)
              {
                continue;
              }

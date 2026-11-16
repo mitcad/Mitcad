@@ -13,8 +13,10 @@ use serde::Serialize;
 pub use crate::components::ComponentReport;
 
 /// How far (relative) a final body's volume may be from the stored body's
-/// before the import warns that they differ (mitcad#1175).
-pub const BODY_VOLUME_TOLERANCE: f64 = 1e-6;
+/// before the import warns that they differ (mitcad#1175): 0.01 %, within
+/// which the import report shows the body as matching the file's
+/// (mitcad#1893, `report_status::BODY_VOLUME_TOLERANCE`).
+pub const BODY_VOLUME_TOLERANCE: f64 = mitcad_import_base::report_status::BODY_VOLUME_TOLERANCE;
 
 /// The report of one file (an `.f3z` package has several designs).
 #[derive(Debug, Clone, Default, Serialize)]
@@ -276,8 +278,10 @@ fn items_with_messages<S: serde::Serializer>(
     for item in items {
         let mut value = serde_json::to_value(item).map_err(S::Error::custom)?;
         if let Some(note) = &item.note {
+            // The import's internal words said plainly too (mitcad#1893).
+            let plain = mitcad_import_base::report_status::plain_words(note);
             value["note_message"] =
-                serde_json::json!(notice::FeatureError::from_text(note).message);
+                serde_json::json!(notice::FeatureError::from_text(&plain).message);
         }
         seq.serialize_element(&value)?;
     }
@@ -1030,9 +1034,9 @@ mod notice_tests {
     }
 
     /// (mitcad#1175) Final bodies that are not the stored ones are one
-    /// warning naming them: past 1e-6 in volume, other faces, a stored
-    /// body without a body in the replay, a replayed body the file does
-    /// not store; within it, none.
+    /// warning naming them: past 0.01 % in volume (mitcad#1893: +0.0002 %
+    /// is the same body), other faces, a stored body without a body in the
+    /// replay, a replayed body the file does not store; within it, none.
     #[test]
     fn final_bodies_that_differ_are_a_warning() {
         let body = |file: &str, mitcad: Option<&str>, dv: f64, faces: (usize, usize)| BodyReport {
@@ -1049,10 +1053,13 @@ mod notice_tests {
             bodies: vec![
                 body("Body1", Some("F2.b0 Body1"), 5e-7, (5, 5)),
                 body("Body2", Some("F5.b0 Body2"), -1e-6, (12, 12)),
+                body("Body5", Some("F7.b0 Body5"), 2e-6, (8, 8)),
+                body("Body6", Some("F8.b0 Body6"), -9e-5, (8, 8)),
             ],
             ..DesignReport::default()
         };
         assert_eq!(report.body_differences(), None);
+        report.bodies.truncate(2);
         report.bodies[0].volume_difference = Some(1.5e-4);
         report.bodies[1].mitcad_faces = Some(40);
         report.bodies.push(body("Body3", None, 0.0, (6, 6)));

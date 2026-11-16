@@ -44,6 +44,8 @@ pub mod document {
         normalized_color, noted_message, noted_status, print_material, purge_defaults_json,
         status_message, status_text, with_warnings, writable_library,
     };
+    // Remarks (mitcad#1914).
+    pub use crate::document::remark_notices;
 }
 
 /// The drawing definitions' sizes and checks, and a date from days.

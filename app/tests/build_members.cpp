@@ -6,6 +6,7 @@
 // build_remove only, which takes the fastener with it; a fastener alone, or
 // one whose connector stays, gets its own; an adder's adder takes nothing
 // more; parts are named once.
+#include "UnitTests.hpp"
 #include "browser/BuildMembers.hpp"
 
 #include <cstdio>
@@ -127,3 +128,4 @@ int buildMembersTests() {
   commandTests();
   return failures;
 }
+MITCAD_UNIT_TEST(buildMembersTests);

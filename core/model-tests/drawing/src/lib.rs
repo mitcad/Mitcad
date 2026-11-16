@@ -21,3 +21,5 @@ mod dxf_units_tests;
 // Custom sheet sizes, title block images and the title block editor
 // (mitcad#1625).
 mod title_block_tests;
+// model_render's line art, projected as drawings' views are (mitcad#1736).
+mod render_lines_tests;

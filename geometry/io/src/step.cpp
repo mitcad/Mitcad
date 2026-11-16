@@ -8,6 +8,8 @@
 #include <memory>
 #include <optional>
 #include <streambuf>
+#include <string>
+#include <vector>
 
 #include <DESTEP_Parameters.hxx>
 #include <IFSelect_ReturnStatus.hxx>
@@ -15,8 +17,16 @@
 #include <STEPControl_Reader.hxx>
 #include <STEPCAFControl_Reader.hxx>
 #include <STEPCAFControl_Writer.hxx>
+#include <STEPConstruct.hxx>
+#include <STEPControl_Writer.hxx>
+#include <StepRepr_RepresentationItem.hxx>
 #include <TCollection_AsciiString.hxx>
+#include <TCollection_HAsciiString.hxx>
+#include <TopLoc_Location.hxx>
+#include <Transfer_FinderProcess.hxx>
 #include <UnitsMethods_LengthUnit.hxx>
+#include <XSControl_TransferWriter.hxx>
+#include <XSControl_WorkSession.hxx>
 
 #include "step_names.hpp"
 #include "xcaf.hpp"
@@ -100,6 +110,47 @@ public:
   }
 };
 
+// Writes a document to a STEP file (the caller holds the exchange lock),
+// naming the representation items of `items` once it is transferred.
+void write_document(const occ::handle<TDocStd_Document>& document, const std::string& path,
+                    const StepWriteOptions& options, const std::vector<detail::ItemName>& items) {
+  DESTEP_Parameters parameters;
+  parameters.WriteSchema = options.schema == StepSchema::AP242
+                               ? DESTEP_Parameters::WriteMode_StepSchema_AP242DIS
+                               : DESTEP_Parameters::WriteMode_StepSchema_AP214IS;
+  parameters.WriteUnit = occt_unit(options.unit);
+  parameters.WriteColor = true;
+  parameters.WriteName = true;
+
+  STEPCAFControl_Writer writer;
+  writer.SetColorMode(true);
+  writer.SetNameMode(true);
+  writer.SetLayerMode(false);
+  writer.SetPropsMode(false);
+  if (!writer.Transfer(document, parameters)) {
+    throw Error("cannot write STEP file " + path);
+  }
+  // XCAF's writer names products and instances only: the solids of a part
+  // made of several bodies get their bodies' names here (read_step reads
+  // them back as the bodies' names).
+  if (!items.empty()) {
+    const occ::handle<Transfer_FinderProcess> process = writer.ChangeWriter().WS()->TransferWriter()->FinderProcess();
+    for (const detail::ItemName& item : items) {
+      TopLoc_Location location;
+      const occ::handle<StepRepr_RepresentationItem> found = STEPConstruct::FindEntity(process, item.shape, location);
+      TCollection_AsciiString name(detail::extended(item.name));
+      name.LeftAdjust();
+      name.RightAdjust();
+      if (!found.IsNull() && !name.IsEmpty()) {
+        found->SetName(new TCollection_HAsciiString(name));
+      }
+    }
+  }
+  if (writer.Write(path.c_str()) != IFSelect_RetDone) {
+    throw Error("cannot write STEP file " + path);
+  }
+}
+
 } // namespace
 
 void write_step(const std::string& path, const std::vector<Body>& bodies,
@@ -114,23 +165,14 @@ void write_step(const std::string& path, const std::vector<Body>& bodies,
   } else {
     detail::add_bodies(document, bodies);
   }
+  write_document(document, path, options, {});
+}
 
-  DESTEP_Parameters parameters;
-  parameters.WriteSchema = options.schema == StepSchema::AP242
-                               ? DESTEP_Parameters::WriteMode_StepSchema_AP242DIS
-                               : DESTEP_Parameters::WriteMode_StepSchema_AP214IS;
-  parameters.WriteUnit = occt_unit(options.unit);
-  parameters.WriteColor = true;
-  parameters.WriteName = true;
-
-  STEPCAFControl_Writer writer;
-  writer.SetColorMode(true);
-  writer.SetNameMode(true);
-  writer.SetLayerMode(false);
-  writer.SetPropsMode(false);
-  if (!writer.Perform(document, path.c_str(), parameters)) {
-    throw Error("cannot write STEP file " + path);
-  }
+void write_step_tree(const std::string& path, const StepTree& tree, const StepWriteOptions& options) {
+  const auto lock = detail::exchange_lock();
+  const occ::handle<TDocStd_Document> document = detail::new_document();
+  const std::vector<detail::ItemName> items = detail::add_tree(document, tree, detail::file_stem(path));
+  write_document(document, path, options, items);
 }
 
 namespace {

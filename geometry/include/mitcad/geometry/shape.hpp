@@ -335,7 +335,19 @@ public:
   // them as information, in the feature's details.
   const std::vector<std::string>& infos() const { return m_infos; }
   void add_info(std::string info) { m_infos.push_back(std::move(info)); }
-  // The other shape's notes and infos added to this one's.
+  // What the command's panel points out while it is open, with its places,
+  // but the user accepts with the result (mitcad#1914: a fillet's tangent
+  // chain that stops where other sharp edges meet, its edges left sharp):
+  // the model gives them as information notices that mark nothing once the
+  // feature is accepted. Not kept in stored shapes (the model keeps them
+  // with the feature's result).
+  const std::vector<std::string>& remarks() const { return m_remarks; }
+  const std::vector<std::vector<NotePlace>>& remark_places() const { return m_remarkPlaces; }
+  void add_remark(std::string remark, std::vector<NotePlace> places = {}) {
+    m_remarks.push_back(std::move(remark));
+    m_remarkPlaces.push_back(std::move(places));
+  }
+  // The other shape's notes, infos and remarks added to this one's.
   void copy_notes(const Shape& other) {
     // (Places kept beside their notes: one list per note.)
     m_notePlaces.resize(m_notes.size());
@@ -344,6 +356,12 @@ public:
       m_notePlaces.push_back(k < other.m_notePlaces.size() ? other.m_notePlaces[k] : std::vector<NotePlace>());
     }
     m_infos.insert(m_infos.end(), other.m_infos.begin(), other.m_infos.end());
+    m_remarkPlaces.resize(m_remarks.size());
+    m_remarks.insert(m_remarks.end(), other.m_remarks.begin(), other.m_remarks.end());
+    for (std::size_t k = 0; k < other.m_remarks.size(); ++k) {
+      m_remarkPlaces.push_back(k < other.m_remarkPlaces.size() ? other.m_remarkPlaces[k]
+                                                               : std::vector<NotePlace>());
+    }
   }
 
 private:
@@ -400,6 +418,8 @@ private:
   std::vector<std::string> m_notes;
   std::vector<std::vector<NotePlace>> m_notePlaces;
   std::vector<std::string> m_infos;
+  std::vector<std::string> m_remarks;
+  std::vector<std::vector<NotePlace>> m_remarkPlaces;
   // Registered with the input check when made.
   bool m_checked = false;
 };

@@ -6,6 +6,7 @@
 // the caches (MITCAD_TEXTURES_DIR) that save requests; errors as sentences;
 // the fetchers' refusals (network off, no HTTPS) and the folder fetcher of
 // the UI tests.
+#include "UnitTests.hpp"
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -590,3 +591,4 @@ int polyHavenSourceTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(polyHavenSourceTests);

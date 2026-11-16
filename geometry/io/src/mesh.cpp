@@ -926,16 +926,37 @@ public:
     TopLoc_Location location;
     const occ::handle<Poly_Triangulation> before = BRep_Tool::Triangulation(shape, location);
     bool fits = false;
+    const char* why = "threw";
+    double covered = -1.0;
+    double boundary = -1.0;
+    int triangles = -1;
     try {
       m_first->Perform(face, parameters, range);
       const occ::handle<Poly_Triangulation> made = BRep_Tool::Triangulation(shape, location);
-      fits = !face->IsSet(IMeshData_Failure) && !made.IsNull() && made != before &&
-             plane_area_fits(covered_area(*made), boundary_area(face));
+      if (face->IsSet(IMeshData_Failure)) {
+        why = "failed";
+      } else if (made.IsNull()) {
+        why = "none";
+      } else if (made == before) {
+        why = "unchanged";
+      } else {
+        covered = covered_area(*made);
+        boundary = boundary_area(face);
+        triangles = made->NbTriangles();
+        why = "area";
+      }
+      fits = covered >= 0.0 && plane_area_fits(covered, boundary);
     } catch (const Standard_Failure&) {
       fits = false;
     }
     if (fits) {
       return;
+    }
+    // Why (mitcad#1919): "none" is also Delabella's own failure, which
+    // BRepMesh's base algorithm catches without marking the face.
+    if (mesh_tracing()) {
+      std::fprintf(stderr, "mesh-trace: plane redone (%s): %d wires, %d triangles over %.6g mm2, boundary %.6g mm2\n",
+                   why, face->WiresNb(), triangles, covered, boundary);
     }
     // The default's own start: no triangulation, nothing failed yet. A
     // stopped meshing leaves the face so, as a face it did not reach.

@@ -3,6 +3,7 @@
 // them (hidden ones and those whose plane is gone left out), points across
 // an image and where a ray meets its plane, the log line UI tests read and
 // a calibration's distance as typed.
+#include "UnitTests.hpp"
 #include "view/ImageReferences.hpp"
 
 #include <cmath>
@@ -110,3 +111,4 @@ int imageReferencesTests() {
   distanceTests();
   return failures;
 }
+MITCAD_UNIT_TEST(imageReferencesTests);

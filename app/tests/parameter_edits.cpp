@@ -3,6 +3,7 @@
 // what is open (the log's words, the table's line), the edited feature's
 // own parameters left to its panel, which commands of the table the panel
 // follows, and a rename carried into the panel's expressions.
+#include "UnitTests.hpp"
 #include "framework/ParameterEdits.hpp"
 
 #include <cstdio>
@@ -181,3 +182,4 @@ int parameterEditsTests() {
   renameTests();
   return failures;
 }
+MITCAD_UNIT_TEST(parameterEditsTests);

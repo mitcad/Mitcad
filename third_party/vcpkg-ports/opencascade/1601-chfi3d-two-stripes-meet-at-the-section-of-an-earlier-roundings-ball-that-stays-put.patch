@@ -32,7 +32,10 @@ no parameters on surface").
   run-on to there within 8 R beyond its end, its contacts on W's and T's
   faces, and B past there over edges between W and tubes of R about a
   curve through C (a cylinder of R whose axis runs through C, or a torus
-  of minor radius R whose centre circle does). Then the cylinder piece is
+  of minor radius R whose centre circle does; at least one such edge: a B
+  that ends there, as two roundings of one fillet meeting at a box's
+  corner in OCCT's boolean/bcutblend A1, is no still ball's and was joined
+  into an invalid body). Then the cylinder piece is
   run on to that section (its points B's), A's pieces past it and B's past
   that section are dropped, and the two ends meet there as free ends: the
   points and the section's edge shared, as JoinOverNarrowFaceFrom's ends
@@ -49,10 +52,10 @@ volume. Needs 1600 (the corner balls of the same chain at the other
 corner of the wall). Before, the corners at both vertices failed.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index a6317365..24ad068d 100644
+index 8c1ec05b..17aa37fa 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -3775,6 +3775,18 @@ void ChFi3d_Builder::Compute()
+@@ -3787,6 +3787,18 @@ void ChFi3d_Builder::Compute()
      {
        // (The stripes as they are.)
      }
@@ -72,10 +75,10 @@ index a6317365..24ad068d 100644
      // edge and came back: on that face's surface, cut by the face beyond.
      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itK(myListStripe); itK.More(); itK.Next())
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 48db7a29..ecad5a80 100644
+index 2e19c5b0..af755114 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -1444,6 +1444,25 @@ private:
+@@ -1468,6 +1468,25 @@ private:
                                          const TopoDS_Face&                Fo,
                                          const TopoDS_Face&                C);
  
@@ -103,10 +106,10 @@ index 48db7a29..ecad5a80 100644
    //! radii): such pairs are taken out of the stripes (and out of theBad)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
 new file mode 100644
-index 00000000..7fc45e54
+index 00000000..31e5eb7f
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_StillBall.cxx
-@@ -0,0 +1,443 @@
+@@ -0,0 +1,452 @@
 +// This file is part of Open CASCADE Technology software library.
 +//
 +// This library is free software; you can redistribute it and/or modify it under
@@ -420,6 +423,7 @@ index 00000000..7fc45e54
 +  const occ::handle<ChFiDS_Spine> spB = SB->Spine();
 +  const double                    wS  = bFirst ? Db->FirstSpineParam() : Db->LastSpineParam();
 +  const TopoDS_Shape&             FW  = DStr.Shape(iA[aW - 1]);
++  int                             aPast = 0;
 +  for (int ie = 1; ie <= spB->NbEdges(); ie++)
 +  {
 +    const double w0 = spB->FirstParameter(ie), w1 = spB->LastParameter(ie);
@@ -428,6 +432,7 @@ index 00000000..7fc45e54
 +    {
 +      continue;
 +    }
++    aPast++;
 +    bool aOnW = false, aStill = false;
 +    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(spB->Edges(ie))); it.More(); it.Next())
 +    {
@@ -444,6 +449,13 @@ index 00000000..7fc45e54
 +    {
 +      return false;
 +    }
++  }
++  // (B runs on past the section over such edges: a stripe that ends there,
++  // as two roundings of one fillet meeting at a box's corner, is no still
++  // ball's.)
++  if (aPast == 0)
++  {
++    return false;
 +  }
 +
 +  // A: Dc run on to the section, its points there B's, its pieces past it

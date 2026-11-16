@@ -5,6 +5,7 @@
 // OCCT, the same box with every face's triangulation wound the other way
 // (with and without the nodes' surface parameters), and closed and open
 // mesh bodies (faces without surfaces, as an imported STL file's).
+#include "UnitTests.hpp"
 #include "render/RenderMesh.hpp"
 
 #include <cstdio>
@@ -182,3 +183,4 @@ int renderMeshTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(renderMeshTests);

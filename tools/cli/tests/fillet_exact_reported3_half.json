@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #353's third design (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake) at the reporter's 5 mm: the cube of 10 rounded on all its edges by half its side, the corners' balls at both ends of each edge meeting in its middle. The geometry kernel's fillet never returned there (and a cancel did not reach it). The meeting corners are refused before the kernel, and the 0.1 % smaller retry builds it at once with its warning: the cube rounded by 4.995."},
+  {"cmd": "set_parameter", "name": "d4", "value": 5},
+  {"expect": {"feature": "Fillet1", "status": "warning", "error_contains": "0.1 % smaller"}},
+  {"expect": {"body": "Body1", "volume": 524.3840320}}
+]

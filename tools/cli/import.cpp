@@ -841,4 +841,20 @@ int import_3dm(const std::vector<std::string>& args) {
   return a.flag("--check") && !pass ? 1 : 0;
 }
 
+// The .serp import's test file (mitcad#1870), imported by the tests with
+// `mitcad-cli run` (import_file).
+int serp_test_file(const std::vector<std::string>& args) {
+  Arguments a;
+  std::string problem;
+  if (!parse_arguments(args, {"--case"}, {}, a, problem)) {
+    return usage(problem);
+  }
+  if (a.positional.size() != 1) {
+    return usage(a.positional.empty() ? "no .serp file to write" : "more than one .serp file");
+  }
+  const std::string* test_case = a.option("--case");
+  mitcad::serp_write_test_file(a.positional[0], test_case != nullptr ? *test_case : std::string());
+  return 0;
+}
+
 } // namespace mitcad::cli

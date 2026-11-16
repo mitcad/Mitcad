@@ -5,6 +5,7 @@
 // places and a failure's plain error. A hover's log words, also while a
 // job computes (mitcad#1600), and the feature a message under the pointer
 // gives when another takes its place (mitcad#1609).
+#include "UnitTests.hpp"
 #include "browser/DocumentSnapshot.hpp"
 #include "framework/NoticePlaces.hpp"
 
@@ -170,3 +171,4 @@ int noticePlacesTests() {
   hoverLatchTests();
   return failures;
 }
+MITCAD_UNIT_TEST(noticePlacesTests);

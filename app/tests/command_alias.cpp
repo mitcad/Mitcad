@@ -3,6 +3,7 @@
 // became File > Save to Project, `file.move_to_project` an alias of
 // `file.save_to_project`): the registry finds the command by it, and a
 // shortcut saved under it moves to the new id, unless the new id has one.
+#include "UnitTests.hpp"
 #include "framework/CommandRegistry.hpp"
 
 #include <cstdio>
@@ -87,3 +88,4 @@ int commandAliasTests() {
   QSettings::setDefaultFormat(format);
   return failures;
 }
+MITCAD_UNIT_TEST(commandAliasTests);

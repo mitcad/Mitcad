@@ -19,6 +19,8 @@
 //! - `overlay` (mitcad#1488, `preview/overlay.rs`): what Print Analysis'
 //!   functions find (or the bodies failed features read), drawn over the
 //!   bodies, with its summary.
+//! - `format: "svg"` (mitcad#1736, `preview/lines.rs`): line art, the
+//!   edges the drawings' projection sees, instead of a shaded picture.
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
@@ -43,6 +45,11 @@ use crate::transform::Transform;
 
 // The overlay's analyses (mitcad#1488).
 mod overlay;
+
+// Line art as SVG (mitcad#1736): the edges seen, hidden lines removed.
+mod lines;
+pub use lines::LineArt;
+pub use mitcad_preview::Format;
 
 /// Encodings at most per picture for the byte budget, and the longer
 /// side a smaller picture never goes below (`ui_screenshot`'s).

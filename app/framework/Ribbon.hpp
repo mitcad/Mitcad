@@ -111,6 +111,10 @@ public:
   void pin(const QString& tab, const QString& id);
   void unpin(const QString& tab, const QString& id);
   void movePin(const QString& tab, const QString& id, int index);
+  // The pins read again from the settings and every group's pinned
+  // buttons made again, after the settings changed outside the ribbon
+  // (Preferences › Import Settings, mitcad#1889); pinsChanged for each tab.
+  void reloadPins();
   // The navigation bar's pins (mitcad#1589): with it set, a command row's
   // menu (and a pinned button's) has Pin to Navigation Bar after Pin to
   // Toolbar, Unpin from Navigation Bar when `pinned` says the command is

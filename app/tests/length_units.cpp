@@ -3,6 +3,7 @@
 // converted to a sensible value of mm, cm, m, in and ft (the table of nice
 // values), what stays as written, and the lengths, areas, volumes and
 // points Measure and the Browser show.
+#include "UnitTests.hpp"
 #include "framework/LengthUnits.hpp"
 
 #include <algorithm>
@@ -150,3 +151,4 @@ int lengthUnitsTests() {
   shownTests();
   return failures;
 }
+MITCAD_UNIT_TEST(lengthUnitsTests);

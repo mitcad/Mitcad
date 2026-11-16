@@ -35,10 +35,23 @@ it. Otherwise add a coincident relation afterwards; coincident curve
 endpoints are merged by the sketch command. Coincident coordinates
 without a relation remain separate points that can open when edited.
 
-Create geometry in a call, read the returned ids, then constrain or use
-them in the next call. Do not predict ids produced earlier in the same
-`model_command` array. Read the reference for fields that take a position
-only, such as a pick place, rather than an existing point id.
+Never predict the ids a command will make. In one `model_command` array,
+name an entry with `"as": "l1"` and take its result in a later entry with
+`{"ref": "l1.end"}`: the point at the line's `end` as written (also for a
+clockwise arc, which is stored the other way round), `l1.made.0` the line
+itself. A whole outline, its constraints and a profile picked by a point
+inside it fit in one array; query afterwards for the faces and edges of
+what it built. Read the reference for fields that take a position only,
+such as a pick place, rather than an existing point id.
+
+A coordinate may be a parameter expression, `["w/2", 5]`: the point is
+held there by a dimension from the sketch origin and follows `w`; number
+coordinates stay free. The same holds for a 3D sketch's new points,
+`["w", 0, "h / 2"]`, held by offsets from its origin point, and for a
+circular pattern's new centre. A move, a scale and a place where the
+command makes no point (an arc's `through`, a text's `at`) are read
+once: they take numbers and refuse expressions; dimension the geometry
+instead.
 
 ## Constraints
 

@@ -6,6 +6,7 @@
 // what came in and what was left out and gives the problem once with the
 // number of profiles that had it. A library import counts its
 // items; distinct problems keep their order.
+#include "UnitTests.hpp"
 #include "print/PrintImportSummary.hpp"
 
 #include <cstdio>
@@ -209,3 +210,4 @@ int printImportSummaryTests() {
   CHECK(distinctProblems({}).isEmpty());
   return failures;
 }
+MITCAD_UNIT_TEST(printImportSummaryTests);

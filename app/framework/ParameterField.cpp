@@ -51,6 +51,7 @@
 #include "Dialogs.hpp"
 #include "FormulaEditor.hpp"
 #include "LengthUnits.hpp"
+#include "ParameterUnits.hpp"
 #include "PanelTree.hpp"
 #include "Theme.hpp"
 #include "ValueStep.hpp"
@@ -171,17 +172,17 @@ public:
     m_expression->setObjectName(QStringLiteral("createParameterExpression"));
     m_expression->setPlaceholderText(tr("A value or an expression, such as 30 or d1 * 2"));
     m_unit = new QComboBox;
-    m_unit->setEditable(true);
+    m_unit->setObjectName(QStringLiteral("createParameterUnit"));
     QStringList units{QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"), QStringLiteral("in"),
                       QStringLiteral("ft"), QStringLiteral("deg"), QStringLiteral("rad")};
     if (!m_setup.unit.isEmpty() && !units.contains(m_setup.unit)) {
       units.prepend(m_setup.unit);
     }
-    m_unit->addItems(units);
-    m_unit->addItem(QString());
-    m_unit->setToolTip(tr("Empty for a number without a unit"));
-    m_unit->setCurrentIndex(m_setup.unit.isEmpty() ? m_unit->count() - 1
-                                                   : static_cast<int>(units.indexOf(m_setup.unit)));
+    // Number last for a number without a unit (mitcad#1920), whose unit in
+    // the model is empty; a unitless field's parameter starts at it.
+    fillUnitBox(m_unit, units);
+    m_unit->setToolTip(tr("Number for a number without a unit"));
+    selectUnitInBox(m_unit, m_setup.unit);
     m_comment = new QLineEdit;
     m_error = new QLabel;
     m_error->setWordWrap(true);
@@ -221,12 +222,13 @@ public:
   // chosen instead (created() false).
   QString chosen() const { return m_chosen; }
   bool created() const { return m_created; }
-  QString unit() const { return m_unit->currentText(); }
+  // The model's unit: empty for Number.
+  QString unit() const { return unitOfBox(m_unit); }
 
 private:
   void createParameter() {
     const QString name = m_name->text().trimmed();
-    const QString unit = m_unit->currentText().trimmed();
+    const QString unit = unitOfBox(m_unit);
     const QString expression = m_expression->text().trimmed();
     std::vector<SuggestedParameter> parameters = m_setup.parameters;
     try {
@@ -251,7 +253,7 @@ private:
       const QString kind = kindProblem(m_setup.kind, kindOfUnit(unit));
       if (!kind.isEmpty()) {
         problem = tr("%1 (the unit %2). Give it a unit of a %3, or use it inside an expression.")
-                      .arg(kind, unit, parameterKindName(m_setup.kind));
+                      .arg(kind, unitDisplayText(unit), parameterKindName(m_setup.kind));
       }
     }
     if (problem.isEmpty()) {

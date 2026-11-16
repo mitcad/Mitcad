@@ -17,9 +17,17 @@ the point is classified along fixed lines instead, from the point towards
 32 points spread over the shape's box (an additive sequence of three
 irrational steps, the same on every call), each past the box's farthest
 corner, until one meets a face cleanly: a line that meets no face, touches
-one or passes through an edge or a vertex is passed over as the segments
-are. Only when none does is the line rejected, as before. Classifications
-whose segments did not run out are unchanged.
+one or passes through an edge or a vertex is passed over. Only when none
+does is the line rejected, as before. Classifications whose segments did
+not run out are unchanged.
+
+A fixed line through an edge is passed over even where the transition
+across the edge's two faces is clear, which decides a segment: a point in
+the plane of a flat shell (every face in one plane, so the shape's box is
+flat) had every fixed line in that plane, and the faces' transition across
+an edge met there counted a point outside the shell inside it. A cut by
+such a tool came out empty (OCCT's TKBO GTests BCutSimpleTest1 K1, K5, K7
+and L1, mitcad#1881); it is the object unchanged, as without the patch.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifier.cxx
@@ -167,7 +175,23 @@ diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifie
      }
  
      if (iFlag == 1)
-@@ -475,6 +564,13 @@
+@@ -356,7 +445,14 @@
+         }
+ 
+         IntCurveSurface_TransitionOnCurve tran = IntCurveSurface_Tangent;
+-        int                               Tst  = GetTransi(f1, f2, EE, param, L, tran);
++        // Mitcad: a fixed line through an edge decides nothing (as one
++        // through a vertex): the transition across the edge's faces is not
++        // taken, the line is passed over where the edge is its first meeting
++        // with the shape. A point in the plane of a flat shell's faces had
++        // every fixed line in that plane (the shape's box is flat), and the
++        // faces' transition across an edge met in their plane counted the
++        // point inside.
++        int Tst = isFixedLine ? 0 : GetTransi(f1, f2, EE, param, L, tran);
+         if (Tst == 1 && std::abs(Lpar) < std::abs(parmin))
+         {
+           parmin = Lpar;
+@@ -475,6 +571,13 @@
  #ifdef OCCT_DEBUG
                        std::cout << "*Problem ds BRepClass3d_SClassifier.cxx" << std::endl;
  #endif
@@ -181,7 +205,7 @@ diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SClassifie
                        continue; // ignore this point
                      }
  
-@@ -522,6 +618,12 @@
+@@ -522,6 +625,12 @@
      {
        isFaultyLine = true;
      }

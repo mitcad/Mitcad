@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# A preview being computed shown without resizing the panel (mitcad#1907,
+# GitHub mitcad/Mitcad#361), on panel-message-top.json (a 20 mm cube:
+# Sketch1 F1, Extrude1 F2), with every feature a preview evaluates slowed
+# by the runner (MITCAD_TEST_RECOMPUTE_DELAY_MS=0,preview=1000), in the
+# layout the runner chose (Docked, Floating):
+#   Extrude1 edited, its distance arrow dragged up: the previews take
+#   longer than the busy mark's delay (300 ms), so the mark beside OK and
+#   Cancel shows ("Panel Extrude busy mark shown after N ms: Computing
+#   preview…") and hides once they have ended, while the panel's message
+#   line stays hidden (no "Panel Extrude message WxH" line, which a shown
+#   message logs: the "Computing preview…" message line made the panel
+#   grow and shrink with each preview). The panel's size and the
+#   height it needs are the same in the lines of the busy mark ("…, panel
+#   WxH, needs H"); the runner checks every such line of the drag.
+# Run by tools/ui-panel-busy-mark-test.sh (Linux),
+# tools/ui-windows-panel-busy-mark-test.ps1 (Windows) and
+# tools/ui-macos-panel-busy-mark-test.sh (macOS).
+expect-ever 'View area'
+wait-idle 60
+window-resize 1400 990
+command view.front
+command view.fit
+wait-idle 60
+
+# Extrude1 edited: its panel, its first (slow) preview and its arrow.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Panel Extrude input distance at ' 20
+wait-idle 60
+wait-log '^Preview Extrude: ok' 30
+wait-log '^Manipulator Extrude distance at ' 20
+focus-main
+
+# The arrow dragged up: the previews show the busy mark, which then hides,
+# and nothing else in the panel changes.
+mark
+drag-from '^Manipulator Extrude distance at ' 0 -60
+wait-log '^Manipulator Extrude distance dragged to ' 30
+wait-idle 60
+wait-log '^Preview Extrude: ok' 30
+wait-log '^Panel Extrude busy: Computing preview.*, panel [0-9]+x[0-9]+, needs [0-9]+$' 10
+wait-log '^Panel Extrude busy mark shown after [0-9]+ ms: Computing preview.*, panel [0-9]+x[0-9]+, needs [0-9]+$' 10
+wait-log '^Panel Extrude busy mark hidden after [0-9]+ ms, panel [0-9]+x[0-9]+, needs [0-9]+$' 10
+expect-no-log '^Panel Extrude message [0-9]+x[0-9]+'
+expect-no-log '^Panel Extrude message box: '
+# The panel as high, and needing as much height, when the mark shows as
+# when it hides.
+capture shownHeight '^Panel Extrude busy mark shown after .*, panel [0-9]+x([0-9]+), needs [0-9]+$'
+capture hiddenHeight '^Panel Extrude busy mark hidden after .*, panel [0-9]+x([0-9]+), needs [0-9]+$'
+expect-near ${hiddenHeight} ${shownHeight} 0 0.5
+capture shownNeeds '^Panel Extrude busy mark shown after .*, needs ([0-9]+)$'
+capture hiddenNeeds '^Panel Extrude busy mark hidden after .*, needs ([0-9]+)$'
+expect-near ${hiddenNeeds} ${shownNeeds} 0 0.5
+
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle 60
+expect-never 'The document was read while a job computes it|TestDriver: FAIL'

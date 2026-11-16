@@ -7,6 +7,7 @@
 // same rank keep the commands that can run first, and a command that cannot
 // run for another reason (nothing to work on) never brings the hint.
 // Among equal matches the commands run last come first (mitcad#1690).
+#include "UnitTests.hpp"
 #include "framework/CommandSearchRank.hpp"
 
 #include <cstdio>
@@ -289,3 +290,4 @@ int commandSearchTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(commandSearchTests);

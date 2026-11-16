@@ -2,6 +2,7 @@
 // ui_type's key presses (mitcad#1735): key names with modifiers, and Unicode
 // text as one typed character after another (ä and ö with their own text,
 // a surrogate pair as one character).
+#include "UnitTests.hpp"
 #include "mcp/UiKeys.hpp"
 
 #include <cstdio>
@@ -74,3 +75,4 @@ int uiKeysTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(uiKeysTests);

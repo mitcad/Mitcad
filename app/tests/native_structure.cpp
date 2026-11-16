@@ -4,6 +4,7 @@
 // viewport, scroll bar containers) changing places is no change; a widget
 // added or removed anywhere, or children reordered in any other container
 // (also inside a scroll area's contents), is one.
+#include "UnitTests.hpp"
 #include "platform/NativeStructure.hpp"
 
 #include <cstdio>
@@ -104,3 +105,4 @@ int nativeStructureTests() {
 
   return failures;
 }
+MITCAD_UNIT_TEST(nativeStructureTests);

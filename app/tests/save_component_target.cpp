@@ -5,6 +5,7 @@
 // case), and so is a file a component of the design is linked from;
 // another file, and a name that differs in case where the disk tells case
 // apart, may be written.
+#include "UnitTests.hpp"
 #include "files/SaveComponentTarget.hpp"
 
 #include <cstdio>
@@ -96,3 +97,4 @@ int saveComponentTargetTests() {
   CHECK(!sameFilePath(root.filePath(QStringLiteral("New.mitcad")), root.filePath(QStringLiteral("Newer.mitcad"))));
   return failures;
 }
+MITCAD_UNIT_TEST(saveComponentTargetTests);

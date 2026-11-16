@@ -5,6 +5,7 @@
 // the index's libraries an enabled source has left out (mitcad#949), Use
 // the installed git program (mitcad#1224), and one repository's URL forms
 // as one source (mitcad#1436).
+#include "UnitTests.hpp"
 #include "files/Libraries.hpp"
 
 #include <cstdio>
@@ -290,3 +291,4 @@ int librarySettingsTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(librarySettingsTests);

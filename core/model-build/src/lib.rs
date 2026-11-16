@@ -34,6 +34,8 @@ pub(crate) mod swap;
 pub(crate) mod gap;
 // Members along an edge (mitcad#1814).
 pub(crate) mod edge;
+// Side snaps in line with the frame's other profiles (mitcad#1886).
+pub(crate) mod lineup;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -60,6 +62,8 @@ pub use timber::{Lie, PointTo};
 pub use wood::EndInput;
 // Members along an edge (mitcad#1814).
 pub use edge::{AlongEdge, AlongEdit, AlongPart, along_of};
+// A side placement's offset from its reference (mitcad#1885).
+pub use place::side_offset;
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};
@@ -133,4 +137,6 @@ pub mod internal {
     };
     // The middle of a free stretch of a side (mitcad#1401).
     pub use crate::gap::{SideGap, Standing};
+    // Side snaps in line with other profiles (mitcad#1886).
+    pub use crate::lineup::LineUp;
 }

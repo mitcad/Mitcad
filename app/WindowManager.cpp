@@ -257,7 +257,7 @@ MainWindow* WindowManager::openFile(MainWindow* source, const QString& path, QSt
   return target;
 }
 
-MainWindow* WindowManager::openFileBeside(MainWindow* source, const QString& path, QString& error) {
+MainWindow* WindowManager::openFileBeside(MainWindow* source, const QString& path, QString& error, bool askChoices) {
   error.clear();
   if (MainWindow* existing = findByPath(path)) {
     present(existing);
@@ -265,8 +265,10 @@ MainWindow* WindowManager::openFileBeside(MainWindow* source, const QString& pat
     return existing;
   }
   QPointer<MainWindow> target = createWindow(false, source, false);
+  target->m_askImportChoices = askChoices;
   const bool opened = target->openFile(path, error);
   if (!target) return nullptr;
+  target->m_askImportChoices = false;
   if (!opened) {
     windowClosed(target);
     return nullptr;

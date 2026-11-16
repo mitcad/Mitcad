@@ -6,6 +6,7 @@
 // draws them from; and the overlay's highlights painted with the
 // highlighted curve's point markers over the highlight (painted into an
 // image: a fit point's fill shows where the 4 px highlight runs under it).
+#include "UnitTests.hpp"
 #include "sketch/PointMarkers.hpp"
 #include "framework/Theme.hpp"
 
@@ -314,3 +315,4 @@ int sketchPointMarkersTests() {
   lineTypeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchPointMarkersTests);

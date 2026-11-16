@@ -48,8 +48,10 @@
 #      once (the remote is read every 2 minutes of the lock clock while
 #      live); the holder's Mitcad killed, its connection's will offers the
 #      lock, which is taken.
-#  11. Resolve Sync refuses replacing a design during exchange-file Open,
-#      New Design (named in the Projects panel) and Close. Its geometry,
+#  11. With the project known to have diverged (Check for Newer Versions,
+#      mitcad#1916), Resolve Sync refuses replacing a design during
+#      exchange-file Open, New Design (named in the Projects panel) and
+#      Close. Its geometry,
 #      revision, filename and recovery data stay; allowing the next Open
 #      imports into a new untitled design.
 #  12. Save As during a sync conflict keeps refreshing the original lock
@@ -754,6 +756,14 @@ EOF
   in_git "$folder" commit -qm "Change the other design" || ui_fail "record a divergent version"
 done
 in_git "$CB" push -q origin main || ui_fail "push the other user's version"
+# MitCad learns of the remote's newer version first (a check, as the
+# periodic one does): with versions to send beside it, a replacement waits
+# for the sync and asks before the lock goes. A divergence only the
+# replacement's own background sync finds keeps the lock without asking
+# (mitcad#1895, #1916).
+ui_mark
+ui_step "check for newer versions"       ui_command "Check for Newer Versions"
+ui_expect_new "Remote check: ahead 1, behind 1" "MitCad knows the project diverged" 30
 
 for action in Open New Close; do
   ui_mark
@@ -857,6 +867,10 @@ EOF
   in_git "$folder" commit -qm "Change another design" || ui_fail "record another divergent version"
 done
 in_git "$SB" push -q origin main || ui_fail "publish another user's version"
+# As in 11: Save As asks only when MitCad knows of the divergence.
+ui_mark
+ui_step "check for newer versions" ui_command "Check for Newer Versions"
+ui_expect_new "Remote check: ahead 1, behind 1" "MitCad knows the project diverged" 30
 ui_mark
 ui_step "save under another name" ui_key ctrl+shift+s
 ui_focus_dialog '^Save in a Project$'

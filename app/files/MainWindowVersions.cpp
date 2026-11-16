@@ -39,6 +39,7 @@
 #include "../framework/ResultCache.hpp"
 #include "LockController.hpp"
 #include "RemoteController.hpp"
+#include "RemoteTask.hpp"
 #include "VersionDialogs.hpp"
 #include "VersionHistory.hpp"
 
@@ -319,10 +320,12 @@ MainWindow::VersionRecord MainWindow::recordVersion(const Project& project, cons
   const QString name = QFileInfo(path).fileName();
   QJsonObject result;
   try {
-    result = vcs(project, {{QStringLiteral("cmd"), QStringLiteral("commit")},
-                           {QStringLiteral("paths"), QJsonArray::fromStringList(paths)},
-                           {QStringLiteral("message"), message},
-                           {QStringLiteral("author"), author}});
+    // Aside (mitcad#1895): the window keeps painting while the commit is
+    // made; sending it is the remote's background work after it.
+    result = projectCommandAside(projectRoot(project), {{QStringLiteral("cmd"), QStringLiteral("commit")},
+                                                        {QStringLiteral("paths"), QJsonArray::fromStringList(paths)},
+                                                        {QStringLiteral("message"), message},
+                                                        {QStringLiteral("author"), author}});
   } catch (const std::exception& e) {
     // No version was recorded. A caller preserving bytes before overwrite
     // must stop; an ordinary save still keeps the bytes it already wrote.

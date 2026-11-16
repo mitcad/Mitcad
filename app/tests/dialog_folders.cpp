@@ -4,6 +4,7 @@
 // new settings object (a restart); a file accepted gives its folder, an
 // application bundle (a folder) the folder it is in; a folder that is gone falls back to the caller's; Save
 // Copy As neither reads nor writes one.
+#include "UnitTests.hpp"
 #include "framework/DialogFolders.hpp"
 
 #include <cstdio>
@@ -105,3 +106,4 @@ int dialogFolderTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(dialogFolderTests);

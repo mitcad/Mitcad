@@ -2,6 +2,7 @@
 // When the view fits the bodies coming into it (mitcad#467): a design's
 // first bodies once, not a command's previews, and never the bodies shown
 // again after the user hid every one (the bundle check of mitcad#529/#530).
+#include "UnitTests.hpp"
 #include "view/FirstBodiesFit.hpp"
 
 #include <cstdio>
@@ -65,3 +66,4 @@ int firstBodiesFitTests() {
   openedDesignTests();
   return failures;
 }
+MITCAD_UNIT_TEST(firstBodiesFitTests);

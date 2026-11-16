@@ -3,6 +3,7 @@
 // read back, the analysis' definition and its defaults, the queries it
 // asks (the narrow gaps', mitcad#1519, too), the answers in the log's line
 // and the panel's words, and what the view draws.
+#include "UnitTests.hpp"
 #include "commands/PrintAnalysis.hpp"
 
 #include <cmath>
@@ -387,3 +388,4 @@ int printAnalysisTests() {
   gapTests();
   return failures;
 }
+MITCAD_UNIT_TEST(printAnalysisTests);

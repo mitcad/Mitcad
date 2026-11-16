@@ -2,6 +2,7 @@
 // The debug log's files (mitcad#269): the folder's limits, the rotation,
 // the header, the lines from before the start, the flushes, the thread's
 // name, and what the command line and MITCAD_DEBUG_LOG ask for.
+#include "UnitTests.hpp"
 #include "framework/DebugLog.hpp"
 
 #include <cstdio>
@@ -432,3 +433,4 @@ int debugLogTests() {
   fileTests();
   return failures;
 }
+MITCAD_UNIT_TEST(debugLogTests);

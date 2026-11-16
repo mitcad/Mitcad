@@ -4,6 +4,7 @@
 // and takes its clicks. Two close parallel lines (a parallel's second
 // symbol beside the lower line covered the upper one), a line through a
 // row, a dimension's text over it, and no side clear near it.
+#include "UnitTests.hpp"
 #include "sketch/GlyphRows.hpp"
 
 #include <cmath>
@@ -150,3 +151,4 @@ int sketchGlyphRowsTests() {
   blockedTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchGlyphRowsTests);

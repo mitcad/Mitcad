@@ -5,6 +5,7 @@
 // name left out), the index page (escaped, no scripts, each card linking
 // its page, a thumbnail or a placeholder, light and dark), and writeIndex
 // removing a removed design's page and thumbnail but nothing else.
+#include "UnitTests.hpp"
 #include "web/ProjectWeb.hpp"
 
 #include <cstdio>
@@ -163,3 +164,4 @@ int projectWebTests() {
   CHECK(now.size() == 2 && now[0].slug == QStringLiteral("parts--y") && now[1].slug == QStringLiteral("plate"));
   return failures;
 }
+MITCAD_UNIT_TEST(projectWebTests);

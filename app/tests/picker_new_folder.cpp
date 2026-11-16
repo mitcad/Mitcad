@@ -2,6 +2,7 @@
 // The project picker's New Folder (mitcad#1649): the name proposed (New
 // Folder, New Folder 2, ... past the names there, case ignored), the name
 // typed, and why the button waits.
+#include "UnitTests.hpp"
 #include "projects/PickerNewFolder.hpp"
 
 #include <cstdio>
@@ -101,3 +102,4 @@ int pickerNewFolderTests() {
   blockedTests();
   return failures;
 }
+MITCAD_UNIT_TEST(pickerNewFolderTests);

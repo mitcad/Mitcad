@@ -444,7 +444,17 @@ public:
     QRect radio; // the radio button (empty without one)
     QRect fx;    // the fx badge of a bound row (mitcad#862; empty without one)
     QRect make;  // the Make tab's marker (mitcad#1049; empty without one)
+    bool elided = false; // the name cut short for the room (mitcad#1932)
   };
+
+  // A row's tooltip while its name is cut short (mitcad#1932): the name in
+  // full, then the row's own tooltip, if any.
+  static QString elidedTip(const QString& name, const QString& own) {
+    if (own.isEmpty() || own.startsWith(name)) {
+      return own.isEmpty() ? name : own;
+    }
+    return name + QLatin1Char('\n') + own;
+  }
 
   using TreeItemDelegate::TreeItemDelegate;
 
@@ -534,6 +544,9 @@ public:
         tip = BrowserPanel::tr("Activate");
       } else if (at.make.contains(event->pos())) {
         tip = index.data(kMakeRole).toString(); // mitcad#1049
+      } else if (at.elided) {
+        // The name in full (mitcad#1932).
+        tip = elidedTip(index.data(Qt::DisplayRole).toString(), index.data(Qt::ToolTipRole).toString());
       }
       if (!tip.isEmpty()) {
         QToolTip::showText(event->globalPos(), tip, view);
@@ -616,6 +629,7 @@ private:
                                  (mark > 0 ? kGap + mark : 0));
     if (opt.fontMetrics.horizontalAdvance(opt.text) > room) {
       opt.text = opt.fontMetrics.elidedText(opt.text, Qt::ElideRight, room);
+      parts.elided = true;
     }
     const int width = qMin(opt.fontMetrics.horizontalAdvance(opt.text), room);
     parts.name = QRect(text.left() + margin, opt.rect.top(), width, opt.rect.height());
@@ -1000,23 +1014,21 @@ public:
     if (cell.isEmpty()) {
       return QRect();
     }
-    QStyleOptionViewItem option;
-    initViewItemOption(&option);
-    option.rect = cell;
-    if (selectionModel() != nullptr && selectionModel()->isSelected(index)) {
-      option.state |= QStyle::State_Selected; // its name in semibold is wider
-    }
-    const BrowserDelegate::Parts parts = m_delegate->parts(option, index);
-    int end = std::max(parts.name.right(), parts.radio.isEmpty() ? parts.name.right() : parts.radio.right());
-    if (!parts.fx.isEmpty()) {
-      end = std::max(end, parts.fx.right()); // the fx badge (mitcad#862)
-    }
-    if (!parts.make.isEmpty()) {
-      end = std::max(end, parts.make.right()); // the Make tab's marker (mitcad#1049)
-    }
     const int left = cell.left() - indentation() + 2;
-    const int right = std::min(end + kBoxPadding, viewport()->width() - 1);
+    const int right = std::min(boxEnd(index, cell), viewport()->width() - 1);
     return QRect(QPoint(left, cell.top() + 2), QPoint(std::max(left, right), cell.bottom() - 2));
+  }
+
+  // Where a row's box would end with its whole name (mitcad#1932: the bare
+  // card widens to it), in the viewport's coordinates; -1 for a row not laid
+  // out.
+  int fullBoxEnd(const QModelIndex& index) const {
+    QRect cell = visualRect(index);
+    if (cell.isEmpty()) {
+      return -1;
+    }
+    cell.setWidth(kUnboundedWidth); // room for any name
+    return boxEnd(index, cell);
   }
 
 protected:
@@ -1176,6 +1188,29 @@ protected:
   }
 
 private:
+  // A cell wide enough for any name (fullBoxEnd).
+  static constexpr int kUnboundedWidth = 1 << 16;
+
+  // The end of a row's box when the row is laid out in `cell`: after its
+  // name, radio button, fx badge and Make marker, with the box's padding.
+  int boxEnd(const QModelIndex& index, const QRect& cell) const {
+    QStyleOptionViewItem option;
+    initViewItemOption(&option);
+    option.rect = cell;
+    if (selectionModel() != nullptr && selectionModel()->isSelected(index)) {
+      option.state |= QStyle::State_Selected; // its name in semibold is wider
+    }
+    const BrowserDelegate::Parts parts = m_delegate->parts(option, index);
+    int end = std::max(parts.name.right(), parts.radio.isEmpty() ? parts.name.right() : parts.radio.right());
+    if (!parts.fx.isEmpty()) {
+      end = std::max(end, parts.fx.right()); // the fx badge (mitcad#862)
+    }
+    if (!parts.make.isEmpty()) {
+      end = std::max(end, parts.make.right()); // the Make tab's marker (mitcad#1049)
+    }
+    return end + kBoxPadding;
+  }
+
   // A row's box (rowBox): the card's material, tinted with the accent colour
   // when the row is selected (less when the window is not active, as the
   // sidebar's band) and lightly when the pointer is on it. Under the
@@ -1470,6 +1505,31 @@ QRegion BrowserPanel::rowsRegion() const {
     region += m_topBar->geometry();
   }
   return region;
+}
+
+int BrowserPanel::rowsWidth() const {
+  const QWidget* viewport = m_tree->viewport();
+  const QRect inside = viewport->rect();
+  int end = -1;
+  for (QModelIndex index = m_tree->indexAt(QPoint(0, 0)); index.isValid(); index = m_tree->indexBelow(index)) {
+    const QRect row = m_tree->visualRect(index);
+    if (row.top() > inside.bottom()) {
+      break;
+    }
+    end = std::max(end, m_tree->fullBoxEnd(index));
+  }
+  if (end < 0) {
+    return 0;
+  }
+  // The viewport's room before the rows (the left scroll bar, the tree's
+  // frame) and after them (the tree's frame and a scroll bar at the right).
+  const int before = viewport->mapTo(this, QPoint(0, 0)).x();
+  const int after = std::max(0, width() - before - viewport->width());
+  int whole = before + end + 1 + after;
+  if (m_topBar != nullptr && m_topBar->isVisible()) {
+    whole = std::max(whole, m_topBar->sizeHint().width());
+  }
+  return whole;
 }
 
 void BrowserPanel::setTopBar(QWidget* bar) {
@@ -3627,6 +3687,7 @@ void BrowserPanel::logLayout() {
     lines << QStringLiteral("%1 at %2,%3").arg(what).arg(point.x()).arg(point.y());
     places.insert(what);
   };
+  int elided = 0;
   for (QTreeWidgetItemIterator it(m_tree); *it != nullptr; ++it) {
     QTreeWidgetItem* item = *it;
     const QRect row = m_tree->visualItemRect(item);
@@ -3638,6 +3699,14 @@ void BrowserPanel::logLayout() {
     const BrowserNode node = nodeOf(item);
     const BrowserDelegate::Parts parts = m_tree->partsOf(item);
     place(QStringLiteral("Browser %1").arg(node.path), parts.name);
+    if (parts.elided) {
+      // A name cut short for the room, and its tooltip's first line: the
+      // name in full (mitcad#1932).
+      ++elided;
+      const QString tip = BrowserDelegate::elidedTip(item->text(kName), item->toolTip(kName));
+      lines << QStringLiteral("Browser name elided %1: tooltip \"%2\"")
+                   .arg(node.path, tip.section(QLatin1Char('\n'), 0, 0));
+    }
     if (item->childCount() > 0) {
       // The disclosure arrow: the middle of the indentation before the row.
       place(QStringLiteral("Browser arrow %1").arg(node.path),
@@ -3662,6 +3731,7 @@ void BrowserPanel::logLayout() {
       lines << QStringLiteral("Browser shared %1: used by %2 features").arg(node.path).arg(users);
     }
   }
+  lines << QStringLiteral("Browser names elided: %1").arg(elided);
   if (m_rows) {
     // With the Rows background (mitcad#419): a place right of every row's
     // box, at the middle row in sight, where a click reaches the 3D view.

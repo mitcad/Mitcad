@@ -1,0 +1,25 @@
+[
+  {"comment": "The .serp import's test file through OCCT (mitcad#1870; mitcad-cli serp-test-file, run in its folder): the reader's sample scene in centimetres around B-reps OCCT wrote in its binary format. The design's bodies are one base feature, each in its layer's folder: a box of 2 x 1 x 0.5 cm on Solids, a B-spline surface of one face on Surfaces, a mesh cube of 1 cm on Surfaces, a hidden box. The block Bolt (a box of 3 x 1 x 1 cm) placed twice is a component placed by two occurrences, the placements found by comparing the shapes: 5 cm along x, and turned a quarter about z and 5 cm along y. The text, point cloud, layout and history record are left out. Centimetres become the design's unit and the bodies millimetres."},
+  {"cmd": "import_file", "path": "sample.serp"},
+  {"expect": {"bodies": 5}},
+  {"expect": {"query": {"query": "document"}, "result": {"units": {"length": "cm"}}}},
+  {"expect": {"body": "Block", "faces": 6, "volume": 1000, "tolerance": 1e-6}},
+  {"expect": {"body": "Block", "bbox": {"min": [0, 0, 0], "max": [20, 10, 5]}, "tolerance": 1e-5}},
+  {"expect": {"body": "Spare", "faces": 6, "volume": 1000, "tolerance": 1e-6}},
+  {"expect": {"body": "Panel", "faces": 1}},
+  {"expect": {"body": "Scan mesh", "faces": 1, "volume": 1000, "tolerance": 1e-5}},
+  {"comment": "Layers as folders, the hidden object hidden."},
+  {"expect": {"query": {"query": "bodies"}, "some": {"name": "Block", "folder": "Solids"}}},
+  {"expect": {"query": {"query": "bodies"}, "some": {"name": "Panel", "folder": "Surfaces"}}},
+  {"expect": {"query": {"query": "bodies"}, "some": {"name": "Scan mesh", "folder": "Surfaces"}}},
+  {"expect": {"query": {"query": "bodies"}, "some": {"name": "Spare", "folder": "Solids", "visible": false}}},
+  {"comment": "The block as a component placed twice where the file has its placements."},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{}, {"name": "Bolt"}],
+    "occurrences": [{"name": "Bolt:1"}, {"name": "Bolt:2"}]}}},
+  {"expect": {"body": "Bolt", "faces": 6, "volume": 3000, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Bolt:1", "body": "Bolt", "bbox": {"min": [50, 0, 0], "max": [80, 10, 10]},
+    "tolerance": 1e-5}},
+  {"expect": {"occurrence": "Bolt:2", "body": "Bolt", "bbox": {"min": [-10, 50, 0], "max": [0, 80, 10]},
+    "tolerance": 1e-5}}
+]

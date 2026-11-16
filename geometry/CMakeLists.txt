@@ -916,7 +916,8 @@ endif()
 if(BUILD_TESTING)
   # OCCT's solid classifier on a point in the plane of a far face of the
   # shell, and the check of a block whose two cavities' bottoms lie in one
-  # plane, with the port's patch 1285 (mitcad#1280).
+  # plane, with the port's patch 1285 (mitcad#1280); a point in the plane of
+  # a flat shell and a cut by such a shell (mitcad#1881).
   add_executable(test_classifier_far_plane tests/test_classifier_far_plane.cpp)
   target_link_libraries(test_classifier_far_plane PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.classifier_far_plane COMMAND test_classifier_far_plane)
@@ -1336,4 +1337,21 @@ if(BUILD_TESTING)
   add_executable(test_fill_cavity tests/test_fill_cavity.cpp)
   target_link_libraries(test_fill_cavity PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fill_cavity COMMAND test_fill_cavity)
+  # Roundings and a chamfer OCCT builds that five port patches once broke
+  # (mitcad#1883, from OCCT's own test cases run against the port): a
+  # partial revolve rounded up to a pole (0211, 0721) and from a cone's apex
+  # (0620), a box's top rounded to a full round with vertical roundings at
+  # its ends (0153), crossing cylinders rounded through their near tangent
+  # points (0771), a throat chamfer's tolerance (0721).
+  add_executable(test_fillet_occt_cases tests/test_fillet_occt_cases.cpp)
+  target_link_libraries(test_fillet_occt_cases PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_occt_cases COMMAND test_fillet_occt_cases)
+  # A fin's foot rounded higher than the flat stretch its curved side bends
+  # into, its chain ending where the fin's top runs down to the plate: the
+  # blend runs on over the flat stretch's plane, cut by the top, with OCCT
+  # alone, on a case of MITCAD_GEOMETRY_CASES (port patch 1700,
+  # mitcad#1926).
+  add_executable(test_fillet_wall_run_on tests/test_fillet_wall_run_on.cpp)
+  target_link_libraries(test_fillet_wall_run_on PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_wall_run_on COMMAND test_fillet_wall_run_on)
 endif()

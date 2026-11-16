@@ -180,6 +180,12 @@ mod sketch_surface;
 // Press Pull continued: how a face's walls continue, the face_run query
 // (mitcad#1850).
 mod press_pull;
+// A body slid or turned into place and where it first runs into others,
+// the assembly_path query (mitcad#1737).
+mod assembly_path;
+// Silhouettes of curved faces and extreme points picked on drawings' views
+// (mitcad#1909).
+mod drawing_silhouettes;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -299,6 +305,7 @@ use self::prelude::*;
 use mitcad_model::expr::{DEFAULT_DECIMALS, Unit, value_to_expression};
 use mitcad_model::features::{FeatureDef, ValueInput};
 use mitcad_model::ids::{BodyUid, FeatureUid};
+use mitcad_model::internal::document::remark_notices;
 use mitcad_model::internal::document::{
     feature_level, feature_notices, feature_notices_placed, noted_status,
 };
@@ -1281,6 +1288,15 @@ named_enum! {
         },
         // How a face's walls continue, for Press Pull (mitcad#1850).
         "face_run" => FaceRun(press_pull::FaceRunQuery),
+        // The corners of a flange on several edges, for the Flange panel's
+        // per-corner Miter (mitcad#1877, `document/flat_patterns.rs`).
+        "sheet_flange_corners" => SheetFlangeCorners {
+            body: BodyUid,
+            edges: Vec<mitcad_model::sheet::BoundaryRef>,
+        },
+        // A body slid or turned into place and where it first runs into
+        // others (mitcad#1737, `assembly_path.rs`).
+        "assembly_path" => AssemblyPath(Box<assembly_path::AssemblyPathQuery>),
     }
 }
 
@@ -1594,7 +1610,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 // failure, `warnings` for one release beside the notices.
                 // The notices in plain words, their places by name
                 // (mitcad#1327).
-                let notices = feature_notices_placed(
+                let mut notices = feature_notices_placed(
                     status,
                     warnings,
                     infos,
@@ -1602,6 +1618,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                     uid,
                     self.warning_places(uid),
                 );
+                // What its panel points out while it is open (mitcad#1914):
+                // information that does not count in its level.
+                let remarks = remark_notices(self.remarks(uid), uid);
+                notices.extend(remarks.iter().cloned());
                 let mut value = json!({"uid": uid, "name": entry.name, "type": entry.def.type_name(),
                        "suppressed": entry.suppressed,
                        "status": status.map(|s| noted_status(Some(s), warnings, note)),
@@ -1617,6 +1637,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 if !infos.is_empty() {
                     value["infos"] = json!(infos);
                 }
+                add_remarks(&mut value, &remarks);
                 // Profiles deleted from their sketch, which an edit panel
                 // leaves out (mitcad#1264).
                 let missing = self.missing_profiles(uid);
@@ -1916,10 +1937,13 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::ExportMaterials(query) => self.export_materials_json(&query)?,
             Query::FileStructure { path } => {
                 // And whether import_file wraps it in a component by
-                // default (mitcad#1629).
+                // default (mitcad#1629), and whether the design has content
+                // (a design file of another format comes in as a component
+                // or as a new design, the app's Where to Import, mitcad#1894).
                 json!({
                     "assembly": mitcad_model::exchange::file_has_assembly(&path)?,
                     "wrap": self.import_wraps_by_default(&path),
+                    "content": self.has_content(),
                 })
             }
             // A sheet's visible corners (mitcad#1338).
@@ -1977,6 +2001,12 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::GltfFile { path } => mitcad_model::exchange::gltf_file_json(&path)?,
             // Press Pull continued (mitcad#1850).
             Query::FaceRun(query) => self.face_run_json(&query)?,
+            // The corners of a flange on several edges (mitcad#1877).
+            Query::SheetFlangeCorners { body, edges } => self
+                .sheet_flange_corners_json(body, &edges)
+                .map_err(ApiError)?,
+            // A body slid or turned into place (mitcad#1737).
+            Query::AssemblyPath(query) => assembly_path::query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2225,6 +2255,11 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 if !warnings.is_empty() {
                     reply["warnings"] = json!(warnings);
                 }
+                // What its panel pointed out (mitcad#1914): information.
+                add_remark_notices(
+                    &mut reply,
+                    &remark_notices(self.remarks(added.uid), added.uid),
+                );
                 // A new component placed beside a part (mitcad#292).
                 if let Some(made) = self.assembly().created_by(added.uid) {
                     let what = format!("{}'s new component", added.name);
@@ -2252,6 +2287,8 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 if !warnings.is_empty() {
                     reply["warnings"] = json!(warnings);
                 }
+                // What its panel pointed out (mitcad#1914): information.
+                add_remark_notices(&mut reply, &remark_notices(self.remarks(uid), uid));
                 // A new component the edit made, placed beside a part (mitcad#292).
                 if let (None, Some(made), Some(entry)) =
                     (before, self.assembly().created_by(uid), self.feature(uid))
@@ -2980,6 +3017,8 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 if !notices.is_empty() {
                     value["notices"] = notice::to_json(&notices);
                 }
+                // Its remarks (mitcad#1914): among its notices too.
+                add_remarks(&mut value, &remark_notices(item.remarks, item.entry.uid));
                 if !item.entry.component.is_root() {
                     value["component"] = json!(item.entry.component);
                 }
@@ -3292,7 +3331,22 @@ fn preview_json(report: &PreviewReport) -> Value {
             }
             .to_json()
         }))
+        // What the panel points out while it is open (mitcad#1914), as
+        // information with its places.
+        .chain(report.remarks.iter().map(|(message, places)| {
+            notice::Notice::info(message.as_str())
+                .with_places(places.iter().cloned())
+                .to_json()
+        }))
         .collect();
+    if !report.remarks.is_empty() {
+        let remarks: Vec<String> = report
+            .remarks
+            .iter()
+            .map(|(message, _)| notice::Notice::info(message.as_str()).message)
+            .collect();
+        value["remarks"] = json!(remarks);
+    }
     if !notices.is_empty() {
         value["notices"] = Value::Array(notices);
     }
@@ -3387,6 +3441,36 @@ pub(crate) fn add_feature_notices(
     let notices = feature_notices(status, warnings, &[], note, uid);
     if !notices.is_empty() {
         value["notices"] = notice::to_json(&notices);
+    }
+}
+
+/// A feature's remarks in the `timeline` and `feature` queries
+/// (mitcad#1914): their messages in plain words as its `remarks`, each also
+/// an information notice among its `notices`, with its places. They do not
+/// count in its `level` or `status`: the application marks nothing for
+/// them once the feature is accepted, and only its panel shows them.
+fn add_remarks(value: &mut Value, remarks: &[notice::Notice]) {
+    if !remarks.is_empty() {
+        value["remarks"] = json!(
+            remarks
+                .iter()
+                .map(|r| r.message.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// A feature's remarks in the result of `add_feature` or `edit_feature`
+/// (mitcad#1914): as [`add_remarks`], the notices first in its `notices`.
+fn add_remark_notices(value: &mut Value, remarks: &[notice::Notice]) {
+    if remarks.is_empty() {
+        return;
+    }
+    add_remarks(value, remarks);
+    let notices = remarks.iter().map(notice::Notice::to_json);
+    match value.get_mut("notices") {
+        Some(Value::Array(list)) => list.extend(notices),
+        _ => value["notices"] = Value::Array(notices.collect()),
     }
 }
 

@@ -4,6 +4,7 @@
 // the warm colours stay with construction, status colours are readable on
 // the dark theme, and disabled icons follow their own rule; Press Pull's
 // arrow stays apart from Extrude's (mitcad#1660).
+#include "UnitTests.hpp"
 #include "framework/Icons.hpp"
 
 #include <algorithm>
@@ -383,3 +384,4 @@ int iconColourTests() {
   writePreviews();
   return failures;
 }
+MITCAD_UNIT_TEST(iconColourTests);

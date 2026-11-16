@@ -36,6 +36,7 @@
 #include <QtLogging>
 
 #include "../framework/Dialogs.hpp"
+#include "../framework/NoticeLevel.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/TestSync.hpp"
@@ -1090,6 +1091,59 @@ std::optional<bool> askImportPlace(QWidget* parent, const QString& file) {
   return chosen;
 }
 
+std::optional<DesignImportPlace> askDesignImportPlace(QWidget* parent, const QStringList& files, bool inProject) {
+  QStringList names;
+  for (const QString& file : files) {
+    names << QFileInfo(file).fileName();
+  }
+  const QString text =
+      files.size() == 1
+          ? QObject::tr("Import %1 into this design as a component, or as a new design?").arg(names.first())
+          : QObject::tr("Import %n files into this design as components, or each as a new design?", nullptr,
+                        static_cast<int>(files.size()));
+  QMessageBox box(QMessageBox::Question, QObject::tr("Where to Import"), text, QMessageBox::Cancel, parent);
+  box.setObjectName(QStringLiteral("importDesignPlace"));
+  QPushButton* into = box.addButton(QObject::tr("Into &This Design"), QMessageBox::AcceptRole);
+  into->setToolTip(QObject::tr("A component of the active component, with the file's history and material"));
+  QPushButton* separate = box.addButton(QObject::tr("A &New Design"), QMessageBox::AcceptRole);
+  separate->setToolTip(QObject::tr("Opens in a tab of its own; this design stays as it is"));
+  box.setDefaultButton(into);
+  // In a project with versions: saved in the project and linked, so that
+  // several designs share it (remembered); else a copy.
+  QCheckBox* linked = nullptr;
+  QSettings settings;
+  const QString linkedKey = QStringLiteral("import/designsLinked");
+  if (inProject) {
+    linked = new QCheckBox(QObject::tr("&Linked: saved in the project as a design of its own"), &box);
+    linked->setObjectName(QStringLiteral("importDesignLinked"));
+    linked->setToolTip(QObject::tr("Designs that link it share it; off: a copy that is edited here"));
+    linked->setChecked(settings.value(linkedKey, true).toBool());
+    box.setCheckBox(linked);
+  }
+  qDebug().noquote() << QStringLiteral("Where to Import dialog opened: %1%2")
+                            .arg(names.join(QStringLiteral(", ")),
+                                 linked == nullptr ? QString()
+                                 : linked->isChecked() ? QStringLiteral("; linked on")
+                                                       : QStringLiteral("; linked off"));
+  prepareModal(&box);
+  execDialog(&box);
+  std::optional<DesignImportPlace> chosen;
+  if (box.clickedButton() == into) {
+    chosen = DesignImportPlace{true, linked != nullptr && linked->isChecked()};
+    if (linked != nullptr) {
+      settings.setValue(linkedKey, linked->isChecked());
+    }
+  } else if (box.clickedButton() == separate) {
+    chosen = DesignImportPlace{false, false};
+  }
+  qDebug().noquote() << QStringLiteral("Where to Import: %1")
+                            .arg(!chosen                ? QStringLiteral("cancelled")
+                                 : !chosen->intoDesign  ? QStringLiteral("new design")
+                                 : chosen->linked       ? QStringLiteral("this design (linked)")
+                                                        : QStringLiteral("this design (copy)"));
+  return chosen;
+}
+
 std::optional<bool> askIamImport(QWidget* parent, const QString& file) {
   QDialog dialog(parent);
   dialog.setObjectName(QStringLiteral("importAssembly"));
@@ -1454,6 +1508,70 @@ QString importStop(const QJsonObject& result) {
       .arg(at.value(QStringLiteral("item")).toInteger());
 }
 
+namespace {
+
+// The columns of the Import Report's table: the row's status first
+// (mitcad#1893), then the row's number, name, type, how it came in and its
+// note.
+enum ReportColumn { kStatus = 0, kIndex, kItem, kType, kCameIn, kNote, kReportColumns };
+
+// A row's rank by its status (errors first) and its place in the report's
+// own order, kept for sorting and filtering.
+constexpr int kRankRole = Qt::UserRole + 1;
+constexpr int kOrderRole = Qt::UserRole + 2;
+
+// The level a report row's status is drawn with (the model's `row_status`,
+// mitcad#1893): OK the success check, a warning and an error their
+// badges; nothing for a row without a status.
+NoticeLevel reportRowLevel(const QString& status) {
+  if (status == QLatin1String("ok")) {
+    return NoticeLevel::Success;
+  }
+  if (status == QLatin1String("warning")) {
+    return NoticeLevel::Warning;
+  }
+  if (status == QLatin1String("error")) {
+    return NoticeLevel::Error;
+  }
+  return NoticeLevel::Hint;
+}
+
+// Errors 0, warnings 1, OK 2, no status 3.
+int reportRowRank(const QString& status) {
+  if (status == QLatin1String("error")) {
+    return 0;
+  }
+  if (status == QLatin1String("warning")) {
+    return 1;
+  }
+  return status == QLatin1String("ok") ? 2 : 3;
+}
+
+// A row of the Import Report: sorted by its status (errors first, then the
+// report's order) in the status column, in the report's order in the #
+// column (the lists of a report each count from 1), by its text elsewhere.
+class ReportRow : public QTreeWidgetItem {
+public:
+  ReportRow(QTreeWidget* tree, const QStringList& texts) : QTreeWidgetItem(tree, texts) {}
+
+  bool operator<(const QTreeWidgetItem& other) const override {
+    const int column = treeWidget() != nullptr ? treeWidget()->sortColumn() : int(kIndex);
+    const int order = data(kIndex, kOrderRole).toInt();
+    const int otherOrder = other.data(kIndex, kOrderRole).toInt();
+    if (column == kStatus) {
+      const int rank = data(kStatus, kRankRole).toInt();
+      const int otherRank = other.data(kStatus, kRankRole).toInt();
+      return rank != otherRank ? rank < otherRank : order < otherOrder;
+    }
+    if (column == kIndex) {
+      return order < otherOrder;
+    }
+    return QTreeWidgetItem::operator<(other);
+  }
+};
+
+} // namespace
+
 void showImportReport(QWidget* parent, const QString& file, const QJsonObject& result, int bodies) {
   const QJsonObject design = importedDesign(result);
   const QJsonArray fileBodies = design.value(QStringLiteral("bodies")).toArray();
@@ -1655,25 +1773,76 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
     summary += QObject::tr("<br><b>The import was stopped</b> after the last item: the bodies were compared by "
                            "volume only.");
   }
+  // The verdict in one line with its symbol (mitcad#1893): the model's,
+  // of the design the report shows.
+  const QJsonObject verdict = design.contains(QStringLiteral("verdict"))
+                                  ? design.value(QStringLiteral("verdict")).toObject()
+                                  : result.value(QStringLiteral("verdict")).toObject();
+  const QString verdictStatus = verdict.value(QStringLiteral("status")).toString();
+  const QString verdictMessage = verdict.value(QStringLiteral("message")).toString();
+  if (!verdictMessage.isEmpty()) {
+    auto* verdictLabel = new QLabel(QStringLiteral("%1&nbsp;<b>%2</b>")
+                                        .arg(noticeIconHtml(reportRowLevel(verdictStatus), 16),
+                                             mitcad::modelMessage(verdictMessage).toHtmlEscaped()));
+    verdictLabel->setObjectName(QStringLiteral("importReportVerdict"));
+    verdictLabel->setWordWrap(true);
+    layout->addWidget(verdictLabel);
+    qDebug().noquote() << QStringLiteral("Import report verdict: %1: %2: %3").arg(file, verdictStatus, verdictMessage);
+  }
   auto* label = new QLabel(summary);
   label->setWordWrap(true);
   layout->addWidget(label);
+  // The rows shown by their status (mitcad#1893).
+  auto* filterRow = new QHBoxLayout;
+  auto* filterLabel = new QLabel(QObject::tr("&Show:"));
+  auto* filter = new QComboBox;
+  filter->setObjectName(QStringLiteral("importReportFilter"));
+  filter->addItems({QObject::tr("All rows"), QObject::tr("Warnings and errors"), QObject::tr("Errors")});
+  filterLabel->setBuddy(filter);
+  filterRow->addWidget(filterLabel);
+  filterRow->addWidget(filter);
+  filterRow->addStretch(1);
+  layout->addLayout(filterRow);
   auto* items = new QTreeWidget;
+  items->setObjectName(QStringLiteral("importReportRows"));
   panel::setCompactIndentation(items, panel::Indent::Flat);
-  items->setColumnCount(5);
-  items->setHeaderLabels({QObject::tr("#"), QObject::tr("Item"), QObject::tr("Type"), QObject::tr("Came in as"),
-                          QObject::tr("Note")});
+  items->setColumnCount(kReportColumns);
+  items->setHeaderLabels({QObject::tr("Status"), QObject::tr("#"), QObject::tr("Item"), QObject::tr("Type"),
+                          QObject::tr("Came in as"), QObject::tr("Note")});
   items->setRootIsDecorated(false);
   items->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  // A row with its status's symbol, the status in words as its tooltip
+  // (the model's `row_status` and `row_status_message`, mitcad#1893), in
+  // the report's order; logged for the tests.
+  int rowOrder = 0;
+  const auto addRow = [&](const QJsonObject& source, const QStringList& texts) {
+    const QString rowStatus = source.value(QStringLiteral("row_status")).toString();
+    const QString rowWords = mitcad::modelMessage(source.value(QStringLiteral("row_status_message")).toString());
+    auto* added = new ReportRow(items, QStringList{QString()} + texts);
+    added->setIcon(kStatus, noticeIcon(reportRowLevel(rowStatus)));
+    added->setToolTip(kStatus, rowWords);
+    added->setData(kStatus, Qt::AccessibleTextRole, rowWords);
+    added->setData(kStatus, kRankRole, reportRowRank(rowStatus));
+    added->setData(kIndex, kOrderRole, rowOrder++);
+    qDebug().noquote() << QStringLiteral("Import report row: %1: %2 %3: %4")
+                              .arg(file, texts.value(0), texts.value(1),
+                                   rowStatus.isEmpty() ? QStringLiteral("none") : rowStatus);
+    return added;
+  };
   // An .ipt part's bodies: one base feature each, or the replay's.
   int bodyIndex = 0;
   for (const QJsonValue& value : design.value(QStringLiteral("imported")).toArray()) {
     const QJsonObject body = value.toObject();
     const QJsonArray madeBodies = body.value(QStringLiteral("bodies")).toArray();
     const QJsonObject made = madeBodies.isEmpty() ? QJsonObject() : madeBodies.first().toObject();
+    // Valid or not, and how it compares with the file's body (mitcad#1893:
+    // "matches the file's body (volume +0.0002 %)").
+    const QString state = body.contains(QStringLiteral("row_status_message"))
+                              ? mitcad::modelMessage(body.value(QStringLiteral("row_status_message")).toString())
+                          : body.value(QStringLiteral("valid")).toBool() ? QObject::tr("valid")
+                                                                         : QObject::tr("not valid");
     const QString note = QObject::tr("%1, %2 faces, from %3")
-                             .arg(body.value(QStringLiteral("valid")).toBool() ? QObject::tr("valid")
-                                                                                : QObject::tr("not valid"))
+                             .arg(state)
                              .arg(body.value(QStringLiteral("faces")).toInt())
                              .arg(body.value(QStringLiteral("source")).toString());
     // The feature by its name, never its uid (docs/ui-conventions.md).
@@ -1684,11 +1853,46 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
     } else {
       cameIn = (iptHistory ? QObject::tr("body of %1") : QObject::tr("base feature %1")).arg(featureName);
     }
-    auto* item = new QTreeWidgetItem(
-        items, {QString::number(++bodyIndex), made.value(QStringLiteral("name")).toString(),
-                body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("surface"), cameIn,
-                note});
-    item->setToolTip(4, note);
+    QTreeWidgetItem* bodyRow = addRow(
+        body, {QString::number(++bodyIndex), made.value(QStringLiteral("name")).toString(),
+               body.value(QStringLiteral("solid")).toBool() ? QObject::tr("solid") : QObject::tr("surface"), cameIn,
+               note});
+    bodyRow->setToolTip(kNote, note);
+  }
+  // An .ipt part's bodies that could not be built (mitcad#1893: errors).
+  if (isIptImport(result)) {
+    for (const QJsonValue& value : design.value(QStringLiteral("skipped")).toArray()) {
+      const QJsonObject body = value.toObject();
+      const QString note = mitcad::modelMessage(body.value(QStringLiteral("error")).toString());
+      QTreeWidgetItem* bodyRow = addRow(body, {QString::number(++bodyIndex), QObject::tr("a body of the file"),
+                                               QObject::tr("body"), QObject::tr("not built"), note});
+      bodyRow->setToolTip(kNote, note);
+    }
+  }
+  // The file's bodies against the import's (an .f3d design's), and the
+  // import's bodies the file does not have (mitcad#1893): a small
+  // difference matches, with the difference in its note.
+  if (!isIptImport(result)) {
+    for (const QJsonValue& value : design.value(QStringLiteral("bodies")).toArray()) {
+      const QJsonObject body = value.toObject();
+      if (!body.contains(QStringLiteral("row_status"))) {
+        continue;
+      }
+      const QString note = mitcad::modelMessage(body.value(QStringLiteral("row_status_message")).toString());
+      QTreeWidgetItem* bodyRow =
+          addRow(body, {QString::number(++bodyIndex), body.value(QStringLiteral("name")).toString(), QObject::tr("body"),
+                        body.contains(QStringLiteral("mitcad")) ? QObject::tr("compared with the file's body")
+                                                                : QObject::tr("missing"),
+                        note});
+      bodyRow->setToolTip(kNote, note);
+    }
+    for (const QJsonValue& value : design.value(QStringLiteral("extra_body_rows")).toArray()) {
+      const QJsonObject body = value.toObject();
+      const QString note = mitcad::modelMessage(body.value(QStringLiteral("row_status_message")).toString());
+      QTreeWidgetItem* bodyRow = addRow(body, {QString::number(++bodyIndex), body.value(QStringLiteral("name")).toString(),
+                                               QObject::tr("body"), QObject::tr("not in the file"), note});
+      bodyRow->setToolTip(kNote, note);
+    }
   }
   // A building project's levels: their components and bodies.
   int levelIndex = 0;
@@ -1701,13 +1905,13 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                                       ? QObject::tr(", elevation %1 mm")
                                             .arg(level.value(QStringLiteral("elevation")).toDouble(), 0, 'f', 1)
                                       : QString());
-    auto* row = new QTreeWidgetItem(
-        items, {QString::number(++levelIndex), level.value(QStringLiteral("name")).toString(), QObject::tr("level"),
+    QTreeWidgetItem* row = addRow(
+        level, {QString::number(++levelIndex), level.value(QStringLiteral("name")).toString(), QObject::tr("level"),
                 QObject::tr("%1 bodies in component %2")
                     .arg(level.value(QStringLiteral("bodies")).toInt())
                     .arg(level.value(QStringLiteral("component")).toString()),
                 note});
-    row->setToolTip(4, note);
+    row->setToolTip(kNote, note);
   }
   // A drawing's (or a .3dm model's) blocks as components: their bodies
   // and occurrences.
@@ -1718,13 +1922,13 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
       const QString note = QObject::tr("%1 occurrences, %2 placements in all")
                                .arg(c.value(QStringLiteral("occurrences")).toInt())
                                .arg(c.value(QStringLiteral("placed")).toInt());
-      auto* row = new QTreeWidgetItem(
-          items, {QString::number(++componentIndex), c.value(QStringLiteral("name")).toString(), QObject::tr("block"),
-                  QObject::tr("%1 bodies in component %2")
-                      .arg(c.value(QStringLiteral("bodies")).toInt())
-                      .arg(c.value(QStringLiteral("component")).toString()),
-                  note});
-      row->setToolTip(4, note);
+      QTreeWidgetItem* row = addRow(
+          c, {QString::number(++componentIndex), c.value(QStringLiteral("name")).toString(), QObject::tr("block"),
+              QObject::tr("%1 bodies in component %2")
+                  .arg(c.value(QStringLiteral("bodies")).toInt())
+                  .arg(c.value(QStringLiteral("component")).toString()),
+              note});
+      row->setToolTip(kNote, note);
     }
   }
   // An assembly's files: how each was found and what came in.
@@ -1739,11 +1943,11 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
                              .arg(f.value(QStringLiteral("occurrences")).toInt())
                              .arg(f.value(QStringLiteral("found")).toString(), path);
     const QString status = f.value(QStringLiteral("status")).toString();
-    auto* row = new QTreeWidgetItem(
-        items, {QString::number(++fileIndex), QFileInfo(path).fileName(), f.value(QStringLiteral("kind")).toString(),
-                outcome.isEmpty() ? status : QStringLiteral("%1, %2").arg(status, outcome), note});
-    row->setToolTip(3, outcome.isEmpty() ? status : outcome);
-    row->setToolTip(4, note);
+    QTreeWidgetItem* row = addRow(
+        f, {QString::number(++fileIndex), QFileInfo(path).fileName(), f.value(QStringLiteral("kind")).toString(),
+            outcome.isEmpty() ? status : QStringLiteral("%1, %2").arg(status, outcome), note});
+    row->setToolTip(kCameIn, outcome.isEmpty() ? status : outcome);
+    row->setToolTip(kNote, note);
     if (!outcome.isEmpty()) {
       qDebug().noquote() << QStringLiteral("Import report part: %1: %2").arg(QFileInfo(path).fileName(), outcome);
     }
@@ -1756,10 +1960,10 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
         item.value(item.contains(QStringLiteral("note_message")) ? QStringLiteral("note_message")
                                                                  : QStringLiteral("note"))
             .toString());
-    auto* row = new QTreeWidgetItem(
-        items, {QString::number(item.value(QStringLiteral("index")).toInt()), item.value(QStringLiteral("name")).toString(),
-                item.value(QStringLiteral("type")).toString(), item.value(QStringLiteral("outcome")).toString(), note});
-    row->setToolTip(4, note);
+    QTreeWidgetItem* row = addRow(
+        item, {QString::number(item.value(QStringLiteral("index")).toInt()), item.value(QStringLiteral("name")).toString(),
+               item.value(QStringLiteral("type")).toString(), item.value(QStringLiteral("outcome")).toString(), note});
+    row->setToolTip(kNote, note);
   }
   // A SolidCraft design's features and joints: how each came in, or why
   // it did not (mitcad#450).
@@ -1773,10 +1977,10 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
           notes << mitcad::modelMessage(note.toString());
         }
         const QString note = notes.join(QStringLiteral("; "));
-        auto* row = new QTreeWidgetItem(items, {QString::number(++index), f.value(QStringLiteral("name")).toString(),
-                                                f.value(QStringLiteral("kind")).toString(),
-                                                f.value(QStringLiteral("outcome")).toString(), note});
-        row->setToolTip(4, note);
+        QTreeWidgetItem* row = addRow(f, {QString::number(++index), f.value(QStringLiteral("name")).toString(),
+                                          f.value(QStringLiteral("kind")).toString(),
+                                          f.value(QStringLiteral("outcome")).toString(), note});
+        row->setToolTip(kNote, note);
       }
     }
   }
@@ -1789,15 +1993,37 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
         notes << mitcad::modelMessage(note.toString());
       }
       const QString note = notes.join(QStringLiteral("; "));
-      auto* row = new QTreeWidgetItem(
-          items, {QString::number(p.value(QStringLiteral("id")).toInteger()),
-                  QStringLiteral("%1 %2").arg(p.value(QStringLiteral("name")).toString(),
-                                              p.value(QStringLiteral("global_id")).toString()),
-                  p.value(QStringLiteral("kind")).toString(), p.value(QStringLiteral("outcome")).toString(), note});
-      row->setToolTip(4, note);
+      QTreeWidgetItem* row = addRow(
+          p, {QString::number(p.value(QStringLiteral("id")).toInteger()),
+              QStringLiteral("%1 %2").arg(p.value(QStringLiteral("name")).toString(),
+                                          p.value(QStringLiteral("global_id")).toString()),
+              p.value(QStringLiteral("kind")).toString(), p.value(QStringLiteral("outcome")).toString(), note});
+      row->setToolTip(kNote, note);
     }
   }
+  // Sorted by a click on a column's header: by the status, errors first;
+  // by # in the report's own order, which it starts in.
+  items->setSortingEnabled(true);
+  items->sortByColumn(kIndex, Qt::AscendingOrder);
+  // The filter shows all rows, the warnings and errors, or the errors.
+  QObject::connect(filter, &QComboBox::currentIndexChanged, items, [items, file](int shownLevels) {
+    int shown = 0;
+    for (int i = 0; i < items->topLevelItemCount(); ++i) {
+      QTreeWidgetItem* entry = items->topLevelItem(i);
+      const int rank = entry->data(kStatus, kRankRole).toInt();
+      const bool visible = shownLevels == 0 || (shownLevels == 1 && rank <= 1) || (shownLevels == 2 && rank == 0);
+      entry->setHidden(!visible);
+      shown += visible ? 1 : 0;
+    }
+    qDebug().noquote() << QStringLiteral("Import report filter: %1: %2 of %3 rows shown")
+                              .arg(file)
+                              .arg(shown)
+                              .arg(items->topLevelItemCount());
+  });
   layout->addWidget(items, 1);
+  // The table has the keyboard first, as before the filter came (Enter
+  // still closes the report).
+  QWidget::setTabOrder(items, filter);
   if (!kept.isEmpty()) {
     QStringList lines;
     for (const QString& line : kept) {
@@ -1831,17 +2057,24 @@ void showImportReport(QWidget* parent, const QString& file, const QJsonObject& r
     text->setWordWrap(true);
     layout->addWidget(text);
   }
+  // The real warnings, each with the warning's symbol; "No warnings." when
+  // there are none (mitcad#1893).
   QStringList warnings;
+  const QString warningIcon = noticeIconHtml(NoticeLevel::Warning);
   for (const QJsonValue& warning : design.value(QStringLiteral("warnings")).toArray()) {
-    warnings << mitcad::modelMessage(warning.toString()).toHtmlEscaped();
+    warnings << QStringLiteral("%1&nbsp;%2").arg(warningIcon, mitcad::modelMessage(warning.toString()).toHtmlEscaped());
   }
   for (const QJsonValue& warning : replay.value(QStringLiteral("warnings")).toArray()) {
-    warnings << mitcad::modelMessage(warning.toString()).toHtmlEscaped();
+    warnings << QStringLiteral("%1&nbsp;%2").arg(warningIcon, mitcad::modelMessage(warning.toString()).toHtmlEscaped());
   }
-  if (!warnings.isEmpty()) {
-    auto* text = new QLabel(QObject::tr("<b>Warnings</b><br>%1").arg(warnings.join(QStringLiteral("<br>"))));
+  {
+    auto* text = new QLabel(QObject::tr("<b>Warnings</b><br>%1")
+                                .arg(warnings.isEmpty() ? QObject::tr("No warnings.").toHtmlEscaped()
+                                                        : warnings.join(QStringLiteral("<br>"))));
+    text->setObjectName(QStringLiteral("importReportWarnings"));
     text->setWordWrap(true);
     layout->addWidget(text);
+    qDebug().noquote() << QStringLiteral("Import report warnings: %1: %2").arg(file).arg(warnings.size());
   }
   // Items tried again on the file's stored bodies before them (mitcad#283):
   // the imported bodies each retry kept and replaced, and the user's answer.

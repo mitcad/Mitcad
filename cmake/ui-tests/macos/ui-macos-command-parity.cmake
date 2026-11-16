@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: MIT
+if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND TARGET mitcad AND BASH_EXECUTABLE
+   AND TARGET mitcad-cli)
+  add_test(NAME app.ui-macos-command-parity
+    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-command-parity-test.sh"
+            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-command-parity" qt)
+  set_tests_properties(app.ui-macos-command-parity PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
+endif()

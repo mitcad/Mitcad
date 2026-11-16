@@ -245,7 +245,12 @@ beyond fills the gap between the pieces of `SplitKPart`
 (`PerformSetOfKPart`). Gaps where the face beyond reaches over the
 neighbouring pieces too, or where one of its edges (a seam) ends under the
 blend, keep OCCT's handling. Before, the blend failed, or rolled on the
-hole's edge.
+hole's edge. A rounding whose contact runs into a face that rises from its
+face (their edge concave: a boss or a lug standing on it, not a hole or a
+cut-out) keeps OCCT's handling too (`ChFi3d_RisesFromFace`, mitcad#1900): the
+cut dropped the cylinder standing out of the face in OCCT's blend/simple S1
+T1 T4 T7 U4 or made the result invalid. Chamfers are still cut by such a
+face (teeth standing on a flange's top).
 
 ### 0056-chfi3d-corner-cutting-the-last-two-walked-pieces
 
@@ -361,7 +366,9 @@ stripe ends in a point there, with no corner at the vertex. The case: the
 rounding of an inside corner between a wall and another wall whose top edge
 is rounded, the first wall's contact leaving it across its top edge before
 the corner's edge reaches the top. Before, the corner at the vertex gave an
-invalid result or failed.
+invalid result or failed. A walk that fails there leaves the builder's state
+as it was (`PerformSurf` sets `done`; the whole fillet of OCCT's
+blend/encoderegularity A1 failed, mitcad#1902).
 
 ### 0075-blendfunc-constrad-rolling-ball-section
 
@@ -388,7 +395,17 @@ cylinder, cone, sphere or torus, instead of on its tangent plane at the edge
 The walk into the straight extensions of the guide past the spine's ends
 stops where a rolling ball's contacts run twice as fast along the guide as
 at the spine's end, before the guide's planes come tangent to the centre's
-curve and the sections get singular (where the approximation failed).
+curve and the sections get singular (where the approximation failed). It is
+cut only where the part kept runs past the spine's end by more than twice the
+section's width on both contacts (`ChFi3d_KeepsWellPastEnd`), or where the
+line runs on into a section near the singular one (its contacts a thousand
+times as fast, or a tangency point, `ChFi3d_RunsIntoSingularSection`,
+mitcad#1902): OCCT's blend/complex B4, whose contacts speed up 73 times close
+to the end (the cut keeping less than half a section's width), was cut short
+of the faces at the end and came out invalid. A chamfer whose walk ran on
+20 mm past the end, kept uncut, had faces on degree 12 surfaces of 101 poles
+(18 when cut), and a rounding along its edges failed (a design of the corpus,
+5ef2dbd5's Fillet28).
 
 ## Reports and tests
 

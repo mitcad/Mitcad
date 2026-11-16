@@ -264,6 +264,34 @@ void MainWindow::registerViewShowCommands() {
        QStringLiteral("datum")});
   add("view.show_sketches", "sketches", tr("Sketches"), "sketch",
       tr("Shows or hides the sketches of every component"), {QStringLiteral("sketch"), QStringLiteral("sketches")});
+  // Every sketch's light bulb in the design at once (mitcad#1931, GitHub
+  // mitcad/Mitcad#355), one undo step; also in the Browser's menus of the
+  // root and of components (BrowserController::setAllSketches).
+  const auto all = [this](const char* id, bool show, const QString& name, const QString& tooltip) {
+    CommandDef def;
+    def.id = QString::fromLatin1(id);
+    def.name = name;
+    def.icon = show ? QStringLiteral("eye") : QStringLiteral("eye-off");
+    def.tooltip = tooltip;
+    def.kind = CommandDef::Kind::Action;
+    def.mode = CommandDef::Mode::Any;
+    def.tab.clear(); // the command search and shortcuts
+    def.group.clear();
+    def.duringCommands = true;
+    def.keywords = {QStringLiteral("sketch"), QStringLiteral("sketches"), QStringLiteral("light bulb"),
+                    QStringLiteral("eye"), QStringLiteral("visibility"), QStringLiteral("show"),
+                    QStringLiteral("hide"), QStringLiteral("all")};
+    def.run = [this, show] {
+      if (m_controller != nullptr) {
+        m_controller->setAllSketches(QString(), show);
+      }
+    };
+    m_registry->add(def);
+  };
+  all("view.show_all_sketches", true, tr("Show All Sketches"),
+      tr("Turns on the light bulb of every sketch in the design"));
+  all("view.hide_all_sketches", false, tr("Hide All Sketches"),
+      tr("Turns off the light bulb of every sketch in the design"));
 }
 
 void MainWindow::toggleViewShow(const QString& kind) {

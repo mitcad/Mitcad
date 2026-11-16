@@ -7,6 +7,7 @@
 // sweep) and the radius that does not fit; the radius a pointer's ray
 // gives along the bisector, kept inside the largest that fits; and the
 // sketch3d.fillet command of a corner by its point and by its lines.
+#include "UnitTests.hpp"
 #include "sketch/Sketch3dFillet.hpp"
 
 #include <cmath>
@@ -217,3 +218,4 @@ int sketch3dFilletTests() {
   wordsTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketch3dFilletTests);

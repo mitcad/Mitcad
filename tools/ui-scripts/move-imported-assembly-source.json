@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The STEP assembly of tools/ui-scripts/move-imported-assembly.mitcad-ui (mitcad#1891), run in the test's work folder and written there as imported.step: Pin (an 8 x 12 x 6 box from the origin) placed twice, Pin:1 at the origin and Pin:2 20 mm along Y. The export writes one assembly that places each part where the design shows it (no sub-assemblies), and two placements keep it an assembly when it is imported."},
+  {"cmd": "create_component", "name": "Pin"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 8, "width": 12, "height": 6, "operation": "new_body"}},
+  {"cmd": "rename_body", "uid": "F1.b0", "name": "Pin"},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "copy_occurrence", "occurrence": "Pin:1", "transform": {"translation": [0, 20, 0]}},
+  {"cmd": "export", "path": "imported.step"}
+]

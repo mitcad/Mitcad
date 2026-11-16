@@ -107,6 +107,11 @@ pub struct ProjectionCache {
     /// Cut sheets' parts worked out (mitcad#853), by body, shape version,
     /// placement and the face chosen.
     part_views: Entries<cut_sheet::PartView>,
+    /// The silhouettes of a body's curved faces seen along one direction
+    /// (mitcad#1909), by body, shape version and direction: what a view's
+    /// picks are found on beside its edges, worked out once per view
+    /// direction rather than on every move of the pointer.
+    silhouettes: Entries<Silhouettes>,
     /// The `threads` query's answer with the recompute it was asked after
     /// (mitcad#1112: every view draws its threads by convention, and
     /// measuring a modelled thread's face is slow, mitcad#878).
@@ -128,6 +133,14 @@ pub struct BodyInView {
 /// the farthest first.
 #[doc(hidden)]
 pub type Shading = Vec<(Vec<P2>, f64)>;
+
+/// A body's curved faces with their silhouettes seen along one direction
+/// (mitcad#1909), in the body's coordinates.
+#[doc(hidden)]
+pub type Silhouettes = Vec<(
+    mitcad_model::topo::FaceName,
+    Vec<mitcad_model::kernel::Curve3>,
+)>;
 
 /// A placed body's round holes.
 pub(crate) type Holes = Vec<compose::HoleInput>;
@@ -237,6 +250,14 @@ impl ProjectionCache {
         keep(&self.part_views, key, value, CACHED_BODY_VIEWS);
     }
 
+    pub fn silhouettes(&self, key: u128) -> Option<std::sync::Arc<Silhouettes>> {
+        cached(&self.silhouettes, key)
+    }
+
+    pub fn keep_silhouettes(&self, key: u128, value: std::sync::Arc<Silhouettes>) {
+        keep(&self.silhouettes, key, value, CACHED_BODY_VIEWS);
+    }
+
     /// The `threads` query's answer kept after the recompute `recompute`.
     pub fn threads(&self, recompute: u64) -> Option<std::sync::Arc<serde_json::Value>> {
         let kept = self.threads.lock().ok()?;
@@ -284,5 +305,5 @@ pub mod internal {
     pub use crate::compose::{
         CalloutStyle, HoleInput, HoleText, hole_callout, hole_text, sketch_dimension,
     };
-    pub use crate::{BodyInView, ProjectionCache, Shading};
+    pub use crate::{BodyInView, ProjectionCache, Shading, Silhouettes};
 }

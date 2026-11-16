@@ -42,6 +42,7 @@
 
 #include "ProjectIndicator.hpp"
 #include "ProjectSettings.hpp"
+#include "SyncState.hpp"
 #include "mitcad_bridge/lib.h"
 
 class QMainWindow;
@@ -103,6 +104,10 @@ public:
   void startUp();
   // The remote's state for the project indicator.
   ProjectIndicator::Remote indicatorState() const;
+  // That state in words (mitcad#1895): "Sending to the project's server…",
+  // "Up to date, last sync 14:02", "Offline: changes are kept and sent
+  // later".
+  SyncWords stateWords() const;
   // "Up to date, last sync 10:42" (Project Settings' Status row).
   QString statusText() const;
 
@@ -127,16 +132,22 @@ public:
   void settingsChanged();
   // Before Save or Restore records a version: while a sync or a connection
   // moves the project's branch, waits for it (with a Cancel that stops it).
-  void waitForBranch();
+  // `root`: another project's folder, whose queue's sync is waited for
+  // ("" the current project; mitcad#1895).
+  void waitForBranch(const QString& root = QString());
   // Stops a running background check or push and waits for it; false (and
   // `why` can wait, said) while a sync runs.
   bool settle(const QString& why);
   // Runs a task while a progress dialog with Cancel shows; its answer.
-  QJsonObject runModal(RemoteTask* task, const QString& label);
+  // `limitSeconds` > 0: cancelled after that long (MitCad closes; what was
+  // not sent goes at the next start, mitcad#1895).
+  QJsonObject runModal(RemoteTask* task, const QString& label, int limitSeconds = 0);
   // Schedules sending the versions that wait, after a push failed.
   void retryLater();
-  // Before the window closes: running work is stopped (versions not sent
-  // stay waiting, and go at the next start).
+  // Before the window closes: a running push or sync is waited for briefly
+  // (closeWaitSeconds, a progress dialog that says so, Close Now), then
+  // running work is stopped (versions not sent stay waiting, and go at the
+  // next start).
   void shutDown();
 
   // The commands.
@@ -159,7 +170,14 @@ public:
   // Its answer ({"case": "nothing"} when nothing waits to be sent; a
   // conflict is the error class "conflict", which is not asked about).
   void checkQuietly();
-  QJsonObject syncNow(const QString& label);
+  QJsonObject syncNow(const QString& label, int limitSeconds = 0);
+  // Version work off the UI thread (mitcad#1895): the author of the
+  // versions of the project in `root` (asked when none is set; none when
+  // cancelled), and a sync that a design's edit lock ran in the project's
+  // version queue: logged as Sync logs it, the versions it sent announced,
+  // the state read again.
+  std::optional<QString> versionAuthor(const QString& root);
+  void syncedInBackground(const QString& root, const QJsonObject& answer);
 
 signals:
   // The remote's state changed (indicatorState()).
@@ -246,6 +264,8 @@ private:
   QTimer* m_retryTimer = nullptr;
   int m_retries = 0;
   bool m_live = false; // the current project's live updates are connected
+  QString m_loggedWords; // the sync state in words as last logged (mitcad#1895)
+  bool m_wordsProblem = false; // and whether it was a failure
 };
 
 } // namespace mitcad

@@ -9,7 +9,12 @@
 // reports in padded slots, the raw reports' log, and each rotation axis
 // alone with no zoom, the same through HID and spacenavd (mitcad#1034);
 // each of the cap's six motions from the device's values to the model in
-// Object mode, and the motion's axes in the debug log (mitcad#1720).
+// Object mode, the motion's axes in the debug log, the cross-talk filter,
+// the device's reach and Dominant axis only's hold, which keeps each of a
+// user's logged SpaceNavigator motions on its own axis (mitcad#1720); Lock
+// Rotation in and out of a sketch and a device's
+// default button for its rotation lock key (mitcad#1910).
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -178,10 +183,409 @@ void mappingTests() {
   rates = spaceMouseRates(settings, {0.3, -0.2, 0.1, 0.0, -0.8, 0.5}, false);
   CHECK(rates.yaw < 0.0 && rates.panX == 0.0 && rates.panY == 0.0 && rates.zoom == 0.0 && rates.pitch == 0.0 &&
         rates.roll == 0.0);
+  // It wins over the cross-talk filter: the strongest axis switched on
+  // moves the view, also when a stronger one is switched off.
+  settings.crossTalk = 90;
+  CHECK(spaceMouseRates(settings, {0.3, -0.2, 0.1, 0.0, -0.8, 0.5}, false).yaw < 0.0);
+  settings.axisOn[4] = false;
+  rates = spaceMouseRates(settings, {0.3, -0.2, 0.1, 0.0, -0.8, 0.5}, false);
+  CHECK(rates.roll > 0.0 && rates.yaw == 0.0 && rates.panX == 0.0 && rates.pitch == 0.0);
   // Off: nothing moves.
   settings = SpaceMouseSettings();
   settings.enabled = false;
   CHECK(!spaceMouseRates(settings, full, false).moving());
+}
+
+// The cross-talk filter (mitcad#1720): a cap that couples its axes, moved
+// along one, reported 30-80 % of that motion on others. Pushed in and out:
+// tz -0.55 with tx 0.43, rx -0.26 and rz -0.24; rolled sideways: rz -0.79
+// with rx 0.48 and tx 0.37.
+void crossTalkTests() {
+  using namespace mitcad;
+  const SpaceMouseAxes inOut{0.43, 0.0, -0.55, -0.26, 0.0, -0.24};
+  const SpaceMouseAxes rolled{0.37, 0.0, 0.0, 0.48, 0.0, -0.79};
+  const auto only = [](const SpaceMouseAxes& axes, std::size_t kept, double value) {
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      if (axes[axis] != (axis == kept ? value : 0.0)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  // On by default, at 50 %.
+  CHECK(SpaceMouseSettings().crossTalk == 50);
+  // A share above the cap's coupling leaves the one axis it was moved along.
+  CHECK(only(spaceMouseWithoutCrossTalk(inOut, 85), 2, -0.55));
+  CHECK(only(spaceMouseWithoutCrossTalk(rolled, 85), 5, -0.79));
+  SpaceMouseSettings settings;
+  settings.crossTalk = 85;
+  SpaceMouseRates rates = spaceMouseRates(settings, inOut, false);
+  CHECK(rates.zoom < 0.0 && rates.panX == 0.0 && rates.panY == 0.0 && !rates.turning());
+  rates = spaceMouseRates(settings, rolled, false);
+  CHECK(rates.roll < 0.0 && rates.pitch == 0.0 && rates.yaw == 0.0 && rates.panX == 0.0 && rates.zoom == 0.0);
+  // The default drops what is less than half the strongest: the in and out
+  // keeps its 78 % pan, the roll its 61 % tilt.
+  const SpaceMouseAxes inOutHalf = spaceMouseWithoutCrossTalk(inOut, 50);
+  CHECK(inOutHalf == (SpaceMouseAxes{0.43, 0.0, -0.55, 0.0, 0.0, 0.0}));
+  CHECK(spaceMouseWithoutCrossTalk(rolled, 50) == (SpaceMouseAxes{0.0, 0.0, 0.0, 0.48, 0.0, -0.79}));
+  // A deliberate motion along two axes of similar size keeps both at the
+  // default, and the small rest of the others goes.
+  const SpaceMouseAxes diagonal{0.6, -0.5, 0.05, 0.03, -0.02, 0.04};
+  CHECK(spaceMouseWithoutCrossTalk(diagonal, 50) == (SpaceMouseAxes{0.6, -0.5, 0.0, 0.0, 0.0, 0.0}));
+  rates = spaceMouseRates(SpaceMouseSettings(), diagonal, false);
+  CHECK(rates.panX > 0.0 && rates.panY < 0.0 && rates.zoom == 0.0 && !rates.turning());
+  // An axis as strong as the strongest stays at any share; every axis full.
+  const SpaceMouseAxes even{0.7, -0.7, 0.0, 0.0, 0.0, 0.0};
+  CHECK(spaceMouseWithoutCrossTalk(even, kSpaceMouseCrossTalkMax) == even);
+  const SpaceMouseAxes full{1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  CHECK(spaceMouseWithoutCrossTalk(full, 50) == full);
+  // Beyond a full deflection counts as a full one.
+  CHECK(spaceMouseWithoutCrossTalk({1.7, 0.9, 0.0, 0.0, 0.0, 0.0}, 85) ==
+        (SpaceMouseAxes{1.7, 0.9, 0.0, 0.0, 0.0, 0.0}));
+  // Off keeps every axis as it came.
+  CHECK(spaceMouseWithoutCrossTalk(inOut, 0) == inOut && spaceMouseWithoutCrossTalk(rolled, 0) == rolled);
+  settings.crossTalk = 0;
+  rates = spaceMouseRates(settings, inOut, false);
+  CHECK(rates.zoom < 0.0 && rates.panX > 0.0 && rates.pitch < 0.0 && rates.roll < 0.0);
+  // A share out of range is taken within it; a value that is no number
+  // does nothing and does not stop the others.
+  CHECK(spaceMouseWithoutCrossTalk(inOut, -20) == inOut);
+  CHECK(spaceMouseWithoutCrossTalk(inOut, 400) == spaceMouseWithoutCrossTalk(inOut, kSpaceMouseCrossTalkMax));
+  CHECK(only(spaceMouseWithoutCrossTalk({std::nan(""), 0.0, -0.55, 0.0, 0.0, 0.0}, 50), 2, -0.55));
+  // The coupling is the cap's: rolled with the roll switched off, its
+  // stray tilt and pan do not move the view either.
+  settings = SpaceMouseSettings();
+  settings.crossTalk = 85;
+  settings.axisOn[5] = false;
+  CHECK(!spaceMouseRates(settings, rolled, false).moving());
+  // In a flat view, a pan with a stray turn pans; a turn with a stray pan
+  // does nothing.
+  settings = SpaceMouseSettings();
+  CHECK(spaceMouseRates(settings, {0.6, 0.0, 0.0, 0.2, 0.0, 0.0}, true).panX > 0.0);
+  CHECK(!spaceMouseRates(settings, {0.2, 0.0, 0.0, 0.0, 0.0, 0.6}, true).moving());
+  // Dominant axis only is as it was: the strongest axis switched on alone,
+  // the filter's share aside.
+  settings = SpaceMouseSettings();
+  settings.dominantAxis = true;
+  for (const int share : {0, 50, 90}) {
+    settings.crossTalk = share;
+    rates = spaceMouseRates(settings, inOut, false);
+    CHECK(rates.zoom < 0.0 && rates.panX == 0.0 && !rates.turning());
+  }
+  // With the device's reach (mitcad#1720) the axes compare as shares of
+  // their kind's: a device that has shown translations up to 0.5 and
+  // rotations up to a full deflection keeps a push of 0.2 (two fifths of
+  // its reach) beside a twist of 0.6, which the nominal scale drops.
+  SpaceMouseReach reach(kSpaceMouseReachStart);
+  reach.add({0.5, 0.0, 0.0, 0.0, 1.0, 0.0});
+  const SpaceMouseAxes pushAndTwist{0.2, 0.0, 0.0, 0.0, 0.6, 0.0};
+  CHECK(spaceMouseWithoutCrossTalk(pushAndTwist, 50) == (SpaceMouseAxes{0.0, 0.0, 0.0, 0.0, 0.6, 0.0}));
+  CHECK(spaceMouseWithoutCrossTalk(pushAndTwist, 50, reach) == pushAndTwist);
+}
+
+// The rate a view axis (tx … rz) moves the view at.
+double rateOf(const mitcad::SpaceMouseRates& rates, std::size_t axis) {
+  switch (axis) {
+  case 0:
+    return rates.panX;
+  case 1:
+    return rates.panY;
+  case 2:
+    return rates.zoom;
+  case 3:
+    return rates.pitch;
+  case 4:
+    return rates.yaw;
+  default:
+    return rates.roll;
+  }
+}
+
+// A motion of a 3D mouse's cap along one axis as a user logged it
+// (mitcad#1720, GitHub mitcad/Mitcad#343): the debug log's "3D mouse
+// report:" lines of a SpaceNavigator (HID 046d:c626, its translation and
+// rotation in reports of their own), about ten a second, each the
+// device's X, Y, Z and Rx, Ry, Rz as its reports give them; the cap came
+// to rest after each motion. The reports between the motions, where the
+// cap was only touched, are left out.
+struct LoggedMotion {
+  const char* name;
+  std::size_t axis; // the view's axis (tx … rz) the cap was moved along
+  double sign;      // its direction
+  std::vector<std::array<int, 6>> reports;
+};
+
+const std::vector<LoggedMotion>& loggedSpaceNavigatorMotions() {
+  static const std::vector<LoggedMotion> motions = {
+      {"pushed right", 0, 1.0,
+       {{33, 12, 0, 0, -3, -3}, {48, 24, -8, 0, -11, -5}, {68, 19, -10, 0, -29, -8}, {89, 16, -13, 0, -43, -3},
+        {82, 11, -22, 0, -40, -3}, {88, 9, -12, -12, -30, -8}, {94, 19, -11, -12, -30, -10},
+        {100, 0, -10, -17, -38, -13}, {107, 0, -6, -24, -38, -13}, {110, 0, -18, -28, -46, -16},
+        {116, 0, -18, -25, -51, -18}, {133, 0, -14, -35, -51, -15}, {133, 0, -27, -32, -56, -15},
+        {128, 0, -26, -36, -54, -15}, {132, 10, -7, -33, -43, -16}, {140, 3, -3, -33, -48, -11},
+        {111, -1, 0, -41, -40, -13}, {116, -9, -17, -36, -54, -10}, {122, -10, -6, -45, -49, -6},
+        {135, -20, 0, -58, -38, -11}, {39, -40, 0, -29, -22, -5}}},
+      {"pushed left", 0, -1.0,
+       {{-34, 0, -3, -6, 10, 0}, {-53, -24, -8, -4, 2, 0}, {-83, -47, -11, -9, 0, 0}, {-84, -70, 0, -26, 2, 0},
+        {-92, -73, 0, -30, 10, 0}, {-99, -84, 0, -26, 7, 15}, {-111, -91, 17, -41, 23, 28},
+        {-117, -124, 17, -51, 36, 31}, {-117, -93, 0, -40, 39, 31}, {-113, -75, 0, -29, 36, 36},
+        {-121, -72, 0, -31, 34, 36}, {-114, -102, 32, -41, 39, 38}, {-100, -114, 54, -35, 29, 40},
+        {-99, -116, 54, -28, 21, 38}, {-101, -106, 47, -27, 26, 41}, {-89, -103, 49, -30, 26, 43},
+        {-75, -93, 37, -26, 24, 44}, {-79, -105, 39, -27, 26, 46}, {-79, -106, 45, -27, 21, 41},
+        {-81, -102, 36, -29, 24, 38}, {-78, -96, 37, -29, 18, 33}, {-83, -96, 42, -33, 26, 30},
+        {-91, -89, 39, -29, 29, 26}, {-90, -88, 34, -27, 26, 30}, {-51, -43, 24, -26, 18, 33},
+        {0, 0, -4, -6, 0, -25}}},
+      {"lifted", 1, 1.0,
+       {{-3, 0, -27, -3, 0, 0}, {0, 3, -47, -3, 0, 0}, {0, 12, -92, 0, -17, 0}, {-2, 11, -115, 0, -14, 0},
+        {-7, 0, -126, -12, -12, 0}, {-5, 4, -130, -5, -15, 0}, {-5, 14, -140, 0, -17, 0}, {-3, 20, -163, 0, -31, 0},
+        {0, 19, -161, 0, -31, 0}, {0, 20, -152, 0, -28, 0}, {0, 24, -147, 0, -23, -1}, {0, 28, -155, 0, -31, -5},
+        {0, 26, -158, 0, -33, -5}, {0, 23, -151, 0, -33, -8}, {0, 24, -158, 0, -36, -8}, {0, 19, -162, 0, -36, -6},
+        {0, 23, -166, 0, -41, -5}, {3, 21, -163, 0, -41, -6}, {9, 16, -150, 0, -44, -5}, {24, 9, -133, 0, -49, 0},
+        {27, 13, -135, 0, -46, 0}, {28, 13, -125, -1, -44, 0}, {23, 10, -108, -3, -41, 0}, {16, 3, -58, -9, -25, 0},
+        {4, 14, -28, -8, -3, 0}, {0, 0, -7, -17, 0, 0}}},
+      {"pressed down", 1, -1.0,
+       {{0, 0, 25, -8, 2, 0}, {7, -3, 28, 0, 0, 0}, {26, -18, 76, -12, 0, -3}, {50, -22, 107, -5, 0, 0},
+        {77, -27, 185, -28, 38, 0}, {53, -54, 114, 0, 9, 0}, {57, -72, 121, 0, 0, 0}, {67, -72, 131, 0, 0, 0},
+        {87, -63, 165, -2, 20, 0}, {74, -70, 132, 0, 0, 0}, {79, -66, 169, 0, 12, 0}, {64, -68, 151, 1, 4, 0},
+        {61, -62, 148, 0, 7, 0}, {59, -67, 143, 1, 4, 0}, {63, -73, 155, 0, 12, 0}, {66, -72, 158, 0, 12, 0},
+        {72, -65, 174, 0, 23, 0}, {70, -60, 166, 0, 18, 0}, {69, -59, 166, 0, 15, 0}, {64, -55, 168, 3, 12, 0},
+        {61, -60, 175, 0, 20, 0}, {64, -61, 183, 0, 28, 0}, {61, -62, 172, 0, 25, 0}, {60, -61, 169, 0, 20, 0},
+        {59, -63, 174, 0, 23, 0}, {59, -60, 175, 0, 18, 0}, {59, -56, 175, 1, 20, 0}, {55, -55, 172, 1, 15, 0},
+        {50, -54, 170, 1, 15, 0}, {44, -46, 166, 4, 10, 0}, {48, -43, 169, 3, 12, 0}, {44, -39, 153, 1, 10, 0},
+        {41, -39, 152, 0, 15, 0}, {35, -36, 135, 0, 17, 0}, {37, -37, 151, 0, 23, 0}, {25, -26, 100, 0, 25, 0},
+        {26, -27, 101, 0, 14, 0}, {27, -10, 86, 0, 25, 0}, {19, -16, 48, 0, 14, 0}, {4, -5, 34, 0, 8, 0}}},
+      {"pushed away", 2, -1.0,
+       {{2, 0, -22, 0, -3, 0}, {6, 0, -29, -2, -8, 0}, {15, -28, -33, -19, -11, 0}, {33, -65, -18, -27, -19, 0},
+        {57, -140, -34, -61, -44, -6}, {61, -141, -44, -68, -47, -13}, {70, -159, -47, -78, -52, -20},
+        {71, -145, -58, -81, -52, -8}, {75, -141, -65, -87, -58, -8}, {75, -141, -67, -90, -58, -11},
+        {86, -139, -57, -90, -63, -8}, {108, -144, -45, -86, -76, -6}, {120, -141, -25, -77, -81, -3},
+        {137, -141, -7, -73, -83, -1}, {148, -162, 0, -82, -73, 0}, {143, -158, 0, -84, -76, 0},
+        {147, -150, 0, -82, -67, 0}, {146, -151, 0, -80, -59, 0}, {148, -157, 4, -88, -57, -6},
+        {129, -144, 13, -89, -38, -15}, {129, -153, 8, -78, -41, -35}, {128, -156, 10, -73, -38, -31},
+        {144, -189, 0, -90, -46, -49}, {141, -173, 0, -90, -46, -48}, {136, -148, 0, -92, -44, -40},
+        {60, -76, 0, -59, -19, -20}}},
+      {"pulled closer", 2, 1.0,
+       {{-21, 51, 0, 7, 5, 0}, {-49, 88, -10, 35, 11, -8}, {-60, 93, -6, 49, 14, -13}, {-58, 96, 0, 39, 27, -31},
+        {-48, 84, 0, 53, 1, -18}, {-49, 98, 0, 52, 14, -21}, {-52, 105, 0, 51, 17, -16}, {-63, 110, 0, 59, 19, -23},
+        {-51, 109, 0, 55, 19, -18}, {-48, 109, 0, 51, 17, -21}, {-55, 109, 0, 48, 22, -21}, {-60, 104, 0, 48, 22, -21},
+        {-69, 107, 0, 51, 22, -21}, {-79, 111, -3, 63, 22, -23}, {-70, 108, -4, 62, 19, -18},
+        {-69, 103, 0, 62, 14, -13}, {-76, 111, 0, 60, 22, -18}, {-67, 136, 0, 62, 25, -21}, {-62, 121, 0, 54, 22, -16},
+        {-66, 120, 0, 56, 25, -10}, {-51, 114, 7, 49, 25, -1}, {-57, 123, 5, 46, 25, -5}, {-53, 124, 0, 39, 27, -5},
+        {-52, 124, 0, 40, 25, -8}, {-54, 126, 0, 40, 30, -10}, {-53, 125, 0, 37, 30, -11}, {-49, 127, 0, 42, 27, -10},
+        {-44, 128, 0, 39, 27, -6}, {-32, 118, 8, 34, 25, -8}, {-10, 90, 2, 23, 16, -8}, {-30, 73, 0, 21, 14, -1}}},
+      {"twisted clockwise", 4, -1.0,
+       {{14, 0, -12, 0, -5, 44}, {18, -15, -17, -15, -8, 68}, {21, -1, -12, -16, -6, 66}, {17, 0, -6, -9, -8, 76},
+        {13, -4, 0, -7, -6, 94}, {10, -7, 0, -15, 0, 116}, {26, -35, 0, -27, 0, 159}, {30, -22, -4, -38, 0, 170},
+        {28, -27, -18, -29, -11, 162}, {26, -28, -22, -33, -9, 160}, {29, -30, -4, -22, -30, 160},
+        {37, -32, 0, -13, -51, 162}, {49, -29, 0, -19, -45, 165}, {67, -39, -10, -20, -56, 160},
+        {75, -39, -5, -27, -54, 159}, {72, -38, 0, -26, -51, 165}, {71, -39, 0, -17, -67, 174},
+        {64, -29, 0, -11, -72, 180}, {66, -21, -7, -9, -75, 172}, {85, -39, -13, -19, -75, 157},
+        {78, -17, -5, -26, -67, 170}, {85, -38, -7, -20, -67, 202}, {84, -31, 0, -26, -67, 218},
+        {89, -27, -2, -28, -70, 210}, {83, -15, -5, -23, -61, 217}, {79, -17, -17, -20, -67, 212},
+        {82, -26, -24, -14, -72, 203}, {90, -33, -22, -13, -85, 205}, {103, -51, -19, -18, -93, 203},
+        {111, -54, -13, -17, -101, 207}, {113, -52, -14, -15, -104, 205}, {118, -48, -13, -8, -117, 203},
+        {115, -47, -10, -3, -120, 208}, {115, -44, -5, -2, -117, 208}, {117, -47, -2, -6, -109, 210},
+        {113, -43, -2, -5, -112, 215}, {113, -44, 0, -5, -112, 215}, {109, -47, 0, -2, -117, 220},
+        {108, -43, 0, 0, -114, 223}, {48, -54, 0, -43, -19, 136}, {13, -29, 0, -20, -11, 54}}},
+      {"twisted counter-clockwise", 4, 1.0,
+       {{0, 2, -26, 13, 0, -11}, {13, -16, 0, -7, -5, -61}, {7, -21, 0, -15, -3, -76}, {9, -35, 0, -25, 0, -86},
+        {9, -27, 0, -24, 0, -96}, {13, -42, 0, -34, 0, -111}, {33, -49, 0, -41, -1, -126}, {48, -71, 0, -53, -6, -111},
+        {55, -67, 0, -69, 0, -116}, {45, -55, 0, -67, -4, -129}, {29, -37, 0, -57, 0, -116},
+        {33, -52, 0, -53, 0, -111}, {47, -65, 18, -62, 0, -102}, {45, -62, 18, -52, 0, -111},
+        {27, -68, 19, -45, 0, -126}, {20, -28, 51, -19, 0, -127}, {29, -19, 42, -27, 2, -165},
+        {7, -14, 20, -7, 0, -150}, {0, -6, 20, -3, 0, -134}, {0, 0, 18, -5, 2, -122}, {0, 0, 12, -5, 8, -121},
+        {0, -11, 18, -15, 16, -124}, {0, 0, 14, -15, 10, -112}, {0, 0, 4, -2, 2, -122}, {0, 0, 3, 0, 5, -136},
+        {0, 0, 0, -5, 2, -132}, {0, 0, 0, -11, 8, -124}, {0, 0, 0, 0, 5, -114}, {0, 6, 2, -3, 16, -111},
+        {0, 19, 6, -18, 26, -121}, {0, 9, 0, -10, 18, -116}, {0, 8, 0, -5, 21, -111}, {0, 0, 8, -18, 21, -111},
+        {0, 0, 13, -15, 16, -119}, {0, 0, 6, -18, 15, -136}, {2, 7, 0, 0, 0, -122}, {3, 7, 0, -1, 2, -132},
+        {0, 0, 0, -9, 0, -139}, {0, 0, 0, -3, 0, -129}, {0, 6, 3, -11, 2, -126}, {0, 15, 6, -17, 13, -137},
+        {0, 7, 4, -17, 13, -129}, {0, 7, 0, -20, 7, -142}, {0, 8, 0, -26, 13, -139}, {0, 25, 14, -23, 13, -142},
+        {0, 19, 12, -26, 13, -141}, {1, 22, 6, -26, 7, -149}, {0, 17, 7, -27, 15, -142}, {0, 12, 8, -30, 15, -144},
+        {0, 19, 15, -30, 15, -141}, {8, 21, 30, -44, 23, -144}, {4, 8, 20, -50, 28, -150}, {11, 11, 22, -46, 21, -150},
+        {0, 11, 18, -40, 15, -162}, {0, 3, 0, -32, 13, -147}, {0, 0, -10, -3, 0, -48}}},
+      {"tilted back", 3, 1.0,
+       {{7, -13, 0, 29, 0, -16}, {0, -1, 0, 65, 14, -18}, {7, -8, 0, 110, 28, -20}, {0, 0, -7, 160, 44, -35},
+        {0, 3, -5, 174, 47, -36}, {0, 0, 0, 158, 47, -35}, {-25, 4, -13, 168, 58, -41}, {6, 0, 0, 253, 62, -43},
+        {0, 0, 0, 234, 61, -31}, {-16, 13, -2, 243, 85, -38}, {-11, 27, -21, 287, 102, -48}, {0, 0, -7, 259, 72, -25},
+        {-56, 28, -12, 251, 109, -53}, {0, 5, 0, 266, 88, -41}, {-25, 9, 0, 207, 77, -46}, {-16, 8, 0, 213, 82, -46},
+        {0, 0, 0, 21, 13, -1}}},
+      {"tilted forward", 3, -1.0,
+       {{0, -29, 0, -47, -11, 0}, {0, -29, -3, -117, -26, 0}, {12, -29, -6, -141, -50, 0}, {17, -38, -5, -151, -66, 0},
+        {23, -41, 0, -154, -66, 0}, {16, -43, 0, -165, -63, 0}, {14, -44, 0, -187, -69, 0}, {7, -43, 0, -208, -69, 0},
+        {27, -59, 8, -215, -80, 0}, {22, -59, 0, -224, -80, 1}, {26, -64, 21, -256, -91, 0},
+        {53, -73, 12, -289, -126, 10}, {26, -66, 10, -298, -110, 6}, {5, -52, 0, -319, -100, 0},
+        {43, -74, 19, -310, -110, 0}, {41, -70, 7, -324, -108, 0}, {20, -50, 0, -341, -105, 6},
+        {29, -49, 15, -327, -102, 0}, {9, -10, 11, -216, -77, 0}}},
+      {"rolled left", 5, 1.0,
+       {{0, 0, 21, 0, 18, 0}, {4, -8, 3, -16, 29, 0}, {0, -32, 15, -40, 90, 0}, {0, -33, 47, -42, 127, 11},
+        {0, -45, 51, -58, 161, 15}, {0, -40, 50, -68, 190, 23}, {0, -33, 61, -63, 193, 25}, {0, -37, 59, -78, 214, 30},
+        {0, -37, 67, -90, 219, 25}, {4, -37, 47, -89, 206, 25}, {5, -33, 62, -73, 212, 26}, {8, -34, 56, -88, 217, 28},
+        {7, -32, 61, -102, 230, 25}, {5, -32, 48, -118, 243, 25}, {0, -28, 48, -126, 245, 28},
+        {0, -20, 59, -137, 243, 8}, {0, -25, 54, -128, 243, 10}, {0, -16, 47, -129, 245, 8},
+        {0, -14, 39, -129, 245, 15}, {-1, -21, 32, -127, 248, 18}, {0, -36, 34, -149, 253, 18},
+        {-2, -29, 36, -165, 266, 15}, {-4, -6, 39, -130, 253, 20}, {0, 0, 0, -28, 29, 0}}},
+      {"rolled right", 5, -1.0,
+       {{0, 19, -15, 19, -24, 0}, {1, 0, -19, 23, -37, -1}, {31, -22, -28, 19, -85, -3}, {50, -11, -49, 51, -143, -6},
+        {35, -12, -44, 66, -153, -8}, {44, 0, -18, 69, -153, -21}, {76, 0, -61, 88, -198, -33},
+        {104, -30, -49, 91, -238, -31}, {115, -41, -47, 74, -235, -28}, {120, -31, -42, 116, -272, -26},
+        {98, -23, -30, 114, -240, -40}, {105, -29, -43, 102, -235, -73}, {121, -23, -50, 116, -261, -81},
+        {112, -12, -41, 136, -269, -71}, {101, -19, -18, 127, -253, -66}, {118, -33, -17, 117, -258, -69},
+        {123, -42, -14, 117, -264, -78}, {123, -42, -5, 116, -261, -81}, {114, -61, -11, 98, -245, -76},
+        {111, -52, 0, 119, -256, -66}, {103, -53, 0, 134, -250, -86}, {106, -27, 0, 162, -266, -93},
+        {76, -36, 0, 133, -207, -91}, {49, -13, 4, 160, -212, -83}, {72, -50, -11, 151, -218, -93},
+        {53, -13, 22, 150, -194, -89}, {45, -3, 0, 145, -168, -86}, {31, 0, 0, 154, -157, -102},
+        {28, -6, 0, 156, -165, -102}, {30, 0, 2, 152, -151, -88}, {37, 0, 0, 160, -178, -64},
+        {48, 0, 0, 141, -154, -76}, {22, 0, 0, 124, -136, -74}, {24, -25, 13, 70, -89, -58},
+        {11, -5, 0, 0, -13, -28}}},
+  };
+  return motions;
+}
+
+mitcad::SpaceMouseAxes loggedAxes(const std::array<int, 6>& report) {
+  return mitcad::spaceMouseFromHid({report[0], report[1], report[2]}, {report[3], report[4], report[5]});
+}
+
+// Each logged motion through `step` (the device's axes in, the rates out),
+// with a rest after each: true when every motion moved the view along its
+// own axis only, its way, in most of its reports, and nothing at rest.
+template <typename Step>
+bool followsEachMotion(const std::vector<LoggedMotion>& motions, Step&& step) {
+  bool all = true;
+  for (const LoggedMotion& motion : motions) {
+    std::size_t moved = 0;
+    std::size_t stray = 0;
+    for (const std::array<int, 6>& report : motion.reports) {
+      const mitcad::SpaceMouseRates rates = step(loggedAxes(report));
+      for (std::size_t axis = 0; axis < 6; ++axis) {
+        const double rate = rateOf(rates, axis);
+        if (axis == motion.axis && rate * motion.sign > 0.0) {
+          ++moved;
+        } else if (rate != 0.0) {
+          ++stray;
+        }
+      }
+    }
+    const bool rested = !step(mitcad::SpaceMouseAxes{}).moving();
+    if (stray > 0 || !rested || moved * 2 <= motion.reports.size()) {
+      std::fprintf(stderr,
+                   "space_mouse.cpp: the logged motion \"%s\": %d report(s) moved its axis, %d stray rate(s)%s\n",
+                   motion.name, static_cast<int>(moved), static_cast<int>(stray), rested ? "" : ", moving at rest");
+      all = false;
+    }
+  }
+  return all;
+}
+
+// Dominant axis only with its hold (mitcad#1720, GitHub mitcad/Mitcad#343):
+// the SpaceNavigator's cap couples its axes heavily (pushed left it
+// reported up to 1.34 times as much in and out as left; twisted, a push to
+// the right of half the twist). With Dominant axis on, each of the six
+// motions, both ways, moves the view along its own axis only, through the
+// mapping's memory as through the controller; chosen afresh at every
+// frame, as before, the push to the left zoomed too. The axis is chosen
+// once the cap is deflected clearly, a stronger axis takes over only past
+// the margin, the hold ends at rest, and the axes compare as shares of the
+// device's reach.
+void dominantHoldTests() {
+  using namespace mitcad;
+  const std::vector<LoggedMotion>& motions = loggedSpaceNavigatorMotions();
+  CHECK(motions.size() == 12);
+  SpaceMouseSettings settings;
+  settings.dominantAxis = true;
+  SpaceMouseMemory memory;
+  const auto withMemory = [&settings, &memory](const SpaceMouseAxes& axes) {
+    return spaceMouseRates(settings, axes, false, &memory);
+  };
+  CHECK(followsEachMotion(motions, withMemory));
+  // The device's reach as it showed it: its translations about half its
+  // rotations.
+  CHECK(memory.reach.of(0) > 0.5 && memory.reach.of(0) < 0.6 && memory.reach.of(3) > 0.9);
+
+  // The same through the controller, which keeps the memory itself.
+  {
+    SpaceMouseRates last;
+    SpaceMouseController::Hooks hooks;
+    hooks.settings = [&settings] { return settings; };
+    hooks.flat = [] { return false; };
+    hooks.rates = [&last](const SpaceMouseRates& rates) { last = rates; };
+    const auto factory = []() -> std::unique_ptr<SpaceMouseBackend> { return std::make_unique<FakeBackend>(false); };
+    SpaceMouseController controller(std::move(hooks), factory);
+    const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+    CHECK(followsEachMotion(motions, [&controller, &last](const SpaceMouseAxes& axes) {
+      controller.motion(axes, false);
+      return last;
+    }));
+    qInstallMessageHandler(previous);
+  }
+
+  // Chosen afresh at every frame (no memory), the push to the left zoomed
+  // where the cap reported more in and out than left.
+  bool zoomed = false;
+  for (const std::array<int, 6>& report : motions[1].reports) {
+    zoomed = zoomed || spaceMouseRates(settings, loggedAxes(report), false).zoom != 0.0;
+  }
+  CHECK(zoomed);
+
+  // The hold on its own.
+  SpaceMouseMemory held;
+  const auto step = [&settings, &held](const SpaceMouseAxes& axes) {
+    return spaceMouseRates(settings, axes, false, &held);
+  };
+  // Past the dead zone but not yet clearly deflected: nothing chosen.
+  CHECK(!step({0.07, 0.0, 0.05, 0.0, 0.0, 0.0}).moving() && held.dominant.held() == -1);
+  SpaceMouseRates rates = step({0.3, 0.0, -0.1, 0.0, 0.0, 0.0});
+  CHECK(rates.panX > 0.0 && rates.zoom == 0.0 && held.dominant.held() == 0);
+  // Another axis 1.33 times as far keeps the held one; 1.67 times takes
+  // over.
+  rates = step({0.3, 0.0, -0.4, 0.0, 0.0, 0.0});
+  CHECK(rates.panX > 0.0 && rates.zoom == 0.0);
+  rates = step({0.3, 0.0, -0.5, 0.0, 0.0, 0.0});
+  CHECK(rates.zoom < 0.0 && rates.panX == 0.0 && held.dominant.held() == 2);
+  // Coming to rest: the held axis back in the dead zone and another still
+  // short of a clear deflection move nothing; at rest the hold ends.
+  CHECK(!step({0.0, 0.0, -0.03, 0.0, 0.08, 0.0}).moving() && held.dominant.held() == 2);
+  CHECK(!step(SpaceMouseAxes{}).moving() && held.dominant.held() == -1);
+  rates = step({0.0, 0.0, 0.0, 0.0, 0.3, 0.0});
+  CHECK(rates.yaw > 0.0 && rates.panX == 0.0 && rates.zoom == 0.0 && held.dominant.held() == 4);
+  // A held axis switched off meanwhile gives way to the strongest one on.
+  settings.axisOn[4] = false;
+  rates = step({0.2, 0.0, 0.0, 0.0, 0.3, 0.0});
+  CHECK(rates.panX > 0.0 && rates.yaw == 0.0 && held.dominant.held() == 0);
+  settings.axisOn[4] = true;
+  step(SpaceMouseAxes{});
+  // Off, Dominant axis only holds nothing.
+  settings.dominantAxis = false;
+  step({0.3, 0.0, 0.0, 0.0, 0.0, 0.0});
+  CHECK(held.dominant.held() == -1);
+  settings.dominantAxis = true;
+  step(SpaceMouseAxes{});
+
+  // The reach: the nominal one learns nothing; a device's grows from its
+  // start with every deflection beyond it, a full one at most, and starts
+  // again when reset.
+  SpaceMouseReach nominal;
+  nominal.add({1.7, 0.2, 0.0, 0.0, 0.0, 0.0});
+  CHECK(nominal.of(0) == 1.0 && nominal.of(5) == 1.0 && nearly(nominal.share(1, 0.2), 0.2));
+  SpaceMouseReach learning(kSpaceMouseReachStart);
+  CHECK(learning.of(2) == kSpaceMouseReachStart && learning.of(4) == kSpaceMouseReachStart);
+  learning.add({0.3, -0.62, 0.0, std::nan(""), 0.0, -1.4});
+  CHECK(nearly(learning.of(1), 0.62) && learning.of(3) == 1.0 && nearly(learning.share(1, 0.31), 0.5));
+  learning.reset();
+  CHECK(learning.of(0) == kSpaceMouseReachStart && learning.of(5) == kSpaceMouseReachStart);
+  // Dominant axis only compares shares of the reach: a device that has
+  // shown translations up to 0.5 and rotations up to a full deflection has
+  // a push of 0.4 (four fifths of its reach) win over a twist of 0.6; on
+  // the nominal scale the twist wins.
+  SpaceMouseMemory device;
+  spaceMouseRates(settings, {0.5, 0.0, 0.0, 0.0, 0.0, 0.0}, false, &device);
+  spaceMouseRates(settings, SpaceMouseAxes{}, false, &device);
+  spaceMouseRates(settings, {0.0, 0.0, 0.0, 0.0, 1.0, 0.0}, false, &device);
+  spaceMouseRates(settings, SpaceMouseAxes{}, false, &device);
+  CHECK(nearly(device.reach.of(0), 0.5) && nearly(device.reach.of(4), 1.0));
+  rates = spaceMouseRates(settings, {0.4, 0.0, 0.0, 0.0, -0.6, 0.0}, false, &device);
+  CHECK(rates.panX > 0.0 && rates.yaw == 0.0);
+  rates = spaceMouseRates(settings, {0.4, 0.0, 0.0, 0.0, -0.6, 0.0}, false);
+  CHECK(rates.yaw < 0.0 && rates.panX == 0.0);
 }
 
 void moveTests() {
@@ -302,7 +706,10 @@ void modeTests() {
   pose.up = {0.0, 0.0, 1.0};
   pose.height = 50.0;
   const SpaceMouseVec pivot{0.0, 0.0, 0.0};
-  const SpaceMouseSettings defaults{};
+  // The defaults without the cross-talk filter (mitcad#1720): the motions
+  // along several axes at once below move along every one of them.
+  SpaceMouseSettings defaults;
+  defaults.crossTalk = 0;
   const Mode modes[3] = {Mode::Object, Mode::Camera, Mode::Fly};
   const double quarter = std::acos(0.0);
   const double nearPole = std::cos(3.14159265358979323846 / 180.0);
@@ -557,7 +964,10 @@ void settingsTests() {
     CHECK(fresh.buttons == (QStringList{QStringLiteral("view.fit"), QStringLiteral("view.home")}));
     // Object mode and no Lock horizon (mitcad#978).
     CHECK(fresh.mode == SpaceMouseMode::Object && !fresh.lockHorizon);
+    // The cross-talk filter at 50 % (mitcad#1720).
+    CHECK(fresh.crossTalk == 50);
     SpaceMouseSettings chosen;
+    chosen.crossTalk = 85;
     chosen.mode = SpaceMouseMode::Fly;
     chosen.lockHorizon = true;
     chosen.enabled = false;
@@ -580,12 +990,22 @@ void settingsTests() {
   CHECK(loaded.buttons == (QStringList{QString(), QStringLiteral("view.top"), QStringLiteral("view.fit")}));
   CHECK(loaded.mode == SpaceMouseMode::Fly && loaded.lockHorizon);
   CHECK(store.value(QStringLiteral("view/spaceMouseMode")).toString() == QStringLiteral("fly"));
+  CHECK(loaded.crossTalk == 85 && store.value(QStringLiteral("view/spaceMouseCrossTalk")).toInt() == 85);
   // A speed out of range comes back within it, a mode of no name as
-  // Object.
+  // Object; a cross-talk share out of range within it, Off as Off, and one
+  // that is no number as the default.
   store.setValue(QStringLiteral("view/spaceMouseSpeed"), 40.0);
   store.setValue(QStringLiteral("view/spaceMouseMode"), QStringLiteral("sideways"));
+  store.setValue(QStringLiteral("view/spaceMouseCrossTalk"), 140);
   loadSpaceMouseSettings(store, loaded);
   CHECK(nearly(loaded.speed, 4.0) && loaded.mode == SpaceMouseMode::Object);
+  CHECK(loaded.crossTalk == kSpaceMouseCrossTalkMax);
+  store.setValue(QStringLiteral("view/spaceMouseCrossTalk"), 0);
+  loadSpaceMouseSettings(store, loaded);
+  CHECK(loaded.crossTalk == 0);
+  store.setValue(QStringLiteral("view/spaceMouseCrossTalk"), QStringLiteral("much"));
+  loadSpaceMouseSettings(store, loaded);
+  CHECK(loaded.crossTalk == 50);
   for (const SpaceMouseMode mode : {SpaceMouseMode::Object, SpaceMouseMode::Camera, SpaceMouseMode::Fly}) {
     CHECK(spaceMouseModeFromId(QLatin1String(spaceMouseModeId(mode))) == mode);
   }
@@ -1144,6 +1564,196 @@ void axesLogControllerTests() {
                                          "strongest ry: in Object mode the model turns clockwise seen from above")));
 }
 
+// Lock Rotation (mitcad#1910): outside a sketch the toggle flips the
+// settings' Lock rotation (saved through the change hook); in a flat view
+// (a sketch) the rotation is off whatever the settings say until the
+// toggle frees it for that sketch, and off again for the next sketch or
+// the same one entered again; the check mark's hook follows each change.
+void rotationLockTests() {
+  using namespace mitcad;
+  SpaceMouseSettings settings;
+  bool flat = false;
+  SpaceMouseRates last;
+  int changes = 0;
+  std::vector<bool> reported;
+  SpaceMouseController::Hooks hooks;
+  hooks.settings = [&settings] { return settings; };
+  hooks.flat = [&flat] { return flat; };
+  hooks.rates = [&last](const SpaceMouseRates& rates) { last = rates; };
+  hooks.change = [&settings, &changes](const SpaceMouseSettings& changed) {
+    settings = changed;
+    ++changes;
+  };
+  hooks.rotationLock = [&reported](bool locked) { reported.push_back(locked); };
+  const auto factory = []() -> std::unique_ptr<SpaceMouseBackend> { return std::make_unique<FakeBackend>(false); };
+  SpaceMouseController controller(std::move(hooks), factory);
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  controller.refresh();
+  const SpaceMouseAxes spin{{0.0, 0.0, 0.0, 0.0, 0.8, 0.0}};
+
+  // Outside a sketch: free as the settings say; the toggle locks the
+  // rotation and saves it, a cap held now stops turning at once, and the
+  // toggle again frees it.
+  CHECK(!controller.rotationLocked() && !reported.empty() && !reported.back());
+  controller.motion(spin, false);
+  CHECK(last.turning());
+  CHECK(controller.toggleRotationLock());
+  CHECK(settings.lockRotation && changes == 1 && controller.rotationLocked() && reported.back());
+  CHECK(!last.turning());
+  CHECK(caught().contains(QStringLiteral("3D mouse: rotation locked")));
+  CHECK(!controller.toggleRotationLock());
+  CHECK(!settings.lockRotation && changes == 2 && !controller.rotationLocked() && !reported.back());
+  CHECK(last.turning());
+  CHECK(caught().contains(QStringLiteral("3D mouse: rotation unlocked")));
+
+  // A sketch: locked although the settings have it free; the cap pans and
+  // zooms only.
+  flat = true;
+  controller.sketchChanged();
+  CHECK(controller.rotationLocked() && reported.back() && !last.turning());
+  controller.motion({{0.0, 0.8, 0.0, 0.0, 0.8, 0.0}}, false);
+  CHECK(!last.turning() && last.panY > 0.0);
+  // The toggle frees it for this sketch, the settings untouched: the cap
+  // turns the view as outside a sketch.
+  controller.motion(spin, false);
+  CHECK(!controller.toggleRotationLock());
+  CHECK(!controller.rotationLocked() && !reported.back() && last.turning());
+  CHECK(changes == 2 && !settings.lockRotation);
+  CHECK(caught().contains(QStringLiteral("3D mouse: rotation unlocked in the sketch")));
+  // The settings' Lock rotation does not lock it again in this sketch.
+  settings.lockRotation = true;
+  controller.refresh();
+  CHECK(!controller.rotationLocked() && last.turning());
+  // Toggled again: locked in the sketch.
+  CHECK(controller.toggleRotationLock());
+  CHECK(controller.rotationLocked() && !last.turning() && changes == 2 && settings.lockRotation);
+  CHECK(caught().contains(QStringLiteral("3D mouse: rotation locked in the sketch")));
+  CHECK(!controller.toggleRotationLock());
+  CHECK(last.turning());
+
+  // The sketch ends: outside it the settings decide (locked now), and the
+  // next sketch starts locked again.
+  flat = false;
+  controller.sketchChanged();
+  CHECK(controller.rotationLocked() && reported.back() && !last.turning());
+  settings.lockRotation = false;
+  controller.refresh();
+  CHECK(!controller.rotationLocked() && !reported.back() && last.turning());
+  flat = true;
+  controller.sketchChanged();
+  CHECK(controller.rotationLocked() && reported.back() && !last.turning());
+  // Freed, then the same sketch entered again: locked again.
+  CHECK(!controller.toggleRotationLock() && last.turning());
+  controller.sketchChanged();
+  CHECK(controller.rotationLocked() && !last.turning());
+  // A view no longer flat forgets a freed rotation even without a word of
+  // the sketch's end.
+  CHECK(!controller.toggleRotationLock() && last.turning());
+  flat = false;
+  controller.motion(spin, false);
+  CHECK(last.turning());
+  flat = true;
+  controller.motion(spin, false);
+  CHECK(controller.rotationLocked() && !last.turning());
+  CHECK(changes == 2);
+  controller.motion(SpaceMouseAxes{}, false);
+  qInstallMessageHandler(previous);
+}
+
+// A device's default button (mitcad#1910): the HID ids read from a
+// backend's device name, the known rotation lock keys by product id, the
+// key bound to Lock Rotation only where the settings have no entry for it,
+// and the controller binding it when such a device connects.
+void deviceButtonTests() {
+  using namespace mitcad;
+  const QString lock = spaceMouseLockRotationCommand();
+  int vendor = 0;
+  int product = 0;
+  CHECK(spaceMouseHidIds(QStringLiteral("SpaceMouse Pro (HID 046d:c62b)"), vendor, product));
+  CHECK(vendor == 0x046d && product == 0xc62b);
+  CHECK(spaceMouseHidIds(QStringLiteral("HID 256f:c631"), vendor, product));
+  CHECK(vendor == 0x256f && product == 0xc631);
+  CHECK(!spaceMouseHidIds(QStringLiteral("/var/run/spnav.sock"), vendor, product));
+  CHECK(!spaceMouseHidIds(QStringLiteral("Device (HID 25zz:c631)"), vendor, product));
+  CHECK(!spaceMouseHidIds(QStringLiteral("Device (HID 256f)"), vendor, product));
+  CHECK(vendor == 0x256f && product == 0xc631); // a name without ids leaves them
+  CHECK(spaceMouseLockKeyButton(0x046d, 0xc62b) == 26);
+  CHECK(spaceMouseLockKeyButton(0x256f, 0xc631) == 26 && spaceMouseLockKeyButton(0x256f, 0xc632) == 26);
+  CHECK(spaceMouseLockKeyButton(0x256f, 0xc638) == 26);
+  CHECK(spaceMouseLockKeyButton(0x256f, 0xc635) == -1); // a Compact: no lock key
+  CHECK(spaceMouseLockKeyButton(0x256f, 0xc652) == -1); // a universal receiver
+  CHECK(spaceMouseLockKeyButton(0x1234, 0xc62b) == -1);
+
+  SpaceMouseSettings settings;
+  CHECK(addSpaceMouseDeviceButtons(settings, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)")));
+  CHECK(settings.buttons.size() == 27 && settings.buttons.at(26) == lock);
+  CHECK(settings.buttons.at(0) == QStringLiteral("view.fit") && settings.buttons.at(1) == QStringLiteral("view.home"));
+  CHECK(settings.buttons.at(2).isEmpty() && settings.buttons.at(25).isEmpty());
+  // Bound already, or set to None by the user: left as it is.
+  CHECK(!addSpaceMouseDeviceButtons(settings, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)")));
+  settings.buttons[26] = QString();
+  CHECK(!addSpaceMouseDeviceButtons(settings, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)")));
+  CHECK(settings.buttons.size() == 27 && settings.buttons.at(26).isEmpty());
+  // Other devices, and spacenavd, which names none: the buttons as they are.
+  SpaceMouseSettings other;
+  CHECK(!addSpaceMouseDeviceButtons(other, QStringLiteral("SpaceMouse Compact (HID 256f:c635)")));
+  CHECK(!addSpaceMouseDeviceButtons(other, QStringLiteral("/var/run/spnav.sock")));
+  CHECK(other.buttons == SpaceMouseSettings().buttons);
+  // The binding survives the settings' round trip.
+  {
+    QTemporaryDir dir;
+    QSettings store(dir.filePath(QStringLiteral("buttons.ini")), QSettings::IniFormat);
+    SpaceMouseSettings bound;
+    CHECK(addSpaceMouseDeviceButtons(bound, QStringLiteral("HID 256f:c632")));
+    saveSpaceMouseSettings(store, bound);
+    SpaceMouseSettings reread;
+    loadSpaceMouseSettings(store, reread);
+    CHECK(reread.buttons == bound.buttons && reread.buttons.value(26) == lock);
+  }
+
+  // The controller: such a device connecting binds its key through the
+  // change hook, logged; its press runs Lock Rotation; a device without a
+  // known key changes nothing.
+  SpaceMouseSettings live;
+  int changes = 0;
+  QStringList commands;
+  FakeBackend* backend = nullptr;
+  SpaceMouseController::Hooks hooks;
+  hooks.settings = [&live] { return live; };
+  hooks.flat = [] { return false; };
+  hooks.rates = [](const SpaceMouseRates&) {};
+  hooks.runCommand = [&commands](const QString& id) { commands.append(id); };
+  hooks.change = [&live, &changes](const SpaceMouseSettings& changed) {
+    live = changed;
+    ++changes;
+  };
+  const auto factory = [&backend]() -> std::unique_ptr<SpaceMouseBackend> {
+    auto made = std::make_unique<FakeBackend>(false);
+    backend = made.get();
+    return made;
+  };
+  SpaceMouseController controller(std::move(hooks), factory);
+  const QtMessageHandler previous = qInstallMessageHandler(catchMessage);
+  caught().clear();
+  controller.refresh();
+  CHECK(backend != nullptr && changes == 0);
+  if (backend != nullptr) {
+    backend->connection(true, QStringLiteral("SpaceMouse Compact (HID 256f:c635)"));
+    CHECK(changes == 0 && live.buttons == SpaceMouseSettings().buttons);
+    backend->connection(true, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)"));
+    CHECK(changes == 1 && live.buttons.value(26) == lock);
+    CHECK(caught().contains(QStringLiteral("3D mouse: button 27 runs view.space_mouse_lock_rotation by default")));
+    backend->button(26, true);
+    backend->button(26, false);
+    CHECK(commands == QStringList(lock));
+    // Connected again: bound already, nothing changes.
+    backend->connection(true, QStringLiteral("SpaceMouse Pro (HID 046d:c62b)"));
+    CHECK(changes == 1);
+  }
+  qInstallMessageHandler(previous);
+}
+
 } // namespace
 
 int spaceMouseTests() {
@@ -1154,11 +1764,16 @@ int spaceMouseTests() {
   capMotionTests();
   axesLogControllerTests();
   mappingTests();
+  crossTalkTests();
+  dominantHoldTests();
   moveTests();
   modeTests();
   cameraTests();
   settingsTests();
   controllerTests();
   timingTests();
+  rotationLockTests();
+  deviceButtonTests();
   return failures;
 }
+MITCAD_UNIT_TEST(spaceMouseTests);

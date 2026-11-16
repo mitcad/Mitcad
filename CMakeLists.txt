@@ -27,7 +27,7 @@ else()
 endif()
 
 project(Mitcad
-  VERSION 0.63.0
+  VERSION 0.64.0
   DESCRIPTION "Open source parametric desktop CAD"
   LANGUAGES CXX)
 
@@ -298,7 +298,6 @@ add_subdirectory(tools/translations)
 include(cmake/MesaRuntime.cmake)
 include(cmake/MacUiTests.cmake)
 include(cmake/SelectionUiTests.cmake)
-include(cmake/TimberUiTests.cmake)
 # After every macOS UI test registration: the Qt workflows that run
 # headless (cmake/MacTestScheduling.cmake).
 if(COMMAND mitcad_macos_headless_tests)

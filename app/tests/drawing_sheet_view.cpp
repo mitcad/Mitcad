@@ -7,6 +7,7 @@
 // clicks snapped to points, a section's second to 45 degrees, Shift as
 // clicked (mitcad#1362); the hover's and the picks' marks as wide as the
 // line they mark at two zooms (mitcad#1618).
+#include "UnitTests.hpp"
 #include "drawings/DrawingSheetView.hpp"
 
 #include <algorithm>
@@ -310,3 +311,4 @@ int drawingSheetViewTests() {
   sheet.setPick(SheetPick::None, false);
   return failures;
 }
+MITCAD_UNIT_TEST(drawingSheetViewTests);

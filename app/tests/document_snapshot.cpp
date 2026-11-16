@@ -2,11 +2,14 @@
 // The document snapshot's feature lookup (mitcad#833): a feature found by
 // its uid through the index read() makes, as the browser and the view look
 // one up per row, body and profile of a design with thousands of features;
-// a missing uid; and a snapshot whose features were added otherwise.
+// a missing uid; and a snapshot whose features were added otherwise. A
+// feature's remarks (mitcad#1914) mark nothing in the timeline.
+#include "UnitTests.hpp"
 #include "browser/DocumentSnapshot.hpp"
 
 #include <cstdio>
 #include <memory>
+#include <utility>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -33,6 +36,7 @@ using namespace mitcad;
 // sketches; every other query has an empty answer.
 class TimelineModel : public CommandContext {
 public:
+  explicit TimelineModel(QJsonObject timeline) : m_timeline(std::move(timeline)) {}
   explicit TimelineModel(int count) {
     QJsonArray features;
     for (int i = 1; i <= count; ++i) {
@@ -108,6 +112,73 @@ void convertedSketchTests() {
   CHECK(featureIcon(feature.type) == QStringLiteral("sketch-3d"));
 }
 
+// A fillet whose tangent chain stops short (mitcad#1914): the timeline
+// gives the remark as an information notice with its places and in its
+// `remarks`, its level none. The snapshot's feature is not noted (no
+// badge, no tooltip line) and takes neither the remark's message nor its
+// places; a warning beside it is kept with its places.
+void remarkTests() {
+  const QString remark =
+      QStringLiteral("The fillet's tangent chain stops where other sharp edges meet: 2 edges that continue "
+                     "it are left sharp.");
+  QJsonArray edges;
+  edges.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("edge")},
+                           {QStringLiteral("body"), QStringLiteral("F2.b0")},
+                           {QStringLiteral("name"), QStringLiteral("E{F2:a|F2:b}")}});
+  QJsonArray remarks;
+  remarks.append(remark);
+  const QJsonObject remarkNotice{{QStringLiteral("level"), QStringLiteral("info")},
+                                 {QStringLiteral("message"), remark},
+                                 {QStringLiteral("target"), QStringLiteral("F3")},
+                                 {QStringLiteral("places"), edges}};
+  QJsonArray notices;
+  notices.append(remarkNotice);
+  QJsonObject fillet{{QStringLiteral("uid"), QStringLiteral("F3")},
+                     {QStringLiteral("name"), QStringLiteral("Fillet1")},
+                     {QStringLiteral("type"), QStringLiteral("fillet")},
+                     {QStringLiteral("status"), QStringLiteral("ok")},
+                     {QStringLiteral("level"), QJsonValue()},
+                     {QStringLiteral("notices"), notices},
+                     {QStringLiteral("remarks"), remarks}};
+  QJsonArray features;
+  features.append(fillet);
+  {
+    const TimelineModel model(QJsonObject{{QStringLiteral("features"), features}, {QStringLiteral("marker"), 1}});
+    const DocumentSnapshot snapshot = DocumentSnapshot::read(model);
+    const DocumentSnapshot::Feature* found = snapshot.feature(QStringLiteral("F3"));
+    CHECK(found != nullptr);
+    if (found != nullptr) {
+      CHECK(!found->noted());
+      CHECK(found->error.isEmpty());
+      CHECK(found->places.isEmpty());
+      CHECK(found->status == QStringLiteral("ok"));
+    }
+  }
+  // With a warning too: the warning's message and places, not the remark's.
+  QJsonArray point;
+  point.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("point")},
+                           {QStringLiteral("at"), QJsonArray{1.0, 2.0, 3.0}}});
+  QJsonArray both;
+  both.append(QJsonObject{{QStringLiteral("level"), QStringLiteral("warning")},
+                          {QStringLiteral("message"), QStringLiteral("The fillet folds back on itself")},
+                          {QStringLiteral("target"), QStringLiteral("F3")},
+                          {QStringLiteral("places"), point}});
+  both.append(remarkNotice);
+  fillet.insert(QStringLiteral("status"), QStringLiteral("warning"));
+  fillet.insert(QStringLiteral("level"), QStringLiteral("warning"));
+  fillet.insert(QStringLiteral("notices"), both);
+  QJsonArray warned;
+  warned.append(fillet);
+  const TimelineModel model(QJsonObject{{QStringLiteral("features"), warned}, {QStringLiteral("marker"), 1}});
+  const DocumentSnapshot snapshot = DocumentSnapshot::read(model);
+  const DocumentSnapshot::Feature* found = snapshot.feature(QStringLiteral("F3"));
+  CHECK(found != nullptr);
+  if (found != nullptr) {
+    CHECK(found->error == QStringLiteral("The fillet folds back on itself"));
+    CHECK(found->places == point);
+  }
+}
+
 } // namespace
 
 int documentSnapshotTests() {
@@ -115,5 +186,7 @@ int documentSnapshotTests() {
   readTests();
   handMadeTests();
   convertedSketchTests();
+  remarkTests();
   return failures;
 }
+MITCAD_UNIT_TEST(documentSnapshotTests);

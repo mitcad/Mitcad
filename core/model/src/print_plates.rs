@@ -227,11 +227,17 @@ impl PrintPlate {
 }
 
 /// A plate value: a key of the `Print Process` set, not one kept per
-/// slicer, with a value of its kind.
+/// slicer, with a value of its kind. A slicer's own key is refused with the
+/// Mitcad key to write instead (mitcad#1897, [`print_keys::key_hint`]).
 pub fn check_value(key: &str, value: &Value) -> Result<(), String> {
     let def = print_keys::key(key)
         .filter(|def| def.set == PrintSet::Process)
-        .ok_or_else(|| format!("{key} is no key of the Print Process set"))?;
+        .ok_or_else(
+            || match print_keys::key_hint(key, PrintSet::Process, Some(value)) {
+                Some(hint) => format!("{key} is no key of the Print Process set{hint}"),
+                None => format!("{key} is no key of the Print Process set"),
+            },
+        )?;
     if def.per_dialect {
         return Err(format!(
             "{key} names a slicer's own preset: a plate does not keep it"
@@ -352,6 +358,38 @@ mod tests {
             .values
             .insert("bed_shape".into(), json!([[0, 0], [1, 0], [1, 1]]));
         assert!(plate.check().is_err());
+    }
+
+    /// A slicer's key names the Mitcad key to write (mitcad#1897).
+    #[test]
+    fn a_slicer_s_key_names_the_key_to_write() {
+        let error = check_value("wall_generator", &json!("arachne")).unwrap_err();
+        assert!(
+            error.starts_with("wall_generator is no key of the Print Process set: it is the"),
+            "{error}"
+        );
+        assert!(
+            error.contains("perimeter_generator (Wall generator)"),
+            "{error}"
+        );
+        assert!(
+            error.contains("write \"perimeter_generator\": \"arachne\" instead"),
+            "{error}"
+        );
+        assert!(error.contains("print_keys query"), "{error}");
+        assert_eq!(
+            check_value("perimeter_generator", &json!("arachne")),
+            Ok(())
+        );
+        // No slicer's key: as before.
+        assert_eq!(
+            check_value("wall_generatr", &json!("arachne")),
+            Err("wall_generatr is no key of the Print Process set".to_owned())
+        );
+        // A key slicers use for different settings: every candidate.
+        let error = check_value("support_angle", &json!(40)).unwrap_err();
+        assert!(error.contains("support_material_angle"), "{error}");
+        assert!(error.contains("support_material_threshold"), "{error}");
     }
 
     #[test]

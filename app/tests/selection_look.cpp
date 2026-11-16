@@ -4,6 +4,7 @@
 // the settings (view/selectionColor, view/selectedLineWidth) and read back,
 // unknown values the defaults; the widths in logical pixels, every one
 // wider than a plain edge, Thin under Normal under Thick.
+#include "UnitTests.hpp"
 #include "view/SelectionLook.hpp"
 
 #include <cstdio>
@@ -79,3 +80,4 @@ int selectionLookTests() {
   CHECK(mitcad::selectedBoundaryWidth(SelectedLineWidth::Normal) == 3.0);
   return failures;
 }
+MITCAD_UNIT_TEST(selectionLookTests);

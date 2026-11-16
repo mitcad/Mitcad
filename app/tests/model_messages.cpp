@@ -5,6 +5,7 @@
 // English fallback; and the catalogues the build made: every template of
 // core/ (ModelMessageTemplates.cpp) translated in Finnish and marked in the
 // pseudo-language, so that no model message is left English.
+#include "UnitTests.hpp"
 #include "framework/ModelMessages.hpp"
 
 #include <cstdio>
@@ -573,3 +574,4 @@ int modelMessageTests() {
 #endif
   return failures;
 }
+MITCAD_UNIT_TEST(modelMessageTests);

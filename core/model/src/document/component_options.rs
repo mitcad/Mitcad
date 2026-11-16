@@ -9,16 +9,19 @@
 //! parameter it uses recomputes that part only. Here: inserting such a
 //! component, changing its options afterwards (a BUILD part's too), what
 //! the queries say of them, and their updates (another version or row of
-//! a library part, a linked file that changed).
+//! a library part, a linked file that changed). Their bodies take the
+//! materials and appearances their source gives them (mitcad#1923,
+//! `linked_looks.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::components::{
     check_transform, design_digest, file_label, followed_link, recorded_link_path, resolve_path,
 };
+use super::linked_looks::{LookOrigin, PartLooks};
 use super::mounts::{Inserted, MountFrame, listed_mounts};
 use super::{DocState, Document, InsertOptions, LibraryChange, LibraryPart, ModelError, invalid};
 use crate::assembly::ExternalLink;
@@ -179,6 +182,47 @@ fn settle_options(state: &mut DocState, part: FeatureUid) -> Result<ConfiguredSo
     Ok(configured)
 }
 
+/// A derived part's source `source` in the part's row (`config`, else
+/// its own) with the values the design gives the part now, as the part
+/// evaluates it (mitcad#1923: what it gives the part's bodies).
+fn configured_part(
+    state: &DocState,
+    part: FeatureUid,
+    source: &LibrarySourceDef,
+    config: Option<&str>,
+) -> Result<DocState, ModelError> {
+    let def = part_def(state, part)?;
+    let (values, pinned) = part_options::part_values(&def, &state.parameters, part);
+    let config = config.or(def.config.as_deref());
+    part_options::configure(source, config, &values, &pinned)
+        .map(|configured| configured.state)
+        .map_err(|e| invalid(format!("{}: {e}", source.label())))
+}
+
+/// Where a library source's images are read from: its library at the
+/// version it was read at (mitcad#1923).
+fn library_origin(source: &LibrarySourceDef) -> LookOrigin {
+    LookOrigin::Library(LibraryRequest {
+        library: source.library.library.clone(),
+        url: source.library.url.clone(),
+        rev: source.library.rev.clone(),
+        component: source.library.component.clone(),
+    })
+}
+
+/// A component linked with options read again (part of `update_links` and
+/// `update_link`): its derived part, the file read again as a source (None:
+/// the source the design keeps, read for its materials only, mitcad#1923),
+/// the file's digest, and what the source gives the part's bodies (None
+/// when that could not be taken: they keep what they have).
+pub(super) struct OptionsUpdate {
+    pub component: ComponentUid,
+    pub part: FeatureUid,
+    pub source: Option<LibrarySourceDef>,
+    pub digest: String,
+    pub looks: Option<PartLooks>,
+}
+
 /// A library part's record after its options, row or version changed:
 /// the combination's row and designation; a part whose name was its old
 /// designation takes the new one.
@@ -299,6 +343,8 @@ struct OptionsInsert {
     path: String,
     digest: String,
     label: Option<String>,
+    /// Where the source's images are read from (mitcad#1923).
+    origin: LookOrigin,
 }
 
 impl<K: Kernel> Document<K> {
@@ -319,6 +365,7 @@ impl<K: Kernel> Document<K> {
         let read = self.library_source(&request).map_err(invalid)?;
         let source = LibrarySourceDef::from_library(SourceId(0), &read).map_err(invalid)?;
         let digest = design_digest(&read.text);
+        let origin = library_origin(&source);
         let insert = OptionsInsert {
             source,
             config: part.config.clone(),
@@ -327,6 +374,7 @@ impl<K: Kernel> Document<K> {
             path: read.path.clone(),
             digest,
             label: None,
+            origin,
         };
         self.insert_with_options(insert, options, parameters)
     }
@@ -357,6 +405,7 @@ impl<K: Kernel> Document<K> {
             path: recorded,
             digest: design_digest(&text),
             label: Some(file_label(path)),
+            origin: LookOrigin::Folder(resolved.parent().map(Path::to_path_buf)),
         };
         self.insert_with_options(insert, options, parameters)
     }
@@ -384,6 +433,7 @@ impl<K: Kernel> Document<K> {
             path,
             digest,
             label,
+            origin,
         } = insert;
         source.id = source_id(&self.state, &source);
         let design = source
@@ -405,6 +455,14 @@ impl<K: Kernel> Document<K> {
             &naming(&source, false),
             &BTreeMap::new(),
         );
+        // The materials and appearances its source gives its bodies
+        // (mitcad#1923); a source that cannot give them leaves them to the
+        // next `update_links`.
+        let looks = match self.part_looks(&configured.state, &source.label(), &origin) {
+            Ok(looks) => Some(looks),
+            Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+            Err(_) => None,
+        };
         let wanted = options.name.clone().unwrap_or_else(|| {
             if library && !combination.designation.is_empty() {
                 combination.designation.clone()
@@ -462,8 +520,13 @@ impl<K: Kernel> Document<K> {
                 feature: added.uid,
                 envelope: None,
                 frames: Vec::new(),
+                looks: false,
+                given: Vec::new(),
             });
             component.library = reference;
+            if let Some(looks) = &looks {
+                state.give_part_looks(made, added.uid, looks);
+            }
             let joint = match &plan {
                 Some(plan) => Some(super::mounts::attach_mount(
                     state, parent, occurrence, &frames, plan,
@@ -608,6 +671,42 @@ impl<K: Kernel> Document<K> {
                 super::library_parts::row_names(&design.configurations)
             )));
         }
+        // Another row may show other bodies, of other materials: they take
+        // what the source gives them in it (mitcad#1923).
+        let looks = match &change.config {
+            Some(row) => {
+                let (mut values, mut pinned) =
+                    part_options::part_values(&def, &self.state.parameters, part);
+                let given: BTreeMap<String, ValueInput> = change
+                    .parameters
+                    .iter()
+                    .filter_map(|(option, value)| Some((option.clone(), value.clone()?)))
+                    .collect();
+                let (tried, tried_bound) = self.trial_values(&design, &label, &given)?;
+                values.retain(|(option, _)| !change.parameters.contains_key(option));
+                values.extend(tried);
+                pinned.retain(|option| !change.parameters.contains_key(option));
+                pinned.extend(tried_bound);
+                let origin = match self
+                    .state
+                    .assembly
+                    .component(component)
+                    .and_then(|c| c.library.as_ref())
+                {
+                    Some(_) => library_origin(source),
+                    None => LookOrigin::Folder(self.part_folder(component)),
+                };
+                match part_options::configure(source, Some(row.as_str()), &values, &pinned) {
+                    Ok(configured) => match self.part_looks(&configured.state, &label, &origin) {
+                        Ok(looks) => Some(looks),
+                        Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                }
+            }
+            None => None,
+        };
         let undo = format!("Change Options of {name}");
         self.apply(|state| {
             let def = part_def(state, part)?;
@@ -628,6 +727,9 @@ impl<K: Kernel> Document<K> {
             state.edit_feature(part, &FeatureDef::DerivedPart(input))?;
             let settled = settle_options(state, part)?;
             refresh_record(state, component, &settled.state);
+            if let Some(looks) = &looks {
+                state.give_part_looks(component, part, looks);
+            }
             let changed = OptionsChanged {
                 component,
                 part,
@@ -879,7 +981,27 @@ impl<K: Kernel> Document<K> {
             if line.ends_with(':') {
                 line.push_str(" unchanged");
             }
-            planned.push((change.component, part, source, change.config.clone(), line));
+            // The materials and appearances the source gives its bodies at
+            // the version and row (mitcad#1923).
+            let looks = match configured_part(&self.state, part, &source, change.config.as_deref())
+                .and_then(|configured| {
+                    self.part_looks(&configured, &source.label(), &library_origin(&source))
+                }) {
+                Ok(looks) => Some(looks),
+                Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+                Err(e) => {
+                    line.push_str(&format!(" (its materials cannot be taken: {e})"));
+                    None
+                }
+            };
+            planned.push((
+                change.component,
+                part,
+                source,
+                change.config.clone(),
+                line,
+                looks,
+            ));
         }
         let label = match planned.as_slice() {
             [(uid, ..)] => format!("Update {}", self.state.assembly.name(*uid)),
@@ -887,7 +1009,7 @@ impl<K: Kernel> Document<K> {
         };
         self.apply(|state| {
             let mut lines = Vec::with_capacity(planned.len());
-            for (component, part, mut source, config, line) in planned {
+            for (component, part, mut source, config, line, looks) in planned {
                 source.id = source_id(state, &source);
                 if state.library_sources.get(source.id).is_none() {
                     state.library_sources.0.push(source.clone());
@@ -901,6 +1023,9 @@ impl<K: Kernel> Document<K> {
                 state.edit_feature(part, &FeatureDef::DerivedPart(input))?;
                 let settled = settle_options(state, part)?;
                 refresh_record(state, component, &settled.state);
+                if let Some(looks) = &looks {
+                    state.give_part_looks(component, part, looks);
+                }
                 lines.push(line);
             }
             Ok((label, lines))
@@ -910,14 +1035,16 @@ impl<K: Kernel> Document<K> {
     /// Linked designs with options whose files changed (part of
     /// `update_links`, and of `update_link` for the components among `only`,
     /// mitcad#1416): each component, its part, the file read again as a
-    /// source and the new digest; a line per file that changed or could not
-    /// be read.
+    /// source, the new digest and what the source gives the part's bodies
+    /// (mitcad#1923); a line per file that changed or could not be read. A
+    /// link made before mitcad#1921 (`ExternalLink::looks` false) takes
+    /// the materials of its file once, even when the file is unchanged.
     pub(super) fn options_file_updates(
         &self,
         base: Option<&Path>,
         only: &dyn Fn(ComponentUid) -> bool,
         messages: &mut Vec<String>,
-    ) -> Vec<(ComponentUid, FeatureUid, LibrarySourceDef, String)> {
+    ) -> Result<Vec<OptionsUpdate>, ModelError> {
         let mut updates = Vec::new();
         for c in self
             .state
@@ -951,7 +1078,33 @@ impl<K: Kernel> Document<K> {
                 }
             };
             let digest = design_digest(&text);
+            let origin = LookOrigin::Folder(resolved.parent().map(Path::to_path_buf));
             if digest == link.digest {
+                if !link.looks {
+                    // Saved before mitcad#1921: the materials of the source
+                    // it keeps, once.
+                    let kept = part_def(&self.state, part)
+                        .ok()
+                        .and_then(|def| self.state.library_sources.get(def.source).cloned());
+                    if let Some(source) = kept {
+                        let looks = self.update_looks(part, &source, &origin, &c.name, messages)?;
+                        if looks.is_some() {
+                            if part_gives_any(&looks) {
+                                messages.push(format!(
+                                    "{} takes the materials of {}",
+                                    c.name, link.path
+                                ));
+                            }
+                            updates.push(OptionsUpdate {
+                                component: c.uid,
+                                part,
+                                source: None,
+                                digest,
+                                looks,
+                            });
+                        }
+                    }
+                }
                 continue;
             }
             let read = crate::file::load_state_at(&text, &resolved)
@@ -960,7 +1113,14 @@ impl<K: Kernel> Document<K> {
             match read {
                 Ok(source) => {
                     messages.push(format!("{} is updated from {}", c.name, link.path));
-                    updates.push((c.uid, part, source, digest));
+                    let looks = self.update_looks(part, &source, &origin, &c.name, messages)?;
+                    updates.push(OptionsUpdate {
+                        component: c.uid,
+                        part,
+                        source: Some(source),
+                        digest,
+                        looks,
+                    });
                 }
                 Err(e) => messages.push(format!(
                     "{}: {e}; it keeps the design saved with the project",
@@ -968,35 +1128,140 @@ impl<K: Kernel> Document<K> {
                 )),
             }
         }
-        updates
+        Ok(updates)
+    }
+
+    /// Library parts with options linked before mitcad#1921 (part of
+    /// `update_links`): each takes the materials and appearances of the
+    /// source the design keeps for it, once (mitcad#1923).
+    pub(super) fn options_library_look_updates(
+        &self,
+        messages: &mut Vec<String>,
+    ) -> Result<Vec<OptionsUpdate>, ModelError> {
+        let mut updates = Vec::new();
+        for c in &self.state.assembly.components {
+            let (Some(link), Some(library), None) = (&c.link, &c.library, &c.build) else {
+                continue;
+            };
+            if link.looks {
+                continue;
+            }
+            let Some(part) = self.state.options_part(c.uid) else {
+                continue;
+            };
+            let Some(source) = part_def(&self.state, part)
+                .ok()
+                .and_then(|def| self.state.library_sources.get(def.source).cloned())
+            else {
+                continue;
+            };
+            let origin = library_origin(&source);
+            let looks = self.update_looks(part, &source, &origin, &c.name, messages)?;
+            if looks.is_some() {
+                if part_gives_any(&looks) {
+                    messages.push(format!(
+                        "{} takes the materials of {} {}",
+                        c.name,
+                        library.library,
+                        library.version_text()
+                    ));
+                }
+                updates.push(OptionsUpdate {
+                    component: c.uid,
+                    part,
+                    source: None,
+                    digest: link.digest.clone(),
+                    looks,
+                });
+            }
+        }
+        Ok(updates)
+    }
+
+    /// What `source` gives the bodies of the derived part `part` of the
+    /// component `name` read again (mitcad#1923); None, with a line, when
+    /// that cannot be taken.
+    fn update_looks(
+        &self,
+        part: FeatureUid,
+        source: &LibrarySourceDef,
+        origin: &LookOrigin,
+        name: &str,
+        messages: &mut Vec<String>,
+    ) -> Result<Option<PartLooks>, ModelError> {
+        match configured_part(&self.state, part, source, None)
+            .and_then(|configured| self.part_looks(&configured, &source.label(), origin))
+        {
+            Ok(looks) => Ok(Some(looks)),
+            Err(ModelError::Cancelled) => Err(ModelError::Cancelled),
+            Err(e) => {
+                messages.push(format!(
+                    "{name}: its materials cannot be taken from its design ({e}); its bodies \
+                     keep theirs"
+                ));
+                Ok(None)
+            }
+        }
+    }
+
+    /// The folder of the file a component is linked to, when it is
+    /// followed (mitcad#1923: where its design's images are).
+    fn part_folder(&self, component: ComponentUid) -> Option<PathBuf> {
+        let link = self.state.assembly.component(component)?.link.as_ref()?;
+        let base = self.source_directory();
+        followed_link(&link.path, base.as_deref())
+            .ok()?
+            .parent()
+            .map(Path::to_path_buf)
     }
 }
 
 /// Puts the files read again into a state (`update_links`): each part
-/// takes its new source, and its link the new digest.
+/// takes its new source, and its link the new digest; its bodies take what
+/// the source gives them (mitcad#1923).
 pub(super) fn apply_file_updates(
     state: &mut DocState,
-    updates: Vec<(ComponentUid, FeatureUid, LibrarySourceDef, String)>,
+    updates: Vec<OptionsUpdate>,
 ) -> Result<(), ModelError> {
-    for (component, part, mut source, digest) in updates {
-        source.id = source_id(state, &source);
-        if state.library_sources.get(source.id).is_none() {
-            state.library_sources.0.push(source.clone());
+    for update in updates {
+        let OptionsUpdate {
+            component,
+            part,
+            source,
+            digest,
+            looks,
+        } = update;
+        if let Some(mut source) = source {
+            source.id = source_id(state, &source);
+            if state.library_sources.get(source.id).is_none() {
+                state.library_sources.0.push(source.clone());
+            }
+            let def = part_def(state, part)?;
+            let mut input = part_input(state, &def);
+            input.source = source.id;
+            state.edit_feature(part, &FeatureDef::DerivedPart(input))?;
+            settle_options(state, part)?;
+            if let Some(link) = state
+                .assembly
+                .component_mut(component)
+                .and_then(|c| c.link.as_mut())
+            {
+                link.digest = digest;
+            }
         }
-        let def = part_def(state, part)?;
-        let mut input = part_input(state, &def);
-        input.source = source.id;
-        state.edit_feature(part, &FeatureDef::DerivedPart(input))?;
-        settle_options(state, part)?;
-        if let Some(link) = state
-            .assembly
-            .component_mut(component)
-            .and_then(|c| c.link.as_mut())
-        {
-            link.digest = digest;
+        if let Some(looks) = &looks {
+            state.give_part_looks(component, part, looks);
         }
     }
     Ok(())
+}
+
+/// Whether looks taken give any body a material or an appearance.
+fn part_gives_any(looks: &Option<PartLooks>) -> bool {
+    looks
+        .as_ref()
+        .and_then(|looks| looks.as_deref())
+        .is_some_and(super::linked_looks::gives_any)
 }
 
 /// A file's name without its extension, for a component's name.

@@ -3251,7 +3251,12 @@ bool SketchController::viewerEvent(QEvent* event) {
     if (axisPickEvent(event, true)) {
       return true;
     }
-    const QString entity = entityAt(e->position());
+    QString entity = entityAt(e->position());
+    // A selected text under the press is dragged (mitcad#1911); one not
+    // selected is the view's to pick.
+    if (entity.isEmpty()) {
+      entity = selectedTextAt(e->position());
+    }
     // Geometry the selection filter leaves empty is neither dragged nor
     // clicked here: the press is the view's (a window, mitcad#217).
     SelectionItem pressed;
@@ -3512,9 +3517,29 @@ void SketchController::startDrag() {
   m_loggedDragSnap.clear();
   m_dragSkipPoints.clear();
   m_dragSkipCurves.clear();
-  m_dragSnaps =
-      m_dragDimension.isEmpty() && m_dragSelection.isEmpty() && m_model.point(m_dragEntity) != nullptr;
-  if (m_dragSnaps) {
+  // A text (mitcad#1911): its anchor snaps as a point does, away from its
+  // frame's rectangle, which moves with it.
+  const std::optional<V2> anchor = m_dragDimension.isEmpty() && m_dragSelection.isEmpty()
+                                       ? textAnchor(m_model, m_dragEntity)
+                                       : std::nullopt;
+  m_dragText = anchor.has_value();
+  m_dragAnchor = anchor.value_or(V2{});
+  m_dragAnchorLast = m_dragAnchor;
+  if (const TextData* text = m_dragText ? m_model.text(m_dragEntity) : nullptr) {
+    for (const QString& corner : text->frame) {
+      m_dragSkipPoints.insert(corner);
+    }
+    for (const CurveData& c : m_model.curves) {
+      if (text->frame.contains(c.start) || text->frame.contains(c.end)) {
+        m_dragSkipCurves.insert(c.id);
+        m_dragSkipPoints.insert(c.start);
+        m_dragSkipPoints.insert(c.end);
+      }
+    }
+  }
+  m_dragSnaps = m_dragText || (m_dragDimension.isEmpty() && m_dragSelection.isEmpty() &&
+                               m_model.point(m_dragEntity) != nullptr);
+  if (m_dragSnaps && !m_dragText) {
     // Not onto itself, its own curves (it is their end, centre or control
     // point) and their other points (a line's end onto its other end
     // would leave nothing of the line), or what holds it already: the
@@ -3547,7 +3572,9 @@ void SketchController::startDrag() {
       }
     }
   }
-  if (m_dragSnaps) {
+  if (m_dragText) {
+    hint(tr("Drag: the text's anchor snaps to points and curves (Shift or Alt: no snap)."));
+  } else if (m_dragSnaps) {
     hint(tr("Drag: the point snaps to points and curves and is held where it is dropped "
             "(Shift or Alt: no snap)."));
   } else {
@@ -3557,10 +3584,17 @@ void SketchController::startDrag() {
   }
 }
 
-void SketchController::snapDrag(const QPointF& position, Qt::KeyboardModifiers modifiers) {
-  const auto raw = sketchAt(position);
+void SketchController::snapDrag(const QPointF& pointer, Qt::KeyboardModifiers modifiers) {
+  auto raw = sketchAt(pointer);
   if (!raw) {
     return;
+  }
+  // A text's anchor follows the pointer from where it was at the press,
+  // and snaps where it comes to (mitcad#1911).
+  QPointF position = pointer;
+  if (m_dragText) {
+    raw = m_dragAnchor + (*raw - m_dragStart);
+    position = toScreen(*raw);
   }
   const bool unsnapped = dragsFreely(modifiers);
   if (unsnapped) {
@@ -3623,6 +3657,38 @@ QStringList SketchController::selectionDraggedWith(const QString& entity) const 
   return ids;
 }
 
+QString SketchController::selectedTextAt(const QPointF& screen) const {
+  const auto raw = sketchAtF(screen);
+  if (!raw) {
+    return QString();
+  }
+  const double margin = kCurvePixels * pixel();
+  for (const SelectionItem& item : m_host.selection()) {
+    if (item.owner != m_uid || item.kind != SelectKind::SketchCurve || !textAnchor(m_model, item.name)) {
+      continue;
+    }
+    const TextData* text = m_model.text(item.name);
+    if (text == nullptr) {
+      continue;
+    }
+    bool any = false;
+    V2 low{0.0, 0.0};
+    V2 high{0.0, 0.0};
+    for (const Curve2& curve : text->outline) {
+      for (const V2& p : {curve.startPoint(), curve.middle(), curve.endPoint()}) {
+        low = any ? V2{std::min(low.x, p.x), std::min(low.y, p.y)} : p;
+        high = any ? V2{std::max(high.x, p.x), std::max(high.y, p.y)} : p;
+        any = true;
+      }
+    }
+    if (any && raw->x >= low.x - margin && raw->x <= high.x + margin && raw->y >= low.y - margin &&
+        raw->y <= high.y + margin) {
+      return text->id;
+    }
+  }
+  return QString();
+}
+
 void SketchController::applyDrag() {
   if (!m_dragging || !m_dragPending) {
     return;
@@ -3641,7 +3707,17 @@ void SketchController::applyDrag() {
   }
   QJsonObject cmd{{QStringLiteral("cmd"), QStringLiteral("sketch.drag")},
                   {QStringLiteral("sketch"), m_uid}};
-  if (!m_dragSelection.isEmpty()) {
+  if (m_dragText) {
+    // A text (mitcad#1911): Move/Copy's model command, by the offset from
+    // where the last step put its anchor to where the pointer takes it.
+    if (dist(target, m_dragAnchorLast) == 0.0) {
+      return;
+    }
+    cmd = QJsonObject{{QStringLiteral("cmd"), QStringLiteral("sketch.move")},
+                      {QStringLiteral("sketch"), m_uid},
+                      {QStringLiteral("texts"), QJsonArray{m_dragEntity}},
+                      {QStringLiteral("by"), xy(target - m_dragAnchorLast)}};
+  } else if (!m_dragSelection.isEmpty()) {
     // The selection together (mitcad#837), in one sketch.drag: by the
     // offset that brings the grabbed point to the cursor, as a curve's
     // single drag does.
@@ -3680,6 +3756,9 @@ void SketchController::applyDrag() {
     runModel(cmd);
     ++m_dragSteps;
     m_dragLast = target;
+    if (m_dragText) {
+      m_dragAnchorLast = target;
+    }
   } catch (const std::exception&) {
     // Fixed geometry does not move.
   }
@@ -3737,10 +3816,12 @@ void SketchController::endDrag() {
   const QStringList together = m_dragSelection;
   // Where a single point was dropped (mitcad#1538): none when it was not
   // released (a dialog ended the drag), with Shift or Alt, or away from
-  // the sketch's points and curves.
-  const Snap dropped = m_dropSnap;
+  // the sketch's points and curves. A text's anchor is not held there
+  // (mitcad#1911): it is no point of the sketch.
+  const Snap dropped = m_dragText ? Snap() : m_dropSnap;
   m_dropSnap = Snap();
   m_dragSnaps = false;
+  m_dragText = false;
   m_snap = Snap();
   m_snap.at = m_dragLast;
   m_dragEntity.clear();
@@ -3765,12 +3846,15 @@ void SketchController::endDrag() {
     qDebug().noquote() << QStringLiteral("Drag of %1 did not move it").arg(entity);
     return;
   }
-  // Where the dragged point is, or the curve's point nearest the cursor.
+  // Where the dragged point is, the curve's point nearest the cursor, or
+  // the text's anchor (mitcad#1911).
   V2 at = m_dragLast;
   if (const auto p = m_model.pointAt(entity)) {
     at = *p;
   } else if (const CurveData* c = m_model.curve(entity)) {
     at = c->curve.nearest(m_dragLast);
+  } else if (const auto anchor = textAnchor(m_model, entity)) {
+    at = *anchor;
   }
   qDebug().noquote() << QStringLiteral("Dragged %1 to (%2, %3)")
                             .arg(entity)

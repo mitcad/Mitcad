@@ -89,3 +89,11 @@ contiguous block, appended at the end:
   your own.
 - `tools/dev-env/versions.sh`: tool pins shared by `setup-user.sh` and
   `setup-macos.sh` (`setup-windows.ps1` mirrors them by hand).
+
+Tests register themselves, in files of their own, and edit no shared list
+([adding a test](docs/development.md#adding-a-test-without-a-shared-list)):
+a Windows UI test in `cmake/ui-tests/windows/<test>.cmake`, a macOS one in
+`cmake/ui-tests/macos/<test>.cmake`, an app.unit test file with
+`MITCAD_UNIT_TEST(<entry point>);` and its sources in
+`app/tests/unit/<file>.cmake`. Branches do not refresh
+`app/translations/*.ts`; that is done once at the merge.

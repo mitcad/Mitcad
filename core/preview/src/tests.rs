@@ -489,3 +489,23 @@ fn pieces_of_one_surface_have_no_edge_between_them() {
         "no edge along x = 1"
     );
 }
+
+/// Line art (mitcad#1736): `format` and the SVG's `hidden_edges`.
+#[test]
+fn the_format_and_hidden_edges_are_read() {
+    let plain = RenderArgs::from_json(&json!({})).unwrap();
+    assert_eq!(plain.format, crate::Format::Png);
+    assert!(!plain.hidden_edges);
+    let svg = RenderArgs::from_json(&json!({"format": "svg", "hidden_edges": true})).unwrap();
+    assert_eq!(svg.format, crate::Format::Svg);
+    assert!(svg.hidden_edges);
+    assert_eq!(svg.format.as_str(), "svg");
+    for bad in [
+        json!({"format": "jpeg"}),
+        json!({"format": "svg", "hidden_edges": "yes"}),
+        json!({"hidden_edges": true}),
+        json!({"format": "png", "hidden_edges": true}),
+    ] {
+        assert!(RenderArgs::from_json(&bad).is_err(), "{bad}");
+    }
+}

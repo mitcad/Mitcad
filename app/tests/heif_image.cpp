@@ -11,6 +11,7 @@
 // with MITCAD_HEIF its libheif decoding the test's files as they are shown
 // (a quarter turn applied), with 8 and 10 bits per channel, a file cut
 // short and other bytes refused with the reason.
+#include "UnitTests.hpp"
 #include "view/ImageFile.hpp"
 
 #include <cstddef>
@@ -534,3 +535,4 @@ int heifImageTests() {
   bundledDecoderTests();
   return failures;
 }
+MITCAD_UNIT_TEST(heifImageTests);

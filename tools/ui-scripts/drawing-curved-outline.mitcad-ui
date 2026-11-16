@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: MIT
+# Dimensions to a curved outline's top and a section's label dragged
+# (mitcad#1909, GitHub #363) on drawing-curved-outline.json: a pipe bend
+# (F2.b0, turned 120 degrees) whose outer side is a torus of 70 seen
+# along its axis in Drawing1's front view at 1:1, the model's (x, z) on
+# the sheet at (130 + x, 115 + z); a section through it (view 2) beside
+# it. The top of the outer outline (x 0, z 70) lies inside its arc, no
+# edge's end: a quarter bend ends there, and the end of the revolution's
+# seam (which runs along the outer outline) would be picked instead.
+#   1. Dimension: the bend's end on XY (a circle seen from the side, at
+#      model (40, 0), sheet 170,115, 10 mm off its centre, which a click
+#      there would snap to: placed at once, a diameter), then the top of
+#      its outer outline (sheet 130,185: its extreme point, which the
+#      click while it is placed picks as the second pick), placed left of
+#      them: a vertical dimension of 70, the bend's overall height. The
+#      tube made 25 thick (Sketch1's circle edited), it follows: 75.
+#   2. The section's label dragged: edit_drawing_view with label_move, its
+#      offset logged; Reset Label Position from its menu puts it back.
+# Run by tools/ui-drawing-curved-outline-test.sh (Linux),
+# tools/ui-windows-drawing-curved-outline-test.ps1 (Windows) and
+# tools/ui-macos-drawing-curved-outline-test.sh (macOS).
+wait-idle
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing sheet view '
+wait-log '^Drawing view 2 label at '
+wait-log '^Drawing view 2 label offset none$'
+wait-idle
+
+# 1. The overall height to the top of the outer outline.
+mark
+command drawing.dimension
+wait-log '^Drawing tool: Dimension'
+drawing-sheet-click 170 115
+wait-log '^Drawing picked circle [(]1[)]'
+wait-log '^Drawing placing view'
+wait-idle
+drawing-sheet-click 130 185
+wait-log '^Drawing picked point [(]2[)]: .*"extreme"'
+wait-idle
+drawing-sheet-click 80 150
+wait-log '^Drawing command: (?=.*"cmd":"add_drawing_annotation")(?=.*"extreme")'
+wait-log '^Drawing annotations drawn: 1 = 70([.]0+)?$'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-log '^Drawing tool: selection'
+wait-idle
+
+# The bend's tube made 25 thick: the outline's top follows it, 75.
+mark
+model-command '{"cmd":"edit_feature","uid":"F1","def":{"type":"sketch","plane":"xy","entities":[{"id":"p1","type":"point","at":[50,0]},{"id":"c2","type":"circle","center":"p1","radius":25}]}}'
+wait-log '^Drawing annotations drawn: 1 = 75([.]0+)?$'
+wait-idle
+
+# 2. The section's label dragged, then put back under it.
+mark
+drag-from '^Drawing view 2 label at ' 60 40
+wait-log '^Drawing view 2 label dragged by '
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_view")(?=.*"label_move")'
+wait-log '^Drawing view 2 label offset [0-9]+[.][0-9],-[0-9]+[.][0-9]$'
+expect-no-log '^Drawing command refused'
+wait-idle
+mark
+context-menu-logged '^Drawing view 2 label at ' 'Reset Label Position'
+wait-log '^Drawing command: (?=.*"cmd":"edit_drawing_view")(?=.*"label_offset":[[]0,0[]])'
+wait-log '^Drawing view 2 label offset none$'
+expect-no-log '^Drawing command refused'
+expect-never 'TestDriver: FAIL'

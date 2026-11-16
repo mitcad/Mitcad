@@ -27,3 +27,7 @@ mod side_gap_tests;
 mod to_face_tests;
 // Removing a profile others are placed on (mitcad#1811).
 mod remove_placed_on_tests;
+// Side snaps in line with the frame's other profiles (mitcad#1886).
+mod side_lineup_tests;
+// Moving what a STEP import brought into a frame (mitcad#1647).
+mod move_imported_tests;

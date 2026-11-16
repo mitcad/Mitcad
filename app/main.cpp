@@ -37,6 +37,8 @@
 #include "framework/AppTheme.hpp"
 #include "framework/ChromeStyle.hpp"
 #include "framework/DebugLog.hpp"
+#include "framework/HangWatchdog.hpp"
+#include "framework/SessionLog.hpp"
 #include "framework/DesktopEntry.hpp"
 #include "framework/Diagnostics.hpp"
 #include "framework/DisplayMeshes.hpp"
@@ -324,6 +326,7 @@ int runApplication(int argc, char* argv[]) {
     LogScope() { mitcad::mcp::installLogRing(); }
     ~LogScope() {
       mitcad::DebugLog::instance().stop();
+      mitcad::SessionLog::instance().finish();
       mitcad::mcp::removeLogRing();
     }
     LogScope(const LogScope&) = delete;
@@ -566,6 +569,14 @@ int runApplication(int argc, char* argv[]) {
       qWarning().noquote() << "Debug log not started:" << error;
     }
   }
+  // The session log (framework/SessionLog.hpp, mitcad#1896): every run's
+  // log on disk, with the start-up's lines; not for a screenshot run.
+  if (!parser.isSet(screenshotOption) && mitcad::SessionLog::wanted()) {
+    QString error;
+    if (!mitcad::SessionLog::instance().start(mitcad::DebugLog::defaultFolder(), &error)) {
+      qWarning().noquote() << "Session log not started:" << error;
+    }
+  }
 
   // Files the system asks to open (macOS: Finder, the Dock, `open -a`) can
   // arrive from the first event loop on, while the window and its start-up
@@ -759,7 +770,14 @@ int runApplication(int argc, char* argv[]) {
 
   // Each window owns one document. Closing the last document ends this
   // process, also on macOS; Quit applies every window's save/lock guard.
-  const int status = QApplication::exec();
+  // The hang marker (framework/HangWatchdog.hpp, mitcad#1896): from the
+  // event loop's first turn to its end; what follows it is no hang.
+  mitcad::HangWatchdog hangWatchdog(mitcad::HangWatchdog::thresholdFromEnvironment());
+  // A UI test script that already ended (mitcad#1933): a step that failed
+  // while the start-up open still computed asked for its exit before this
+  // loop ran, and the loop would never end; its status instead.
+  const int status = testDriver.left() ? testDriver.exitStatus() : QApplication::exec();
+  hangWatchdog.stop();
   // Display meshes still to be stored after an open (mitcad#880): the body
   // being written is finished, the others are dropped (the next open
   // meshes and stores them).

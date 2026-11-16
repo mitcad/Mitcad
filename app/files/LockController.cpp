@@ -35,6 +35,7 @@
 #include "ProjectIndicator.hpp"
 #include "RemoteController.hpp"
 #include "RemoteTask.hpp"
+#include "VersionQueue.hpp"
 #include "mitcad_bridge/lib.h"
 #include "../framework/UiSizes.hpp"
 
@@ -375,7 +376,7 @@ RemoteTask* LockController::lockTask(const QString& name, const QList<QJsonObjec
     jsons << compactJson(command);
   }
   const QByteArray root = m_root.toUtf8();
-  return RemoteTask::custom(
+  RemoteTask* task = RemoteTask::custom(
       name,
       [root, jsons](const SyncControl& control) {
         // A project of the thread's own; the core shares what it saw of the
@@ -389,6 +390,10 @@ RemoteTask* LockController::lockTask(const QString& name, const QList<QJsonObjec
         return answer;
       },
       this);
+  // In the project's version queue (mitcad#1895): never beside its push,
+  // fetch or sync.
+  task->setProject(m_root);
+  return task;
 }
 
 void LockController::startTask(RemoteTask* task, std::function<void(const QJsonObject&)> done) {
@@ -452,7 +457,7 @@ void LockController::dropRunning() {
   }
 }
 
-QJsonObject LockController::runNow(RemoteTask* task, const QString& label) {
+QJsonObject LockController::runNow(RemoteTask* task, const QString& label, int limitSeconds) {
   ++m_blocking;
   m_pollTimer->stop();
   dropRunning();
@@ -470,6 +475,18 @@ QJsonObject LockController::runNow(RemoteTask* task, const QString& label) {
     const QPointer<RemoteTask> pending = task;
     connect(&dialog, &QProgressDialog::canceled, task, &RemoteTask::cancel);
     connect(task, &RemoteTask::finished, &waiting, [&finished] { finished = true; });
+    QTimer limit;
+    if (limitSeconds > 0) {
+      // MitCad closes (mitcad#1895): the lock is left to go stale.
+      limit.setSingleShot(true);
+      connect(&limit, &QTimer::timeout, task, [task, limitSeconds] {
+        qInfo().noquote() << QStringLiteral("Edit lock task %1 stopped after %2 s: MitCad closes")
+                                 .arg(task->name())
+                                 .arg(limitSeconds);
+        task->cancel();
+      });
+      limit.start(limitSeconds * 1000);
+    }
     task->start();
     waitDialogUntil([&] { return finished || pending == nullptr; });
     if (pending != nullptr) {
@@ -652,8 +669,21 @@ bool LockController::designClosing(const QString& next, bool readOnly) {
   if (!next.isEmpty() && samePath(next, m_path) && !(readOnly && !isReadOnly())) {
     return true; // the same design again
   }
-  if (!closeLock(false)) {
-    return false;
+  if (syncNeedsChoice()) {
+    // What the project is known to be in decides, not a server answer still
+    // to come (mitcad#1916): its sync stopped for choices, or its versions
+    // and the remote's newer ones need a replay that may. The choice is
+    // asked before the lock goes, and Resolve Sync keeps the design
+    // (mitcad#131); the sync waits in the project's version queue under a
+    // progress that keeps the window painting.
+    if (!closeLock(false)) {
+      return false;
+    }
+  } else {
+    // Its versions sent and its lock released in the project's version
+    // queue (mitcad#1895): Save As, Save to Project, New Design and Open go
+    // on at once, however slow the server is.
+    closeInBackground();
   }
   // The design is gone: what follows (its project, the next design) starts
   // afresh.
@@ -665,6 +695,16 @@ bool LockController::designClosing(const QString& next, bool readOnly) {
   updateIndicator();
   updateBanner();
   return true;
+}
+
+bool LockController::syncNeedsChoice() const {
+  if (m_mode != Mode::Holding || !sameFolderPath(m_host.project().root, m_root)) {
+    return false;
+  }
+  // The remote controller's state is the current project's (the last
+  // check, sync or push), read from the repository without the server.
+  const ProjectIndicator::Remote remote = m_remote.indicatorState();
+  return remote.conflict || (remote.ahead > 0 && remote.behind > 0);
 }
 
 void LockController::designSaved(const QString& path) {
@@ -1857,12 +1897,13 @@ void LockController::handOver(const QJsonObject& request, bool withoutSaving, co
   schedulePoll(0);
 }
 
-bool LockController::releaseAll(const QString& label) {
+bool LockController::releaseAll(const QString& label, int limitSeconds) {
   if (m_root.isEmpty()) {
     return true;
   }
-  const QJsonObject answer =
-      runNow(lockTask(QStringLiteral("lock_release"), {lockCommand("lock_release", {{QStringLiteral("all"), true}})}), label);
+  const QJsonObject answer = runNow(
+      lockTask(QStringLiteral("lock_release"), {lockCommand("lock_release", {{QStringLiteral("all"), true}})}), label,
+      limitSeconds);
   const QString cls = errorClassOf(answer);
   if (!cls.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Edit lock release failed (%1): %2").arg(cls, errorMessageOf(answer));
@@ -1903,7 +1944,15 @@ bool LockController::closeLock(bool quit) {
   // (the remote's work is the current project's); another project opened
   // already, they wait to be sent there.
   if (m_mode == Mode::Holding && sameFolderPath(m_host.project().root, m_root)) {
-    const QJsonObject synced = m_remote.syncNow(tr("Sending the versions of %1…").arg(fileName()));
+    // Closing MitCad waits only briefly, saying so (mitcad#1895).
+    const int seconds = quit ? closeWaitSeconds() : 0;
+    const QJsonObject synced =
+        quit ? m_remote.syncNow(tr("Sending the versions of %1 before MitCad closes…\nWhat is not sent within %n "
+                                   "second(s) is sent the next time the project opens.",
+                                   nullptr, seconds)
+                                    .arg(fileName()),
+                                seconds)
+             : m_remote.syncNow(tr("Sending the versions of %1…").arg(fileName()));
     const QString cls = errorClassOf(synced);
     if (cls == QLatin1String("conflict")) {
       qInfo().noquote() << QStringLiteral("Edit lock: the sync of %1 needs a choice before the release: asked")
@@ -1942,7 +1991,8 @@ bool LockController::closeLock(bool quit) {
   }
   if (release) {
     releaseAll(quit ? tr("Releasing the edit lock of %1…").arg(fileName())
-                        : tr("Closing %1: releasing its edit lock…").arg(fileName()));
+                    : tr("Closing %1: releasing its edit lock…").arg(fileName()),
+               quit ? closeWaitSeconds() : 0);
     if (m_mode == Mode::Holding) {
       publishLock(QJsonObject());
     }
@@ -1951,6 +2001,137 @@ bool LockController::closeLock(bool quit) {
     m_live->publishOpen(m_root, m_relative, QString());
   }
   return true;
+}
+
+void LockController::closeInBackground() {
+  if (m_root.isEmpty()) {
+    return;
+  }
+  if (m_mode == Mode::None) {
+    // No lock (edit locks off): who has the design open is told still.
+    if (m_live != nullptr) {
+      m_live->publishOpen(m_root, m_relative, QString());
+    }
+    return;
+  }
+  m_pollTimer->stop();
+  stopTimers();
+  closeAnswerDialog();
+  if (m_dialog != nullptr) {
+    m_dialog->close();
+  }
+  // The design's running lock work is of no use now: stopped, not waited
+  // for (its answer is dropped; the release waits in the queue behind it).
+  ++m_generation;
+  m_queue.clear();
+  if (m_task != nullptr) {
+    m_task->cancel();
+  }
+  const bool holding = m_mode == Mode::Holding;
+  const bool release = holding || m_mode == Mode::Unconfirmed || m_mode == Mode::Taking || m_requested;
+  // The versions are sent while the design's project is the current one,
+  // as when the window closes.
+  QString author;
+  if (holding && sameFolderPath(m_host.project().root, m_root)) {
+    const std::optional<QString> chosen = m_remote.versionAuthor(m_root);
+    if (chosen) {
+      author = *chosen;
+    }
+  }
+  const QString root = m_root;
+  const QString relative = m_relative;
+  const QString name = fileName();
+  if (!release && author.isEmpty()) {
+    if (m_live != nullptr) {
+      m_live->publishOpen(root, relative, QString());
+    }
+    return;
+  }
+  const QByteArray where = root.toUtf8();
+  const QByteArray info = compactJson({{QStringLiteral("cmd"), QStringLiteral("remote_info")}});
+  const QByteArray sync = author.isEmpty() ? QByteArray()
+                                           : compactJson({{QStringLiteral("cmd"), QStringLiteral("sync")},
+                                                          {QStringLiteral("author"), author},
+                                                          {QStringLiteral("fetch"), true}});
+  const QByteArray releaseJson =
+      release ? compactJson(lockCommand("lock_release", {{QStringLiteral("all"), true}})) : QByteArray();
+  RemoteTask* task = RemoteTask::custom(
+      sync.isEmpty() ? QStringLiteral("lock_release") : QStringLiteral("sync"),
+      [where, info, sync, releaseJson](const SyncControl& control) {
+        const rust::Box<Project> project = open_project(rustStr(where));
+        QJsonObject out;
+        if (!sync.isEmpty()) {
+          // Only when versions wait: a sync with nothing to send would
+          // still reach the server.
+          const QJsonObject remote = parseObject(project->command(rustStr(info)));
+          if (remote.value(QStringLiteral("ahead")).toInt(0) > 0) {
+            const QJsonObject synced = parseObject(project->command_with(rustStr(sync), control));
+            out.insert(QStringLiteral("sync"), synced);
+            const QString cls = errorClassOf(synced);
+            if (cls == QLatin1String("conflict") || unreachable(cls)) {
+              // The lock stays: until a sync, or until it is stale.
+              out.insert(QStringLiteral("kept"), cls);
+              return out;
+            }
+          }
+        }
+        if (!releaseJson.isEmpty()) {
+          out.insert(QStringLiteral("release"), parseObject(project->command_with(rustStr(releaseJson), control)));
+        }
+        return out;
+      },
+      this);
+  task->setProject(root);
+  qInfo().noquote() << QStringLiteral("Edit lock: closing %1 in the background (%2%3)")
+                           .arg(name, sync.isEmpty() ? QString() : QStringLiteral("send, "),
+                                release ? QStringLiteral("release") : QStringLiteral("keep"));
+  connect(task, &RemoteTask::finished, this, [this, task, root, relative, name, holding] {
+    const QJsonObject answer = task->answer();
+    task->deleteLater();
+    const QJsonObject synced = answer.value(QStringLiteral("sync")).toObject();
+    if (!synced.isEmpty()) {
+      m_remote.syncedInBackground(root, synced);
+    }
+    const QString kept = answer.value(QStringLiteral("kept")).toString();
+    const QString cls = errorClassOf(answer);
+    if (!kept.isEmpty()) {
+      qInfo().noquote() << QStringLiteral("Edit lock stays: %1 (%2)").arg(name, kept);
+      m_host.status(kept == QLatin1String("conflict")
+                        ? tr("The versions of %1 were not sent: the server has newer versions of files you changed "
+                             "too. Sync to choose what to keep; its edit lock stays until then.")
+                              .arg(name)
+                        : tr("The versions of %1 wait: the project's server could not be reached. They are sent "
+                             "later; its edit lock stays until then.")
+                              .arg(name),
+                    true);
+    } else if (!cls.isEmpty()) {
+      // The task itself failed (the project could not be opened).
+      qInfo().noquote() << QStringLiteral("Edit lock: closing %1 failed (%2): %3").arg(name, cls, errorMessageOf(answer));
+    } else {
+      const QJsonObject released = answer.value(QStringLiteral("release")).toObject();
+      const QString failed = errorClassOf(released);
+      if (!failed.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("Edit lock release failed (%1): %2").arg(failed, errorMessageOf(released));
+      }
+      for (const QJsonValue& value : released.value(QStringLiteral("released")).toArray()) {
+        qInfo().noquote() << QStringLiteral("Edit lock released: %1").arg(value.toString());
+      }
+      for (const QJsonValue& value : released.value(QStringLiteral("withdrawn")).toArray()) {
+        qInfo().noquote() << QStringLiteral("Edit lock request withdrawn: %1").arg(value.toString());
+        if (m_live != nullptr && !value.toString().isEmpty()) {
+          m_live->publishRequest(root, {{QStringLiteral("type"), QStringLiteral("withdrawn")},
+                                        {QStringLiteral("path"), value.toString()}});
+        }
+      }
+      if (failed.isEmpty() && holding && m_live != nullptr) {
+        m_live->publishLock(root, relative, QJsonObject());
+      }
+    }
+    if (m_live != nullptr) {
+      m_live->publishOpen(root, relative, QString());
+    }
+  });
+  task->start();
 }
 
 void LockController::releaseByUser() {
@@ -2146,6 +2327,7 @@ void LockController::probe(QObject* context, std::function<void(bool accepted, c
         return parseObject(repository->command_with(rustStr(json), control));
       },
       this);
+  task->setProject(project.root);
   connect(task, &RemoteTask::finished, this, [this, task, key, guard, done] {
     const QJsonObject answer = task->answer();
     task->deleteLater();
@@ -2291,6 +2473,9 @@ void LockController::updateIndicator() {
     state = QStringLiteral("none");
     break;
   case Mode::Taking:
+    // The window stays editable meanwhile (mitcad#1895: the server may be
+    // slow).
+    text = tr("Checking the lock…");
     state = QStringLiteral("taking");
     break;
   case Mode::Holding:

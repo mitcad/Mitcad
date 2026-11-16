@@ -5,6 +5,7 @@
 // (also onto one that has a history), clearing one design leaves the others;
 // the approval modes' names, Always allow per agent and its reset, the
 // privacy notice per agent.
+#include "UnitTests.hpp"
 #include "agent/ChatHistoryStore.hpp"
 #include "agent/ChatSettings.hpp"
 
@@ -139,3 +140,4 @@ int chatHistoryTests() {
   QSettings::setDefaultFormat(format);
   return failures;
 }
+MITCAD_UNIT_TEST(chatHistoryTests);

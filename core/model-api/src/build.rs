@@ -727,6 +727,9 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
                 });
                 // Centred between these profiles (mitcad#1401).
                 part["gap"] = json!(info.record.gap);
+                // Its offset from `from`, as `build_edit`'s `at.offset`
+                // takes it (mitcad#1885).
+                part["offset"] = json!(mitcad_model_build::side_offset(self, info.component));
                 // A member along an edge (mitcad#1814): its edge frame,
                 // whose definition has the edge, the face and the offsets,
                 // and how it lies.
@@ -1169,8 +1172,17 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
             let to_world = active.after(&target.placement).after(slot);
             let middle = (side.near + side.far) / 2.0;
             let at = |offset: f64| to_world.apply_point([offset - side.near + middle, 0.0, 0.0]);
-            for (kind, offset) in side.snaps() {
-                snaps.push(json!({"kind": kind, "offset": offset, "point": at(offset)}));
+            // The profile a line-up is with (mitcad#1886).
+            let with = |l: &mitcad_model_build::internal::LineUp| {
+                json!({"component": l.component, "occurrence": path_text(&l.path),
+                       "name": l.name})
+            };
+            for s in side.snaps() {
+                let mut snap = json!({"kind": s.kind, "offset": s.offset, "point": at(s.offset)});
+                if let Some(l) = s.with {
+                    snap["with"] = with(l);
+                }
+                snaps.push(snap);
             }
             // The reference the placement is bound to and the offset from
             // it, as `at.from` and `at.offset` take them (mitcad#417).
@@ -1183,6 +1195,7 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
                              "along": active.apply_vector(mitcad_model::internal::build::x_axis(&to_world))});
             // The free stretch it stands in (mitcad#1401): its ends from
             // end A and the profiles around it, for a change of From.
+            snapped["with"] = side.line.as_ref().map_or(Value::Null, with);
             snapped["gap"] = match &side.gap {
                 Some(g) => json!({"start": g.start, "end": g.end,
                                   "a": g.a.as_ref().map(|s| s.component),

@@ -87,6 +87,20 @@ const CommandDef* CommandRegistry::editorOf(const QJsonObject& feature) const {
   return nullptr;
 }
 
+QString CommandRegistry::editRefusal(const QJsonObject& feature) const {
+  const QString type = feature.value(QStringLiteral("type")).toString();
+  for (const auto& def : m_commands) {
+    if (def->kind == CommandDef::Kind::Feature && !type.isEmpty() &&
+        (def->featureType == type || def->editsAlso.contains(type)) && def->load && def->editRefusal) {
+      const QString why = def->editRefusal(feature);
+      if (!why.isEmpty()) {
+        return why;
+      }
+    }
+  }
+  return QString();
+}
+
 void CommandRegistry::createActions(QWidget* owner,
                                     const std::function<void(const QString&)>& trigger) {
   for (const auto& def : m_commands) {
@@ -298,6 +312,20 @@ void CommandRegistry::setShortcuts(const QHash<QString, ContextShortcuts>& propo
     }
   }
   refreshShortcuts();
+}
+
+void CommandRegistry::reloadShortcuts() {
+  int saved = 0;
+  {
+    const QSettings settings;
+    for (const QString& key : settings.allKeys()) {
+      if (key.startsWith(kShortcutGroup + QLatin1Char('/')) || key.startsWith(kShortcutGroup + QLatin1Char('.'))) {
+        ++saved;
+      }
+    }
+  }
+  refreshShortcuts();
+  qInfo().noquote() << QStringLiteral("Shortcuts reloaded from the settings: %1 saved").arg(saved);
 }
 
 void CommandRegistry::refreshShortcuts() {

@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The synthetic library part of the Edit Options UI test (mitcad#1929, tools/ui-edit-options-component-test.sh): a plate 100 mm long, Width wide and 10 mm thick, with an open table of the options Color (Black, White) and Width (20 mm ... 200 mm, step 10 mm) and the row Standard (White, 60 mm: 60000 mm3)."},
+  {"cmd": "add_parameter", "name": "Color", "expression": "'White'", "values": ["'Black'", "'White'"]},
+  {"cmd": "add_parameter", "name": "Width", "expression": "60 mm", "min": "20 mm", "max": "200 mm", "step": "10 mm"},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0], "length": 100, "width": "Width",
+    "height": 10, "operation": "new_body"}},
+  {"cmd": "set_configurations", "configurations": {"options": ["Color", "Width"], "closed": false,
+    "default": "Standard",
+    "rows": [{"name": "Standard", "values": {"Color": "'White'", "Width": "60 mm"}}]}},
+  {"expect": {"bodies": 1}}
+]

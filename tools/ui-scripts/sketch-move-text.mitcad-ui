@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: MIT
+# A sketch text moved after it is made (mitcad#1911, GitHub
+# mitcad/Mitcad#369): placed with the Text tool, moved with Move/Copy,
+# dragged onto a point and placed by Edit Text's Position, its anchor (the
+# model's `at`) read back each time in Edit Text's Position X and Y. The
+# wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation on the fixture's Sketch1: two framing points at (-20, -15)
+# and (20, 15) and a free point at (10, 10).
+#
+# The text is "I" in the bundled Droid Sans, 5 mm high (the Text tool's
+# default): its stem runs from x 0.620 to 1.074 and y 0.349 to 3.220 from
+# its anchor (2048 font units an em: 254..440 and 143..1319), so a click at
+# the anchor plus (0.62, 1.8) is on its outline and picks the text.
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The text placed at the origin with the Text tool.
+mark
+command sketch.text
+sketch-click 0 0
+type I
+key Return
+wait-log '^Added text t[0-9]+ "I" at \(0, 0\)$'
+key Escape
+key Escape
+wait-idle
+
+# 2. Move/Copy on the selected text: its anchor in the preview's positions,
+# moved by 10 mm in X.
+mark
+sketch-click 0.62 1.8
+expect-selection 1 0
+mark
+command sketch.move
+wait-log '^Command Move/Copy started'
+expect-log '^Move/Copy Objects: 1 sketch curve \[sketch curve t[0-9]+ of F1\]'
+wait-log '^Preview Move/Copy: ok'
+wait-log '^Preview Move/Copy positions: t[0-9]+ \(0\.000, 0\.000\)$'
+mark
+type-in '^Panel Move/Copy input dx at ' '10 mm'
+wait-log '^Preview Move/Copy positions: t[0-9]+ \(10\.000, 0\.000\)$'
+mark
+key Return
+wait-log '^Added Move/Copy'
+wait-idle
+
+# Read back: Edit Text shows the text's Position at (10, 0).
+mark
+sketch-click 10.62 1.8
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+expect-log '^Edit Text Text: 1 sketch curve \[sketch curve t[0-9]+ of F1\]'
+expect-input-text x '^10$'
+expect-input-text y '^0$'
+key Escape
+wait-log '^Command Edit Text cancelled'
+wait-idle
+
+# 3. A drag of the selected text by 10 mm up: its anchor snaps onto the
+# point at (10, 10).
+mark
+sketch-click 10.62 1.8
+expect-selection 1 0
+mark
+sketch-drag 10.62 1.8 10.62 11.8
+wait-log '^Dragged t[0-9]+ to \(10\.000, 10\.000\)$'
+expect-log '^Drag snap of t[0-9]+: '
+expect-no-log 'did not move it'
+wait-idle
+
+# Read back: Edit Text shows (10, 10); a Position typed places the text.
+mark
+sketch-click 10.62 11.8
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+expect-log '^Edit Text Text: 1 sketch curve \[sketch curve t[0-9]+ of F1\]'
+expect-input-text x '^10$'
+expect-input-text y '^10$'
+mark
+type-in '^Panel Edit Text input x at ' '-12.5'
+type-in '^Panel Edit Text input y at ' '7.25'
+wait-log '^Preview Edit Text: ok'
+key Return
+wait-log '^Added Edit Text'
+wait-idle
+
+# 4. Read back where the Position put it.
+mark
+sketch-click -11.88 9.05
+expect-selection 1 0
+mark
+command sketch.edit_text
+wait-log '^Command Edit Text started'
+expect-input-text x '^-12\.5$'
+expect-input-text y '^7\.25$'
+key Escape
+wait-log '^Command Edit Text cancelled'
+screenshot '${MITCAD_TEST_WORK}/sketch-move-text.png'
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

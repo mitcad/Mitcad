@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# The Import Report's verdict and row statuses with an error (mitcad#1893),
+# on the test project of test_exchange --write-iam, the application started
+# with --open of its top.iam, which imports the parts with their design
+# history without asking (Import Assembly is File > Open's question only),
+# and one of the files the assembly refers to is missing:
+#   - the verdict, with the error symbol, says that one file could not be
+#     imported;
+#   - the missing file's row is an error, the other files' rows are OK or
+#     warnings, every row has a status;
+#   - the filter Errors shows the one error row only, All rows every row;
+#     Esc closes the report.
+# Run by tools/ui-import-report-status-test.sh (Linux),
+# tools/ui-windows-import-report-status-test.ps1 (Windows) and
+# tools/ui-macos-import-report-status-test.sh (macOS).
+wait-log '^Import report verdict: top\.iam: error: 1 file could not be imported' 300
+expect-ever '^Import report row: top\.iam: [0-9]+ .*: error$'
+expect-ever '^Import report row: top\.iam: [0-9]+ .*: ok$'
+expect-never '^Import report row: top\.iam: .*: none$'
+focus-dialog '^Import Report$' 30
+
+# Errors only: the missing file's row; then every row again.
+mark
+qt-choice importReportFilter 'Errors'
+wait-log '^Import report filter: top\.iam: 1 of [0-9]+ rows shown$' 10
+mark
+qt-choice importReportFilter 'All rows'
+wait-log '^Import report filter: top\.iam: ([0-9]+) of \1 rows shown$' 10
+
+mark
+key Escape
+wait-idle 30
+expect-never 'TestDriver: FAIL'

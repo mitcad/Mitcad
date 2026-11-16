@@ -46,6 +46,7 @@
 #include "../framework/Numbers.hpp"
 #include "../framework/PanelTree.hpp"
 #include "../framework/ParameterField.hpp"
+#include "../framework/ParameterUnits.hpp"
 #include "../framework/FormulaEditor.hpp"
 #include "../framework/IdleCall.hpp"
 #include "../framework/Theme.hpp"
@@ -75,6 +76,9 @@ constexpr int kLimitedRole = Qt::UserRole + 65;
 constexpr int kHasLimitsRole = Qt::UserRole + 66;
 constexpr int kOwnLimitRole = Qt::UserRole + 67;
 constexpr int kFixedLimitRole = Qt::UserRole + 68;
+// The model's unit of a row, in its Name cell (mitcad#1920): the Unit cell
+// shows Number for a parameter without a unit.
+constexpr int kUnitRole = Qt::UserRole + 69;
 
 // The mark of a limited value in its cell.
 QString limitMark(const QString& limited) {
@@ -117,17 +121,13 @@ bool isTextUnit(const QString& unit) {
 }
 
 // A unit box starts at `unit`, the design's length unit (mitcad#1452):
-// its item when it lists one, else typed in.
+// its item when it lists one, else typed in; at its first row when the
+// design has none.
 void selectUnit(QComboBox* box, const QString& unit) {
   if (unit.isEmpty()) {
     return;
   }
-  const int item = box->findText(unit);
-  if (item >= 0) {
-    box->setCurrentIndex(item);
-  } else {
-    box->setCurrentText(unit);
-  }
+  selectUnitInBox(box, unit);
 }
 
 // A bare number gets the parameter's unit ("30" in a
@@ -155,15 +155,13 @@ public:
     auto* form = new QFormLayout(this);
     m_name = new QLineEdit;
     m_unit = new QComboBox;
-    m_unit->setEditable(true);
-    m_unit->addItems({QStringLiteral("mm"), QStringLiteral("cm"), QStringLiteral("m"),
-                      QStringLiteral("in"), QStringLiteral("ft"), QStringLiteral("deg"),
-                      QStringLiteral("rad"), QStringLiteral("Text"), QString()});
-    m_unit->setItemText(m_unit->count() - 1, QString());
+    // The units, Text, and Number last for a number without a unit
+    // (mitcad#1920), whose unit in the model is empty.
+    fillUnitBox(m_unit, parameterUnits());
     // The design's length unit (mitcad#1452): 0.875 typed in a design in
     // inches is 0.875 in, as in every value field, unless chosen otherwise.
     selectUnit(m_unit, m_host.model().lengthUnit());
-    m_unit->setToolTip(tr("Empty for a number without a unit; Text for a text, such as 'Box ' & Width"));
+    m_unit->setToolTip(tr("Number for a number without a unit; Text for a text, such as 'Box ' & Width"));
     m_expression = new QLineEdit;
     m_comment = new QLineEdit;
     m_error = new QLabel;
@@ -188,13 +186,14 @@ public:
     m_name->setFocus();
   }
 
-  QString unit() const { return m_unit->currentText(); }
+  // The model's unit: empty for Number.
+  QString unit() const { return unitOfBox(m_unit); }
   QString name() const { return m_name->text().trimmed(); }
 
 private:
   void add() {
     const QString name = m_name->text().trimmed();
-    const QString unit = m_unit->currentText().trimmed();
+    const QString unit = unitOfBox(m_unit);
     const QString expression = withUnit(m_expression->text().trimmed(), unit);
     QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("add_parameter")},
                         {QStringLiteral("name"), name},
@@ -450,6 +449,7 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_table->setColumnCount(11);
   m_table->setHeaderLabels({tr("Name"), tr("Unit"), tr("Expression"), tr("Value"), tr("Comment"), QStringLiteral("★"),
                             tr("Min"), tr("Max"), tr("Step"), tr("Strict"), tr("Slider")});
+  m_table->headerItem()->setToolTip(kUnit, tr("Number for a number without a unit; Text for a text"));
   m_table->headerItem()->setToolTip(kFavorite, tr("Favorites: listed first"));
   m_table->headerItem()->setToolTip(kMin, tr("The smallest value: an expression, may use other parameters"));
   m_table->headerItem()->setToolTip(kMax, tr("The largest value: an expression, may use other parameters"));
@@ -496,6 +496,9 @@ ParametersDialog::ParametersDialog(DocumentHost& host, QWidget* parent)
   m_align = new DecimalAlignDelegate(m_table, {kExpression, kValue});
   m_table->setItemDelegateForColumn(kExpression, m_align);
   m_table->setItemDelegateForColumn(kValue, m_align);
+  // Unit: Number for a parameter without a unit, edited in a Unit list
+  // (mitcad#1920).
+  m_table->setItemDelegateForColumn(kUnit, new ParameterUnitDelegate(m_table));
   // The native cells line them up too (mitcad#1080).
   m_table->setProperty(NativeDecimalColumnsProperty,
                        QVariantList{static_cast<int>(kExpression), static_cast<int>(kValue)});
@@ -608,7 +611,11 @@ QTreeWidgetItem* ParametersDialog::addRow(QTreeWidgetItem* parent, const QJsonOb
   const bool user = parameter.value(QStringLiteral("kind")).toString() == QStringLiteral("user");
   auto* row = new QTreeWidgetItem(parent);
   row->setText(kName, name);
-  row->setText(kUnit, parameter.value(QStringLiteral("unit")).toString());
+  // Number for a parameter without a unit (mitcad#1920): display only; the
+  // model's unit is in kUnitRole, and the sort and the filter read the model.
+  const QString unit = parameter.value(QStringLiteral("unit")).toString();
+  row->setText(kUnit, unitDisplayText(unit));
+  row->setData(kName, kUnitRole, unit);
   row->setText(kExpression, parameter.value(QStringLiteral("expression")).toString());
   row->setText(kValue, parameter.value(QStringLiteral("text")).toString());
   row->setText(kComment, parameter.value(QStringLiteral("comment")).toString());
@@ -618,7 +625,7 @@ QTreeWidgetItem* ParametersDialog::addRow(QTreeWidgetItem* parent, const QJsonOb
   const bool reference = parameter.value(QStringLiteral("kind")).toString() == QStringLiteral("reference");
   // A text parameter (mitcad#664): its value is its text; no limits, no
   // slider.
-  const bool text = isTextUnit(parameter.value(QStringLiteral("unit")).toString());
+  const bool text = isTextUnit(unit);
   row->setData(kName, kKindRole,
                user ? QStringLiteral("user") : reference ? QStringLiteral("reference") : QStringLiteral("model"));
   for (const int column : {kName, kUnit, kExpression, kValue, kComment, kFavorite, kMin, kMax, kStep, kStrict, kSlider}) {
@@ -699,7 +706,8 @@ QTreeWidgetItem* ParametersDialog::addRow(QTreeWidgetItem* parent, const QJsonOb
   for (const int column : {kName, kUnit, kExpression, kComment, kMin, kMax, kStep}) {
     const auto refused = m_refused.constFind(refusedKey(name, column));
     if (refused != m_refused.cend()) {
-      row->setText(column, refused.value().first);
+      // A refused unit as the Unit list shows it: Number for none (mitcad#1920).
+      row->setText(column, column == kUnit ? unitDisplayText(refused.value().first) : refused.value().first);
       if (!mac::styleRefusedParameter(row, column)) {
         row->setForeground(column, refusedText());
         row->setBackground(column, refusedFill());
@@ -959,7 +967,8 @@ void ParametersDialog::edit(QTreeWidgetItem* item, int column) {
   // A driven dimension's reference has no limits (mitcad#665), nor has a
   // text parameter (mitcad#664).
   if ((column == kMin || column == kMax || column == kStep) &&
-      (item->data(kName, kKindRole).toString() == QStringLiteral("reference") || isTextUnit(item->text(kUnit)))) {
+      (item->data(kName, kKindRole).toString() == QStringLiteral("reference") ||
+       isTextUnit(item->data(kName, kUnitRole).toString()))) {
     return;
   }
   if ((column == kName || column == kExpression) && item->data(kName, kHeldRole).toBool()) {
@@ -984,7 +993,7 @@ void ParametersDialog::edit(QTreeWidgetItem* item, int column) {
     // (mitcad#567); no dialog from it, which would end the cell's editing.
     if (auto* editor = qobject_cast<QLineEdit*>(m_table->itemWidget(item, column))) {
       ParameterFieldOptions suggest;
-      suggest.kind = kindOfUnit(item->text(kUnit));
+      suggest.kind = kindOfUnit(item->data(kName, kUnitRole).toString());
       suggest.own = item->data(kName, kNameRole).toString();
       suggest.label = QStringLiteral("%1 expression").arg(suggest.own);
       suggest.create = false;
@@ -992,7 +1001,7 @@ void ParametersDialog::edit(QTreeWidgetItem* item, int column) {
       // What the limits would make of it, while it is typed (mitcad#665).
       if (item->data(kName, kHasLimitsRole).toBool()) {
         const QString name = item->data(kName, kNameRole).toString();
-        const QString unit = item->text(kUnit);
+        const QString unit = item->data(kName, kUnitRole).toString();
         connect(editor, &QLineEdit::textEdited, this, [this, name, unit](const QString& text) {
           previewExpression(name, withUnit(text.trimmed(), unit));
         });
@@ -1027,12 +1036,14 @@ void ParametersDialog::cellEdited(QTreeWidgetItem* item, int column) {
     command.insert(QStringLiteral("new_name"), text);
     break;
   case kUnit:
+    // The Unit list writes the model's unit, empty for Number (mitcad#1920).
+    text = unitOfText(text);
     command.insert(QStringLiteral("cmd"), QStringLiteral("set_parameter"));
     command.insert(QStringLiteral("unit"), text);
     break;
   case kExpression:
     command.insert(QStringLiteral("cmd"), QStringLiteral("set_parameter"));
-    command.insert(QStringLiteral("expression"), withUnit(text, item->text(kUnit)));
+    command.insert(QStringLiteral("expression"), withUnit(text, item->data(kName, kUnitRole).toString()));
     break;
   case kComment:
     command.insert(QStringLiteral("cmd"), QStringLiteral("set_parameter"));
@@ -1245,7 +1256,7 @@ void ParametersDialog::editFormula() {
   ParameterFieldOptions options;
   options.own=name;
   options.label=name;
-  options.kind=kindOfUnit(item->text(kUnit));
+  options.kind=kindOfUnit(item->data(kName, kUnitRole).toString());
   options.anyKind=true;
   FormulaEditor dialog(*source,options,item->text(kExpression),this);
   if (execDialog(&dialog)!=QDialog::Accepted) return;

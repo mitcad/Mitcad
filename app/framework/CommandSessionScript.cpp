@@ -148,7 +148,7 @@ bool CommandSession::scriptInputs(const QJsonObject& inputs, const ItemReader& r
                   QStringLiteral(" (%1)").arg(item->logDescription());
           return false;
         }
-        items.append(input.convert ? input.convert(*item) : *item);
+        items.append(input.takenIn(*item, m_state, m_host));
       }
       if (input.max > 0 && items.size() > input.max) {
         error = tr("%1: %2 takes at most %3").arg(m_def.name, input.label).arg(input.max);

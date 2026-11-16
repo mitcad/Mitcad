@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include <cstdio>
 
 #include <QCheckBox>
@@ -198,6 +199,22 @@ int navigationPreferencesTests() {
   CHECK(form.chosen().spaceMouse.speed == 2.0 && form.chosen().spaceMouse.reversed[0] &&
         !form.chosen().spaceMouse.axisOn[5] && form.chosen().spaceMouse.lockRotation);
   CHECK(form.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
+  // Its cross-talk filter (mitcad#1720): 50 % by default, Off at 0, waiting
+  // while Dominant axis only is on.
+  auto* crossTalk = form.findChild<QSpinBox*>(QStringLiteral("navigationSpaceMouseCrossTalk"));
+  auto* dominant = form.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseDominant"));
+  CHECK(crossTalk && dominant);
+  if (crossTalk && dominant) {
+    CHECK(crossTalk->value() == 50 && crossTalk->isEnabled() && crossTalk->maximum() == kSpaceMouseCrossTalkMax);
+    crossTalk->setValue(0);
+    CHECK(crossTalk->text() == QStringLiteral("Off") && form.chosen().spaceMouse.crossTalk == 0);
+    crossTalk->setValue(85);
+    CHECK(form.chosen().spaceMouse.crossTalk == 85);
+    dominant->setChecked(true);
+    CHECK(!crossTalk->isEnabled() && form.chosen().spaceMouse.dominantAxis);
+    dominant->setChecked(false);
+    CHECK(crossTalk->isEnabled());
+  }
   // Its Navigation mode and Lock horizon (mitcad#978): Object and off by
   // default, Lock horizon apart from the mouse's Constrained orbit.
   auto* spaceMode = form.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseMode"));
@@ -250,6 +267,8 @@ int navigationPreferencesTests() {
           !reopened.chosen().spaceMouse.axisOn[5] && reopened.chosen().spaceMouse.lockRotation);
     CHECK(reopened.chosen().spaceMouse.buttons == (QStringList{QStringLiteral("view.home"), QString()}));
     CHECK(reopened.chosen().spaceMouse.mode == SpaceMouseMode::Camera && reopened.chosen().spaceMouse.lockHorizon);
+    auto* reopenedCrossTalk = reopened.findChild<QSpinBox*>(QStringLiteral("navigationSpaceMouseCrossTalk"));
+    CHECK(reopened.chosen().spaceMouse.crossTalk == 85 && reopenedCrossTalk && reopenedCrossTalk->value() == 85);
     auto* reopenedMode = reopened.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseMode"));
     auto* reopenedHorizon = reopened.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockHorizon"));
     CHECK(reopenedMode && reopenedMode->currentData().toInt() == int(SpaceMouseMode::Camera));
@@ -259,6 +278,27 @@ int navigationPreferencesTests() {
     CHECK(navigationAction(reopened.chosen(), NavigationInput::TrackpadScroll, Qt::ShiftModifier) == NavigationAction::Orbit);
     CHECK(navigationAction(reopened.chosen(), NavigationInput::LeftButton, Qt::NoModifier) == NavigationAction::None);
     CHECK(reopened.findChild<QComboBox*>(QStringLiteral("navigationScheme"))->currentData().toInt() == int(NavigationScheme::Custom));
+
+    // Lock Rotation's toggle and a device's default button outside the page
+    // (mitcad#1910): its check box and button choices follow without a
+    // change of its own, and its next change keeps them.
+    int reopenedChanges = 0;
+    reopened.changed = [&reopenedChanges] { ++reopenedChanges; };
+    SpaceMouseSettings outside = reopened.chosen().spaceMouse;
+    outside.lockRotation = false;
+    outside.buttons = QStringList{QStringLiteral("view.fit"), QStringLiteral("view.space_mouse_lock_rotation")};
+    reopened.followSpaceMouse(outside);
+    auto* reopenedLock = reopened.findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockRotation"));
+    auto* reopenedFirst = reopened.findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton0"));
+    CHECK(reopenedChanges == 0 && reopenedLock && !reopenedLock->isChecked());
+    CHECK(!reopened.chosen().spaceMouse.lockRotation && reopened.chosen().spaceMouse.buttons == outside.buttons);
+    CHECK(reopenedFirst && reopenedFirst->currentData().toString() == QStringLiteral("view.fit"));
+    CHECK(reopenedSecond &&
+          reopenedSecond->currentData().toString() == QStringLiteral("view.space_mouse_lock_rotation"));
+    if (reopenedHorizon) reopenedHorizon->setChecked(false);
+    CHECK(reopenedChanges == 1 && !reopened.chosen().spaceMouse.lockRotation &&
+          reopened.chosen().spaceMouse.buttons == outside.buttons);
   }
   return failures;
 }
+MITCAD_UNIT_TEST(navigationPreferencesTests);

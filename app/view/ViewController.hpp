@@ -11,6 +11,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include "../OcctViewer.hpp"
 #include "../framework/ChromeStyle.hpp"
@@ -19,6 +20,7 @@
 class QAction;
 class QActionGroup;
 class QMenu;
+class QSettings;
 class QWidget;
 
 namespace mitcad {
@@ -78,10 +80,18 @@ struct ViewSettings {
   // rounded in stereo).
   int focalLength = 29;
   int anaglyphFocalLength = 50;
+  // Every shown sketch drawn through the bodies outside sketch mode
+  // (mitcad#1931, `view/sketchesThroughBodies`): on by default.
+  bool sketchesThroughBodies = true;
   static constexpr int kMinFocalLength = 20;
   static constexpr int kMaxFocalLength = 70;
 
   static ViewSettings load();
+  // The same from another store (defaults()).
+  static ViewSettings load(const QSettings& store);
+  // What load() gives with nothing saved: the platform's defaults
+  // (Preferences › Restore Defaults, mitcad#1887).
+  static ViewSettings defaults();
   void save() const;
   // The background's colours (a gradient from top to bottom, or `top`).
   void colors(QColor& top, QColor& bottom, bool& gradient) const;
@@ -123,6 +133,18 @@ public:
   // Preferences' Show the navigation bar changed (mitcad#1086): the bar
   // shows or hides at once.
   std::function<void(bool shown)> navigationBarChanged;
+  // Preferences › Import Settings wrote these groups (mitcad#1889,
+  // framework/SettingsTransfer.hpp: "pins", "layout", ...): the window
+  // reads what it keeps of them again (the navigation bar's, the toolbar's
+  // and the quick-access group's pins).
+  std::function<void(const QStringList& groups)> settingsImported;
+  // Lock Rotation's command (mitcad#1910): the window toggles its 3D
+  // mouse's rotation lock.
+  std::function<void()> toggleSpaceMouseRotation;
+  // The 3D mouse's settings changed outside Preferences (Lock Rotation, a
+  // device's default button, mitcad#1910): saved, and the view and an open
+  // Navigation page follow.
+  void setSpaceMouseSettings(const SpaceMouseSettings& settings);
   void setSnapToGrid(bool on);
   // The View menu's Visual Style actions in menu order (after createMenus),
   // Rendered after a null entry (a separator) when there is a render worker:
@@ -202,6 +224,26 @@ private:
   // Asks whether to restart now for the layout chosen in Preferences
   // (mitcad#419); yes calls restartRequested.
   void askLayoutRestart(ChromeStyle chosen);
+  // Preferences › Restore Defaults (mitcad#1887, view/PreferencesRestore.cpp):
+  // asks first, saying what is reset and what is kept (the page's name, or
+  // empty for every page); true to go on.
+  bool confirmRestoreDefaults(QWidget* parent, const QString& pageName);
+  // The settings of those pages (`general`, `display`, ...) back to their
+  // defaults: saved, and applied as Preferences applies a change; logs
+  // "Preferences: restore defaults, current group|all settings: <pages>".
+  // Recent files, library sources, favourites, window places and
+  // shortcuts are not on a page and stay.
+  void restorePreferenceDefaults(const QStringList& pages, bool all);
+  // Preferences › Export Settings and Import Settings (mitcad#1889,
+  // view/PreferencesTransfer.cpp): the groups chosen, a file, one log line.
+  // Import asks first, saying what the file holds and which groups it
+  // replaces, then applies them as Preferences applies a change.
+  void exportSettings(QWidget* parent);
+  void importSettings(QWidget* parent);
+  // What the open windows had before an import (PreferencesTransfer.cpp).
+  struct SettingsBeforeImport;
+  // The imported groups applied as a change in Preferences applies.
+  void applyImportedSettings(const SettingsBeforeImport& before, const QStringList& groups);
 
   OcctViewer& m_viewer;
   CommandRegistry& m_registry;

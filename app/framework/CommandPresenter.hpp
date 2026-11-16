@@ -98,6 +98,14 @@ public:
   // hides it. A click calls Actions::messageAction. A frontend without it
   // shows none (an agent reads the offer from the script state).
   virtual void setMessageAction(const QString& /*text*/, const QString& /*tooltip*/) {}
+  // Work under way for the panel, its text the description ("Computing
+  // preview…"); empty: none (mitcad#1907, GitHub mitcad/Mitcad#361). Shown
+  // without changing the panel's size: the Qt panel's busy mark beside OK
+  // and Cancel, once the work has lasted a moment (BusyMark), with the text
+  // as its accessible name and tooltip; the message stays for problems and
+  // hints. A frontend without it shows nothing (OK stays disabled meanwhile
+  // either way).
+  virtual void setBusy(const QString& /*text*/) {}
   virtual void setResult(const QString& text) = 0;
   // An inspection's answer as a whole: its rows of names and values where
   // it has them (Inspection::values and groups, mitcad#1010), else its
@@ -112,8 +120,9 @@ public:
   // (textEdited); false when the field is not shown (mitcad#250).
   virtual bool insertIntoValue(const QString& /*key*/, const QString& /*text*/) { return false; }
   // What the controls show, for live MCP (mitcad#265): `message` (the status
-  // line), `result` (an inspection's answer), `ok_enabled` and `notes` (by
-  // input key: `error` or `hint`). Empty when the frontend cannot tell.
+  // line), `result` (an inspection's answer), `ok_enabled`, `notes` (by
+  // input key: `error` or `hint`) and `busy` (setBusy's text while work is
+  // under way, mitcad#1907). Empty when the frontend cannot tell.
   virtual QJsonObject shownState() const { return {}; }
   virtual void logLayout() const = 0;
   // Where a click on an input lands, as logLayout logs it, in the host

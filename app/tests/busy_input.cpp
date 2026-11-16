@@ -4,6 +4,7 @@
 // receiver or application-wide, is logged and the event dropped; the
 // receiver does not get it, nothing escapes the delivery, and a close
 // dropped so keeps its window open. test_app runs as mitcad::Application.
+#include "UnitTests.hpp"
 #include "framework/Application.hpp"
 #include "framework/ModelBusy.hpp"
 
@@ -183,3 +184,4 @@ int busyInputTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(busyInputTests);

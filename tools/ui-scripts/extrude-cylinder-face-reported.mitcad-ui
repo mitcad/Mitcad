@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: MIT
+# Extrude of a sketch on a cylinder's side with the automatic operation
+# (mitcad#1908) on the reported design of GitHub mitcad/Mitcad#362 from the
+# private test files (MITCAD_MITCAD_REPORTED, github-362/; never
+# committed): Component1:1 (O1) with a cylinder of radius 150 (F2.b0) and
+# Sketch2 (F3) on its side, its origin at -0.657 rad about the axis.
+# Extrude takes the sketch's circle (r{c1}, radius 22.36 about (0, 60)): its
+# highlight lies on the face, its middle at (117.43, -90.63, 60), where the
+# region flat on the carrier plane had it at (118.75, -91.65, 60); the New
+# Body preview turns Join with the cylinder as Local bodies, and OK adds
+# the Join (it was refused for its cut targets).
+# Run by tools/ui-extrude-cylinder-face-test.sh when the design is there.
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-idle
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F3/r\{c1\}' 20
+click-pick 'profile F3/r\{c1\}'
+wait-log '^Extrude Profiles: 1 profile \[profile r\{c1\}'
+wait-log '^View highlight places: .*profile F3/r\{c1\} in O1 at 117\.[3-5],-90\.[5-7],(59\.9|60\.0)' 30
+# Since the start: the first preview of the profile Extrude starts with
+# may already have chosen Join with the cylinder, which the picked one
+# then chooses again without a new line.
+expect-ever '^Extrude: automatic Operation = Join' 30
+expect-ever '^Extrude Local bodies: 1 body \[body F2\.b0 in O1\]' 30
+wait-idle
+expect-never 'Preview Extrude: failed'
+
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-idle
+expect-never 'Preview Extrude: failed|Recompute failed|TestDriver: FAIL'

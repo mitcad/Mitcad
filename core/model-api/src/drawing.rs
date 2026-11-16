@@ -538,6 +538,7 @@ impl<K: Kernel> DrawingOps<K> for Document<K> {
                         ..style
                     }),
                     label: None,
+                    label_offset: None,
                     subject: Some(subject.clone()),
                     breaks: Vec::new(),
                     aligned: false,

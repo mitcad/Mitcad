@@ -78,4 +78,20 @@ rust::Vec<OutlineCurve> face_outline(const geometry::Shape& shape, rust::Str fac
   return result;
 }
 
+rust::Vec<OutlineCurve> face_silhouettes(const geometry::Shape& shape, rust::Str face,
+                                         std::array<double, 3> direction) {
+  const gp_Vec along(direction[0], direction[1], direction[2]);
+  if (!(along.Magnitude() > 1e-12)) {
+    throw std::invalid_argument("a face's silhouettes need the direction it is seen along");
+  }
+  const gp_Dir d(along);
+  rust::Vec<OutlineCurve> result;
+  for (const int f : shape.find_faces(std::string(face))) {
+    for (const geometry::ModelCurve& c : geometry::face_silhouettes(shape.face(f), d)) {
+      result.push_back(convert(c));
+    }
+  }
+  return result;
+}
+
 } // namespace mitcad::bridge

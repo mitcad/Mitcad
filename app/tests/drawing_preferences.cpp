@@ -2,6 +2,7 @@
 // Preferences › Display › Always show corners in drawings and its Corner dot
 // size (mitcad#1338): off and Medium by default, kept in the settings (group
 // drawing) and read back, an unknown size Medium, the sizes' ids and radii.
+#include "UnitTests.hpp"
 #include "drawings/DrawingPreferences.hpp"
 #include "drawings/DrawingSheetView.hpp"
 
@@ -77,3 +78,4 @@ int drawingPreferencesTests() {
   CHECK(!mitcad::drawings::cornerDotSizeFromId(QStringLiteral("medium ")).has_value());
   return failures;
 }
+MITCAD_UNIT_TEST(drawingPreferencesTests);

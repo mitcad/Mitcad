@@ -6,6 +6,7 @@
 // the outline the selected tile had before (the selection's text colour
 // with nothing under it) does not over a light picture. A filled star gets
 // no disc, and nothing is drawn outside the star's box (its hit area).
+#include "UnitTests.hpp"
 #include "library/PartStar.hpp"
 
 #include <algorithm>
@@ -164,3 +165,4 @@ int partStarTests() {
   filledStarTests();
   return failures;
 }
+MITCAD_UNIT_TEST(partStarTests);

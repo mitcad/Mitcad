@@ -33,6 +33,11 @@ ChooseSection asked BRepExtrema_ExtCC for the points of the extremum of
 two edges that are parallel, which have a distance but no points, and
 crashed; it now takes them as edges without an extremum.
 
+An exception in the cut along the bisector plane (a construction it
+cannot make) refuses it, so that the corner is left as OCCT leaves it
+(mitcad#1899: OCCT's bugs/modalg_1 bug1477_9 and bug1477_10 stopped on a
+Standard_ConstructionError where stock gives its invalid shell).
+
 An 8 mm pipe along the intersection curve of a sine wave drawn as ten
 lines on XZ and an arc on XY, and along two B-spline pieces meeting at 3,
 0.3 and 0.05 degrees, is now mitred, square to the path within 0.0002
@@ -42,10 +47,11 @@ held 32.6 % less (the ten lines), 3, 0.3 and 0.05 degrees.
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-@@ -56,6 +56,19 @@
+@@ -56,6 +56,20 @@
  #include <NCollection_Map.hxx>
  #include <BRepExtrema_ExtCC.hxx>
  #include <ShapeFix_Edge.hxx>
++#include <Standard_Failure.hxx>
 +#include <BRepAdaptor_Curve.hxx>
 +#include <Bnd_Box.hxx>
 +#include <algorithm>
@@ -62,10 +68,11 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
  
  static TopoDS_Edge FindEdgeCloseToBisectorPlane(const TopoDS_Vertex& theVertex,
                                                  TopoDS_Compound&     theComp,
-@@ -272,6 +285,27 @@
+@@ -271,6 +285,36 @@
+ //=================================================================================================
  
  void BRepFill_TrimShellCorner::Perform()
- {
++{
 +  PerformByIntersection();
 +  // Two sides of one section touch where their normals coincide (at the
 +  // corner's sides), and along a small corner they meet at a shallow
@@ -75,7 +82,16 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  if (!myDone && myTransition == BRepFill_Right)
 +  {
 +    myHistMap.Clear();
-+    myDone = PerformByBisectorPlane();
++    // An exception (a construction the cut cannot make) refuses it, so that
++    // the corner is left as OCCT leaves it (mitcad#1899).
++    try
++    {
++      myDone = PerformByBisectorPlane();
++    }
++    catch (const Standard_Failure&)
++    {
++      myDone = false;
++    }
 +    if (!myDone)
 +    {
 +      myHistMap.Clear();
@@ -86,11 +102,10 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +//=================================================================================================
 +
 +void BRepFill_TrimShellCorner::PerformByIntersection()
-+{
+ {
    int  anIndex1, anIndex2, nF1, nF2, i, j, aNbP, aNbC;
    bool bhassec;
- 
-@@ -1109,8 +1143,9 @@
+@@ -1109,8 +1153,9 @@
          {
            // trim <FirstEdge> and <LastEdge> in the points of extrema
            // these points become new vertex with centre between them
@@ -101,7 +116,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
            {
              int imin = 1;
              for (i = 2; i <= Extrema.NbExt(); i++)
-@@ -2920,3 +2955,691 @@
+@@ -2943,3 +2988,691 @@
  
    return false;
  }

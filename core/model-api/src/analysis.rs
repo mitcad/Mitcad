@@ -999,6 +999,26 @@ pub(super) trait AnalysisOps<K: Kernel> {
         occurrence: Option<&OccurrencePath>,
         what: &str,
     ) -> Result<Transform, ApiError>;
+
+    /// A body as a selection gives it (mitcad#1737, `assembly_path.rs`): a
+    /// uid or name, or fields with an `occurrence` as `measure` takes
+    /// them; its shape in its own coordinates and what places it in the
+    /// design. A face, edge, vertex or datum is refused; `what` names the
+    /// selection in the error.
+    fn placed_body(&self, arg: &SelectionArg, what: &str)
+    -> Result<PlacedBody<K::Shape>, ApiError>;
+}
+
+/// A body placed in the design (mitcad#1737): [`AnalysisOps::placed_body`].
+pub(super) struct PlacedBody<S> {
+    pub(super) uid: BodyUid,
+    pub(super) name: String,
+    /// In the body's own coordinates.
+    pub(super) shape: S,
+    /// From the body's coordinates into the design's.
+    pub(super) placed: Transform,
+    /// The occurrence the selection gave, by ids.
+    pub(super) occurrence: Option<OccurrencePath>,
 }
 
 impl<K: Kernel> AnalysisOps<K> for Document<K> {
@@ -1422,6 +1442,29 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
         what: &str,
     ) -> Result<Transform, ApiError> {
         self.selection_transform(owner, occurrence, what)
+    }
+
+    fn placed_body(
+        &self,
+        arg: &SelectionArg,
+        what: &str,
+    ) -> Result<PlacedBody<K::Shape>, ApiError> {
+        let fields = self.selection_fields(arg)?;
+        let named = fields.face.is_some() || fields.edge.is_some() || fields.vertex.is_some();
+        let Some(uid) = fields.body.filter(|_| !named && fields.datum.is_none()) else {
+            return Err(ApiError(format!(
+                "{what} must be a body (a uid or name, or {{\"body\", \"occurrence\"}}), got {}",
+                arg.describe()
+            )));
+        };
+        let resolved = self.resolve_selection(arg)?;
+        Ok(PlacedBody {
+            uid,
+            name: self.body_name(uid),
+            shape: resolved.shape,
+            placed: resolved.placed,
+            occurrence: resolved.occurrence,
+        })
     }
 }
 

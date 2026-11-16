@@ -432,6 +432,152 @@ void test_step_assembly_structure(const std::string& dir) {
   }
 }
 
+// A design's component tree written as STEP assemblies (mitcad#1915): an
+// Arm (a sub-assembly placing a Pin twice) placed twice, the second turned
+// a quarter about z, a Plate placed once, a Pair (a component of two
+// bodies, each one solid) and a body of the design itself. Read back with
+// its structure, each component is one node, both Arms one definition, the
+// Pair one part whose bodies keep their names and colours; flattened, a
+// body per placed copy. An instance of a definition that is not written,
+// or of the definition that places it, is refused.
+void test_step_tree(const std::string& dir) {
+  using mitcad::io::Placement;
+  using mitcad::io::StepTree;
+  const TopoDS_Shape plate_shape = BRepPrimAPI_MakeBox(100.0, 50.0, 2.0).Shape();
+  const TopoDS_Shape pin_shape = BRepPrimAPI_MakeBox(20.0, 10.0, 5.0).Shape();
+  const TopoDS_Shape left = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+  const TopoDS_Shape right = BRepPrimAPI_MakeBox(gp_Pnt(20.0, 0.0, 0.0), 10.0, 10.0, 5.0).Shape();
+  const TopoDS_Shape loose = BRepPrimAPI_MakeBox(gp_Pnt(0.0, -50.0, 0.0), 5.0, 5.0, 5.0).Shape();
+  const auto at = [](double x, double y, double z, const std::string& name) {
+    Placement placement;
+    placement.translation = {x, y, z};
+    placement.name = name;
+    return placement;
+  };
+  Placement turned = at(300.0, 100.0, 0.0, "Arm:2");
+  turned.rotation = {{{0.0, -1.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 0.0, 1.0}}};
+  StepTree tree;
+  tree.definitions.resize(5);
+  tree.definitions[0].bodies = {Body{"Loose", loose, std::nullopt, {}}};
+  tree.definitions[0].instances = {
+      StepTree::Instance{1, at(0.0, 0.0, -10.0, "Plate:1")}, StepTree::Instance{2, at(0.0, 100.0, 0.0, "Arm:1")},
+      StepTree::Instance{2, turned}, StepTree::Instance{4, at(0.0, -100.0, 0.0, "Pair:1")}};
+  tree.definitions[1].name = "Plate";
+  tree.definitions[1].bodies = {Body{"Plate body", plate_shape, Color{0.2, 0.4, 0.6}, {}}};
+  tree.definitions[2].name = "Arm";
+  tree.definitions[2].instances = {StepTree::Instance{3, at(0.0, 0.0, 0.0, "Pin:1")},
+                                   StepTree::Instance{3, at(0.0, 20.0, 0.0, "Pin:2")}};
+  tree.definitions[3].name = "Pin";
+  tree.definitions[3].bodies = {Body{"Pin", pin_shape, std::nullopt, {}}};
+  tree.definitions[4].name = "Pair";
+  tree.definitions[4].bodies = {Body{"Left", left, Color{1.0, 0.0, 0.0}, {}},
+                                Body{"Right", right, Color{0.0, 0.0, 1.0}, {}}};
+  const std::string path = dir + "/tree.step";
+  mitcad::io::write_step_tree(path, tree);
+
+  // Flattened: the Plate, four Pins, the Pair's two bodies and the loose one.
+  CHECK(mitcad::io::read_step(path).size() == 8);
+
+  const mitcad::io::StepRead read = mitcad::io::read_step_structured(path, true);
+  CHECK(read.assembly.has_value());
+  if (!read.assembly) {
+    return;
+  }
+  const mitcad::io::StepAssembly& assembly = *read.assembly;
+  const auto node_named = [&](const std::string& name) -> const mitcad::io::StepAssembly::Node* {
+    for (const mitcad::io::StepAssembly::Node& node : assembly.nodes) {
+      if (node.name == name) {
+        return &node;
+      }
+    }
+    return nullptr;
+  };
+  // Plate, Arm, Pin, Pair and the loose body's part: each once.
+  CHECK(assembly.nodes.size() == 5);
+  const mitcad::io::StepAssembly::Node* plate_node = node_named("Plate");
+  const mitcad::io::StepAssembly::Node* arm_node = node_named("Arm");
+  const mitcad::io::StepAssembly::Node* pin_node = node_named("Pin");
+  const mitcad::io::StepAssembly::Node* pair_node = node_named("Pair");
+  CHECK(plate_node != nullptr && arm_node != nullptr && pin_node != nullptr && pair_node != nullptr);
+  if (plate_node == nullptr || arm_node == nullptr || pin_node == nullptr || pair_node == nullptr) {
+    return;
+  }
+  // The design's instances first, then its own body, named as written.
+  CHECK(assembly.roots.size() == 5);
+  if (assembly.roots.size() == 5) {
+    CHECK(&assembly.nodes.at(assembly.roots[0].node) == plate_node);
+    CHECK(&assembly.nodes.at(assembly.roots[1].node) == arm_node);
+    CHECK(assembly.roots[1].node == assembly.roots[2].node);
+    CHECK(&assembly.nodes.at(assembly.roots[3].node) == pair_node);
+    CHECK(assembly.roots[0].placement.name == "Plate:1");
+    CHECK(assembly.roots[1].placement.name == "Arm:1");
+    CHECK(assembly.roots[2].placement.name == "Arm:2");
+    CHECK(assembly.roots[3].placement.name == "Pair:1");
+    CHECK(near(assembly.roots[0].placement.translation[2], -10.0, 1e-6));
+    CHECK(near(assembly.roots[3].placement.translation[1], -100.0, 1e-6));
+    const auto& r = assembly.roots[2].placement.rotation;
+    CHECK(near(r[0][0], 0.0, 1e-12) && near(r[0][1], -1.0, 1e-12) && near(r[1][0], 1.0, 1e-12));
+    const mitcad::io::StepAssembly::Node& own = assembly.nodes.at(assembly.roots[4].node);
+    CHECK(own.instances.empty() && own.bodies.size() == 1);
+    if (own.bodies.size() == 1) {
+      CHECK(own.bodies.front().name == "Loose");
+      CHECK(box_near(bbox(own.bodies.front().shape), bbox(loose), 1e-6));
+    }
+  }
+  // A part of one body is named after its component (its body as well).
+  CHECK(plate_node->instances.empty() && plate_node->bodies.size() == 1);
+  if (plate_node->bodies.size() == 1) {
+    CHECK(plate_node->bodies.front().name == "Plate");
+    CHECK(same_color(plate_node->bodies.front().color, Color{0.2, 0.4, 0.6}, 1e-3));
+    CHECK(box_near(bbox(plate_node->bodies.front().shape), bbox(plate_shape), 1e-6));
+  }
+  // The Arm places the Pin twice, named after the occurrences.
+  CHECK(arm_node->bodies.empty() && arm_node->instances.size() == 2);
+  if (arm_node->instances.size() == 2) {
+    CHECK(&assembly.nodes.at(arm_node->instances[0].node) == pin_node);
+    CHECK(arm_node->instances[0].node == arm_node->instances[1].node);
+    CHECK(arm_node->instances[0].placement.name == "Pin:1");
+    CHECK(arm_node->instances[1].placement.name == "Pin:2");
+    CHECK(near(arm_node->instances[1].placement.translation[1], 20.0, 1e-6));
+  }
+  // The second pin of the turned arm: 20 mm along y in the arm, turned to
+  // -20 mm along x, then moved to (300, 100).
+  if (pin_node->bodies.size() == 1 && arm_node->instances.size() == 2 && assembly.roots.size() == 5) {
+    const TopoDS_Shape placed = pin_node->bodies.front().shape.Moved(TopLoc_Location(
+        transformation(assembly.roots[2].placement) * transformation(arm_node->instances[1].placement)));
+    CHECK(box_near(bbox(placed), Box{{270.0, 100.0, 0.0}, {280.0, 120.0, 5.0}}, 1e-6));
+  }
+  // The Pair: one part, its solids named and coloured as its bodies.
+  CHECK(pair_node->instances.empty() && pair_node->bodies.size() == 2);
+  for (const Body& body : pair_node->bodies) {
+    CHECK(body.name == "Left" || body.name == "Right");
+    if (body.name == "Left") {
+      CHECK(near(volume(body.shape), 1000.0, 1e-6));
+      CHECK(same_color(body.color, Color{1.0, 0.0, 0.0}, 1e-3));
+    } else if (body.name == "Right") {
+      CHECK(near(volume(body.shape), 500.0, 1e-6));
+      CHECK(same_color(body.color, Color{0.0, 0.0, 1.0}, 1e-3));
+    }
+  }
+
+  // Refused: an instance of a definition that is not written, and a
+  // definition placed inside itself.
+  for (const std::size_t refused : {std::size_t{7}, std::size_t{1}}) {
+    StepTree bad;
+    bad.definitions.resize(2);
+    bad.definitions[0].instances = {StepTree::Instance{1, Placement{}}};
+    bad.definitions[1].name = "Loop";
+    bad.definitions[1].instances = {StepTree::Instance{refused, Placement{}}};
+    bool threw = false;
+    try {
+      mitcad::io::write_step_tree(dir + "/refused.step", bad);
+    } catch (const mitcad::io::Error&) {
+      threw = true;
+    }
+    CHECK(threw);
+  }
+}
+
 void test_step_units(const std::string& dir) {
   // A box from the origin to (1, 2, 3) inches.
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(25.4, 50.8, 76.2).Shape();
@@ -1831,6 +1977,49 @@ void test_face_checker_wire_boxes() {
   }
 }
 
+// Rectangular planes through Delabella (OCCT port patch 1082, mitcad#1919):
+// a rectangle's four corners are cocircular, and Delabella, which sorts the
+// points by their distance from the middle of their box, met them in an
+// order where the last lay beyond the contour's first edge where 64-bit
+// long double rounding left the four distances' order exact and 53-bit
+// rounding (MSVC, ARM) did not: the plane was left without a triangulation
+// and the checked tier made it again by the default insertion (perf_holes'
+// five square notch walls, a 10 mm cube's six faces). A cube and the
+// rectangles of a sweep that failed so with 53 bits mesh through
+// Delabella, unchecked and checked, every plane its own triangles and none
+// made again. (With 64-bit long double they mesh without the patch too.)
+void test_rectangular_planes() {
+  using mitcad::io::MeshOptions;
+  using mitcad::io::MeshReport;
+  const MeshOptions view{0.01, 5.0 * std::atan(1.0) / 45.0, false, 20000, false, false};
+  MeshOptions preview = view;
+  preview.fast_planes = true;
+  MeshOptions checked = preview;
+  checked.check_planes = true;
+  const auto rectangle = [](double x0, double y0, double x1, double y1) -> TopoDS_Shape {
+    return BRepBuilderAPI_MakeFace(gp_Pln(gp::XOY()), x0, x1, y0, y1).Face();
+  };
+  const std::pair<TopoDS_Shape, std::size_t> shapes[] = {
+      {BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), 6},
+      {BRepPrimAPI_MakeBox(gp_Pnt(20.0, 302.5, 0.0), 5.0, 5.0, 5.0).Shape(), 6},
+      {rectangle(94.1, 28.23, 192.65, 126.78), 1},
+      {rectangle(81.0, 24.3, 109.99, 53.29), 1},
+      {rectangle(67.9, 20.37, 162.38, 149.808), 1},
+      {rectangle(67.9, 20.37, 141.29, 93.76), 1}};
+  for (const auto& [shape, planes] : shapes) {
+    for (const MeshOptions& options : {preview, checked}) {
+      const TopoDS_Shape meshed = BRepBuilderAPI_Copy(shape).Shape();
+      MeshReport report;
+      CHECK(mitcad::io::mesh_in_place(meshed, options, Message_ProgressRange(), &report));
+      std::printf("Rectangular planes, %s: %s\n", options.check_planes ? "checked" : "interactive",
+                  report.line().c_str());
+      CHECK(report.meshed == planes && report.failed == 0);
+      CHECK(report.planes_redone == 0);
+      CHECK(planes_fit(meshed, 1e-9) == static_cast<int>(planes));
+    }
+  }
+}
+
 // Building-scale cylinders and cones (mitcad#438): at the view's absolute
 // 0.01 mm a turn round a radius of metres took thousands of pieces, which
 // their faces' triangles follow (BRepMesh puts no points inside a
@@ -2837,6 +3026,7 @@ int main(int argc, char** argv) {
     test_step_multi_solid_part();
     test_step_name_code_pages(dir);
     test_step_assembly_structure(dir);
+    test_step_tree(dir);
     test_iges(dir);
     test_triangulate_keeps_original();
     test_building_scale_sphere(dir);
@@ -2852,6 +3042,7 @@ int main(int argc, char** argv) {
     test_throwing_face();
     test_nearly_cocircular_planes();
     test_face_checker_wire_boxes();
+    test_rectangular_planes();
     test_building_scale_round_faces();
     test_shape_deviation();
     test_small_circles();

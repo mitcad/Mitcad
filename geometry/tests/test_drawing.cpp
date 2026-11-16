@@ -1010,6 +1010,22 @@ std::vector<GeomAbs_Shape> continuities(const TopoDS_Shape& shape) {
   return out;
 }
 
+// The continuity on every edge between two faces set to C0, as booleans
+// and imports leave it (OCCT's fillet records it on the edges it makes; a
+// later operation's edges have none).
+void clear_continuities(const TopoDS_Shape& shape) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, faces);
+  BRep_Builder builder;
+  for (int i = 1; i <= faces.Extent(); ++i) {
+    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
+    if (around.Extent() == 2) {
+      builder.Continuity(TopoDS::Edge(faces.FindKey(i)), TopoDS::Face(around.First()), TopoDS::Face(around.Last()),
+                         GeomAbs_C0);
+    }
+  }
+}
+
 // Seen lines along smooth edges (tangent edges and seams) in the views
 // check_tangent_edges draws.
 struct TangentViewCounts {
@@ -1136,16 +1152,7 @@ void test_tangent_edges_of_a_filleted_block() {
   }
   TopoDS_Shape block = top.Shape();
   // The continuity as a later operation leaves it: none.
-  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> faces;
-  TopExp::MapShapesAndAncestors(block, TopAbs_EDGE, TopAbs_FACE, faces);
-  BRep_Builder builder;
-  for (int i = 1; i <= faces.Extent(); ++i) {
-    const NCollection_List<TopoDS_Shape>& around = faces.FindFromIndex(i);
-    if (around.Extent() == 2) {
-      builder.Continuity(TopoDS::Edge(faces.FindKey(i)), TopoDS::Face(around.First()), TopoDS::Face(around.Last()),
-                         GeomAbs_C0);
-    }
-  }
+  clear_continuities(block);
   const TangentViewCounts counts = check_tangent_edges(std::make_shared<Shape>(block), "filleted block");
   // The test's premise: as it is, the shape's tangent edges are drawn as
   // sharp ones.
@@ -1155,24 +1162,59 @@ void test_tangent_edges_of_a_filleted_block() {
 // The reported design of mitcad#1438 (a bearing block with fillets), its
 // body written by `mitcad-cli export` as a .brep file
 // (cli.drawing_tangent_edges_reported): no tangent edges drawn with
-// Tangent Edges off.
+// Tangent Edges off: the body as the model makes it, and the same body with
+// its edges' continuity left out as a later operation or an import leaves
+// it.
 int check_brep_file(const char* path) {
   TopoDS_Shape shape;
+  TopoDS_Shape bare;
   BRep_Builder builder;
-  if (!BRepTools::Read(shape, path, builder) || shape.IsNull()) {
+  if (!BRepTools::Read(shape, path, builder) || shape.IsNull() || !BRepTools::Read(bare, path, builder) ||
+      bare.IsNull()) {
     std::fprintf(stderr, "test_drawing: cannot read %s\n", path);
     return 1;
   }
   test::guarded("the reported design's tangent edges", [&] {
-    const TangentViewCounts counts = check_tangent_edges(std::make_shared<Shape>(shape), path);
-    // The premise: the body as the model makes it has tangent edges that
-    // were drawn as sharp ones.
+    // OCCT's fillet records G1 on the tangent edges it makes (port patch
+    // 0350 takes their tangency whichever way the faces face, mitcad#1880),
+    // so OCCT's hidden-line removal alone draws none of them as sharp; the
+    // check holds the drawing to that.
+    check_tangent_edges(std::make_shared<Shape>(shape), path);
+  });
+  test::guarded("the reported design's tangent edges without their continuity", [&] {
+    clear_continuities(bare);
+    const TangentViewCounts counts =
+        check_tangent_edges(std::make_shared<Shape>(bare), std::string(path) + " without continuity");
+    // The premise: without the continuity, the body's tangent edges are
+    // drawn as sharp ones by OCCT's hidden-line removal alone.
     CHECK(counts.raw > counts.raw_seams);
   });
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }
   return test::failures == 0 ? 0 : 1;
+}
+
+// A 30 x 20 x 10 box from model_render's isometric camera, as its line art
+// projects it (mitcad#1736): looking along (-1, 1, -1) with Z up, the x axis
+// the direction times up. The nine edges at the three faces seen are drawn
+// seen and whole; the three at the far corner only with hidden lines.
+void test_box_from_the_iso_view() {
+  const ShapePtr box = std::make_shared<Shape>(BRepPrimAPI_MakeBox(gp_Pnt(0.0, 0.0, 0.0), 30.0, 20.0, 10.0).Shape());
+  const gp_Vec direction(-1.0, 1.0, -1.0);
+  const gp_Dir toward_eye(-direction);
+  const gp_Dir x_axis(direction.Crossed(gp_Vec(0.0, 0.0, 1.0)));
+  for (const bool hidden : {false, true}) {
+    const DrawnView drawn = project_view({box}, view(toward_eye, x_axis, hidden));
+    CHECK(!drawn.polygonal);
+    int seen = 0;
+    for (const DrawnCurve& c : drawn.curves) {
+      seen += c.visible ? 1 : 0;
+      CHECK(c.type == DrawnCurve::Type::Line);
+    }
+    CHECK(seen == 9);
+    CHECK(hidden_count(drawn) == (hidden ? 3 : 0));
+  }
 }
 
 } // namespace
@@ -1190,6 +1232,7 @@ int main(int argc, char* argv[]) {
   test::guarded("the quick path for curved edges", test_quick_path_for_curved_edges);
   test::guarded("the quick path at the view's scale", test_quick_path_at_the_view_scale);
   test::guarded("the tangent edges of a filleted block", test_tangent_edges_of_a_filleted_block);
+  test::guarded("a box from the iso view", test_box_from_the_iso_view);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }

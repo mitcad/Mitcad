@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+# A new error in a panel higher than its page is scrolled into view by the
+# panel itself (mitcad#1884), on panel-message-top.json (a 20 mm cube:
+# Sketch1 F1, Extrude1 F2), in a window of 1280 x 600 and the layout the
+# runner chose (Docked, Floating):
+#   Extrude1 edited, its Distance typed 0: the preview fails, and the page
+#   scrolls so that the panel's error box under the Operation row (below
+#   the page's view in the Docked layout) is in view, the Distance field
+#   that still has the keyboard staying in view too ("Panel Extrude
+#   message revealed: in view, scrolled N of M"). The places logged after
+#   it ("Panel Extrude message at", "Panel Extrude input distance at") lie
+#   within the page's view ("Panel Extrude view y A to B"): the runner
+#   checks them. Nothing here scrolls the panel to its message (no hover,
+#   no click on it); the test driver only brings Distance into view to
+#   type in it, as it does for any field.
+# Run by tools/ui-panel-message-reveal-test.sh (Linux) and
+# tools/ui-windows-panel-message-reveal-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+window-resize 1280 600
+command view.fit
+wait-idle
+
+# Extrude1 edited: its panel and its preview.
+mark
+dblclick-logged '^Timeline Extrude1 at '
+wait-log '^Editing F2 with Extrude' 20
+wait-log '^Panel Extrude input distance at ' 20
+wait-idle 30
+
+# Distance 0: the preview fails, its error in the panel's box, in view.
+mark
+type-in '^Panel Extrude input distance at ' 0
+wait-log '^Preview Extrude: failed' 30
+wait-log '^Panel Extrude message box: error: ' 10
+wait-log '^Panel Extrude message revealed: in view, scrolled [0-9]+ of [0-9]+$' 10
+wait-log '^Panel Extrude message at ' 10
+wait-idle 30
+expect-no-log '^Panel Extrude message revealed: partly'
+
+mark
+key Escape
+wait-log '^Command Extrude cancelled' 20
+wait-idle

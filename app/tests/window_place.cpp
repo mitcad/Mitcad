@@ -4,6 +4,7 @@
 // (a removed monitor, half off-screen, larger than the screen, the title
 // bar above the top), a new window cascaded from another, and the place
 // kept in and read from the settings.
+#include "UnitTests.hpp"
 #include "framework/WindowPlace.hpp"
 
 #include <cstdio>
@@ -207,3 +208,4 @@ int windowPlaceTests() {
   settingTests();
   return failures;
 }
+MITCAD_UNIT_TEST(windowPlaceTests);

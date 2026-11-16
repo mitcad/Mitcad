@@ -28,10 +28,10 @@
   {"expect": {"feature": "Rib1", "status": "ok"}},
   {"expect": {"bodies": 1, "body": "F2.b0", "volume": 67591.14857512855}},
 
-  {"comment": "With Extend Ends: the start's continuation rises over the tall cylinder's top face, and only the wall below its top edge closes it off. The start fills from its tip up to the curved face below the line along the tangent through the edge, nothing over the top face, and the rib does not warn (before mitcad#1857 the start stayed as drawn with the warning 'meets no face of the bodies'). At t across the thickness the wall is w = 10 - sqrt(100 - t^2) from the tip: the start fills 50 w - 3/8 w^2, the end 20 w - 3/8 w^2, together 70 * (40 - 2 sqrt(96) - 100 asin(0.2)) - 3/4 * (800 - 16/3 - 20 (2 sqrt(96) + 100 asin(0.2))) = 18.755948828582333 more. One solid with the base and both cylinders."},
+  {"comment": "With Extend Ends: the start's continuation rises over the tall cylinder's top face, and only the wall below its top edge closes it off. The start fills from its tip up to the curved face and up to the top face's level, z = 60, with no step under the edge (mitcad#1888; mitcad#1857 filled only below the line along the tangent through the edge), nothing over the top face, and the rib does not warn (before mitcad#1857 the start stayed as drawn with the warning 'meets no face of the bodies'). At t across the thickness the wall is w = 10 - sqrt(100 - t^2) from the tip: the start fills 50 w, the end 20 w - 3/8 w^2, together 70 * (40 - 2 sqrt(96) - 100 asin(0.2)) - 3/8 * (800 - 16/3 - 20 (2 sqrt(96) + 100 asin(0.2))) = 18.76812366884353 more. One solid with the base and both cylinders."},
   {"cmd": "edit_feature", "uid": "F9", "def": {"type": "rib", "curves": {"sketch": "F8", "curves": ["c1"]}, "thickness": 4,
     "extent": {"type": "to_next"}, "direction": "sketch_y", "extend_ends": true}},
   {"expect": {"feature": "Rib1", "status": "ok"}},
-  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 67609.90452395713}},
+  {"expect": {"bodies": 1, "body": "F2.b0", "volume": 67609.9166987974}},
   {"expect": {"body": "F2.b0", "max": [100, 40, 60]}}
 ]

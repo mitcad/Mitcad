@@ -378,8 +378,10 @@ cells.
   normal as an offset construction plane, a sketch or datum plane turned
   about its support's x or y axis as an `angle` construction plane, a
   side offset that moves a quarter-turned plane along its normal as an
-  `offset` from the parallel origin plane) becomes that value's MitCad
-  expression.
+  `offset` from the parallel origin plane, the attachment offset of a
+  coordinate system that carries a sketch, on it or on one of its planes,
+  as the sketch's placement on its plane, mitcad#1930) becomes that value's
+  MitCad expression.
 - The translation maps references, units, constants, the conditional and
   functions (written out where MitCad has no equivalent) and keeps
   FreeCAD's precedence. An integer property's expression is rounded as

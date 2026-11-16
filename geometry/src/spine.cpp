@@ -1045,7 +1045,15 @@ ShapePtr pipe_shell_with(const NamedWire& loop, const TopoDS_Wire& spine, const 
   BRepOffsetAPI_MakePipeShell pipe(spine);
   pipe.SetTolerance(tolerance, tolerance, 1.0e-2);
   set_mode(pipe, mode);
-  pipe.SetTransitionMode(transition);
+  if (transition == BRepBuilderAPI_RightCorner) {
+    // Mitred from a turn of 1e-4 rad on (port patch 1662): through a smaller
+    // turn than OCCT's 1e-2 rad the section keeps its frame and leans by the
+    // turn (the slight kinks between the pieces of an intersection curve).
+    // Rounded corners keep OCCT's 1e-2 rad.
+    pipe.SetTransitionMode(transition, 1.0e-4);
+  } else {
+    pipe.SetTransitionMode(transition);
+  }
   pipe.Add(loop.wire, false, false);
   detail::build(pipe);
   if (!pipe.IsDone()) {

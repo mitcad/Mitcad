@@ -4,6 +4,7 @@
 // hidden), the Comments panel's filter, the UI tests' log lines, the
 // targets that picks of the view stand for, and the pin's picture and its
 // click area.
+#include "UnitTests.hpp"
 #include "view/Comments.hpp"
 #include "framework/Selection.hpp"
 #include "framework/Theme.hpp"
@@ -303,3 +304,4 @@ int commentsTests() {
   pinTests();
   return failures;
 }
+MITCAD_UNIT_TEST(commentsTests);

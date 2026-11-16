@@ -19,6 +19,14 @@ extension joins the surface at C0 (a knot of the surface's degree in
 multiplicity). Other surfaces (the analytic ones of lines and circles)
 are extended as before.
 
+At a corner between two pieces of the path that are lines or circles the
+sides are extended as OCCT extends them (mitcad#1899): there the trim
+along their intersection makes the corner, and the prisms stopped the
+sweep of OCCT's pipe/bugs bug32807 (a section of B-splines along a half
+circle and a line meeting at a right angle). A corner with one piece of
+another kind (an ellipse's arc beside a circle's, where the sine as ten
+lines crosses the arc) takes the prisms on both sides.
+
 With it the cuts of that corner's sides lie 2.7e-5 mm apart and the pipe
 is mitred square to its path (it leaned by 3 degrees). The corners of the
 existing mitred pipes and sweeps keep their volumes.
@@ -34,7 +42,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  #include <GeomLib_IsPlanarSurface.hxx>
  #include <gp_Pnt2d.hxx>
  #include <gp_Vec2d.hxx>
-@@ -93,6 +94,113 @@
+@@ -93,6 +94,145 @@
  
  //=================================================================================================
  
@@ -145,10 +153,42 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
 +  S = occ::handle<Geom_BoundedSurface>(E);
 +}
 +
++//=======================================================================
++// function : CornerOfLinesOrCircles
++// purpose  : Whether the pieces of the path that meet at the corner before
++//            the law theIndex (of a closed path, the last and the first at
++//            the first) are lines or circles (mitcad#1899). Along those
++//            the sides are extended as OCCT extends them: the corner's
++//            trim along their intersection makes it, and their sides'
++//            extensions lean little from their end sections' prisms.
++//=======================================================================
++static bool CornerOfLinesOrCircles(const occ::handle<BRepFill_LocationLaw>& theLoc, const int theIndex)
++{
++  const int aNbLaw = theLoc->NbLaw();
++  for (int i : {theIndex - 1, theIndex})
++  {
++    int aLaw = i;
++    if (theLoc->IsClosed())
++    {
++      aLaw = (i < 1) ? aNbLaw : (i > aNbLaw ? 1 : i);
++    }
++    if (aLaw < 1 || aLaw > aNbLaw)
++    {
++      continue;
++    }
++    const GeomAbs_CurveType aType = theLoc->Law(aLaw)->GetCurve()->GetType();
++    if (aType != GeomAbs_Line && aType != GeomAbs_Circle)
++    {
++      return false;
++    }
++  }
++  return true;
++}
++
  static int NumberOfPoles(const TopoDS_Wire& W)
  {
    int NbPoints = 0;
-@@ -2331,14 +2439,26 @@
+@@ -2331,14 +2471,30 @@
        {
          occ::handle<Geom_BoundedSurface> BndS;
          BndS = occ::down_cast<Geom_BoundedSurface>(TabS(isec, ipath));
@@ -159,7 +199,10 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
 +        gp_Vec aV;
 +        myLoc->Law(IPath)->GetDomain(aFirst, aLast);
 +        myLoc->Law(IPath)->D0(aFirst, aM, aV);
-+        ExtendAlong(BndS, ExtendFirst, Sweep.ExchangeUV(), false, gp_Vec(aM.Column(3)));
++        // (mitcad#1899) As OCCT extends it at a corner between lines and
++        // circles of the path.
++        const gp_Vec aDir = CornerOfLinesOrCircles(myLoc, IPath) ? gp_Vec() : gp_Vec(aM.Column(3));
++        ExtendAlong(BndS, ExtendFirst, Sweep.ExchangeUV(), false, aDir);
          TabS(isec, ipath) = BndS;
        }
        if ((ipath == NbPath) && (ExtendLast > 0))
@@ -173,7 +216,8 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
 +        gp_Vec aV;
 +        myLoc->Law(IPath)->GetDomain(aFirst, aLast);
 +        myLoc->Law(IPath)->D0(aLast, aM, aV);
-+        ExtendAlong(BndS, ExtendLast, Sweep.ExchangeUV(), true, gp_Vec(aM.Column(3)));
++        const gp_Vec aDir = CornerOfLinesOrCircles(myLoc, IPath + 1) ? gp_Vec() : gp_Vec(aM.Column(3));
++        ExtendAlong(BndS, ExtendLast, Sweep.ExchangeUV(), true, aDir);
          TabS(isec, ipath) = BndS;
        }
      }

@@ -6,6 +6,7 @@
 // when its own buttons do not fit either; a group of pins only collapses
 // once they have all folded; a group whose buttons fit under its name
 // does not collapse (mitcad#696).
+#include "UnitTests.hpp"
 #include "framework/RibbonFit.hpp"
 
 #include <cstdio>
@@ -93,3 +94,4 @@ int ribbonFitTests() {
   pinsOnlyAndUnderNameTests();
   return failures;
 }
+MITCAD_UNIT_TEST(ribbonFitTests);

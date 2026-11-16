@@ -3,6 +3,7 @@
 // the catalogues the build made (cmake/Translations.cmake): Finnish names
 // itself and translates the commands, the pseudo-language marks every text,
 // and a text is found also where its context at run time is not lupdate's.
+#include "UnitTests.hpp"
 #include "framework/Language.hpp"
 
 #include <cstdio>
@@ -134,3 +135,4 @@ int languageTests() {
 #endif
   return failures;
 }
+MITCAD_UNIT_TEST(languageTests);

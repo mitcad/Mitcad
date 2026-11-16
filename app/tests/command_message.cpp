@@ -4,6 +4,7 @@
 // sideways, at the Docked page's width, and as narrow as the other rows
 // allow with a larger font (display scaling); a new message from its first
 // line (mitcad#1430). On Qt's offscreen platform.
+#include "UnitTests.hpp"
 #include "framework/CommandMessage.hpp"
 
 #include <QAbstractSlider>
@@ -242,3 +243,4 @@ int commandMessageTests() {
   check(note.minimumSizeHint().width() * 4 < whole.minimumSizeHint().width(), "notes: a long name asks for little width");
   return failures;
 }
+MITCAD_UNIT_TEST(commandMessageTests);

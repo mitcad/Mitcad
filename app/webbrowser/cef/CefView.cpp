@@ -31,6 +31,7 @@
 #include <QtLogging>
 
 #include "CefEngine.hpp"
+#include "webbrowser/BrowserDiagnostics.hpp"
 #include "webbrowser/BrowserKeys.hpp"
 #include "webbrowser/ComponentWebFiles.hpp"
 #include "include/cef_client.h"
@@ -150,10 +151,11 @@ public:
       m_view->titleChangedTo(QString::fromStdString(title.ToString()));
     }
   }
-  bool OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t, const CefString& message, const CefString&,
-                        int) override {
+  bool OnConsoleMessage(CefRefPtr<CefBrowser>, cef_log_severity_t level, const CefString& message,
+                        const CefString& source, int line) override {
     if (m_view != nullptr) {
-      m_view->logged(QString::fromStdString(message.ToString()));
+      m_view->logged(level == LOGSEVERITY_ERROR || level == LOGSEVERITY_FATAL,
+                     QString::fromStdString(message.ToString()), QString::fromStdString(source.ToString()), line);
     }
     return false;
   }
@@ -595,7 +597,7 @@ void CefView::reload() {
 
 void CefView::runJavaScript(const QString& script) {
   if (m_browser) {
-    m_browser->GetMainFrame()->ExecuteJavaScript(script.toStdString(), CefString("mitcad://script"), 0);
+    m_browser->GetMainFrame()->ExecuteJavaScript(script.toStdString(), CefString(browserdiag::kScriptSource), 0);
   }
 }
 
@@ -730,14 +732,26 @@ void CefView::loadingChanged(bool /*loading*/, bool canGoBack, bool canGoForward
   emit navigationChanged();
 }
 
-void CefView::loadEnded(bool ok) { emit loadFinished(ok); }
+void CefView::loadEnded(bool ok) {
+  // How the page draws WebGL, for the feedback diagnostics (mitcad#1906):
+  // the probe's answer comes back through the console (logged).
+  const QString scheme = m_url.scheme();
+  if (ok && (scheme == QLatin1String("http") || scheme == QLatin1String("https") || scheme == QLatin1String("file"))) {
+    runJavaScript(QString::fromLatin1(browserdiag::kWebglProbeScript));
+  }
+  emit loadFinished(ok);
+}
 
 void CefView::cursorChanged(int type) { setCursor(QCursor(cursorShape(type))); }
 
-void CefView::logged(const QString& message) {
+void CefView::logged(bool error, const QString& message, const QString& source, int line) {
   if (message.startsWith(QStringLiteral("mitcad:"))) {
-    emit consoleMessage(message);
+    if (!cef::noteScriptMessage(message)) {
+      emit consoleMessage(message);
+    }
+    return;
   }
+  cef::notePageMessage(m_url.toString(), error, message, source, line);
 }
 
 QString CefView::downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url) {

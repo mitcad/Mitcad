@@ -42,6 +42,14 @@ pub mod ffi {
             face: &str,
             direction: [f64; 3],
         ) -> Result<Vec<OutlineCurve>>;
+
+        /// The silhouettes alone of the faces of the name seen along
+        /// `direction` (mitcad#1909, `geometry::face_silhouettes`).
+        fn face_silhouettes(
+            shape: &Shape,
+            face: &str,
+            direction: [f64; 3],
+        ) -> Result<Vec<OutlineCurve>>;
     }
 }
 

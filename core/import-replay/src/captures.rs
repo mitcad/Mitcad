@@ -38,6 +38,7 @@ use mitcad_model::{ComponentUid, OccurrenceUid, Transform};
 use serde_json::Value;
 
 use crate::components::{self, Components};
+use crate::references::Steps;
 
 /// The occurrences one captured position places: in their parents'
 /// coordinates, and why others it lists are left out.
@@ -250,7 +251,12 @@ struct Entry {
 }
 
 /// The file's captured positions (see the module documentation).
-pub(crate) fn read(dump: &Dump, components: &Components, assembly: &Assembly) -> Captures {
+pub(crate) fn read(
+    dump: &Dump,
+    components: &Components,
+    assembly: &Assembly,
+    outer: &HashMap<u64, Steps>,
+) -> Captures {
     let mut entries = Vec::new();
     let mut out = Captures::default();
     let mut snapshots = Vec::new();
@@ -387,7 +393,7 @@ pub(crate) fn read(dump: &Dump, components: &Components, assembly: &Assembly) ->
             by_index.push((index, local));
         }
     }
-    read_steps(dump, components, assembly, &mut out);
+    read_steps(dump, components, assembly, outer, &mut out);
     // What the occurrences' placements say a captured position placed
     // beyond the positions decoded: all of them where none are (those of
     // joints' values), else those its paths do not name (an empty path).
@@ -443,11 +449,18 @@ pub(crate) fn read(dump: &Dump, components: &Components, assembly: &Assembly) ->
 /// The occurrences' placements (mitcad#81): each step in the root
 /// component, and the last one in the parent as the occurrence's last
 /// placement (it wins over the captured positions, which it includes).
-fn read_steps(dump: &Dump, components: &Components, assembly: &Assembly, out: &mut Captures) {
+fn read_steps(
+    dump: &Dump,
+    components: &Components,
+    assembly: &Assembly,
+    outer: &HashMap<u64, Steps>,
+    out: &mut Captures,
+) {
     fn walk(
         nodes: &[OccurrenceNode],
         parent: Option<&PathPlacements>,
         components: &Components,
+        outer: &HashMap<u64, Steps>,
         out: &mut Captures,
     ) {
         for n in nodes {
@@ -464,6 +477,13 @@ fn read_steps(dump: &Dump, components: &Components, assembly: &Assembly, out: &m
                 Some(world) => world,
                 None => parent.map_or(stored_local, |p| p.stored.after(&stored_local)),
             };
+            // An occurrence of a component of another document placed along
+            // paths inside it: its own placements worked out from those
+            // (`references::outer_placements`, mitcad#1892).
+            let worked_out = f3d
+                .and_then(|f| f.object_id)
+                .and_then(|id| outer.get(&id))
+                .cloned();
             let read: Option<Vec<(Option<i64>, Transform)>> = f3d
                 .and_then(|f| f.placements.as_ref())
                 .and_then(|steps| {
@@ -473,6 +493,7 @@ fn read_steps(dump: &Dump, components: &Components, assembly: &Assembly, out: &m
                         .collect()
                 })
                 .filter(|r: &Vec<_>| !r.is_empty());
+            let read = worked_out.or(read);
             let o = f3d
                 .and_then(|f| f.object_id)
                 .and_then(|id| components.occurrence(id));
@@ -508,6 +529,7 @@ fn read_steps(dump: &Dump, components: &Components, assembly: &Assembly, out: &m
                     n.children.as_deref().unwrap_or_default(),
                     Some(&path),
                     components,
+                    outer,
                     out,
                 );
             }
@@ -517,6 +539,7 @@ fn read_steps(dump: &Dump, components: &Components, assembly: &Assembly, out: &m
         dump.occurrences.as_deref().unwrap_or_default(),
         None,
         components,
+        outer,
         out,
     );
     // Parents first, so that each local placement is made relative to the

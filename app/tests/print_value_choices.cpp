@@ -5,6 +5,7 @@
 // per slicer, the filament's, and those the body sets itself; each with
 // the value the body prints with now. The search matches a plain name or
 // a key and puts the setting named as typed first.
+#include "UnitTests.hpp"
 #include <cstdio>
 
 #include <QJsonArray>
@@ -119,3 +120,4 @@ int printValueChoicesTests() {
         QStringLiteral("Strength"));
   return failures;
 }
+MITCAD_UNIT_TEST(printValueChoicesTests);

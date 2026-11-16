@@ -81,6 +81,10 @@ public:
     QString renamedFrom;
     bool changeNoted = false;
     QString lastError;
+    // The same refusal as the model gave it, with its places' tail
+    // (mitcad#1897): what the MCP passes on, split into its short cause,
+    // its detail and its places (core/mcp, split_error).
+    QString lastModelError;
     bool lastCancelled = false;
     QPointer<CommandSession> activeCommand;
     bool commandInSketch = false;

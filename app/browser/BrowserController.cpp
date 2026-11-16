@@ -993,6 +993,64 @@ void BrowserController::setFolderContents(const BrowserNode& node, bool show) {
   }
 }
 
+void BrowserController::setAllSketches(const QString& occurrencePath, bool show) {
+  // The components in scope: every one for the design, else the
+  // occurrence's component and those placed in it, however deep.
+  QStringList components;
+  if (occurrencePath.isEmpty()) {
+    for (const DocumentSnapshot::Component& c : std::as_const(m_snapshot.components)) {
+      components << c.uid;
+    }
+  } else {
+    const DocumentSnapshot::Occurrence* placed = occurrence(occurrencePath);
+    if (placed == nullptr) {
+      return;
+    }
+    std::function<void(const DocumentSnapshot::Occurrence&)> gather = [&](const DocumentSnapshot::Occurrence& o) {
+      if (!components.contains(o.component)) {
+        components << o.component;
+      }
+      for (const DocumentSnapshot::Occurrence& child : o.children) {
+        gather(child);
+      }
+    };
+    gather(*placed);
+  }
+  QJsonArray commands;
+  for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
+    if (feature.isAnySketch() && feature.isActive() && components.contains(feature.component) &&
+        m_snapshot.isShown(feature.uid) != show) {
+      commands.append(cmd("set_feature_visible", {{QStringLiteral("uid"), feature.uid},
+                                                  {QStringLiteral("visible"), show}}));
+    }
+  }
+  const int changed = static_cast<int>(commands.size());
+  if (show) {
+    // What it shows is then in the view (as a folder's Show All, mitcad#1771).
+    for (const QString& component : std::as_const(components)) {
+      if (!m_snapshot.folderShown(component, DocumentSnapshot::Folder::Sketches)) {
+        commands.append(cmd("set_folder_visible",
+                            {{QStringLiteral("component"), component},
+                             {QStringLiteral("folder"), DocumentSnapshot::folderKey(DocumentSnapshot::Folder::Sketches)},
+                             {QStringLiteral("visible"), true}}));
+      }
+    }
+    if (!m_snapshot.showSketches) {
+      commands.append(cmd("set_view_show", {{QStringLiteral("sketches"), true}}));
+    }
+  }
+  const QString path = occurrencePath.isEmpty() ? QStringLiteral("Root") : occurrencePath;
+  const QString verb = show ? QStringLiteral("shown") : QStringLiteral("hidden");
+  if (commands.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("All sketches %1: already %2").arg(path, verb);
+    return;
+  }
+  // One undo step for them all (a single change is the model's own step).
+  if (m_host.runVisibilityCommands(commands, show ? tr("Show All Sketches") : tr("Hide All Sketches"))) {
+    qDebug().noquote() << QStringLiteral("All sketches %1: %2 (%3)").arg(path, verb).arg(changed);
+  }
+}
+
 bool BrowserController::toggleIsolated(const BrowserNode& node) {
   const Selection& isolation = m_snapshot.isolation;
   if (isolation.isEmpty() || !node.visible ||
@@ -1904,6 +1962,12 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
       }
     }
     isolate();
+    // Every sketch's light bulb in the design or the component (mitcad#1931,
+    // GitHub mitcad/Mitcad#355), one undo step each.
+    menu.add(QStringLiteral("eye"), tr("Show All Sketches"),
+             [this, node] { setAllSketches(node.occurrence, true); });
+    menu.add(QStringLiteral("eye-off"), tr("Hide All Sketches"),
+             [this, node] { setAllSketches(node.occurrence, false); });
     // The timeline's filter (mitcad#98), this window's view.
     menu.add(QStringLiteral("filter"), tr("Show in Timeline Only"), [this, node] {
       m_timeline->setFilter(node.uid, m_timeline->filterSubcomponents());

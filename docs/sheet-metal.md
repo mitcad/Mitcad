@@ -332,6 +332,10 @@ positive usable width. The kernel checks `Lstraight > tolerance`, enough base
 material for the selected setback, valid relief intersections, and collisions.
 It reports which length/offset/radius fails; it does not clamp the user's value.
 
+A flange may take several connected edges, one wall each, mitred where
+they meet with a corner gap ([a flange on several
+edges](#a-flange-on-several-edges-mitcad1872)).
+
 For `r=2`, `t=1`, `K=0.4`, `theta=pi/2`, `BA=1.2*pi`, `Si=2` and `So=3`.
 An entered length 12 gives straight lengths 12, 10 and 9 for tangent, inner
 and outer respectively. A stationary tangent length 30 plus a tangent flange
@@ -1478,6 +1482,108 @@ outline (commands.md, "A flange's profile sketch").
   rectangular and the tapered wall, the Face narrowed and the angle changed
   without a warning, the warning for a profile on the XY plane); `tools/ui-sheet-flange-profile-test.sh`
   and the ctest `app.ui-windows-sheet-flange-profile`.
+
+### A flange on several edges (mitcad#1872)
+
+One Flange may take several straight edges connected at their ends
+(GitHub mitcad/Mitcad#337: flanges on adjoining edges of a vertical and
+an inclined face, refused one at a time because their walls passed
+through each other). `boundaries` follow `boundary`; edge `k` makes bend
+and wall slot `k` with curves from `100 k` (commands.md, "A flange on
+several edges"). `sheet/folded/flange_edges.rs`:
+
+- **Corners.** Two edges meet where an end of each coincides, or where
+  the two ends lie on the two tangent lines of one bend at the same axial
+  place (the sides of two faces that a bend joins). The edges make one
+  chain or loop; anything else is refused in words. The flange's own
+  geometry for each edge (its port frame and the wall's plane from the
+  construction at the edge's start) is worked out on the input sheet, so
+  the corners do not depend on the order the edges are built in.
+- **Miters as half-spaces.** A corner gives each of its two flanges a
+  half-space (`Keep`) its material keeps to. Bisect: the plane through
+  the point where the walls' mid-thickness root lines come closest,
+  normal to `u_i - u_j` (the edges' directions away from the corner),
+  `g / 2` off it on each side. A wall running past: the passing wall up
+  to the other wall's far surface, the other wall `g` short of the
+  passing wall's near surface; both bends keep the bisecting half-space,
+  the cut-back one the near-surface one as well.
+- **Existing flanges** (mitcad#1877, `existing_walls`). A free end that
+  lies at an end of a bend's tangent line, on either side, meets what
+  lies across the bend: a wall of another flange (the end where that
+  flange's bend starts, or across a bend from a flange's wall) keeps the
+  end `g` short of its near surface (the existing wall runs past); a
+  flange on the panel across whose bend ends across from the end (its
+  stationary tangent line's end, in the middle of the thickness, on the
+  other tangent line of the bend across, at most its setback away on the
+  side of its wall, where its trim cut the bend across back) keeps it
+  `g` short of that flange's wall: of its near surface at an angle, and
+  where the walls lie in one plane (or touch face to face) of the plane
+  square to its edge through the farthest its wall's chart and its bend
+  reach towards the end (a gap of 0 refused). Only the new flange keeps
+  to these; the existing ones are never cut.
+- **Normal cuts.** A sheet's side faces are normal to its surfaces (the
+  chart's region is swept through the thickness), so a true bisecting
+  cut of two walls at an angle, oblique through the thickness, is not a
+  sheet. Each wall is cut on the straight line where the half-space's
+  plane meets whichever of its two surfaces reaches further (a half-plane
+  of its chart); each bend ends square where its whole cross-section
+  (radii `r` to `r + t` over its angle, `bend_limit`) clears the plane.
+  Walls in one plane (both flanges turned to the inside of the bend
+  between their faces) are cut exactly on the bisecting line; walls at an
+  angle meet, at a gap of 0, along one line (an open corner, mitcad#1409);
+  the gap is exact where they come closest.
+- **Face and wall.** The bend covers the edge between its limits; the
+  face is cut back to the tangent line over the bend and, past a
+  shortened end, on to the edge's end (curves `70 + 100 k` at the start,
+  `80 + 100 k` at the end), through a bend there by the developed cut
+  (`cut_back`, whose tool curves now take a slot). The wall is the
+  rectangle of its length over the bend, run on past a mitred end (also
+  past the edge's end, up to its length plus the bend's radius, two
+  thicknesses and the gap) and clipped by its half-planes; its root over
+  the bend is the port `53`, the root beyond the bend free (`55`, `56`),
+  the miters `58` and `59`. A free end follows the face's side as a whole
+  edge does (mitcad#1576). Unfold and the Flat Pattern develop the walls
+  as charts, so the gaps stay.
+- **Limits.** Profile, hem, corner joint, offsets and width belong to a
+  single plain flange and are refused with several edges or a corner
+  gap, as are At Edge (no material to cut back at a corner) and a length
+  with no wall; a pattern copy joined to the sheet does not repeat a
+  flange on several edges. Walls that still meet are refused by the
+  construction naming the flanges, with the advice to widen the gap or
+  change the angle, length or position.
+- **Places** (mitcad#1877). Each end's rule keeps the places of its
+  corner: the side faces the two edges were picked by (`wall_name`, as
+  the input sheet has them), an existing flange's wall's front face, the
+  corner's point. The refusals at a corner (in `corner_rules`,
+  `edge_flange`, `wall_polygon`) carry them as a `FeatureError`'s places,
+  in the input body (`flange_edges` puts them there); a refusal of the
+  construction that names meeting walls (`panel F6 slot 1`, read by
+  `walls_named` before `name_walls` names them) gets, through
+  `publish_placed`, each wall's place (one of this flange's walls: its
+  edge's side face; another's: its front face) and the places of the
+  corner whose rule names them all. The panel paints them on hover.
+- **Per-corner Miter in the panel** (mitcad#1877). The Flange panel's
+  Corners rows each pick a corner (an edge or a vertex there); the
+  `sheet_flange_corners` query (`edge_corners`: the corners of the edges
+  by the same `corners` rule, with the middle of the two ends) maps the
+  pick to the nearest corner's two edges, written as `corner_miters`. An
+  edit's rows keep their two edges until a corner is picked.
+- **Tests.** CLI `cli.sheet_flange_edges` (a 40 x 30 box, three edges,
+  Inside and Outside at gaps 0 and 1, turned down, the earlier edge
+  running past, one corner's own miter, Flat Pattern areas, refusals) and
+  `cli.sheet_flange_edges_bend` (the sides of a face and of an inclined
+  wall that a 45-degree bend joins, walls in one plane mitred on the
+  bend's bisecting line at gaps 1 and 2, the edges in either order; gap 0
+  and a wall running past refused); `cli.sheet_flange_edges_existing`
+  (mitcad#1877: a flange on an inclined wall's side meeting a plain
+  flange on the face's side across the bend, walls in one plane, the
+  volume and the 1 mm gap measured, the existing wall uncut, gap 0
+  refused, `sheet_flange_corners`); the mock kernel's
+  `sheet_edges_tests.rs` (the definition saved and reopened, the gap a
+  parameter, refusals before any geometry, the places of a corner
+  refusal, the corners found); the UI
+  `tools/ui-sheet-flange-edges-test.sh` and the ctest
+  `app.ui-windows-sheet-flange-edges`.
 
 ## Kernel seam
 

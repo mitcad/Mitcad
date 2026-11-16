@@ -672,6 +672,11 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
     if ((type != m_def.featureType && !m_def.editsAlso.contains(type)) || !m_def.load ||
         (m_def.canEdit && !m_def.canEdit(def))) {
       error = tr("%1 cannot edit %2.").arg(m_def.name, feature.value(QStringLiteral("name")).toString());
+      // What the panel does not hold, in words (mitcad#1885).
+      const QString why = m_def.editRefusal ? m_def.editRefusal(def) : QString();
+      if (!why.isEmpty()) {
+        error += QLatin1Char(' ') + why;
+      }
       return false;
     }
     m_def.load(def, m_state, m_host);
@@ -736,7 +741,7 @@ bool CommandSession::start(const Selection& preselection, QString& error) {
             !isReferable(picked) || (sketchAxis && !input.sketchAxes)) {
           continue;
         }
-        const SelectionItem item = input.convert ? input.convert(picked) : picked;
+        const SelectionItem item = input.takenIn(picked, m_state, m_host);
         Selection& items = m_state.items(slot.key);
         if (!containsEntry(items, item, resolve) && (input.max == 0 || items.size() < input.max)) {
           items.append(item);
@@ -1422,6 +1427,8 @@ void CommandSession::activate(const QString& key) {
   // An extent's object: a face in front of an origin plane is the pick,
   // also one of another component (mitcad#762).
   viewer.setPlanesByDepth(input != nullptr && input->planesByDepth);
+  // Patch's edges: a surface body's free edge picks its opening (mitcad#1927).
+  viewer.setOpeningEdges(input != nullptr && input->takesOpenings);
   // Measure's Faces, Edges and Vertices: a body's corner or edge before the
   // sketch point or line on it, but the edited sketch's own (mitcad#869).
   viewer.setSketchesBehind(input != nullptr && input->sketchesBehind, m_host.editedSketch());
@@ -1592,7 +1599,7 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
         qDebug().noquote() << QStringLiteral("%1 %2: %3 of the preview taken as %4")
                                   .arg(m_def.name, input->label, item.logDescription(), named->name);
       }
-      accepted.append(input->convert ? input->convert(*named) : *named);
+      accepted.append(input->takenIn(*named, m_state, m_host));
       raw.append(*named);
     } else if (input->refusesMeshes && item.geometry == QStringLiteral("mesh") && input->filter.testFlag(item.kind)) {
       // A mesh body picked in the browser (the view does not offer one):
@@ -2918,7 +2925,12 @@ void CommandSession::runPreview() {
     const quint64 structure = m_structureGeneration;
     m_asyncPending = true;
     m_previewClock.start();
-    showPanelMessage(tr("Computing preview…"), NoticeLevel::Progress);
+    // The panel's busy mark beside OK and Cancel, which changes no size,
+    // instead of a message line that made the panel grow and shrink with
+    // each preview (mitcad#1907, GitHub mitcad/Mitcad#361); the message
+    // shown stays until the result replaces it. The log keeps its
+    // "Computing preview started" line (the host's job).
+    m_presenter->setBusy(tr("Computing preview…"));
     m_presenter->setOkEnabled(false);
     const bool started = m_host.modelPreviewAsync(key, m_def.name, this,
         [this, generation, structure, key, built, computedFrom, leftOut,
@@ -2926,6 +2938,9 @@ void CommandSession::runPreview() {
           m_previewClock.invalidate();
           if (!asyncPresenterAvailable()) { return; }
           m_asyncPending = false;
+          // A newer preview that starts at once keeps the mark shown
+          // (BusyMark's grace).
+          m_presenter->setBusy(QString());
           if (m_cancelRequested) {
             if (m_host.asynchronousCommands()) { finishAsyncCancel(); }
             else { cancel(); }
@@ -2958,6 +2973,7 @@ void CommandSession::runPreview() {
     if (!started) {
       m_asyncPending = false;
       m_previewClock.invalidate();
+      m_presenter->setBusy(QString());
       schedulePreview();
     }
     return;
@@ -3388,6 +3404,12 @@ QString CommandSession::okMessage(const QJsonObject& report) {
   // Then what is worth knowing of how it was built (mitcad#1106: a fillet
   // built 0.1 % smaller than asked), information unless there are warnings.
   message << report.value(QStringLiteral("infos")).toVariant().toStringList();
+  // Then what the panel points out while it is open (mitcad#1914: a
+  // fillet's tangent chain that stops where other sharp edges meet), also
+  // information: the user accepts it with OK, and nothing marks the
+  // feature for it afterwards. The pointer over the message paints its
+  // places (the edges left sharp).
+  message << report.value(QStringLiteral("remarks")).toVariant().toStringList();
   m_shownNote.clear();
   refreshRowNotes();
   if (m_missingProfiles > 0) {
@@ -3464,20 +3486,23 @@ void CommandSession::acceptFeaturePreview(const QByteArray& key, const Built& bu
       // What the rows left out need, as without the preview (mitcad#1813).
       showPanelMessage(leftOutMessage, NoticeLevel::Hint);
     }
-    // (Then its infos, mitcad#1106.)
+    // (Then its infos, mitcad#1106, and its remarks, mitcad#1914.)
     const QStringList infos = preview.report.value(QStringLiteral("infos")).toVariant().toStringList();
+    const QStringList remarks = preview.report.value(QStringLiteral("remarks")).toVariant().toStringList();
     // A preview of the complete rows only names the rows it leaves out and
     // what the panel says they need (mitcad#1813), for UI tests.
     const QString without =
         leftOutMessage.isEmpty()
             ? QString()
             : QStringLiteral(" without its incomplete rows (%1: %2)").arg(leftOutRows, leftOutMessage);
-    qDebug().noquote() << QStringLiteral("Preview %1%2: ok%3%4")
+    qDebug().noquote() << QStringLiteral("Preview %1%2: ok%3%4%5")
                               .arg(m_def.name, without,
                                    warnings.isEmpty() ? QString()
                                                       : QStringLiteral(", warning: ") + warnings.join(QStringLiteral("; ")),
                                    infos.isEmpty() ? QString()
-                                                   : QStringLiteral(", info: ") + infos.join(QStringLiteral("; ")));
+                                                   : QStringLiteral(", info: ") + infos.join(QStringLiteral("; ")),
+                                   remarks.isEmpty() ? QString()
+                                                     : QStringLiteral(", remark: ") + remarks.join(QStringLiteral("; ")));
     // The occurrences it shows elsewhere (mitcad#55), for UI tests.
     QStringList moved;
     for (const QJsonValue& value : preview.report.value(QStringLiteral("placements")).toArray()) {
@@ -5596,6 +5621,7 @@ void CommandSession::finish(bool committed) {
   viewer.setPlanesBehind(false);
   viewer.setPlanesByDepth(false);
   viewer.setSketchesBehind(false);
+  viewer.setOpeningEdges(false);
   viewer.setProfilesFirst(false);
   viewer.setHandleBoxes({}); // the handles' value boxes went with them
   viewer.setHandleAreas(nullptr, {}); // and the handles (mitcad#1105)

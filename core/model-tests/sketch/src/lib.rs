@@ -93,3 +93,13 @@ mod sketch_rounded_offset_1774_tests;
 // Sketches on cylindrical and conical faces: developed coordinates, profiles
 // raised and sunk, Split Face, lengths on the face (mitcad#1768).
 mod sketch_curved_face_1768_tests;
+// Point coordinates written as expressions of parameters, and the points
+// at a drawing command's inputs as written (mitcad#1897).
+mod sketch_expression_points_1897_tests;
+// Sketch texts moved and copied with Move/Copy, a text on a path refused,
+// and Edit Text's position (mitcad#1911).
+mod sketch_move_text_1911_tests;
+// Point coordinates written as expressions in 3D sketches, refused in words
+// by a move and a scale, and held for a circular pattern's centre
+// (mitcad#1912).
+mod sketch_expression_points_1912_tests;

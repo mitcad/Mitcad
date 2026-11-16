@@ -2,6 +2,7 @@
 // Export Drawing's choices (mitcad#471): the defaults, kept in the settings
 // (group drawing) and read back, unknown values ignored, typed scales, and
 // the export_drawing command they make.
+#include "UnitTests.hpp"
 #include "files/DrawingSettings.hpp"
 
 #include <cstdio>
@@ -90,3 +91,4 @@ int drawingSettingsTests() {
   CHECK(!all.contains(QStringLiteral("bodies")) && !all.contains(QStringLiteral("section")));
   return failures;
 }
+MITCAD_UNIT_TEST(drawingSettingsTests);

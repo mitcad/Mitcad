@@ -7,6 +7,7 @@
 // the type; each design's preview has a place of its own by its path in
 // the previews' folder; Show start page at launch is on by default; and an
 // earlier list without times reads with the files' own.
+#include "UnitTests.hpp"
 #include "files/RecentDesigns.hpp"
 
 #include <cstdio>
@@ -205,3 +206,4 @@ int recentDesignsTests() {
   QSettings::setDefaultFormat(format);
   return failures;
 }
+MITCAD_UNIT_TEST(recentDesignsTests);

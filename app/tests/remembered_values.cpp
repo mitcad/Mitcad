@@ -4,6 +4,7 @@
 // an edit and Cancel keep nothing; a new panel starts with the value read
 // back, or with the default when none is kept or it does not evaluate in
 // the design at hand. A choice marked so keeps its option (mitcad#1868).
+#include "UnitTests.hpp"
 #include "framework/RememberedValues.hpp"
 
 #include <cstdio>
@@ -313,3 +314,4 @@ int rememberedValuesTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(rememberedValuesTests);

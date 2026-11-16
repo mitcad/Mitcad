@@ -6,6 +6,7 @@
 // what the panel does with the answer (mitcad#1864: also for the selection
 // it opens with), the message box with its buttons, default and check box,
 // and the preference's values.
+#include "UnitTests.hpp"
 #include "browser/JointHolderQuestion.hpp"
 
 #include <cstdio>
@@ -253,3 +254,4 @@ int jointHolderQuestionTests() {
   settingsTests();
   return failures;
 }
+MITCAD_UNIT_TEST(jointHolderQuestionTests);

@@ -212,7 +212,9 @@ add_library(mitcad-webbrowser MODULE
   cef/CefView.cpp
   cef/CefView.hpp
   ../files/FileFormats.cpp
-  ../files/FileFormats.hpp)
+  ../files/FileFormats.hpp
+  BrowserDiagnostics.cpp
+  BrowserDiagnostics.hpp)
 target_include_directories(mitcad-webbrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # CEF's headers as the system's: MitCad's warning flags are for its own code.
 target_include_directories(mitcad-webbrowser SYSTEM PRIVATE "${CEF_INCLUDE_PATH}")

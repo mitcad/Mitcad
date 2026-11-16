@@ -79,6 +79,20 @@ void TestDriver::testNavigationControls(const QString& mode) {
                  spaceMode->findData(int(SpaceMouseMode::Camera)) >= 0 &&
                  spaceMode->findData(int(SpaceMouseMode::Fly)) >= 0,
              QStringLiteral("the 3D Mouse tab has no Navigation mode or Lock horizon"))) return;
+  if (mode == QStringLiteral("lock-rotation-button")) {
+    // Button 2 chosen to run Lock Rotation (mitcad#1910): the command is
+    // offered beside the view commands, and the choice applies at once.
+    auto* button = controls->findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton1"));
+    const int row = button ? button->findData(spaceMouseLockRotationCommand()) : -1;
+    if (!check(row >= 0, QStringLiteral("the 3D Mouse tab's buttons do not offer Lock Rotation"))) return;
+    button->setCurrentIndex(row);
+    if (!check(controls->chosen().spaceMouse.buttons.value(1) == spaceMouseLockRotationCommand() &&
+                   window->viewer().navigation().spaceMouse.buttons.value(1) == spaceMouseLockRotationCommand(),
+               QStringLiteral("button 2's Lock Rotation was not applied"))) return;
+    qInfo().noquote() << QStringLiteral("Navigation controls: 3D mouse button 2 runs %1 (%2)")
+                             .arg(spaceMouseLockRotationCommand(), button->currentText());
+    return;
+  }
   if (mode == QStringLiteral("configure")) {
     scheme->setCurrentIndex(scheme->findData(int(NavigationScheme::MiddlePan)));
     auto* editor = qobject_cast<QComboBox*>(table->cellWidget(middle, 1));
@@ -95,7 +109,8 @@ void TestDriver::testNavigationControls(const QString& mode) {
       reset->click();
     }
   } else if (mode != QStringLiteral("default") && mode != QStringLiteral("restored")) {
-    fail(m_line, QStringLiteral("navigation controls mode must be default, configure, restored or reset"));
+    fail(m_line, QStringLiteral("navigation controls mode must be default, configure, restored, reset or "
+                                "lock-rotation-button"));
     return;
   }
   const auto chosen = controls->chosen();

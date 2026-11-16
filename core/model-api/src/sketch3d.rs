@@ -50,6 +50,7 @@ use mitcad_model::sketch::spatial_edit::{
     RectangleRequest, SegmentRequest, ShapeMade, SpatialEdit, SpatialEditReport, SpatialPointInput,
     SplineRequest, TextRequest,
 };
+use mitcad_model::sketch::spatial_inputs::{SpatialDrawnInputs, SpatialInputPoints, place_only};
 use mitcad_model::sketch::spatial_planar::planar_view;
 use mitcad_model::sketch::{ConstraintUid, Ref, SketchText, TextAlign, TextVAlign};
 use mitcad_model::{Document, PlanarConversion, SketchConversion, SpatialEditError};
@@ -73,7 +74,9 @@ named_enum! {
         },
         "sketch3d.add_point" => AddPoint {
             sketch: FeatureUid,
-            at: [f64; 3],
+            /// A position [x, y, z], whose coordinates may be expressions
+            /// (mitcad#1912).
+            at: Value,
             /// Attach it to a source point, or put it on a source curve
             /// (mitcad#1543; `source_input` reads it).
             #[serde(default)]
@@ -117,7 +120,7 @@ named_enum! {
             start: Value,
             end: Value,
             #[serde(default)]
-            through: Option<[f64; 3]>,
+            through: Option<Value>,
             #[serde(default)]
             center: Option<Value>,
             #[serde(default)]
@@ -324,7 +327,7 @@ named_enum! {
             #[serde(default)]
             b: Option<Value>,
             #[serde(default)]
-            c: Option<[f64; 3]>,
+            c: Option<Value>,
             #[serde(default)]
             center: Option<Value>,
             #[serde(default)]
@@ -359,12 +362,12 @@ named_enum! {
             sketch: FeatureUid,
             text: String,
             /// The anchor: where the text starts (or a frame's corner).
-            at: [f64; 3],
+            at: Value,
             plane: Value,
             height: f64,
             /// The frame's opposite corner: a text in a frame.
             #[serde(default)]
-            frame: Option<[f64; 3]>,
+            frame: Option<Value>,
             #[serde(default)]
             angle: f64,
             #[serde(default)]
@@ -439,20 +442,30 @@ fn plane_normal(plane: SpatialPlane) -> SpatialAxis {
     }
 }
 
-/// A field a rectangle mode needs.
-fn field(value: Option<Value>, name: &str, mode: &str) -> Result<SpatialPointInput, String> {
-    point_input(&need(value, name, mode)?)
+/// A point input a rectangle mode needs, read by `read`.
+fn field(
+    value: Option<Value>,
+    name: &str,
+    mode: &str,
+    read: &mut PointReader<'_>,
+) -> Result<SpatialPointInput, String> {
+    read(name, &need(value, name, mode)?)
 }
 
-/// The corners of `sketch3d.add_rectangle`'s mode from its fields; a field
-/// of another mode is refused.
+/// How a command reads a point input inside its edit (mitcad#1912: with
+/// coordinates written as expressions, [`SpatialDrawnInputs`]).
+type PointReader<'a> = dyn FnMut(&str, &Value) -> Result<SpatialPointInput, String> + 'a;
+
+/// The corners of `sketch3d.add_rectangle`'s mode from its fields, the
+/// point inputs read by `read`; a field of another mode is refused.
 fn rectangle_corners(
     mode: &str,
     a: Option<Value>,
     b: Option<Value>,
-    c: Option<[f64; 3]>,
+    c: Option<Value>,
     center: Option<Value>,
     corner: Option<Value>,
+    read: &mut PointReader<'_>,
 ) -> Result<RectangleCorners, String> {
     match mode {
         "two_point" => {
@@ -460,8 +473,8 @@ fn rectangle_corners(
             refuse_field(&center, "center", mode)?;
             refuse_field(&corner, "corner", mode)?;
             Ok(RectangleCorners::TwoPoint {
-                a: field(a, "a", mode)?,
-                b: field(b, "b", mode)?,
+                a: field(a, "a", mode, read)?,
+                b: field(b, "b", mode, read)?,
             })
         }
         "center" => {
@@ -469,17 +482,17 @@ fn rectangle_corners(
             refuse_field(&b, "b", mode)?;
             refuse_field(&c, "c", mode)?;
             Ok(RectangleCorners::Center {
-                center: field(center, "center", mode)?,
-                corner: field(corner, "corner", mode)?,
+                center: field(center, "center", mode, read)?,
+                corner: field(corner, "corner", mode, read)?,
             })
         }
         "three_point" => {
             refuse_field(&center, "center", mode)?;
             refuse_field(&corner, "corner", mode)?;
             Ok(RectangleCorners::ThreePoint {
-                a: field(a, "a", mode)?,
-                b: field(b, "b", mode)?,
-                c: need(c, "c", mode)?,
+                a: field(a, "a", mode, read)?,
+                b: field(b, "b", mode, read)?,
+                c: place_only("c", &need(c, "c", mode)?)?,
             })
         }
         other => Err(format!(
@@ -571,29 +584,6 @@ fn curve_name(id: EntityUid) -> String {
 
 fn names<T: ToString>(items: &[T]) -> Vec<String> {
     items.iter().map(ToString::to_string).collect()
-}
-
-/// A point of a command: `[x, y, z]` (a new point at local coordinates) or
-/// an existing point's id. Two coordinates are refused: a 3D sketch's
-/// points have three.
-fn point_input(value: &Value) -> Result<SpatialPointInput, String> {
-    match value {
-        Value::String(text) => point_id(text).map(SpatialPointInput::Existing),
-        Value::Array(items) if items.len() == 3 => {
-            let mut at = [0.0; 3];
-            for (k, item) in items.iter().enumerate() {
-                at[k] = item
-                    .as_f64()
-                    .ok_or("a point's coordinates are numbers (millimetres)")?;
-            }
-            Ok(SpatialPointInput::At(at))
-        }
-        Value::Array(items) => Err(format!(
-            "a 3D sketch's point has three coordinates [x, y, z], not {}",
-            items.len()
-        )),
-        _ => Err("a point is [x, y, z] (a new point) or a point id like \"p3\"".to_owned()),
-    }
 }
 
 /// A source of a command (mitcad#1543): as the definition writes it
@@ -836,6 +826,48 @@ fn report_json(report: &SpatialEditReport) -> Value {
     value
 }
 
+/// A drawing command's coordinates written as expressions (mitcad#1912),
+/// when it had any: `inputs`, each point input field with the point at it
+/// as written (`null` where the command made none; a spline's `points` as
+/// a list), and `coordinates`, the dimension that holds each such
+/// coordinate and the parameter it uses.
+fn put_coordinates(value: &mut Value, inputs: &SpatialInputPoints) {
+    if inputs.coordinates.is_empty() {
+        return;
+    }
+    let mut fields = serde_json::Map::new();
+    for input in &inputs.points {
+        let point = input.point.map_or(Value::Null, |p| json!(point_name(p)));
+        match input.index {
+            None => {
+                fields.insert(input.field.clone(), point);
+            }
+            Some(i) => {
+                let list = fields
+                    .entry(input.field.clone())
+                    .or_insert_with(|| json!([]));
+                if let Value::Array(list) = list {
+                    if list.len() <= i {
+                        list.resize(i + 1, Value::Null);
+                    }
+                    list[i] = point;
+                }
+            }
+        }
+    }
+    value["inputs"] = Value::Object(fields);
+    let coordinates: Vec<Value> = inputs
+        .coordinates
+        .iter()
+        .map(|c| {
+            json!({"point": point_name(c.point), "axis": c.axis,
+                   "dimension": c.dimension.to_string(), "expression": c.expression,
+                   "parameter": c.parameter})
+        })
+        .collect();
+    value["coordinates"] = json!(coordinates);
+}
+
 /// One corner a fillet rounded (mitcad#1548): the corner, its lines, the
 /// arc with its centre and tangent points, the construction lines to the
 /// corner and those that took the lines' segment relations.
@@ -979,7 +1011,7 @@ fn reference_geometry(curve: &SpatialReferenceCurve) -> Value {
 fn arc_placement(
     mode: &str,
     through: Option<[f64; 3]>,
-    center: Option<Value>,
+    center: Option<SpatialPointInput>,
     normal: Option<[f64; 3]>,
     from: Option<String>,
     normal_axis: Option<(SpatialAxis, SpatialSense)>,
@@ -996,7 +1028,7 @@ fn arc_placement(
         "center" => {
             refuse_field(&through, "through", mode)?;
             refuse_field(&from, "from", mode)?;
-            let center = point_input(&need(center, "center", mode)?)?;
+            let center = need(center, "center", mode)?;
             // The active plane's normal when only `normal_axis` is given.
             let normal = match (normal, normal_axis) {
                 (Some(normal), _) => normal,
@@ -1282,7 +1314,11 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 fixed,
             } => {
                 let source = optional_source(self, sketch, source.as_ref())?;
-                let (point, report) = edit(self, sketch, "Add Point", |e| {
+                let drawn = SpatialDrawnInputs::default();
+                let ((point, inputs), report) = edit(self, sketch, "Add Point", |e| {
+                    let SpatialPointInput::At(at) = drawn.read(e, "at", &at)? else {
+                        return Err("\"at\" is a position [x, y, z], not a point id".to_owned());
+                    };
                     let point = e.add_point(at)?;
                     if let Some(source) = source {
                         e.attach(point, source)?;
@@ -1290,10 +1326,12 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                     if fixed {
                         e.fix(point)?;
                     }
-                    Ok(point)
+                    let inputs = drawn.finish(e, &[("at", None, point)])?;
+                    Ok((point, inputs))
                 })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([point_name(point)]);
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddLine {
@@ -1314,23 +1352,31 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                     .map(rotated_frame)
                     .transpose()
                     .map_err(ApiError)?;
-                let request = SegmentRequest {
-                    start: point_input(&start).map_err(ApiError)?,
-                    end: point_input(&end).map_err(ApiError)?,
-                    construction,
-                    axis: axis_of(axis, sense, "axis").map_err(ApiError)?,
-                    length,
-                    offsets: offsets.unwrap_or([None, None, None]),
-                    start_source: optional_source(self, sketch, start_source.as_ref())?,
-                    end_source: optional_source(self, sketch, end_source.as_ref())?,
-                };
-                let (made, report) = edit(self, sketch, "Add Line", |e| {
-                    e.add_segment_in(&request, frame)
+                let axis = axis_of(axis, sense, "axis").map_err(ApiError)?;
+                let start_source = optional_source(self, sketch, start_source.as_ref())?;
+                let end_source = optional_source(self, sketch, end_source.as_ref())?;
+                let drawn = SpatialDrawnInputs::default();
+                let ((made, inputs), report) = edit(self, sketch, "Add Line", |e| {
+                    let request = SegmentRequest {
+                        start: drawn.read(e, "start", &start)?,
+                        end: drawn.read(e, "end", &end)?,
+                        construction,
+                        axis,
+                        length,
+                        offsets: offsets.unwrap_or([None, None, None]),
+                        start_source,
+                        end_source,
+                    };
+                    let made = e.add_segment_in(&request, frame)?;
+                    let known = [("start", None, made.start), ("end", None, made.end)];
+                    let inputs = drawn.finish(e, &known)?;
+                    Ok((made, inputs))
                 })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([curve_name(made.line)]);
                 value["start"] = json!(point_name(made.start));
                 value["end"] = json!(point_name(made.end));
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddArc {
@@ -1352,25 +1398,49 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
             } => {
                 let normal_axis =
                     axis_of(normal_axis, normal_sense, "normal_axis").map_err(ApiError)?;
-                let placement = arc_placement(&mode, through, center, normal, from, normal_axis)
+                // A three-point arc's `through` is a place: no point is made
+                // there (mitcad#1912).
+                let through = through
+                    .as_ref()
+                    .map(|t| place_only("through", t))
+                    .transpose()
                     .map_err(ApiError)?;
-                let request = ArcRequest {
-                    start: point_input(&start).map_err(ApiError)?,
-                    end: point_input(&end).map_err(ApiError)?,
-                    placement,
-                    construction,
-                    normal_axis,
-                    radius,
-                    arc_length,
-                    start_source: optional_source(self, sketch, start_source.as_ref())?,
-                    end_source: optional_source(self, sketch, end_source.as_ref())?,
-                };
-                let (made, report) = edit(self, sketch, "Add Arc", |e| e.add_arc(&request))?;
+                let start_source = optional_source(self, sketch, start_source.as_ref())?;
+                let end_source = optional_source(self, sketch, end_source.as_ref())?;
+                let drawn = SpatialDrawnInputs::default();
+                let ((made, inputs), report) = edit(self, sketch, "Add Arc", |e| {
+                    let center = center
+                        .as_ref()
+                        .map(|c| drawn.read(e, "center", c))
+                        .transpose()?;
+                    let placement =
+                        arc_placement(&mode, through, center, normal, from, normal_axis)?;
+                    let request = ArcRequest {
+                        start: drawn.read(e, "start", &start)?,
+                        end: drawn.read(e, "end", &end)?,
+                        placement,
+                        construction,
+                        normal_axis,
+                        radius,
+                        arc_length,
+                        start_source,
+                        end_source,
+                    };
+                    let made = e.add_arc(&request)?;
+                    let known = [
+                        ("start", None, made.start),
+                        ("end", None, made.end),
+                        ("center", None, made.center),
+                    ];
+                    let inputs = drawn.finish(e, &known)?;
+                    Ok((made, inputs))
+                })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([curve_name(made.arc)]);
                 value["center"] = json!(point_name(made.center));
                 value["start"] = json!(point_name(made.start));
                 value["end"] = json!(point_name(made.end));
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddCircle {
@@ -1386,7 +1456,6 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 diameter,
                 construction,
             } => {
-                let center = point_input(&center).map_err(ApiError)?;
                 let normal_axis =
                     axis_of(normal_axis, normal_sense, "normal_axis").map_err(ApiError)?;
                 // Plane-bound on a frame plane (mitcad#1550).
@@ -1432,7 +1501,9 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 } else {
                     point_ids(&through).map_err(ApiError)?
                 };
-                let (circle, report) = edit(self, sketch, "Add Circle", |e| {
+                let drawn = SpatialDrawnInputs::default();
+                let ((circle, inputs), report) = edit(self, sketch, "Add Circle", |e| {
+                    let center = drawn.read(e, "center", &center)?;
                     // Where the circle starts: the value when it is known.
                     let start = match &radius {
                         ValueInput::Number(v) => *v,
@@ -1479,10 +1550,12 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                             *r = if diameter { value / 2.0 } else { value };
                         }
                     }
-                    Ok(circle)
+                    let inputs = drawn.finish(e, &[])?;
+                    Ok((circle, inputs))
                 })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([curve_name(circle)]);
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddEllipse {
@@ -1495,10 +1568,11 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 minor_value,
                 construction,
             } => {
-                let center = point_input(&center).map_err(ApiError)?;
-                let major = point_input(&major).map_err(ApiError)?;
                 let on = shape_plane(&plane).map_err(ApiError)?;
-                let (ellipse, report) = edit(self, sketch, "Add Ellipse", |e| {
+                let drawn = SpatialDrawnInputs::default();
+                let ((ellipse, inputs), report) = edit(self, sketch, "Add Ellipse", |e| {
+                    let center = drawn.read(e, "center", &center)?;
+                    let major = drawn.read(e, "major", &major)?;
                     let ellipse =
                         e.add_ellipse_on(center, major, minor_radius, on, construction)?;
                     if let Some(value) = &major_value {
@@ -1515,10 +1589,12 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                             false,
                         )?;
                     }
-                    Ok(ellipse)
+                    let inputs = drawn.finish(e, &[])?;
+                    Ok((ellipse, inputs))
                 })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([curve_name(ellipse)]);
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddRectangle {
@@ -1535,12 +1611,15 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 construction,
             } => {
                 let on = shape_plane(&plane).map_err(ApiError)?;
-                let request = RectangleRequest {
-                    corners: rectangle_corners(&mode, a, b, c, center, corner).map_err(ApiError)?,
-                    normal: plane_normal(on),
-                    construction,
-                };
-                let (made, report) = edit(self, sketch, "Add Rectangle", |e| {
+                let drawn = SpatialDrawnInputs::default();
+                let ((made, inputs), report) = edit(self, sketch, "Add Rectangle", |e| {
+                    let mut read = |f: &str, v: &Value| drawn.read(e, f, v);
+                    let corners = rectangle_corners(&mode, a, b, c, center, corner, &mut read)?;
+                    let request = RectangleRequest {
+                        corners,
+                        normal: plane_normal(on),
+                        construction,
+                    };
                     let made = e.add_rectangle_on(&request, on)?;
                     let sides = made.sides.unwrap_or([made.curves[0], made.curves[1]]);
                     for (line, value) in sides.iter().zip([&width, &height]) {
@@ -1552,9 +1631,12 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                             )?;
                         }
                     }
-                    Ok(made)
+                    let inputs = drawn.finish(e, &[])?;
+                    Ok((made, inputs))
                 })?;
-                shape_json(&report, &made)
+                let mut value = shape_json(&report, &made);
+                put_coordinates(&mut value, &inputs);
+                value
             }
             Sketch3dCommand::AddPolygon {
                 sketch,
@@ -1567,15 +1649,23 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 construction,
             } => {
                 let on = shape_plane(&plane).map_err(ApiError)?;
-                let request = PolygonRequest {
-                    center: point_input(&center).map_err(ApiError)?,
-                    vertex: point_input(&vertex).map_err(ApiError)?,
-                    sides,
-                    inscribed,
-                    normal: plane_normal(on),
-                    construction,
-                };
-                let (made, report) = edit(self, sketch, "Add Polygon", |e| {
+                let drawn = SpatialDrawnInputs::default();
+                let ((made, inputs), report) = edit(self, sketch, "Add Polygon", |e| {
+                    // A circumscribed polygon's `vertex` is a side's middle: a
+                    // place, no point (mitcad#1912).
+                    let vertex = if inscribed {
+                        drawn.read(e, "vertex", &vertex)?
+                    } else {
+                        drawn.read_place(e, "vertex", &vertex)?
+                    };
+                    let request = PolygonRequest {
+                        center: drawn.read(e, "center", &center)?,
+                        vertex,
+                        sides,
+                        inscribed,
+                        normal: plane_normal(on),
+                        construction,
+                    };
                     let made = e.add_polygon_on(&request, on)?;
                     if let (Some(value), Some(circle)) = (&radius, made.construction.first()) {
                         e.add_dimension(
@@ -1584,9 +1674,12 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                             false,
                         )?;
                     }
-                    Ok(made)
+                    let inputs = drawn.finish(e, &[])?;
+                    Ok((made, inputs))
                 })?;
-                shape_json(&report, &made)
+                let mut value = shape_json(&report, &made);
+                put_coordinates(&mut value, &inputs);
+                value
             }
             Sketch3dCommand::AddText {
                 sketch,
@@ -1610,10 +1703,15 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                 planar.italic = italic;
                 planar.align = align;
                 planar.valign = valign;
+                // Places: a text has no point there (mitcad#1912).
                 let request = TextRequest {
                     text: planar,
-                    at,
-                    frame,
+                    at: place_only("at", &at).map_err(ApiError)?,
+                    frame: frame
+                        .as_ref()
+                        .map(|f| place_only("frame", f))
+                        .transpose()
+                        .map_err(ApiError)?,
                     normal: plane_normal(on),
                 };
                 let (id, report) = edit(self, sketch, "Add Text", |e| e.add_text_on(&request, on))?;
@@ -1636,19 +1734,23 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                             .to_owned(),
                     ));
                 }
-                let points = points
-                    .iter()
-                    .map(point_input)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(ApiError)?;
-                let request = SplineRequest {
-                    points,
-                    degree,
-                    closed,
-                    ends: ends.unwrap_or([SpatialSplineEnd::Natural; 2]),
-                    construction,
-                };
-                let (made, report) = edit(self, sketch, "Add Spline", |e| e.add_spline(&request))?;
+                let drawn = SpatialDrawnInputs::default();
+                let ((made, inputs), report) = edit(self, sketch, "Add Spline", |e| {
+                    let mut read = Vec::with_capacity(points.len());
+                    for (i, p) in points.iter().enumerate() {
+                        read.push(drawn.read_at(e, "points", i, p)?);
+                    }
+                    let request = SplineRequest {
+                        points: read,
+                        degree,
+                        closed,
+                        ends: ends.unwrap_or([SpatialSplineEnd::Natural; 2]),
+                        construction,
+                    };
+                    let made = e.add_spline(&request)?;
+                    let inputs = drawn.finish(e, &[])?;
+                    Ok((made, inputs))
+                })?;
                 let mut value = report_json(&report);
                 value["made"] = json!([curve_name(made.spline)]);
                 value["spline_points"] = json!(
@@ -1657,6 +1759,7 @@ impl<K: Kernel> Sketch3dOps<K> for Document<K> {
                         .map(|p| point_name(*p))
                         .collect::<Vec<_>>()
                 );
+                put_coordinates(&mut value, &inputs);
                 value
             }
             Sketch3dCommand::AddConstraint { sketch, constraint } => {

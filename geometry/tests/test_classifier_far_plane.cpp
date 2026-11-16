@@ -16,11 +16,17 @@
 // point whose bottom (first in its shell, so that the checker's point of it
 // lies on the bottom's edges) lies in that plane too. Every other face of
 // the pointed cavity is seen from there less than 5 degrees off its plane.
+//
+// A flat shell (every face in one plane, volume 0) has every fixed line of a
+// point in its plane run in that plane; such a line through an edge is passed
+// over (mitcad#1881), so that a cut by the flat shell leaves its object as it
+// is instead of emptying it.
 
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
@@ -28,8 +34,10 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Solid.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
+#include <BRepGProp.hxx>
 #include <BRepLib.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <TopExp_Explorer.hxx>
@@ -38,7 +46,9 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Solid.hxx>
 #include <TopoDS_Vertex.hxx>
+#include <GProp_GProps.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 #include <gp_XYZ.hxx>
 
 #include "check.hpp"
@@ -233,11 +243,72 @@ void test_block_with_the_two_cavities() {
   CHECK(classifier.State() == TopAbs_OUT);
 }
 
+// A flat shell: a rectangle in the plane x = 0 swept along z, within its own
+// plane, so that every face of the solid lies in x = 0 and its volume is 0
+// (the tool of OCCT's TKBO GTests BCutSimpleTest1 K1, K5, K7 and L1).
+TopoDS_Shape flat_prism() {
+  const TopoDS_Face face =
+      planar_face({gp_Pnt(0, 75, 40), gp_Pnt(0, 175, 40), gp_Pnt(0, 175, 115), gp_Pnt(0, 75, 115)});
+  return BRepPrimAPI_MakePrism(face, gp_Vec(0, 0, 30)).Shape();
+}
+
+double volume(const TopoDS_Shape& shape) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props);
+  return props.Mass();
+}
+
+void test_point_in_the_plane_of_a_flat_shell() {
+  // mitcad#1881: a point in the plane of a flat shell gets no segment from
+  // any face (each surface holds it), so it is classified along the fixed
+  // lines, and the shape's box being flat, every one of them runs in that
+  // plane. A line through an edge there was decided by the transition across
+  // the edge's faces, which counted points outside the shell inside it; a
+  // fixed line through an edge is now passed over, and with no line meeting
+  // a face cleanly the point is rejected as before the patch (OUT).
+  const TopoDS_Shape flat = flat_prism();
+  CHECK(std::abs(volume(flat)) < 1e-6);
+  BRepClass3d_SolidClassifier classifier(flat);
+  for (const gp_Pnt& point : {gp_Pnt(0, 200, 22.7144), gp_Pnt(0, 190, 20), gp_Pnt(0, 20, 10),
+                              gp_Pnt(0, 120, 10)}) {
+    classifier.Perform(point, 1e-7);
+    CHECK(classifier.State() == TopAbs_OUT);
+    if (classifier.State() != TopAbs_OUT) {
+      std::fprintf(stderr, "  (%g, %g, %g): state %d\n", point.X(), point.Y(), point.Z(),
+                   static_cast<int>(classifier.State()));
+    }
+  }
+}
+
+void test_cut_by_a_flat_shell() {
+  // A block with a pocket in its top, whose face x = 0 the flat shell
+  // touches along the block's top edge: the cut leaves the block as it is
+  // (with the patch's earlier form it came out empty: the block was
+  // classified inside the tool).
+  // Both prisms as the GTests make them: a rectangle in a plane z = const,
+  // swept down.
+  const TopoDS_Shape plate = BRepPrimAPI_MakePrism(
+      planar_face({gp_Pnt(0, 0, 40), gp_Pnt(150, 0, 40), gp_Pnt(150, 200, 40), gp_Pnt(0, 200, 40)}),
+      gp_Vec(0, 0, -40)).Shape();
+  const TopoDS_Shape pocket = BRepPrimAPI_MakePrism(
+      planar_face(
+          {gp_Pnt(25, 25, 50), gp_Pnt(25, 125, 50), gp_Pnt(100, 125, 50), gp_Pnt(100, 25, 50)}),
+      gp_Vec(0, 0, -30)).Shape();
+  const TopoDS_Shape block = BRepAlgoAPI_Cut(plate, pocket).Shape();
+  const double before = 150.0 * 200.0 * 40.0 - 75.0 * 100.0 * 20.0;
+  CHECK_NEAR(volume(block), before);
+  BRepAlgoAPI_Cut cut(block, flat_prism());
+  CHECK(cut.IsDone());
+  CHECK_NEAR(volume(cut.Shape()), before);
+}
+
 } // namespace
 
 int main() {
   test::guarded("point_in_the_plane_of_a_far_face", test_point_in_the_plane_of_a_far_face);
   test::guarded("block_with_the_two_cavities", test_block_with_the_two_cavities);
+  test::guarded("point_in_the_plane_of_a_flat_shell", test_point_in_the_plane_of_a_flat_shell);
+  test::guarded("cut_by_a_flat_shell", test_cut_by_a_flat_shell);
   if (test::failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", test::failures);
     return 1;

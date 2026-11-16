@@ -8,6 +8,8 @@
 // boundaries, corners) the definitions keep, and `load` turns those back
 // into the faces and edges that carry their names.
 #include <cmath>
+#include <cstddef>
+#include <limits>
 #include "framework/ModelMessages.hpp"
 
 #include <QDebug>
@@ -65,6 +67,12 @@ const Choices kFlangeCorners = {{QStringLiteral("none"), QStringLiteral("None")}
 const Choices kFlangeWidths = {{QStringLiteral("whole"), QStringLiteral("Whole Edge")},
                                {QStringLiteral("offsets"), QStringLiteral("Offsets from the Ends")},
                                {QStringLiteral("middle"), QStringLiteral("From the Middle")}};
+// How the walls of a flange on several edges meet at their corners (the
+// model's `miter`, mitcad#1872): on the bisecting plane, or one wall
+// running past the other.
+const Choices kFlangeMiters = {{QStringLiteral("bisect"), QStringLiteral("Bisect")},
+                               {QStringLiteral("earlier_runs_past"), QStringLiteral("Earlier Edge Runs Past")},
+                               {QStringLiteral("later_runs_past"), QStringLiteral("Later Edge Runs Past")}};
 
 // --- Picks and semantic references
 
@@ -235,6 +243,118 @@ bool isCornerJoint(const CommandState& state) {
 // Whether a flange's wall is drawn by a profile sketch (mitcad#1648): the
 // hidden input `profile` names the sketch.
 bool hasProfile(const CommandState& state) { return !state.text(QStringLiteral("profile")).isEmpty(); }
+
+// Whether the Flange panel has several edges (mitcad#1872): one flange
+// with a wall on each and mitered corners, without hem, corner joint,
+// width or profile.
+bool severalEdges(const CommandState& state) { return state.items(QStringLiteral("edge")).size() > 1; }
+
+// The Flange panel's Corners (mitcad#1877): one row per corner whose Miter
+// is its own (the model's `corner_miters`), the corner picked in the view
+// (an edge or a vertex where two of the flange's edges meet) or, as an
+// edit loads it, given by its two edges (the hidden `edges`, "0,1").
+const QString kCornerMiters = QStringLiteral("corner_miters");
+
+// The two edges a Corners row names: by its pick, the corner of the
+// flange's edges `edges` (their boundaries) nearest the pick (the model's
+// `sheet_flange_corners`), else a corner whose two walls the picked edge
+// lies between; else the edges it was loaded with. False when the row
+// names none; `built` fails when its pick is no corner of the flange.
+bool cornerEdges(const CommandState& row, const QString& rowKey, const QString& body, const QJsonArray& edges,
+                 const CommandContext& context, QJsonArray& corners, Built& built, int& first, int& second) {
+  const Selection& picked = row.items(QStringLiteral("corner"));
+  if (picked.isEmpty()) {
+    const QStringList pair = row.text(QStringLiteral("edges")).split(QLatin1Char(','));
+    bool ok = pair.size() == 2;
+    if (ok) {
+      bool read = false;
+      first = pair.at(0).toInt(&read);
+      ok = read;
+      second = pair.at(1).toInt(&read);
+      ok = ok && read;
+    }
+    return ok;
+  }
+  if (corners.isEmpty()) {
+    try {
+      corners = context
+                    .queryObject({{QStringLiteral("query"), QStringLiteral("sheet_flange_corners")},
+                                  {QStringLiteral("body"), body},
+                                  {QStringLiteral("edges"), edges}})
+                    .value(QStringLiteral("corners"))
+                    .toArray();
+    } catch (const std::exception& error) {
+      built = Built::failure(mitcad::modelMessage(error.what()), rowKey);
+      return false;
+    }
+  }
+  const SelectionItem& item = picked.first();
+  double nearest = std::numeric_limits<double>::infinity();
+  for (const QJsonValue& value : corners) {
+    const QJsonObject corner = value.toObject();
+    const QJsonArray pair = corner.value(QStringLiteral("edges")).toArray();
+    if (pair.size() != 2) {
+      continue;
+    }
+    const int a = pair.at(0).toInt();
+    const int b = pair.at(1).toInt();
+    double distance = 0.0;
+    if (item.at) {
+      const QJsonArray at = corner.value(QStringLiteral("at")).toArray();
+      for (int i = 0; i < 3; ++i) {
+        const double d = at.at(i).toDouble() - (*item.at)[static_cast<std::size_t>(i)];
+        distance += d * d;
+      }
+    } else {
+      // No point: the edge between the two walls of the corner.
+      const auto wall = [&edges](int k) {
+        const QJsonObject edge = edges.at(k).toObject();
+        return wallName(edge.value(QStringLiteral("panel")).toObject(), edge.value(QStringLiteral("curve")).toObject());
+      };
+      if (!item.name.contains(wall(a)) || !item.name.contains(wall(b))) {
+        continue;
+      }
+    }
+    if (distance < nearest) {
+      nearest = distance;
+      first = a;
+      second = b;
+    }
+  }
+  if (!std::isfinite(nearest)) {
+    built = Built::failure(QObject::tr("Pick a corner where two of the flange's edges meet."), rowKey);
+    return false;
+  }
+  return true;
+}
+
+// The Corners rows as the model's `corner_miters` (mitcad#1877); a row
+// that names no corner is left out.
+QJsonArray cornerMiters(const CommandState& state, const QString& body, const QJsonArray& edges,
+                        const CommandContext& context, Built& built) {
+  QJsonArray out;
+  QJsonArray corners;
+  for (int i = 0; i < state.rows(kCornerMiters); ++i) {
+    const CommandState row = state.row(kCornerMiters, i);
+    int first = -1;
+    int second = -1;
+    const QString key = CommandState::rowKey(kCornerMiters, i, QStringLiteral("corner"));
+    if (!cornerEdges(row, key, body, edges, context, corners, built, first, second)) {
+      if (!built.error.isEmpty()) {
+        return {};
+      }
+      continue;
+    }
+    QJsonArray pair;
+    pair.append(first);
+    pair.append(second);
+    QJsonObject corner;
+    corner.insert(QStringLiteral("edges"), pair);
+    corner.insert(QStringLiteral("miter"), row.choice(QStringLiteral("miter")));
+    out.append(corner);
+  }
+  return out;
+}
 
 // The Flange panel's Profile row (mitcad#1648): what draws the wall, with
 // Edit Profile (and Remove Profile once there is one).
@@ -549,31 +669,55 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("sheet_flange");
   // A profile sketch draws the wall (mitcad#1648): its length, width, hem
   // and corner are the sketch's, and their inputs are hidden.
-  const auto rectangular = [](const CommandState& s) { return !hasProfile(s); };
-  const auto plain = [](const CommandState& s) { return hasProfile(s) || !isHem(s); };
-  const auto measured = [](const CommandState& s) { return !hasProfile(s) && !isHem(s) && !isCornerJoint(s); };
-  const auto noCorner = [](const CommandState& s) { return !hasProfile(s) && !isCornerJoint(s); };
-  const auto cornerShown = [](const CommandState& s) { return !hasProfile(s) && !isHem(s); };
-  const auto hemShown = [](const CommandState& s) { return !hasProfile(s) && isHem(s); };
-  const auto doubleHem = [](const CommandState& s) {
-    return !hasProfile(s) && s.choice(QStringLiteral("hem")) == QStringLiteral("double");
+  // Several edges (mitcad#1872): plain walls, so the profile, hem,
+  // corner joint and width are hidden and Corner Gap and Miter shown.
+  const auto rectangular = [](const CommandState& s) { return severalEdges(s) || !hasProfile(s); };
+  const auto plain = [](const CommandState& s) { return severalEdges(s) || hasProfile(s) || !isHem(s); };
+  const auto measured = [](const CommandState& s) {
+    return severalEdges(s) || (!hasProfile(s) && !isHem(s) && !isCornerJoint(s));
   };
+  const auto noCorner = [](const CommandState& s) {
+    return !severalEdges(s) && !hasProfile(s) && !isCornerJoint(s);
+  };
+  const auto cornerShown = [](const CommandState& s) { return !severalEdges(s) && !hasProfile(s) && !isHem(s); };
+  const auto hemShown = [](const CommandState& s) { return !severalEdges(s) && !hasProfile(s) && isHem(s); };
+  const auto doubleHem = [](const CommandState& s) {
+    return !severalEdges(s) && !hasProfile(s) && s.choice(QStringLiteral("hem")) == QStringLiteral("double");
+  };
+  const auto widthShown = [](const CommandState& s) { return !severalEdges(s) && !hasProfile(s); };
   const auto offsets = [](const CommandState& s) {
-    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets");
+    return !severalEdges(s) && !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("offsets");
   };
   const auto middle = [](const CommandState& s) {
-    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle");
+    return !severalEdges(s) && !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle");
   };
   const auto ownRoot = [](const CommandState& s) {
-    return !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") &&
+    return !severalEdges(s) && !hasProfile(s) && s.choice(QStringLiteral("width_type")) == QStringLiteral("middle") &&
            s.checked(QStringLiteral("custom_root"));
+  };
+  const auto single = [](const CommandState& s) { return !severalEdges(s); };
+  const auto ownGap = [](const CommandState& s) {
+    return severalEdges(s) && s.checked(QStringLiteral("custom_gap"));
+  };
+  // A Corners row's corner (mitcad#1877): an edge or a vertex of the sheet
+  // where two of the flange's edges meet; an edit's row names its two
+  // edges until a corner is picked.
+  InputDef cornerPick =
+      selectionInput(QStringLiteral("corner"), QObject::tr("Corner"), SelectKind::Edge | SelectKind::Vertex, 0, 1)
+          .withTooltip(QObject::tr("An edge or a vertex of the sheet where two of the flange's edges meet"));
+  cornerPick.emptyShows = [](const CommandState& row) -> std::pair<QString, QColor> {
+    const QStringList pair = row.text(QStringLiteral("edges")).split(QLatin1Char(','));
+    if (pair.size() != 2) {
+      return {};
+    }
+    return {QObject::tr("Edges %1 and %2").arg(pair.at(0).toInt() + 1).arg(pair.at(1).toInt() + 1), QColor()};
   };
   // Measured, Position, Corner, Hem and Width start a new flange with the
   // choices of the last OK (mitcad#1868, app/COMMANDS.md "Remembered
   // values"): a user's way of dimensioning flanges is set once.
   def.inputs = {
-      selectionInput(QStringLiteral("edge"), QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 1, 1)
-          .withTooltip(QObject::tr("A straight edge or side face of the sheet"))
+      selectionInput(QStringLiteral("edge"), QObject::tr("Edge"), SelectKind::Edge | SelectKind::Face, 1, 0)
+          .withTooltip(QObject::tr("Straight edges or side faces of the sheet; edges connected at their ends meet mitered"))
           .withAccepts(isWall),
       angleInput().withVisible(plain),
       flipInput(QStringLiteral("flip"), QObject::tr("Flip")),
@@ -608,7 +752,7 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
           .withRemembered()
           .withTooltip(QObject::tr("How much of the edge the flange covers; from the middle it may pass the "
                                    "edge's ends"))
-          .withVisible(rectangular),
+          .withVisible(widthShown),
       valueInput(QStringLiteral("start"), QObject::tr("Start Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
           .withVisible(offsets),
       valueInput(QStringLiteral("end"), QObject::tr("End Offset"), ValueKind::Length, QStringLiteral("0 mm")).withStepMinimum(0.0)
@@ -630,31 +774,69 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
       textInput(QStringLiteral("profile"), QObject::tr("Profile")).withVisible([](const CommandState&) {
         return false;
       }),
-      noteInput(QStringLiteral("profile_note"), flangeProfileNote, nullptr, QObject::tr("Profile")),
+      noteInput(QStringLiteral("profile_note"), flangeProfileNote, nullptr, QObject::tr("Profile")).withVisible(single),
+      // The corners of a flange on several edges (mitcad#1872).
+      choiceInput(QStringLiteral("miter"), QObject::tr("Miter"), kFlangeMiters, QStringLiteral("bisect"))
+          .withTooltip(QObject::tr("Where two walls meet: cut on the corner's bisecting plane, or one wall runs past"))
+          .withVisible(severalEdges),
+      checkInput(QStringLiteral("custom_gap"), QObject::tr("Own Corner Gap"), false)
+          .withTooltip(QObject::tr("Off: the gap between the walls at a corner is the sheet's thickness"))
+          .withVisible(severalEdges),
+      valueInput(QStringLiteral("corner_gap"), QObject::tr("Corner Gap"), ValueKind::Length, QStringLiteral("1 mm"))
+          .withStepMinimum(0.0)
+          .withTooltip(QObject::tr("The gap between two walls where they meet; 0 where they only touch along a line"))
+          .withVisible(ownGap),
+      // A corner's own Miter (mitcad#1877): the corner picked in the
+      // view, or the two edges an edit loaded.
+      listInput(kCornerMiters, QObject::tr("Corners"),
+                {cornerPick,
+                 textInput(QStringLiteral("edges"), QObject::tr("Edges")).withVisible([](const CommandState&) {
+                   return false;
+                 }),
+                 choiceInput(QStringLiteral("miter"), QObject::tr("Miter"), kFlangeMiters, QStringLiteral("bisect"))
+                     .withTooltip(QObject::tr("How the two walls meet at this corner, in place of the flange's Miter"))},
+                QObject::tr("Add Corner"), QObject::tr("Corner %1"), 0)
+          .withTooltip(QObject::tr("Corners whose walls meet otherwise than the flange's Miter says"))
+          .withVisible(severalEdges),
   };
   def.inputs += overrideInputs(true);
   def.enabled = [&context] { return hasSheets(context); };
   def.build = [&context](const CommandState& state, const CommandContext&) {
     Built result;
-    const SelectionItem item = state.items(QStringLiteral("edge")).first();
-    const QJsonObject pick = sheetPick(item, context, result, QStringLiteral("edge"));
-    if (!result.error.isEmpty()) {
-      return result;
+    // Each edge's boundary; several edges make one flange with mitered
+    // corners (mitcad#1872), all on one sheet.
+    const Selection& edges = state.items(QStringLiteral("edge"));
+    const SelectionItem item = edges.first();
+    QJsonValue boundary;
+    QJsonArray further;
+    for (qsizetype i = 0; i < edges.size(); ++i) {
+      const QJsonObject pick = sheetPick(edges.at(i), context, result, QStringLiteral("edge"));
+      if (!result.error.isEmpty()) {
+        return result;
+      }
+      const QJsonValue picked = pick.value(QStringLiteral("boundary"));
+      if (!picked.isObject() || !pick.value(QStringLiteral("straight")).toBool()) {
+        return Built::failure(QObject::tr("Select a straight edge of a flat face of the sheet."), QStringLiteral("edge"));
+      }
+      if (i == 0) {
+        boundary = picked;
+      } else if (edges.at(i).owner != item.owner) {
+        return Built::failure(QObject::tr("Select edges of one sheet for one flange."), QStringLiteral("edge"));
+      } else {
+        further.append(picked);
+      }
     }
-    const QJsonValue boundary = pick.value(QStringLiteral("boundary"));
-    if (!boundary.isObject() || !pick.value(QStringLiteral("straight")).toBool()) {
-      return Built::failure(QObject::tr("Select a straight edge of a flat face of the sheet."), QStringLiteral("edge"));
-    }
+    const bool several = !further.isEmpty();
     // A profile sketch draws the wall (mitcad#1648): no hem, corner joint
     // or width then.
-    const bool profiled = hasProfile(state);
-    const bool hem = !profiled && isHem(state);
+    const bool profiled = !several && hasProfile(state);
+    const bool hem = !several && !profiled && isHem(state);
     // A hem's length is measured from the plane touching its first bend's
     // outer surface, and its angle gives only its side (commands.md, "Hem
     // forms of a flange").
     // A corner joint's length is the closed section's inside dimension
     // (commands.md, "Corner joints of a closing flange").
-    const bool corner = !profiled && !hem && isCornerJoint(state);
+    const bool corner = !several && !profiled && !hem && isCornerJoint(state);
     const QString mode = hem      ? QStringLiteral("outer_tangent")
                          : corner ? QStringLiteral("inner")
                                   : state.choice(QStringLiteral("length_mode"));
@@ -680,7 +862,30 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     if (profiled) {
       result.def.insert(QStringLiteral("profile"), state.text(QStringLiteral("profile")));
     }
-    const QString widthType = profiled ? QStringLiteral("whole") : state.choice(QStringLiteral("width_type"));
+    if (several) {
+      result.def.insert(QStringLiteral("boundaries"), further);
+      if (state.choice(QStringLiteral("miter")) != QStringLiteral("bisect")) {
+        result.def.insert(QStringLiteral("miter"), state.choice(QStringLiteral("miter")));
+      }
+      if (state.checked(QStringLiteral("custom_gap"))) {
+        result.def.insert(QStringLiteral("corner_gap"), state.expression(QStringLiteral("corner_gap")));
+      }
+      // The corners with their own Miter (mitcad#1877).
+      QJsonArray all;
+      all.append(boundary);
+      for (const QJsonValue next : further) {
+        all.append(next);
+      }
+      const QJsonArray corners = cornerMiters(state, item.owner, all, context, result);
+      if (!result.error.isEmpty()) {
+        return result;
+      }
+      if (!corners.isEmpty()) {
+        result.def.insert(QStringLiteral("corner_miters"), corners);
+      }
+    }
+    const QString widthType =
+        profiled || several ? QStringLiteral("whole") : state.choice(QStringLiteral("width_type"));
     if (widthType == QStringLiteral("offsets")) {
       result.def.insert(QStringLiteral("offsets"),
                         QJsonObject{{QStringLiteral("start"), state.expression(QStringLiteral("start"))},
@@ -698,8 +903,28 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
     return result;
   };
   def.load = [](const QJsonObject& feature, CommandState& state, const CommandContext& model) {
-    state.setItems(QStringLiteral("edge"),
-                   {wallFace(str(feature, "body"), feature.value(QStringLiteral("boundary")).toObject())});
+    Selection edges{wallFace(str(feature, "body"), feature.value(QStringLiteral("boundary")).toObject())};
+    for (const QJsonValue further : feature.value(QStringLiteral("boundaries")).toArray()) {
+      edges.append(wallFace(str(feature, "body"), further.toObject()));
+    }
+    state.setItems(QStringLiteral("edge"), edges);
+    state.setChoice(QStringLiteral("miter"), feature.value(QStringLiteral("miter")).toString(QStringLiteral("bisect")));
+    // The corners with their own Miter (mitcad#1877), each by its two
+    // edges until a corner is picked in its row.
+    const QJsonArray ownMiters = feature.value(QStringLiteral("corner_miters")).toArray();
+    state.setRows(kCornerMiters, static_cast<int>(ownMiters.size()));
+    for (int i = 0; i < static_cast<int>(ownMiters.size()); ++i) {
+      const QJsonObject own = ownMiters.at(i).toObject();
+      const QJsonArray pair = own.value(QStringLiteral("edges")).toArray();
+      state.setText(CommandState::rowKey(kCornerMiters, i, QStringLiteral("edges")),
+                    QStringLiteral("%1,%2").arg(pair.at(0).toInt()).arg(pair.at(1).toInt()));
+      state.setChoice(CommandState::rowKey(kCornerMiters, i, QStringLiteral("miter")),
+                      own.value(QStringLiteral("miter")).toString(QStringLiteral("bisect")));
+    }
+    if (feature.contains(QStringLiteral("corner_gap"))) {
+      state.setChecked(QStringLiteral("custom_gap"), true);
+      loadValue(state, QStringLiteral("corner_gap"), feature.value(QStringLiteral("corner_gap")), feature, model);
+    }
     loadAngle(feature, state, model);
     const QJsonObject length = feature.value(QStringLiteral("length")).toObject();
     state.setChoice(QStringLiteral("length_mode"), str(length, "mode"));
@@ -765,6 +990,17 @@ CommandDef sheetFlangeCommand(const CommandContext& context) {
   }
   def.describe = [](const CommandState& state, const CommandContext&) {
     const QString flipped = state.checked(QStringLiteral("flip")) ? QStringLiteral(" flipped") : QString();
+    if (severalEdges(state)) {
+      const QString gap = state.checked(QStringLiteral("custom_gap")) ? text(state, "corner_gap")
+                                                                       : QStringLiteral("the thickness");
+      // The corners with their own Miter (mitcad#1877).
+      const int own = state.rows(kCornerMiters);
+      const QString corners = own > 0 ? QStringLiteral(", %1 corner miters").arg(own) : QString();
+      return QStringLiteral("Added flange on %1 edges, length %2 (%3), angle %4, %5 miter, corner gap %6%7%8")
+          .arg(QString::number(state.items(QStringLiteral("edge")).size()), text(state, "length"),
+               state.choice(QStringLiteral("length_mode")), text(state, "angle"), state.choice(QStringLiteral("miter")),
+               gap, corners, flipped);
+    }
     if (hasProfile(state)) {
       return QStringLiteral("Added flange with the profile %1, angle %2%3")
           .arg(state.text(QStringLiteral("profile")), text(state, "angle"), flipped);

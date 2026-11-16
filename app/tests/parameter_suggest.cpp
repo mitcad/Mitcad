@@ -10,6 +10,7 @@
 // plain value with the list closed (mitcad#1254), and not while the model
 // computes (mitcad#1360); Remove Name in the browser and the menu
 // (mitcad#1577).
+#include "UnitTests.hpp"
 #include "framework/FormulaEditor.hpp"
 #include "framework/ModelBusy.hpp"
 #include "framework/ParameterField.hpp"
@@ -1116,3 +1117,4 @@ int parameterSuggestTests() {
   removeNameTests();
   return failures;
 }
+MITCAD_UNIT_TEST(parameterSuggestTests);

@@ -4,6 +4,7 @@
 // or ordinary words; its allow-list; and the selection card's words for a
 // selected profile, sketch curve, constraint and dimension, without the
 // region key or an item's id.
+#include "UnitTests.hpp"
 #include "framework/Selection.hpp"
 #include "framework/VisibleTextGuard.hpp"
 
@@ -156,3 +157,4 @@ int visibleTextTests() {
   CHECK(shown.measurements.isEmpty());
   return failures;
 }
+MITCAD_UNIT_TEST(visibleTextTests);

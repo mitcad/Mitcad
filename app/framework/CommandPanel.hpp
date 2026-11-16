@@ -31,6 +31,7 @@ class QVBoxLayout;
 
 namespace mitcad {
 
+class BusyMark;
 class CommandMessage;
 class CutTargetsPanel;
 class NoteRow;
@@ -66,6 +67,13 @@ public:
   // The button under the message (mitcad#1634: Activate <component>);
   // logged "Panel <command> message action <text> at x,y" with the places.
   void setMessageAction(const QString& text, const QString& tooltip) override;
+  // The busy mark beside OK and Cancel while a preview computes
+  // (mitcad#1907): shown after BusyMark::kDelayMs, taking no room of its
+  // own; logged "Panel <command> busy: <text>, panel WxH", then "Panel
+  // <command> busy mark shown after <ms> ms: <text>, panel WxH" and "…
+  // busy mark hidden after <ms> ms, panel WxH" (or "… busy ended after <ms>
+  // ms, mark not shown, panel WxH").
+  void setBusy(const QString& text) override;
   // An inspection's answer (Measure, Interference): its text, or its rows
   // of names and values where it has them (Measure, mitcad#1010:
   // ResultRows, right under the inputs).
@@ -178,6 +186,9 @@ private:
                  const CommandState& state, const QString& list, int index);
   void refreshRows(const CommandState& state);
   void scheduleLogLayout();
+  // "panel WxH, needs H": the panel's size and the height its rows ask
+  // for, in the busy lines (setBusy, mitcad#1907).
+  QString busySize() const;
   // The lines logLayout logs: every input's place, OK's, the panel's width
   // and what its page shows of it.
   QStringList layoutLines() const;
@@ -188,6 +199,10 @@ private:
   // message or a note changed, for UI tests (mitcad#198).
   void scheduleLogFit();
   void logFit() const;
+  // A new error or warning scrolled into the page's view (mitcad#1884), the
+  // field that has the keyboard kept in view; what that leaves out is shown
+  // once the field loses the keyboard.
+  void revealMessage();
   // Lays out what changed and shows or hides the page's scroll bar now, so
   // that the places and widths logged are the settled ones (mitcad#1456).
   void settleLayout() const;
@@ -222,12 +237,16 @@ private:
   // no text; the text as given.
   QPushButton* m_messageAction = nullptr;
   QString m_messageActionText;
+  // A new error or warning not yet scrolled into view (revealMessage).
+  bool m_revealMessage = false;
   QLabel* m_result = nullptr;
   // The answer as rows, when the inspection gives them (mitcad#1010); the
   // label above keeps its text, hidden then.
   ResultRows* m_resultRows = nullptr;
   QPushButton* m_ok = nullptr;
-  QWidget* m_buttonBox = nullptr; // OK and Cancel until takeButtons
+  QWidget* m_buttonBox = nullptr; // OK and Cancel (and the busy mark) until takeButtons
+  // Beside OK and Cancel while a preview computes (mitcad#1907).
+  BusyMark* m_busy = nullptr;
   std::vector<std::unique_ptr<Row>> m_rows;
   QHash<QString, Row*> m_byKey;
   QHash<QString, QPair<QString, QString>> m_notes; // key: error, hint

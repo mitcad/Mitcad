@@ -7,6 +7,7 @@
 // unknown command id in the preference is dropped with a log line, an alias
 // becomes its command and a repeated id is kept once, and the settings are
 // written again without them.
+#include "UnitTests.hpp"
 #include "framework/NavigationBarPins.hpp"
 
 #include <cstdio>
@@ -202,3 +203,4 @@ int navigationBarPinsTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(navigationBarPinsTests);

@@ -399,7 +399,9 @@ päätä", never "napsauta keskipiste".
 | mesh | verkko | never verkkomalli (malli is a design); Convert Mesh: Muunna verkko; Save as Mesh: Tallenna verkkona |
 | feature | piirre | |
 | sketch | luonnos | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
+| through the bodies (drawn) | kappaleiden läpi | Sketches Through Bodies: Luonnokset kappaleiden läpi; Show All Sketches, Hide All Sketches: Näytä kaikki luonnokset, Piilota kaikki luonnokset |
 | 3D sketch | 3D-luonnos | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
+| text (sketch) | teksti | anchor (a text's): ankkuri; Position X, Y: Sijainti X, Y; a text on a path: polulla oleva teksti; QR code: QR-koodi |
 | relation (3D sketch) | suhde | a 3D sketch's constraint; Relations: Suhteet; In plane: Tasossa; in-plane relation, Fix, dimension: tasosuhde, tasokiinnitys, tasomitta; Align X: Suuntaa X; Keep Axis, Keep Plane: Pidä akselilla, Pidä tasossa |
 | On Sketch Plane | Luonnostasolla | the relation; Release from Plane: Vapauta tasosta; Release Plane: Vapauta taso |
 | attach, detach (3D sketch) | linkittää, irrottaa | Attach: Linkitä; Detach: Irrota; linked reference: linkitetty viittaus; source: lähde; Replace Reference: Korvaa viittaus; reference curve: viitekäyrä; On Face (a point on a face): Tahkolla |

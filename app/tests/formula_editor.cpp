@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include <cstdio>
 
 #include <QApplication>
@@ -186,3 +187,4 @@ int formulaEditorTests() {
   textFormulaTests();
   return failures;
 }
+MITCAD_UNIT_TEST(formulaEditorTests);

@@ -283,6 +283,9 @@ mod limits;
 mod table;
 #[cfg(test)]
 mod tests;
+// A slicer's key where a Mitcad key is wanted (mitcad#1897).
+mod aliases;
+pub use aliases::{aliases, key_hint};
 
 /// The dialects of a [`DialectKey`] as bits.
 const B: u8 = 1;

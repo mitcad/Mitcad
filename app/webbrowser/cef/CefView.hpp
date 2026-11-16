@@ -4,7 +4,9 @@
 // A CEF browser shown in a Qt widget (mitcad#1579): windowless (off-screen)
 // rendering, CefRenderHandler::OnPaint's software buffer painted into the
 // widget (never a GPU texture: composited in software, with or without a
-// GPU; WebGL is drawn on the GPU where there is one, mitcad#1861), and the
+// GPU; WebGL is drawn on the GPU where there is one, mitcad#1861; each page
+// loaded is asked how it draws WebGL and its console's errors are kept for
+// the feedback diagnostics, mitcad#1906), and the
 // widget's mouse, wheel, keys, input method, clipboard and cursor forwarded
 // to it. No native child window, so it needs no native embedding on any
 // platform (Wayland, macOS). Downloads go where the owner says
@@ -92,6 +94,8 @@ public:
   void clearBrowsingData();
   // Before CEF ends (CefEngine): the browser closed and let go.
   void closeBrowser();
+  // The GPU path failed this run (CefEngine, mitcad#1906): gpuFailed().
+  void gpuFailedNotice() { emit gpuFailed(); }
 
   // Where a download goes: its full path, or empty to refuse it. Called
   // with the file's suggested name and the address.
@@ -103,6 +107,9 @@ signals:
   void loadFinished(bool ok);
   void navigationChanged();
   void consoleMessage(const QString& message);
+  // WebGL failed on the GPU this run: it is drawn in software from the next
+  // start of MitCad (mitcad#1906).
+  void gpuFailed();
   // state: a DownloadState.
   void downloadUpdated(quint32 id, qint64 received, qint64 total, int state, const QString& path,
                        const QString& reason);
@@ -176,7 +183,11 @@ private:
   void loadingChanged(bool loading, bool canGoBack, bool canGoForward);
   void loadEnded(bool ok);
   void cursorChanged(int type);
-  void logged(const QString& message);
+  // A message of the page's console (`error`: of the error level; `source`
+  // and `line`: where it came from): MitCad's own scripts' "mitcad:" lines
+  // to consoleMessage() unless they are the diagnostics' (the WebGL probe),
+  // the rest to the diagnostics (mitcad#1906).
+  void logged(bool error, const QString& message, const QString& source, int line);
   QString downloadStarting(std::uint32_t id, const QString& suggestedName, const QUrl& url);
   bool downloadRefused(std::uint32_t id) const { return m_refused.count(id) != 0; }
   // `reason` in words (the user's), `detail` the log's (the bytes and

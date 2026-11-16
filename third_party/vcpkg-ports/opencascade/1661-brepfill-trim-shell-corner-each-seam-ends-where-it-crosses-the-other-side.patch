@@ -38,6 +38,17 @@ intersection of the two sides comes in pieces (sides of one radius touch
 at two points of the corner, and meet at a shallow angle along small
 corners), the loop still does not close.
 
+Only where the two crossings are distinct vertices that lie near the
+bisector plane, within a tenth of their distance from the corner
+(mitcad#1899): one vertex of both is the U-edges' own crossing, which
+FindCommonVertex refused by its direction (sides that nearly coincide at
+a slight turn of the path: OCCT's bugs/modalg_7 bug32444, whose sweep was
+not done), and a crossing further off is not where the seams pass each
+other (inside a rounded corner of sides swept along lines: OCCT's
+pipe/specific H4 to J8, which lost 5 % of their volume). And an end of a
+section edge's curve is at a point where OCCT's comparison on the face
+finds it; the comparison in 3D only decides where that finds neither.
+
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
@@ -75,25 +86,30 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
    NCollection_DataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>&
      theHistMap)
  {
-@@ -1352,6 +1360,17 @@
+@@ -1352,6 +1360,22 @@
        }
      }
  
 +    // The vertex where each U-edge ends: the common one, or (the sides swept
 +    // along pieces of a path curved near the corner, whose U-edges do not
 +    // cross each other) each U-edge's own crossing with the other side's
-+    // faces nearest to the bisector plane.
++    // faces nearest to the bisector plane. Only where the two are distinct
++    // vertices near the plane (mitcad#1899): one vertex of both is the
++    // U-edges' own crossing, which OCCT refused by its direction (along
++    // nearly coincident sides at a slight turn of the path), and a crossing
++    // far from the plane is not where the seams pass each other.
 +    TopoDS_Vertex aHit1 = aCommonVertex, aHit2 = aCommonVertex;
 +    if (!bvertexfound)
 +    {
 +      bvertexfound = FindHitNearBisector(theDS, anEIndex1, theAxeOfBisPlane, aHit1, apar1)
-+                     && FindHitNearBisector(theDS, anEIndex2, theAxeOfBisPlane, aHit2, apar2);
++                     && FindHitNearBisector(theDS, anEIndex2, theAxeOfBisPlane, aHit2, apar2)
++                     && !aHit1.IsSame(aHit2);
 +    }
 +
      if (bvertexfound)
      {
        TopoDS_Vertex aV1, aV2;
-@@ -1362,8 +1381,8 @@
+@@ -1362,8 +1386,8 @@
        aNewE1.Orientation(TopAbs_FORWARD);
        aV1.Orientation(TopAbs_FORWARD);
        aBB.Add(aNewE1, aV1);
@@ -104,7 +120,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
        BRep_Tool::Range(TopoDS::Edge(aE1), f, l);
        aBB.Range(aNewE1, f, apar1);
  
-@@ -1371,8 +1390,8 @@
+@@ -1371,8 +1395,8 @@
        TopoDS_Edge aNewE2 = TopoDS::Edge(aE2.EmptyCopied());
        TopExp::Vertices(TopoDS::Edge(aE2), aV1, aV2);
        aNewE2.Orientation(TopAbs_FORWARD);
@@ -115,7 +131,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
        aBB.Add(aNewE2, aV2);
        BRep_Tool::Range(TopoDS::Edge(aE2), f, l);
        aBB.Range(aNewE2, apar2, l);
-@@ -1388,6 +1407,49 @@
+@@ -1388,6 +1412,54 @@
    return true;
  }
  
@@ -159,29 +175,49 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      }
 +    }
 +  }
-+  return bFound;
++  // Near the plane: within a tenth of its distance from the corner (the
++  // seams of sides swept along curves pass each other there; a U-edge that
++  // crosses the other side's faces further off, as one inside a rounded
++  // corner of sides swept along lines does, is left whole as OCCT leaves it).
++  return bFound
++         && aBest <= 0.1 * BRep_Tool::Pnt(theVertex).Distance(theAxeOfBisPlane.Location());
 +}
 +
  //=================================================================================================
  
  void StoreVedgeInHistMap(
-@@ -1724,20 +1786,29 @@
+@@ -1724,20 +1796,43 @@
    TopExp::Vertices(aEPrev, Vf, Vl);
    BRepAdaptor_Surface aBAS(theFace, false);
  
 +  // An end of an edge's curve on the face is at the point theP (rather
-+  // than at theQ) where it lies within the tolerance of theP in 3D and
-+  // nearer to theP than to theQ on the face (the two curves of a closed
-+  // face's seam are one line in 3D). The tolerance is that of the edge's
-+  // vertex and of the edge itself: the curve of an approximated section
-+  // edge on a swept face can end further from its vertex than the
-+  // vertex's own tolerance, and further on the face than the tolerance's
-+  // resolution there.
-+  const auto isAt =
-+    [&aBAS](const gp_Pnt2d& theEnd, const gp_Pnt2d& theP, const gp_Pnt2d& theQ, const double theTol) {
-+      return aBAS.Value(theEnd.X(), theEnd.Y()).Distance(aBAS.Value(theP.X(), theP.Y())) <= theTol
-+             && theEnd.Distance(theP) <= theEnd.Distance(theQ);
-+    };
++  // than at theQ) where it lies within the resolution of the vertex's
++  // tolerance on the face, as OCCT checks it. Where it lies within that of
++  // neither point (the curve of an approximated section edge on a swept
++  // face can end further from its vertex than the vertex's own tolerance,
++  // and further on the face than the tolerance's resolution there), it is
++  // at theP where it lies within twice the vertex's or the edge's
++  // tolerance of theP in 3D, whichever is wider, and nearer to theP than
++  // to theQ on the face (the two curves of a closed face's seam are one
++  // line in 3D).
++  const auto isAt = [&aBAS](const gp_Pnt2d& theEnd,
++                            const gp_Pnt2d& theP,
++                            const gp_Pnt2d& theQ,
++                            const double    theVTol,
++                            const double    theETol) {
++    const double aUVTol = std::max(aBAS.UResolution(theVTol), aBAS.VResolution(theVTol));
++    if (theEnd.Distance(theP) < aUVTol)
++    {
++      return true;
++    }
++    if (theEnd.Distance(theQ) < aUVTol)
++    {
++      return false;
++    }
++    return aBAS.Value(theEnd.X(), theEnd.Y()).Distance(aBAS.Value(theP.X(), theP.Y()))
++             <= 2. * std::max(theVTol, theETol)
++           && theEnd.Distance(theP) <= theEnd.Distance(theQ);
++  };
    double aTolerance1 = (Vf.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(Vf);
    double aTolerance2 = (Vl.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(Vl);
 -  double utol        = aBAS.UResolution(aTolerance1);
@@ -190,46 +226,45 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 -  utol               = aBAS.UResolution(aTolerance2);
 -  vtol               = aBAS.VResolution(aTolerance2);
 -  aTolerance2        = (utol > vtol) ? utol : vtol;
-+  aTolerance1        = 2. * std::max(aTolerance1, BRep_Tool::Tolerance(aEPrev));
-+  aTolerance2        = 2. * std::max(aTolerance2, BRep_Tool::Tolerance(aEPrev));
++  double aTolE       = BRep_Tool::Tolerance(aEPrev);
  
    gp_Pnt2d ap          = aCurve->Value(f);
    bool     bFirstFound = false;
    bool     bLastFound  = false;
  
 -  if (ap.Distance(theFirstPoint) < aTolerance1)
-+  if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1))
++  if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1, aTolE))
    {
      if (theOrientedList.IsEmpty())
      {
-@@ -1745,7 +1816,7 @@
+@@ -1745,7 +1840,7 @@
      }
      bFirstFound = true;
    }
 -  else if (ap.Distance(theLastPoint) < aTolerance1)
-+  else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1))
++  else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1, aTolE))
    {
      if (theOrientedList.IsEmpty())
      {
-@@ -1755,7 +1826,7 @@
+@@ -1755,7 +1850,7 @@
    }
    ap = aCurve->Value(l);
  
 -  if (ap.Distance(theLastPoint) < aTolerance2)
-+  if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2))
++  if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2, aTolE))
    {
      if (theOrientedList.IsEmpty())
      {
-@@ -1763,7 +1834,7 @@
+@@ -1763,7 +1858,7 @@
      }
      bLastFound = true;
    }
 -  else if (ap.Distance(theFirstPoint) < aTolerance2)
-+  else if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2))
++  else if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2, aTolE))
    {
      if (theOrientedList.IsEmpty())
      {
-@@ -1792,30 +1863,26 @@
+@@ -1792,30 +1887,25 @@
  
      aTolerance1 = (aV21.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(aV21);
      aTolerance2 = (aV22.IsNull()) ? Precision::Confusion() : BRep_Tool::Tolerance(aV22);
@@ -239,30 +274,29 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 -    utol        = aBAS.UResolution(aTolerance2);
 -    vtol        = aBAS.VResolution(aTolerance2);
 -    aTolerance2 = (utol > vtol) ? utol : vtol;
-+    aTolerance1 = 2. * std::max(aTolerance1, BRep_Tool::Tolerance(aE));
-+    aTolerance2 = 2. * std::max(aTolerance2, BRep_Tool::Tolerance(aE));
++    aTolE       = BRep_Tool::Tolerance(aE);
      aCurve      = BRep_Tool::CurveOnSurface(aE, theFace, f, l);
      ap          = aCurve->Value(f);
  
 -    if (ap.Distance(theFirstPoint) < aTolerance1)
-+    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1))
++    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance1, aTolE))
      {
        bFirstFound = true;
      }
 -    else if (ap.Distance(theLastPoint) < aTolerance1)
-+    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1))
++    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance1, aTolE))
      {
        bLastFound = true;
      }
      ap = aCurve->Value(l);
  
 -    if (ap.Distance(theFirstPoint) < aTolerance2)
-+    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2))
++    if (isAt(ap, theFirstPoint, theLastPoint, aTolerance2, aTolE))
      {
        bFirstFound = true;
      }
 -    else if (ap.Distance(theLastPoint) < aTolerance2)
-+    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2))
++    else if (isAt(ap, theLastPoint, theFirstPoint, aTolerance2, aTolE))
      {
        bLastFound = true;
      }

@@ -18,11 +18,21 @@
 //! `u8 1`). The occurrence's own stored transform is the first one: the
 //! joints after it do not change it, so the last placement is where the
 //! file shows the occurrence.
+//!
+//! A path may go on inside a component of another document: its levels
+//! there are references through that document's key between the path's
+//! last occurrence (one of that component) and the component the path
+//! starts in, one object per occurrence inside *(the valve servo design:
+//! a joint on a part inside the inserted servo moved the servo, and the
+//! file keeps the paths to each of its parts, mitcad#1892)*. Their
+//! placements are those paths', not the occurrence's own: they are kept
+//! apart ([`InsidePlacements`]), and an object of the occurrence's own
+//! path, where the file has one, gives its placements.
 
 use std::collections::HashMap;
 
 use super::super::classes::*;
-use super::super::ir::{IDENTITY, Mat4, OccurrenceNode, PlacementStep};
+use super::super::ir::{IDENTITY, InsidePlacements, Mat4, OccurrenceNode, PlacementStep};
 use super::super::stream::{Segment, u32_at};
 use super::{item_occurrence, rigid_matrix};
 
@@ -37,6 +47,10 @@ pub(super) struct History {
     pub path: Vec<u64>,
     /// The component the path starts in.
     pub context: u64,
+    /// The levels inside a component of another document (object ids in
+    /// its file), from the outermost down: the path goes on through the
+    /// path's last occurrence, one of that component (mitcad#1892).
+    pub inner: Vec<u64>,
     /// Each item (object id) with the path's placement after it.
     pub steps: Vec<(u64, Mat4)>,
 }
@@ -55,6 +69,14 @@ pub(super) fn history(seg: &Segment, id: u64) -> Option<History> {
     if component.context.is_some() {
         return None;
     }
+    // The levels inside another document come before the component as
+    // references through the document's key.
+    let inner: Vec<u64> = seg
+        .context_refs_in(d, 0, refs[k].0)
+        .into_iter()
+        .filter(|(_, r)| r.guid == OCCURRENCE)
+        .map(|(_, r)| r.id)
+        .collect();
     let mut path = Vec::new();
     for (_, r) in &refs[..k] {
         if seg.guid_of(r.id) == Some(OCCURRENCE) {
@@ -91,15 +113,23 @@ pub(super) fn history(seg: &Segment, id: u64) -> Option<History> {
     Some(History {
         path,
         context: component.id,
+        inner,
         steps,
     })
 }
 
+/// A path's placement steps, as `History::steps`.
+type Steps = Vec<(u64, Mat4)>;
+
 /// Every occurrence's placements in the root component `root`: by path
 /// where the object names it, else by the occurrence the first item made.
+/// Paths that go on inside a component of another document are kept apart,
+/// by the path down to its occurrence: they are not that occurrence's own.
 pub(super) struct Histories {
-    by_path: HashMap<Vec<u64>, Vec<(u64, Mat4)>>,
-    by_occurrence: HashMap<u64, Vec<(u64, Mat4)>>,
+    by_path: HashMap<Vec<u64>, Steps>,
+    by_occurrence: HashMap<u64, Steps>,
+    /// By the path down to the occurrence: (the inner levels, their steps).
+    inside: HashMap<Vec<u64>, Vec<(Vec<u64>, Steps)>>,
 }
 
 impl Histories {
@@ -107,12 +137,22 @@ impl Histories {
         let mut out = Histories {
             by_path: HashMap::new(),
             by_occurrence: HashMap::new(),
+            inside: HashMap::new(),
         };
         for o in seg.objects_of(OCCURRENCE_PLACEMENTS) {
             let Some(h) = history(seg, o.id) else {
                 continue;
             };
             if Some(h.context) != root {
+                continue;
+            }
+            if !h.inner.is_empty() {
+                if !h.path.is_empty() {
+                    out.inside
+                        .entry(h.path)
+                        .or_default()
+                        .push((h.inner, h.steps));
+                }
                 continue;
             }
             if !h.path.is_empty() {
@@ -156,14 +196,16 @@ impl Histories {
                     .flatten()
             });
             if let (Some(steps), Some(f3d)) = (steps, n.f3d.as_mut()) {
-                f3d.placements = Some(
-                    steps
+                f3d.placements = Some(placement_steps(steps, index_of));
+            }
+            if let (Some(inside), Some(f3d)) = (self.inside.get(&*path), n.f3d.as_mut()) {
+                f3d.inside_placements = Some(
+                    inside
                         .iter()
-                        .map(|(item, m)| PlacementStep {
-                            index: index_of.get(item).map(|&i| i as i64),
-                            object_id: Some(*item),
-                            transform: Some(*m),
-                            ..PlacementStep::default()
+                        .map(|(inner, steps)| InsidePlacements {
+                            inner: Some(inner.clone()),
+                            placements: Some(placement_steps(steps, index_of)),
+                            ..InsidePlacements::default()
                         })
                         .collect(),
                 );
@@ -185,4 +227,17 @@ fn count_nodes(nodes: &[OccurrenceNode], count: &mut HashMap<u64, usize>) {
             count_nodes(children, count);
         }
     }
+}
+
+/// Steps as the dump's, items by their timeline index (`index_of`).
+fn placement_steps(steps: &[(u64, Mat4)], index_of: &HashMap<u64, usize>) -> Vec<PlacementStep> {
+    steps
+        .iter()
+        .map(|(item, m)| PlacementStep {
+            index: index_of.get(item).map(|&i| i as i64),
+            object_id: Some(*item),
+            transform: Some(*m),
+            ..PlacementStep::default()
+        })
+        .collect()
 }

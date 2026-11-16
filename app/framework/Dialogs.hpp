@@ -49,6 +49,10 @@ QString dialogItem(QWidget* parent, const QString& title, const QString& label,
                    const QStringList& items, int current, bool* accepted);
 QString dialogOpenFileName(QWidget* parent, const QString& title = {}, const QString& directory = {},
                            const QString& filter = {}, QString* selectedFilter = nullptr);
+// The same choosing one file or more (File › Import, mitcad#1894); logs
+// "File dialog <title>: <n> files chosen" for more than one.
+QStringList dialogOpenFileNames(QWidget* parent, const QString& title = {}, const QString& directory = {},
+                                const QString& filter = {}, QString* selectedFilter = nullptr);
 QString dialogSaveFileName(QWidget* parent, const QString& title = {}, const QString& directory = {},
                            const QString& filter = {}, QString* selectedFilter = nullptr);
 QString dialogDirectory(QWidget* parent, const QString& title = {}, const QString& directory = {});

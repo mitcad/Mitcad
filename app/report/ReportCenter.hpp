@@ -33,6 +33,17 @@
 //   model's design_package query at Preview (for its size) and again at
 //   Send; Send then opens the zip's folder and says how to attach it or
 //   e-mail it, and the issue's body names it.
+// - Include the logs (mitcad#1896): Send Feedback's form can ask for this
+//   session's and the previous session's log files
+//   (framework/SessionLog.hpp): in the design's zip when there is one,
+//   else copied into a folder of `reports` that Send opens.
+// - The diagnostics (mitcad#1906): with Component from Web's browser when
+//   its window was used (webbrowser/BrowserDiagnostics.hpp: how it draws
+//   WebGL, the GPU process's failures, the pages' last errors), which its
+//   module leaves on the application object.
+// - The last session ended unexpectedly (its lock left behind, no crash
+//   report of it: a hang the user ended, a kill): a notice says so once,
+//   with Open Log Folder; every error report offers that button too.
 //
 // For tests: MITCAD_TEST_LOG_URLS=1 logs the address instead of opening a
 // browser (tools/ui-test-lib.sh sets it); MITCAD_TEST_CRASH=app or
@@ -80,6 +91,9 @@ public:
     std::function<QString()> designFile;
     // A query of the model (an error or a busy model throws).
     std::function<QJsonObject(const QJsonObject&)> query;
+    // Help › Open Log Folder (mitcad#1896): the session logs and crash
+    // dumps, from the error reports and the unexpected end's notice.
+    std::function<void()> openLogFolder;
   };
 
   ReportCenter(QMainWindow& window, Host host, QObject* parent = nullptr);
@@ -123,29 +137,38 @@ public:
 
 private:
   struct Offer {
-    QString kind;    // "crash", "worker-crash", "error"
+    QString kind;    // "crash", "worker-crash", "error", "ended" (the notice of mitcad#1896)
     QString message; // what the offer says happened
     report::Report report;
     QStringList files; // crash files the offer answers
   };
 
   void scanCrashes(bool atStart);
+  // The last session ended unexpectedly (SessionLog::endedUnexpectedly, no
+  // crash report of it): the notice, once per run (mitcad#1896).
+  void offerEndedSession();
   void queue(const Offer& offer);
   void offerNext();
   bool showOffer(const Offer& offer);
+  void showEndedNotice(const Offer& offer);
   report::Report crashReport(const report::CrashReport& crash, int earlier) const;
   QString diagnostics() const;
   QString recentActions() const;
   // The preview, then the delivery; true when sent. `includeDesign`: with
-  // the design's zip (mitcad#1795).
+  // the design's zip (mitcad#1795); `includeLogs`: with this session's and
+  // the previous session's logs (mitcad#1896).
   bool previewAndSend(const report::Report& report, const QImage& screenshot, QWidget* parent,
-                      bool includeDesign = false);
-  // `designZip`: where the design's zip goes, "" for none.
+                      bool includeDesign = false, bool includeLogs = false);
+  // `designZip`: where the design's zip goes, "" for none; `sessionLogs`:
+  // the session logs to attach (in the zip when there is one).
   void deliver(const report::Report& report, const QImage& screenshot, QWidget* parent,
-               const QString& logFile = QString(), const QString& designZip = QString());
+               const QString& logFile = QString(), const QString& designZip = QString(),
+               const QStringList& sessionLogs = QStringList());
   // Writes the design's zip at `path` with the report's Markdown, the
-  // screenshot's file (when there is one) and the log of this run.
-  report::DesignZip writeDesignZip(const QString& path, const QString& markdown, const QString& screenshotFile) const;
+  // screenshot's file (when there is one), the log of this run and the
+  // session logs given.
+  report::DesignZip writeDesignZip(const QString& path, const QString& markdown, const QString& screenshotFile,
+                                   const QStringList& sessionLogs = QStringList()) const;
   // The folder of the screenshots and design zips: `reports` in the local
   // application data.
   static QString reportsFolder();
@@ -163,6 +186,7 @@ private:
   QList<Offer> m_offers;
   QTimer* m_offerTimer = nullptr;
   bool m_offering = false;
+  bool m_crashOfferedAtStart = false; // a crash of an earlier run is offered
 };
 
 // Opens `url` in the browser; with MITCAD_TEST_LOG_URLS=1 (UI tests) only

@@ -345,6 +345,10 @@ struct InputDef {
   // Mesh bodies and their faces (item.geometry "mesh": triangles without
   // surfaces) are not taken: the operation needs surfaces (mitcad#399).
   bool refusesMeshes = false;
+  // Selection of edges: also an opening of a surface body, picked by one of
+  // its free edges (openingEdgeItem, mitcad#1927: Patch, the surface
+  // features' edges); other inputs never take such an item.
+  bool takesOpenings = false;
   int min = 1;
   int max = 1;
   QColor color; // highlight colour; the palette's next when invalid
@@ -356,6 +360,13 @@ struct InputDef {
   bool keepOnRepick = false;
   // The form a pick is kept in (a face stands for the feature that made it).
   std::function<SelectionItem(const SelectionItem&)> convert;
+  // The form a pick is kept in that depends on the state and the model,
+  // in place of `convert` for picks, a selection made before the command
+  // and a script's items (takenIn): Move/Copy's Components keeps a body
+  // clicked as the occurrence placed in the move's component on the
+  // body's path (mitcad#1891). `convert` stays the form without them
+  // (takes(), the context menu's offer).
+  std::function<SelectionItem(const SelectionItem&, const CommandState&, const CommandContext&)> convertNow;
   // Called after a pick was taken, with the item as picked (with `at`).
   std::function<void(const SelectionItem&, CommandState&, const CommandContext&)> onPick;
   // Occurrences to draw as ghosts for an item of the input (mitcad#147):
@@ -705,6 +716,10 @@ struct InputDef {
     refusesMeshes = true;
     return *this;
   }
+  InputDef& withOpenings() {
+    takesOpenings = true;
+    return *this;
+  }
   InputDef& withToolOverlays() {
     toolOverlays = true;
     return *this;
@@ -739,6 +754,11 @@ struct InputDef {
   }
   InputDef& withConvert(std::function<SelectionItem(const SelectionItem&)> form) {
     convert = std::move(form);
+    return *this;
+  }
+  InputDef& withConvertNow(
+      std::function<SelectionItem(const SelectionItem&, const CommandState&, const CommandContext&)> form) {
+    convertNow = std::move(form);
     return *this;
   }
   InputDef& withAlsoTakes(SelectFilter kinds) {
@@ -953,6 +973,11 @@ struct InputDef {
   bool takes(const SelectionItem& item) const;
   bool takesIn(const SelectionItem& item, const CommandState& state) const;
   SelectionItem taken(const SelectionItem& item) const { return convert ? convert(item) : item; }
+  // The form an item is kept in by the input in a state (convertNow, else
+  // convert).
+  SelectionItem takenIn(const SelectionItem& item, const CommandState& state, const CommandContext& context) const {
+    return convertNow ? convertNow(item, state, context) : taken(item);
+  }
   bool isRequired() const { return type == Type::Selection && min > 0; }
 };
 
@@ -1461,6 +1486,11 @@ struct CommandDef {
   // Whether the inputs can hold all of a definition of `featureType`, so
   // that editing loses nothing (every definition when unset).
   std::function<bool(const QJsonObject&)> canEdit;
+  // Why canEdit refuses a definition, in words for the person who wanted to
+  // edit it (mitcad#1885): what the panel does not hold, such as "An origin
+  // is geometry the panel cannot show, …"; empty or unset: the plain notice
+  // that the feature has no edit panel.
+  std::function<QString(const QJsonObject&)> editRefusal;
   // A log line after OK, such as "Added fillet on 4 edge(s)".
   std::function<QString(const CommandState&, const CommandContext&)> describe;
   // The feature's key value (mitcad#1235), which the timeline's and the

@@ -264,6 +264,9 @@ pub struct PlacedView {
     pub bounds: Bounds,
     /// Written under it (`SECTION A-A`).
     pub label: Option<String>,
+    /// How far its label is moved from under the middle of its box, sheet
+    /// mm (mitcad#1909: dragged).
+    pub label_offset: P2,
     /// Its cut faces hatched.
     pub hatch: bool,
     /// Faces shaded under the lines, each a polygon in view coordinates
@@ -374,7 +377,36 @@ impl PlacedView {
         }
         b
     }
+
+    /// Its label as the sheet draws it (mitcad#1909): its text under the
+    /// middle of its box, moved by its `label_offset`; None without a label
+    /// or when it shows nothing.
+    pub fn label_group(&self) -> Option<Group> {
+        let text = self.label.as_ref()?;
+        if self.bounds.is_empty() {
+            return None;
+        }
+        let lo = self.map.at(self.bounds.min);
+        let hi = self.map.at(self.bounds.max);
+        let mut label = Group::new("view-label");
+        label.text(
+            [
+                (lo[0] + hi[0]) / 2.0 + self.label_offset[0],
+                lo[1] - LABEL_BELOW + self.label_offset[1],
+            ],
+            LABEL_HEIGHT,
+            0.0,
+            Anchor::Middle,
+            text.clone(),
+        );
+        Some(label)
+    }
 }
+
+/// How far below a view's box its label's baseline lies, and its letters'
+/// height, sheet mm.
+const LABEL_BELOW: f64 = 9.0;
+const LABEL_HEIGHT: f64 = 5.0;
 
 /// A section's cutting plane drawn across a view.
 #[derive(Debug, Clone, PartialEq)]
@@ -1152,6 +1184,7 @@ pub fn compose(options: &DrawingOptions, units: Units, input: &SheetInput) -> Co
             map,
             bounds: *bounds,
             label: view.name.is_none().then(|| "SECTION A-A".to_owned()),
+            label_offset: [0.0, 0.0],
             hatch: true,
             shading: Vec::new(),
             holes: None,
@@ -1310,15 +1343,8 @@ pub fn render(
         }
         let lo = place.at(view.bounds.min);
         let hi = place.at(view.bounds.max);
-        if let Some(text) = &view.label {
-            let mut label = Group::new("view-label");
-            label.text(
-                [(lo[0] + hi[0]) / 2.0, lo[1] - 9.0],
-                5.0,
-                0.0,
-                Anchor::Middle,
-                text.clone(),
-            );
+        // Moved where it was dragged (mitcad#1909).
+        if let Some(label) = view.label_group() {
             groups.push(label);
         }
         // Overall dimensions of the orthographic views.

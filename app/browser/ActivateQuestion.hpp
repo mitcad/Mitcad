@@ -36,6 +36,9 @@ namespace mitcad {
 // (a test of the question sets it to 1).
 bool askToActivateComponent();
 void saveAskToActivateComponent(bool on);
+// No saved value, as before the first choice (Preferences › Restore
+// Defaults, mitcad#1887): the default above applies again.
+void resetAskToActivateComponent();
 
 // What a pick asks, worked out from the document's structure.
 struct ActivateQuestion {

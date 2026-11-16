@@ -519,6 +519,10 @@ impl DocState {
             feature: added.uid,
             envelope,
             frames: Vec::new(),
+            // Shown in full later, its next `update_links` gives its bodies
+            // their materials (mitcad#1923).
+            looks: false,
+            given: Vec::new(),
         });
         Ok(made)
     }

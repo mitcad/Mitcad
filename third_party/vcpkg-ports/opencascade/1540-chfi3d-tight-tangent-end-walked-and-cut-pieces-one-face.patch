@@ -29,9 +29,10 @@ has the stored body's area, and the result the stored body's faces.
 Upstream: new.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 6d31ff06..6e3394b0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -17458,56 +17458,93 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17485,60 +17485,97 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
                                       Stripe->OrientationOnFace1(),
                                       Stripe->OrientationOnFace2(),
                                       Stripe->Choix());
@@ -51,6 +52,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    const double MaxStep = 0.05 * (Spine->LastParameter(nbed) - Spine->FirstParameter(1)) / nbed;
    const double Fleche  = (HGuide->LastParameter() - HGuide->FirstParameter()) * fleche;
 -  bool         walked  = false;
+-  // (The stripe is walked already: a walk that fails here leaves the
+-  // builder's state as it was, PerformSurf setting done.)
+-  const bool aDone = done;
 -  try
 -  {
 -    OCC_CATCH_SIGNALS
@@ -61,6 +65,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 -  {
 -    walked = false;
 -  }
+-  done = aDone;
 -  if (!walked || SeqSD.Length() != 1)
 -  {
 -    return false;
@@ -112,6 +117,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    double First = W0, Last = isFirst ? HGuide->FirstParameter() : HGuide->LastParameter();
 +    int    intf = 0, intl = 0;
 +    bool   walked = false;
++    // (The stripe is walked already: a walk that fails here leaves the
++    // builder's state as it was, PerformSurf setting done.)
++    const bool aDone = done;
 +    try
 +    {
 +      OCC_CATCH_SIGNALS
@@ -122,6 +130,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    {
 +      walked = false;
 +    }
++    done = aDone;
 +    if (!walked || SeqSD.Length() != 1)
 +    {
 +      return false;
@@ -173,7 +182,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    TopoDS_Face BF = B, FoF = Fo;
    BF.Orientation(TopAbs_FORWARD);
    FoF.Orientation(TopAbs_FORWARD);
-@@ -17544,14 +17581,21 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17575,14 +17612,21 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
      anEnd.CPO.SetPoint(Q);
      anEnd.CPO.SetArc(tolapp3d, Eq, wQ, aTrO);
    }
@@ -198,7 +207,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    const occ::handle<ChFiDS_SurfData> aNone;
    occ::handle<ChFiDS_SurfData>       G;
    try
-@@ -17583,6 +17627,36 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17614,6 +17658,36 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    {
      return false;
    }

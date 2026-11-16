@@ -37,7 +37,7 @@ rolled on the hole's edge and failed.
   the contacts); the next piece starts from its own point, which cuts its
   edge.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index ed0026c..890ed2a 100644
+index ed0026c0..890ed2a7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -3238,6 +3238,112 @@ static bool RollsOnAcross(const TopOpeBRepDS_DataStructure&
@@ -348,7 +348,7 @@ index ed0026c..890ed2a 100644
  }
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 8cc2751..08e4fbb 100644
+index a8f9089c..c9dda836 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -4084,13 +4084,26 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
@@ -410,8 +410,8 @@ index 8cc2751..08e4fbb 100644
            anOther = !onN;
          }
          if (!anOther)
-@@ -4901,6 +4924,387 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
-   return G;
+@@ -4919,6 +4942,387 @@ static bool ChFi3d_RisesFromFace(const occ::handle<ChFiDS_Spine>& Spine,
+          && ChFi3d::DefineConnectType(E, N, B, Precision::Angular(), false) == ChFiDS_Concave;
  }
  
 +//=======================================================================
@@ -798,7 +798,7 @@ index 8cc2751..08e4fbb 100644
  //=======================================================================
  // function : ChFi3d_FillKPartGaps
  // purpose  : Pieces of an analytic blend split by the domains of its
-@@ -4956,8 +5360,8 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
+@@ -4974,8 +5378,8 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
          continue;
        }
        const TopoDS_Face N = TopoDS::Face(DStr.Shape(A->Index(ons)));
@@ -809,13 +809,16 @@ index 8cc2751..08e4fbb 100644
        bool        ok = true;
        for (int k = 0; k < 2 && ok; k++)
        {
-@@ -4975,17 +5379,45 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
+@@ -4993,7 +5397,7 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
              Fk = TopoDS::Face(it.Value());
            }
          }
 -        if (Fk.IsNull() || (!B.IsNull() && !B.IsSame(Fk)) || ChFi3d::IsTangentFaces(E, N, Fk))
 +        if (Fk.IsNull() || ChFi3d::IsTangentFaces(E, N, Fk))
          {
+           ok = false;
+           break;
+@@ -5003,12 +5407,40 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
            ok = false;
            break;
          }
@@ -858,7 +861,7 @@ index 8cc2751..08e4fbb 100644
        // (A, a piece of the same analytic blend, holds its whole lines.)
        const occ::handle<ChFiDS_SurfData> G = ChFi3d_KPartCutPiece(DStr,
                                                                    Spine,
-@@ -4993,8 +5425,8 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
+@@ -5016,8 +5448,8 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
                                                                    ons,
                                                                    N,
                                                                    B,
@@ -869,7 +872,7 @@ index 8cc2751..08e4fbb 100644
                                                                    A,
                                                                    C,
                                                                    tol3d);
-@@ -5008,20 +5440,16 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
+@@ -5031,20 +5463,16 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
        // ends on a line of the intersection that does not cross the blend
        // between them, or on two lines that meet), two pieces, cut from
        // each end to the middle (to where the two lines meet).

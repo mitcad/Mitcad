@@ -57,6 +57,11 @@ bool ShopSettings::save() const {
   return true;
 }
 
+void ShopSettings::reset() {
+  QSettings().remove(kRegionKey);
+  savePreferredShops({});
+}
+
 QList<RegionShop> regionShops(const QJsonObject& shops, const QString& region) {
   QList<RegionShop> out;
   if (region.trimmed().isEmpty()) {

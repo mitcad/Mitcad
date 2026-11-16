@@ -15,6 +15,7 @@
 //   - each plane is seen at least half open, none near edge-on.
 // Along the exact cube diagonal the second check fails (the planes were
 // hard to tell apart), and View › Isometric stays that exact diagonal.
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <initializer_list>
@@ -182,3 +183,4 @@ int defaultViewTests() {
   isometricTests();
   return failures;
 }
+MITCAD_UNIT_TEST(defaultViewTests);

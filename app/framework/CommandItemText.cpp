@@ -31,6 +31,24 @@ QString CommandContext::itemText(const SelectionItem& item) const {
   static const QStringList origin = {QStringLiteral("xy"), QStringLiteral("xz"), QStringLiteral("yz"),
                                      QStringLiteral("x"),  QStringLiteral("y"),  QStringLiteral("z")};
   try {
+    // A BUILD joint's origin on a part's mount frame (mitcad#1885): by its
+    // end, and the part's name; never the frame's reference.
+    if (isMountFrame(item)) {
+      const QString part = mountFramePart(item);
+      const QString partName = part.isEmpty() ? QString() : featureName(part);
+      const QString frame = mountFrameName(item);
+      const bool hasName = !partName.isEmpty() && partName != part;
+      if (frame == QStringLiteral("end_a")) {
+        return hasName ? QCoreApplication::translate("Selection", "End A frame of %1").arg(partName)
+                       : QCoreApplication::translate("Selection", "End A frame");
+      }
+      if (frame == QStringLiteral("end_b")) {
+        return hasName ? QCoreApplication::translate("Selection", "End B frame of %1").arg(partName)
+                       : QCoreApplication::translate("Selection", "End B frame");
+      }
+      return hasName ? QCoreApplication::translate("Selection", "Mount frame of %1").arg(partName)
+                     : QCoreApplication::translate("Selection", "Mount frame");
+    }
     switch (item.kind) {
     case SelectKind::Face:
     case SelectKind::Edge:

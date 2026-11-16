@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the Edit Options UI test (mitcad#1929, tools/ui-edit-options-component-test.sh): the plate of the test's library (LIBRARY_URL, replaced by the test) inserted with options as Plate, in its default row Standard (White, Width 60 mm: 100 x 60 x 10 = 60000 mm3)."},
+  {"cmd": "insert_component", "name": "Plate",
+   "library": {"id": "test-options", "url": "LIBRARY_URL", "rev": "v1.0.0", "component": "plate"},
+   "parameters": {}},
+  {"expect": {"bodies": 1}}
+]

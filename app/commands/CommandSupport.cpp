@@ -1128,13 +1128,75 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> axisOf(const SelectionItem& item,
   }
 }
 
+namespace {
+
+// The middle of a sketch's selected profiles on the cylindrical or conical
+// face the sketch lies on (mitcad#1768), and the face's normal out of the
+// material there, in the sketch's component's coordinates (mitcad#1908):
+// the center of the regions' areas in the sketch's developed coordinates
+// (the `profiles` query's measures) put onto the face by the model's map
+// (the `sketch_surface` query's points). None when no region is found.
+std::optional<std::pair<gp_Pnt, gp_Dir>> profilesOnFace(const Selection& profiles,
+                                                        const CommandContext& context) {
+  const QString sketch = profiles.first().owner;
+  QStringList regions;
+  for (const SelectionItem& item : profiles) {
+    if (item.kind == SelectKind::Profile && item.owner == sketch) {
+      regions << item.name;
+    }
+  }
+  const QJsonArray all = context
+                             .query({{QStringLiteral("query"), QStringLiteral("profiles")},
+                                     {QStringLiteral("sketch"), sketch},
+                                     {QStringLiteral("measures"), true}})
+                             .toArray();
+  double area = 0.0;
+  double u = 0.0;
+  double v = 0.0;
+  for (const QJsonValue& value : all) {
+    const QJsonObject region = value.toObject();
+    if (!regions.contains(region.value(QStringLiteral("region")).toString())) {
+      continue;
+    }
+    const double a = region.value(QStringLiteral("area")).toDouble();
+    const QJsonArray center = region.value(QStringLiteral("center")).toArray();
+    if (!(a > 0.0) || center.size() != 2) {
+      continue;
+    }
+    area += a;
+    u += a * center.at(0).toDouble();
+    v += a * center.at(1).toDouble();
+  }
+  if (!(area > 0.0)) {
+    return std::nullopt;
+  }
+  QJsonArray points;
+  points.append(QJsonArray{u / area, v / area});
+  const QJsonObject onFace = context.queryObject({{QStringLiteral("query"), QStringLiteral("sketch_surface")},
+                                                  {QStringLiteral("sketch"), sketch},
+                                                  {QStringLiteral("points"), points}});
+  const QJsonArray answered = onFace.value(QStringLiteral("points")).toArray();
+  if (answered.isEmpty()) {
+    return std::nullopt;
+  }
+  const QJsonObject point = answered.first().toObject();
+  const QJsonValue at = point.value(QStringLiteral("at"));
+  const QJsonValue outward = point.value(QStringLiteral("normal"));
+  if (!at.isArray() || !outward.isArray()) {
+    return std::nullopt;
+  }
+  const gp_Vec normal = vectorOf(outward);
+  if (normal.Magnitude() < 1e-12) {
+    return std::nullopt;
+  }
+  return std::make_pair(pointOf(at), gp_Dir(normal));
+}
+
+} // namespace
+
 std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles,
                                                        const CommandContext& context) {
   if (profiles.isEmpty()) {
-    return std::nullopt;
-  }
-  const auto center = centerOf(profiles, context);
-  if (!center) {
     return std::nullopt;
   }
   try {
@@ -1151,6 +1213,23 @@ std::optional<std::pair<gp_Pnt, gp_Dir>> profileNormal(const Selection& profiles
     const QString path = profilesOccurrence(profiles, context);
     const QJsonArray occurrences =
         path.isEmpty() ? QJsonArray() : componentsOf(context).value(QStringLiteral("occurrences")).toArray();
+    // A sketch on a cylindrical or conical face (mitcad#1908, GitHub
+    // mitcad/Mitcad#362): the arrow starts on the face, where its profiles
+    // are raised or sunk along the face's normals, not on the carrier
+    // plane through the sketch's origin.
+    if (sketch.value(QStringLiteral("surface")).isObject()) {
+      if (std::optional<std::pair<gp_Pnt, gp_Dir>> onFace = profilesOnFace(profiles, context)) {
+        if (const std::optional<gp_Trsf> world = occurrenceWorldIn(occurrences, path)) {
+          onFace->first.Transform(*world);
+          onFace->second.Transform(*world);
+        }
+        return onFace;
+      }
+    }
+    const auto center = centerOf(profiles, context);
+    if (!center) {
+      return std::nullopt;
+    }
     const std::optional<gp_Dir> normal = sketchNormalInDesign(frame, occurrences, path);
     if (!normal) {
       return std::nullopt;

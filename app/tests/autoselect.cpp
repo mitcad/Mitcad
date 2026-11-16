@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include "framework/AutoselectPanel.hpp"
 
 #include <QCoreApplication>
@@ -130,3 +131,4 @@ int autoselectTests() {
   check(panel.isHidden() && preview.isEmpty(), "consuming or suppressing the sketch clears preview and hides the box");
   return failures;
 }
+MITCAD_UNIT_TEST(autoselectTests);

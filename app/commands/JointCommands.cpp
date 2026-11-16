@@ -23,6 +23,7 @@
 #include <QKeySequence>
 #include <QRegularExpression>
 #include <QStringList>
+#include <QtLogging>
 
 #include <gp_Trsf.hxx>
 
@@ -335,17 +336,89 @@ QJsonObject originOf(const SelectionItem& item, const QString& path) {
 }
 
 // The item of a definition's origin, with its path from the root; invalid
-// when no input can show it (fixed geometry, a frame given directly).
-SelectionItem originItem(const QJsonValue& value, const QString& prefix, const CommandContext& context) {
+// when no input can show it (fixed geometry). A part's mount frame, which
+// BUILD joins parts by, shows as its frame (mitcad#1885). An origin with a
+// frame given in part (`frame_override`, a BUILD corner's turn and shift)
+// is shown by its geometry only where the panel keeps the override
+// (`keepsOverride`: Joint, As-Built Joint, Constraint; keptOverride).
+SelectionItem originItem(const QJsonValue& value, const QString& prefix, const CommandContext& context,
+                         bool keepsOverride = false) {
   const QJsonObject origin = value.toObject();
-  if (origin.contains(QStringLiteral("frame_override"))) {
+  if (!keepsOverride && origin.contains(QStringLiteral("frame_override"))) {
     return SelectionItem();
   }
-  SelectionItem item = itemOf(origin.value(QStringLiteral("geometry")), context);
+  const QJsonValue geometry = origin.value(QStringLiteral("geometry"));
+  const QJsonObject ref = geometry.toObject();
+  SelectionItem item = ref.size() == 1 && ref.value(QStringLiteral("mount")).isString()
+                           ? mountFrameItem(ref.value(QStringLiteral("mount")).toString())
+                           : itemOf(geometry, context);
   if (item.isValid()) {
     item.occurrence = joinPath(prefix, str(origin, "occurrence"));
   }
   return item;
+}
+
+// --- An origin's frame override kept through an edit (mitcad#1885, GitHub
+// mitcad/Mitcad#354): the hidden input `<input>_override` holds it with the
+// item it was loaded on; OK writes it again while that item stays picked,
+// and another pick drops it.
+
+QString overrideInput(const QString& input) { return input + QStringLiteral("_override"); }
+
+// An item as the kept override names it: its reference and its path.
+QString overrideItemKey(const SelectionItem& item) {
+  const QJsonObject key{{QStringLiteral("geometry"), item.reference()}, {QStringLiteral("occurrence"), item.occurrence}};
+  return QString::fromUtf8(QJsonDocument(key).toJson(QJsonDocument::Compact));
+}
+
+// Keeps a loaded origin's override in `textId` (an input's, or a row's
+// whole key); nothing for an origin without one.
+void loadOverride(CommandState& state, const QString& textId, const QJsonValue& origin, const SelectionItem& item) {
+  const QJsonObject frameOverride = origin.toObject().value(QStringLiteral("frame_override")).toObject();
+  if (frameOverride.isEmpty() || !item.isValid()) {
+    state.setText(textId, QString());
+    return;
+  }
+  const QJsonObject kept{{QStringLiteral("item"), overrideItemKey(item)},
+                         {QStringLiteral("frame_override"), frameOverride}};
+  state.setText(textId, QString::fromUtf8(QJsonDocument(kept).toJson(QJsonDocument::Compact)));
+  qInfo().noquote() << QStringLiteral("Joint origin %1 keeps its frame override (%2)")
+                           .arg(QString(textId).remove(QStringLiteral("_override")), item.logDescription());
+}
+
+// The override kept for `input` while its loaded item is still picked;
+// empty otherwise.
+QJsonObject keptOverride(const CommandState& state, const QString& input) {
+  const Selection& items = state.items(input);
+  if (items.isEmpty()) {
+    return QJsonObject();
+  }
+  const QJsonObject kept = QJsonDocument::fromJson(state.text(overrideInput(input)).toUtf8()).object();
+  if (kept.value(QStringLiteral("item")).toString() != overrideItemKey(items.first())) {
+    return QJsonObject();
+  }
+  return kept.value(QStringLiteral("frame_override")).toObject();
+}
+
+// An origin of the panel's pick with its kept override.
+QJsonObject withKeptOverride(QJsonObject origin, const CommandState& state, const QString& input) {
+  const QJsonObject frameOverride = keptOverride(state, input);
+  if (!frameOverride.isEmpty()) {
+    origin.insert(QStringLiteral("frame_override"), frameOverride);
+  }
+  return origin;
+}
+
+// Why a joint's panel cannot hold a definition, in words (mitcad#1885):
+// empty when it can. `origins` are the origins' keys of the definition (or
+// of a row).
+QString originsRefusal(const QJsonObject& def, const QStringList& origins, const CommandContext& context) {
+  for (const QString& key : origins) {
+    if (def.contains(key) && !originItem(def.value(key), QString(), context, true).isValid()) {
+      return QObject::tr("An origin is geometry the panel cannot show, such as a fixed point, axis or plane.");
+    }
+  }
+  return QString();
 }
 
 struct Frame {
@@ -364,12 +437,17 @@ Frame frameOf(const QJsonObject& frame) {
   return result;
 }
 
-// The frame an origin gives at the marker, in the design.
-std::optional<Frame> originFrame(const SelectionItem& item, const CommandContext& context) {
+// The frame an origin gives at the marker, in the design; with the
+// override an edit keeps (mitcad#1885).
+std::optional<Frame> originFrame(const SelectionItem& item, const CommandContext& context,
+                                 const QJsonObject& frameOverride = QJsonObject()) {
   QJsonObject request{{QStringLiteral("query"), QStringLiteral("joint_frame")},
                       {QStringLiteral("geometry"), item.reference()}};
   if (!item.occurrence.isEmpty()) {
     request.insert(QStringLiteral("occurrence"), item.occurrence);
+  }
+  if (!frameOverride.isEmpty()) {
+    request.insert(QStringLiteral("frame_override"), frameOverride);
   }
   try {
     return frameOf(context.queryObject(request));
@@ -385,7 +463,7 @@ std::optional<Frame> pickedFrame(const CommandState& state, const CommandContext
   for (const QString& input : inputs) {
     const Selection& items = state.items(input);
     if (!items.isEmpty()) {
-      if (auto frame = originFrame(items.first(), context)) {
+      if (auto frame = originFrame(items.first(), context, keptOverride(state, input))) {
         return frame;
       }
     }
@@ -479,7 +557,7 @@ std::optional<Frame> jointHandleFrame(const CommandState& state, const CommandCo
   const Selection& a = state.items(QStringLiteral("a"));
   const Selection& b = state.items(QStringLiteral("b"));
   if (!a.isEmpty() && !b.isEmpty() && movedInPreview(b.first(), state) && !movedInPreview(a.first(), state)) {
-    if (auto frame = originFrame(a.first(), context)) {
+    if (auto frame = originFrame(a.first(), context, keptOverride(state, QStringLiteral("a")))) {
       if (!state.checked(QStringLiteral("flip"))) {
         // Half a turn about X: Z and Y reversed.
         frame->z.Reverse();
@@ -581,6 +659,15 @@ bool limitsEditable(const QJsonObject& feature) {
     const QJsonObject limit = value.toObject();
     return limit.contains(QStringLiteral("min")) == limit.contains(QStringLiteral("max"));
   });
+}
+
+// Why the panel cannot hold the limits, in words (mitcad#1885); empty when
+// it can.
+QString limitsRefusal(const QJsonObject& feature) {
+  return limitsEditable(feature)
+             ? QString()
+             : QObject::tr("A limit has a minimum without a maximum, or a maximum without a minimum, which the "
+                           "panel cannot hold.");
 }
 
 // The position a joint is driven to (Drive Joint, a drag) is kept through an
@@ -802,7 +889,7 @@ Built originsOf(const CommandState& state, const CommandContext& context, const 
                                 .arg(componentName(component, context)),
                             input);
     }
-    def.insert(input, originOf(items.first(), *path));
+    def.insert(input, withKeptOverride(originOf(items.first(), *path), state, input));
   }
   return Built::of(def);
 }
@@ -983,6 +1070,8 @@ CommandDef jointCommand(const CommandContext& context) {
   // The motion it makes played back and forth from the preview (mitcad#1790).
   def.inputs += {animateInput(jointMotionChoices)};
   def.inputs += {hidden(QStringLiteral("component")), hidden(QStringLiteral("position"))};
+  // Origin A's and B's frame overrides as loaded (mitcad#1885).
+  def.inputs += {hidden(overrideInput(QStringLiteral("a"))), hidden(overrideInput(QStringLiteral("b")))};
   // The component that holds the picks, when the question made it the
   // joint's (or declined it; mitcad#1856).
   def.inputs += {hidden(QStringLiteral("holder")), hidden(QStringLiteral("kept"))};
@@ -1020,8 +1109,12 @@ CommandDef jointCommand(const CommandContext& context) {
     const QString component = featureComponent(str(feature, "uid"), context);
     state.setText(QStringLiteral("component"), component);
     const QString prefix = placingPaths(component, context).value(0);
-    state.setItems(QStringLiteral("a"), {originItem(feature.value(QStringLiteral("a")), prefix, context)});
-    state.setItems(QStringLiteral("b"), {originItem(feature.value(QStringLiteral("b")), prefix, context)});
+    for (const QString& input : {QStringLiteral("a"), QStringLiteral("b")}) {
+      const QJsonValue origin = feature.value(input);
+      const SelectionItem item = originItem(origin, prefix, context, true);
+      state.setItems(input, {item});
+      loadOverride(state, overrideInput(input), origin, item);
+    }
     loadMotions(feature, state, context);
     loadStart(feature, state, jointsOf(context));
     loadValue(state, QStringLiteral("offset"), feature.value(QStringLiteral("offset")), feature, context);
@@ -1030,9 +1123,12 @@ CommandDef jointCommand(const CommandContext& context) {
   };
 
   def.canEdit = [&context](const QJsonObject& feature) {
-    return originItem(feature.value(QStringLiteral("a")), QString(), context).isValid() &&
-           originItem(feature.value(QStringLiteral("b")), QString(), context).isValid() &&
+    return originsRefusal(feature, {QStringLiteral("a"), QStringLiteral("b")}, context).isEmpty() &&
            limitsEditable(feature);
+  };
+  def.editRefusal = [&context](const QJsonObject& feature) {
+    const QString origins = originsRefusal(feature, {QStringLiteral("a"), QStringLiteral("b")}, context);
+    return !origins.isEmpty() ? origins : limitsRefusal(feature);
   };
 
   withAnimate(def, jointPanelMotion);
@@ -1080,6 +1176,8 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
                  hidden(QStringLiteral("relative")), hidden(QStringLiteral("pair"))};
   // The component that holds the picks (mitcad#1856).
   def.inputs += {hidden(QStringLiteral("holder")), hidden(QStringLiteral("kept"))};
+  // The Motion Origin's frame override as loaded (mitcad#1885).
+  def.inputs += {hidden(overrideInput(QStringLiteral("origin")))};
   def.addOptions = intoHolder(context);
   def.enabled = [&context] { return occurrenceCount(context) > 1; };
 
@@ -1108,7 +1206,7 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
         return Built::failure(QObject::tr("Select geometry inside %1.").arg(componentName(component, context)),
                               QStringLiteral("origin"));
       }
-      joint.insert(QStringLiteral("origin"), originOf(origin, *path));
+      joint.insert(QStringLiteral("origin"), withKeptOverride(originOf(origin, *path), state, QStringLiteral("origin")));
     }
     // A's placement in B's coordinates where they are now; an edit keeps
     // the recorded one while A and B stay.
@@ -1146,7 +1244,10 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
       state.setItems(QLatin1String(keys[i]), {item});
     }
     if (feature.contains(QStringLiteral("origin"))) {
-      state.setItems(QStringLiteral("origin"), {originItem(feature.value(QStringLiteral("origin")), prefix, context)});
+      const QJsonValue origin = feature.value(QStringLiteral("origin"));
+      const SelectionItem item = originItem(origin, prefix, context, true);
+      state.setItems(QStringLiteral("origin"), {item});
+      loadOverride(state, overrideInput(QStringLiteral("origin")), origin, item);
     }
     const QJsonArray relative = feature.value(QStringLiteral("relative")).toArray();
     if (!relative.isEmpty()) {
@@ -1157,9 +1258,11 @@ CommandDef asBuiltJointCommand(const CommandContext& context) {
   };
 
   def.canEdit = [&context](const QJsonObject& feature) {
-    return (!feature.contains(QStringLiteral("origin")) ||
-            originItem(feature.value(QStringLiteral("origin")), QString(), context).isValid()) &&
-           limitsEditable(feature);
+    return originsRefusal(feature, {QStringLiteral("origin")}, context).isEmpty() && limitsEditable(feature);
+  };
+  def.editRefusal = [&context](const QJsonObject& feature) {
+    const QString origin = originsRefusal(feature, {QStringLiteral("origin")}, context);
+    return !origin.isEmpty() ? origin : limitsRefusal(feature);
   };
 
   def.describe = [](const CommandState&, const CommandContext& context) {
@@ -1716,7 +1819,30 @@ std::optional<QJsonObject> rowOrigin(const CommandState& row, const QString& inp
   if (!path) {
     return std::nullopt;
   }
-  return originOf(items.first(), *path);
+  return withKeptOverride(originOf(items.first(), *path), row, input);
+}
+
+// Why the Constraint panel cannot hold a constraint set, in words
+// (mitcad#1885); empty when it can.
+QString constraintRefusal(const QJsonObject& feature, const CommandContext& context) {
+  for (const QJsonValue& value : feature.value(kRows).toArray()) {
+    const QJsonObject row = value.toObject();
+    if (row.contains(QStringLiteral("a2"))) {
+      return QObject::tr("A constraint centers between two origins on its first side, which the panel cannot hold.");
+    }
+    const QJsonObject limits = row.value(QStringLiteral("limits")).toObject();
+    if (limits.contains(QStringLiteral("min")) != limits.contains(QStringLiteral("max")) ||
+        (limits.contains(QStringLiteral("rest")) && !limits.contains(QStringLiteral("min")))) {
+      return QObject::tr("A constraint's limits are incomplete (a minimum, a maximum or a rest value alone), which "
+                         "the panel cannot hold.");
+    }
+    const QString origins =
+        originsRefusal(row, {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("b2")}, context);
+    if (!origins.isEmpty()) {
+      return origins;
+    }
+  }
+  return QString();
 }
 
 // The `constraint_row` query of a row's picks; empty without both.
@@ -1979,7 +2105,10 @@ CommandDef constraintCommand(const CommandContext& context) {
                  return resting(row) && rowType(row, context) == QStringLiteral("angle");
                }),
            // A locked insert's turn as loaded: an edit keeps it.
-           hidden(QStringLiteral("lock_angle"))},
+           hidden(QStringLiteral("lock_angle")),
+           // The origins' frame overrides as loaded (mitcad#1885).
+           hidden(overrideInput(QStringLiteral("a"))), hidden(overrideInput(QStringLiteral("b"))),
+           hidden(overrideInput(QStringLiteral("b2")))},
           QObject::tr("Add Constraint"), QObject::tr("Constraint %1"))
           // A row that waits for its picks leaves the others' preview
           // (mitcad#1813).
@@ -2076,7 +2205,10 @@ CommandDef constraintCommand(const CommandContext& context) {
       const auto key = [i](const char* id) { return CommandState::rowKey(kRows, i, QString::fromLatin1(id)); };
       for (const char* id : {"a", "b", "b2"}) {
         if (row.contains(QLatin1String(id))) {
-          state.setItems(key(id), {originItem(row.value(QLatin1String(id)), prefix, context)});
+          const QJsonValue origin = row.value(QLatin1String(id));
+          const SelectionItem item = originItem(origin, prefix, context, true);
+          state.setItems(key(id), {item});
+          loadOverride(state, overrideInput(key(id)), origin, item);
         }
       }
       const QString type = str(row, "type");
@@ -2104,20 +2236,8 @@ CommandDef constraintCommand(const CommandContext& context) {
     }
   };
 
-  def.canEdit = [&context](const QJsonObject& feature) {
-    const QJsonArray rows = feature.value(kRows).toArray();
-    return std::all_of(rows.begin(), rows.end(), [&context](const QJsonValue& value) {
-      const QJsonObject row = value.toObject();
-      const QJsonObject limits = row.value(QStringLiteral("limits")).toObject();
-      return !row.contains(QStringLiteral("a2")) &&
-             limits.contains(QStringLiteral("min")) == limits.contains(QStringLiteral("max")) &&
-             (!limits.contains(QStringLiteral("rest")) || limits.contains(QStringLiteral("min"))) &&
-             originItem(row.value(QStringLiteral("a")), QString(), context).isValid() &&
-             originItem(row.value(QStringLiteral("b")), QString(), context).isValid() &&
-             (!row.contains(QStringLiteral("b2")) ||
-              originItem(row.value(QStringLiteral("b2")), QString(), context).isValid());
-    });
-  };
+  def.canEdit = [&context](const QJsonObject& feature) { return constraintRefusal(feature, context).isEmpty(); };
+  def.editRefusal = [&context](const QJsonObject& feature) { return constraintRefusal(feature, context); };
 
   def.describe = [](const CommandState&, const CommandContext& context) {
     const QJsonObject joints = jointsOf(context);

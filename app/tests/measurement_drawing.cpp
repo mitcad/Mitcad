@@ -13,6 +13,7 @@
 // plane, extension lines from the measured point, frames two text heights
 // high, the bundled lettering, a picture's own background tone, hole
 // callouts and a frame under one.
+#include "UnitTests.hpp"
 #include "view/MeasurementDrawing.hpp"
 
 #include <array>
@@ -916,3 +917,4 @@ int measurementDrawingTests() {
   CHECK(nearColour(inked.pixelColor(50, 18), QColor(30, 32, 36), 8));
   return failures;
 }
+MITCAD_UNIT_TEST(measurementDrawingTests);

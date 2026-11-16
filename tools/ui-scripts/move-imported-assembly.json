@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of tools/ui-scripts/move-imported-assembly.mitcad-ui (mitcad#1891), run in the test's work folder after move-imported-assembly-source.json wrote imported.step there: Body1 (F1.b0), a 20 x 20 x 5 box from (-40, 0, 0) in the root; Frame:1, a component of the design placed 40 mm along X in the root, with a 10 x 30 x 4 box ((40, 0, 0) to (50, 30, 4)); then the STEP assembly imported into its own component imported:1 in the root (the root has content), keeping its structure: imported:1 places the component Pin twice, Pin:1 ((0, 0, 0) to (8, 12, 6)) and Pin:2 ((0, 20, 0) to (8, 32, 6)). Pin's body is then the only one two occurrences deep (twice, one per placement) and Frame's the only one one deep. The root active."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-40, 0],
+    "length": 20, "width": 20, "height": 5, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Frame", "transform": {"translation": [40, 0, 0]}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 10, "width": 30, "height": 4, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "C0"},
+  {"cmd": "import_file", "path": "imported.step"},
+  {"cmd": "activate_component", "component": "C0"}
+]

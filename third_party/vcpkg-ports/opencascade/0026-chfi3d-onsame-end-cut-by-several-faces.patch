@@ -20,7 +20,9 @@ contact point was off an edge (PerformMoreThreeCorner, which failed). Now:
   cut by the faces around (the arc, the flat), as for any intersection at
   end. Both sides are handled: the first contact off its edge with the
   first face's edge in the OnSame state, or the second contact off its
-  edge with the second face's edge in it.
+  edge with the second face's edge in it. Roundings only: a chamfer keeps
+  OCCT's corner there (OCCT's chamfer sequences B9 gave no result where
+  stock gives an invalid one, mitcad#1902).
 - When the updated contact point lies beyond the vertex on that edge's
   prolongation, the piece of its curve from the vertex to the point bounds
   the side's face and the face across the edge, each in the edge's own
@@ -31,9 +33,18 @@ contact point was off an edge (PerformMoreThreeCorner, which failed). Now:
   p-curves and projections in any period) are taken into the face's
   domain where a period brings them there.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 6dfe7b49..2855d497 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -1958,6 +1958,82 @@ static bool IsShrink(const Geom2dAdaptor_Curve& PC,
+@@ -37,6 +37,7 @@
+ #include <NCollection_List.hxx>
+ #include <ChFiDS_Map.hxx>
+ #include <ChFiDS_Spine.hxx>
++#include <ChFiDS_ChamfSpine.hxx>
+ #include <ElCLib.hxx>
+ #include <Extrema_ExtCC.hxx>
+ #include <Extrema_ExtPC.hxx>
+@@ -2023,6 +2024,82 @@ static bool IsShrink(const Geom2dAdaptor_Curve& PC,
    return false;
  }
  
@@ -116,7 +127,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
  //=================================================================================================
  
  void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
-@@ -2304,14 +2380,36 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2381,14 +2458,38 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    {
      nbface = nface - 2;
    }
@@ -124,9 +135,11 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
 +  // A face of the fillet that runs on tangentially past the vertex (the
 +  // OnSame state) leaves its contact point off any edge: the edge of that
 +  // face at the vertex is then the first (or last) one, prolonged up to
-+  // that point (isOnSame1 or isOnSame2 below).
++  // that point (isOnSame1 or isOnSame2 below). Roundings only: a chamfer
++  // there keeps OCCT's corner (OCCT's chamfer sequences B9 gave no result).
 +  TopoDS_Edge anOnSameEdge, anOnSameEdge2;
-+  if (nface == 3 && state == ChFiDS_OnSame && CV1.IsOnArc() != CV2.IsOnArc())
++  if (nface == 3 && state == ChFiDS_OnSame && CV1.IsOnArc() != CV2.IsOnArc()
++      && occ::down_cast<ChFiDS_ChamfSpine>(stripe->Spine()).IsNull())
 +  {
 +    TopoDS_Edge   threeE[3];
 +    TopoDS_Vertex aVbid;
@@ -156,7 +169,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
    tabedg.SetValue(0, Edge[0]);
    tabedg.SetValue(nbface, Edge[nbface]);
    // processing of a fillet arriving on a vertex
-@@ -2542,7 +2640,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2619,7 +2720,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          }
          if (!findonf2)
          {
@@ -165,7 +178,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
          }
        }
        if (findonf2 && !isOnSame2)
-@@ -3348,6 +3446,38 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3427,6 +3528,38 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
      //       pfac2.SetX(xx2);
      //     }
  
@@ -204,7 +217,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      if (isSeamOnEndFace && facecouture.IsSame(Face[nb - 1]))
      {
        // On the face whose seam runs from the vertex, the ends of the
-@@ -3565,6 +3695,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3644,6 +3777,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        Interfedge[0] =
          ChFi3d_FilPointInDS(CV1.TransitionOnArc(), Iarc1, indpoint1, paredge1, Isvtx1);
        // DStr.ChangeShapeInterferences(Edge[0]).Append(Interfp1);
@@ -217,7 +230,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      }
      if (nb == nbface)
      {
-@@ -3572,6 +3708,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3651,6 +3790,12 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        Interfedge[nb] =
          ChFi3d_FilPointInDS(CV2.TransitionOnArc(), Iarc2, indpoint2, paredge2, Isvtx2);
        // DStr.ChangeShapeInterferences(Edge[nb]).Append(Interfp2);
@@ -230,7 +243,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      }
  
      if (nb != nbface || oneintersection1 || oneintersection2)
-@@ -3962,7 +4104,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4041,7 +4186,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        DStr.ChangeShapeInterferences(Edge[nb - 1]).Append(Interfedge[nb - 1]);
      }
    }

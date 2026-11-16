@@ -4,6 +4,7 @@
 // their middle, normal and size, the commands Edit Form sends (none for an
 // edit that does nothing) and why an edit is refused, and the lines drawn
 // of a cage and of a limit mesh's outline.
+#include "UnitTests.hpp"
 #include "commands/FormCage.hpp"
 
 #include <cmath>
@@ -333,3 +334,4 @@ int formCageTests() {
   followUpTests();
   return failures;
 }
+MITCAD_UNIT_TEST(formCageTests);

@@ -6,6 +6,7 @@
 // rows as they are typed (outside the wall, overlapping, a window without
 // its sill, the header above the top plate; a partition's narrower
 // framing). The model's side: core/model-tests/build-timber/src/wall_bearing_tests.rs.
+#include "UnitTests.hpp"
 #include "build/TimberOpenings.hpp"
 
 #include <cmath>
@@ -184,3 +185,4 @@ int timberOpeningsTests() {
   checks();
   return failures;
 }
+MITCAD_UNIT_TEST(timberOpeningsTests);

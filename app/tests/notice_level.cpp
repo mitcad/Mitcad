@@ -3,6 +3,7 @@
 // severity"): the model's levels read, the worst of several, each level's
 // word, colour role, highlight box fill and lifetime, and its badge, which
 // differs by shape as well as colour; hints and progress have none.
+#include "UnitTests.hpp"
 #include "framework/NoticeLevel.hpp"
 
 #include <cstdio>
@@ -143,3 +144,4 @@ int noticeLevelTests() {
   badgeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(noticeLevelTests);

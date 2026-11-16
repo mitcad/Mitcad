@@ -60,11 +60,12 @@ the probe cannot use the document's tools or replace its conversation.
 | `core/3dm` (`mitcad-3dm`) | Rust | `.3dm` models, format versions 5 to 8 (mitcad#1715): the chunks, the settings (units, tolerance), layers, block definitions and the object table with attributes; B-reps, extrusions, NURBS, plane, revolution and sum surfaces, the curve classes, meshes and block instances, SubD objects' control nets (as Form cages, mitcad#1757); their conversion to the neutral B-rep model of `core/asm` in millimetres; a writer of sample models for the tests ([README](../core/3dm/README.md)). No geometry. |
 | `core/3mf` (`mitcad-3mf`) | Rust | 3MF writer (one object of parts) and a checking reader for tests. |
 | `core/gltf` (`mitcad-gltf`) | Rust | glTF 2.0 reader (mitcad#1826): the binary and JSON forms with their buffers and images embedded or beside them, the node tree, triangles with the texture coordinates of their images (mitcad#1862), metallic-roughness materials and their images, and in words what the import does not take; the model makes the mesh bodies and components (`exchange/gltf_import.rs`). MitCad's own glTF files come from the application's web page writer (`app/web/WebGlb`) ([README](../core/gltf/README.md)). No geometry. |
+| `core/serp` (`mitcad-serp`) | Rust | `.serp` files, format versions 1 to 9 (mitcad#1870): the bare JSON scene or its zip, units, layers with their paths and colours, objects with their B-rep data (OCCT's binary format, read by the kernel's `import_brep`) or meshes, blocks, and the kinds the import leaves out, counted; a newer version refused in words. The model makes the bodies, folders and block components (`exchange/serp_import.rs`) ([README](../core/serp/README.md)). No geometry. |
 | `core/usdz` (`mitcad-usdz`) | Rust | USDZ writer: the binary USD layer (crate format 0.8.0, LZ4 and USD's integer coding written here, no USD library) of a scene of meshes, `Xform`s and `UsdPreviewSurface` materials, packed with its textures 64-byte aligned; time-sampled transforms of an animated scene (mitcad#1597); a checking reader for tests (mitcad#123). |
 | `core/vcs` (`mitcad-vcs`) | Rust | Version history of projects in git (gitoxide, only here); remotes through the system's git; component libraries and community indexes in git repositories ([libraries.md](libraries.md)). |
 | `core/update` (`mitcad-update`) | Rust | Release manifest, signatures, version selection; the `mitcad-release` tool. No network ([updates.md](updates.md)). |
 | `core/mcp` (`mitcad-mcp`) | Rust | MCP lifecycle, JSON-RPC envelopes, tool schemas, the command-reference resource and `model_reference`, the reference in sections (mitcad#714); the guides for agents (`core/mcp/guide/`, Agent Skills layout, behind `model_reference {"guide": …}` and `mitcad://guide/<id>`, mitcad#1508); headless stdio and live application profiles. No geometry dependency; its tests read the model API's permitted names ([mcp.md](mcp.md)). |
-| `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images). |
+| `core/preview` (`mitcad-preview`) | Rust | Preview images without a GPU or a display (mitcad#1486): `model_render`'s arguments, its camera (shared by every quality), a software rasterizer over the bodies' display meshes (with a section's caps and highlighted edges, mitcad#1487, and the overlay of an analysis' triangles over them, mitcad#1488) and a PNG writer; deterministic on one platform. The live server draws the same pictures through `Document::mcp_render`. The model builds the scene (`core/model/src/preview.rs`) ([mcp.md](mcp.md), Preview images); its line art as SVG (mitcad#1736, `format: "svg"`) is a drawing view's projection along the camera (`core/model/src/preview/lines.rs`). |
 | `core/cam` (`mitcad-cam`) | Rust | CAM for CNC milling (mitcad#1013, [cam.md](cam.md)): tools and the tool library, planar outlines of lines and arcs, toolpaths, the 2.5-axis operations (facing, contour with the tool radius compensation, offset pocketing with islands, drilling), the machine model with its keep-out zones and tool changers and the check of a program against it, and the post-processors (one `PostProcessor` trait; grbl, grblHAL, RepRapFirmware, MillenniumOS, Mach3, Mach4, LinuxCNC). No model, no OCCT; offsets by cavalier_contours. |
 | `core/subdiv` (`mitcad-subdiv`) | Rust | Forms (mitcad#1757): control cages, their edits, Catmull-Clark subdivision with creases and boundaries and the limit surface as bicubic patches, below the model (re-exported as `mitcad_model::subdiv`); no OCCT ([Forms](#forms-subdivision-surfaces)). |
 | `core/ffi` (`mitcad-ffi-bridges`), `core/cpp` | Rust, C++ | CXX bridges: the `Kernel` on OCCT, the document API for C++. An rlib (mitcad#792), so that Cargo starts it on its dependencies' metadata. |
@@ -204,6 +205,30 @@ design in a project.
   fillets, sweeps, lofts, offsets, splits, sewing) poll the monitor
   through a progress range (`Kernel::interruptible`,
   `geometry/include/mitcad/geometry/cancel.hpp`) and throw `Cancelled`.
+  OCCT's fillet and chamfer do not look at their progress range
+  everywhere, so a call of theirs that does not return would hold the
+  recompute and its Cancel for good: the OCCT kernel runs each fillet's and
+  chamfer's call on a thread of its own (`core/ffi/src/kernel/abandon.rs`,
+  mitcad#1917) while the evaluation's thread waits. So do the other calls
+  seen to run on without returning (mitcad#1922): shells and offsets
+  (Shell, Offset Face, Thicken, Offset Surface: OCCT's offset looks at
+  the range only between its steps), sweeps (Sweep, Pipe, Coil, Helix,
+  Loft, solid and surface: OCCT's pipe shell, pipe and loft ignore the
+  range, our helical sweeps have none; a pipe along a tight helix ran for
+  minutes, mitcad#1788) and healing (Delete Face's defeaturing, which ran
+  300 s in a fillet's retry, mitcad#1337, and the ShapeFix healing of a
+  body built from its boundary, whose repair of intersecting wires once
+  never returned, mitcad#495). It gives the call up
+  within 10 ms of the monitor's cancel (the call fails as cancelled), or
+  once the call has run for the kernel's time limit (300 s by default,
+  `MITCAD_KERNEL_TIME_LIMIT`, 0 for none; on the wall clock): the
+  feature then fails "the geometry kernel did not finish within N s; the
+  operation was given up", and the recompute goes on. The call given up
+  goes on on its thread with its geometry cancelled (OCCT's algorithms
+  that look at a progress range stop there), sharing its input shapes as
+  the import's parallel definitions do (mitcad#95), and drops its result
+  when it returns; the process ends without its static destructors
+  meanwhile (*Hangs* below).
   A monitor can be part of others (`RecomputeMonitor::within`): cancelled
   with any of them or at its deadline. The `.f3d` import tries each
   definition under one, with the user's stop, the hang watchdog's
@@ -292,7 +317,11 @@ design in a project.
   returns; a process that ends meanwhile ends with `std::_Exit` once its
   output is written (`abandoned_imports()`: `mitcad-cli`, the import
   worker, the application), as the shared libraries' static destructors
-  would tear down OCCT's state under that thread.
+  would tear down OCCT's state under that thread. The kernel calls a
+  Cancel or the time limit gave up (fillets, chamfers, shells, offsets,
+  sweeps, healing) count there too (mitcad#1917, mitcad#1922,
+  *Cancellation* above); with them, the import's try given up inside one
+  of those calls returns at once.
 - **Undo:** the definition state (parameters, features, marker, body
   attributes, assembly, visibility, named views, analyses) is cheap to
   clone and pushed on a stack; several commands can merge into one step
@@ -686,7 +715,13 @@ design in a project.
   cut faces); a detail and a broken view the parts of edges they show; of
   picks as near, the one the projection draws visible, then the one nearest
   the eye; a pictorial view measures aligned dimensions in 3D and refuses
-  foreshortened ones. A view may also bring in the model's own
+  foreshortened ones. The silhouettes of curved faces (mitcad#1909,
+  `Kernel::face_silhouettes`, kept per body version and view direction,
+  `api/drawing_silhouettes.rs`) are picks too, kept as the face and a
+  point of the outline in its body's coordinates, found again as the
+  face's outline nearest that point; a pick's `extreme` direction makes
+  it the point of its curve furthest that way, so an overall size to the
+  top of a curved outline follows the model. A view may also bring in the model's own
   annotations it sees square on (mitcad#1406, `model_annotations`): the
   model lays them out (`api/annotations.rs`, `model_items`), and the view
   draws each, once per sheet, as an annotation of the drawing's engine
@@ -1698,7 +1733,11 @@ the `Shape` type.
   `Kernel::triangle_mesh` (one closed, outward-facing mesh per body,
   placed by its occurrences). STEP, IGES, OBJ and BRep go through
   `Kernel::write_file` with each body's placements (`ExportBody::placements`;
-  STEP as an assembly, the others as moved copies). USDZ is written by
+  STEP as an assembly, the others as moved copies); STEP of bodies that
+  occurrences place goes through `Kernel::write_step_tree` instead
+  (mitcad#1915, `core/model/src/exchange/step_tree.rs`): the design's
+  component tree, each distinct component once as a part or an assembly
+  instanced by its occurrences, as the import reads it back. USDZ is written by
   the model from `Kernel::face_meshes` (each face its own vertices with
   the surface's normals, in the order `Kernel::faces` lists them, so
   face appearances find their triangles; a mesh body's texture
@@ -2564,7 +2603,9 @@ not recompute.
   Manager on macOS (`platform/macos/SpaceMouseMac.cpp`). A missing device
   or daemon is no error. `view/SpaceMouseController` maps the axes to the
   camera's rates (`view/SpaceMouseNavigation.hpp`: speed, dead zone,
-  reversed axes, locks, dominant axis; pan and zoom only in sketch mode)
+  reversed axes, locks, the dominant axis held until the cap is at rest,
+  the cross-talk filter and the device's reach of mitcad#1720, kept in
+  the controller's `SpaceMouseMemory`; pan and zoom only in sketch mode)
   and runs the buttons' view commands through their actions;
   `OcctViewer` moves the camera by the rates at each frame in the 3D
   mouse's Navigation mode (mitcad#978: Object and Camera about the mouse
@@ -3070,8 +3111,10 @@ not recompute.
   failed feature, `edited`, `new`; `core/model/src/document/command_outcome.rs`)
   go to the top of the result, and `mitcad_mcp::command_outcome` decides
   for both profiles (mitcad#401). A `model_command` takes an array of
-  commands (one undo step; a refused entry undoes the earlier ones) and
-  answers with what it changed, compared in Rust
+  commands (one undo step; a refused entry undoes the earlier ones; an
+  entry takes what an earlier one made by name, `"as"` and `{"ref"}`,
+  checked and replaced by `core/mcp/src/array_refs.rs` for both profiles,
+  mitcad#1897) and answers with what it changed, compared in Rust
   (`core/mcp/src/changes.rs`: snapshots before and after, the shape
   versions of the `bodies` query, `recompute_times`); the live
   `model_export` writes into the folders for designs with the headless
@@ -3128,7 +3171,12 @@ not recompute.
   to, a building project's linked models) run in that process too
   (`--list-references`, `--list-links`), behind the progress dialog, and
   a reader's fault there fails the import with "the import process
-  stopped" instead of ending the session. The parsing queries that do
+  stopped" instead of ending the session. A design file of another
+  format imported into the open design as a component (mitcad#1894)
+  goes the same way: the worker writes the imported design, and the
+  application inserts that design file with `insert_component` (a copy,
+  or a linked file saved in the project), so the open design never runs
+  a reader either. The parsing queries that do
   run in the application (`dxf_info`, `svg_info`, the DXF and SVG
   inserts, the print settings' read) run their reader through
   `reader_guard::catch_panic` (core/model-base), which turns a panic into
@@ -3234,7 +3282,7 @@ not recompute.
   both sides check. CEF runs windowless, its loop pumped from Qt's, each
   page painted from its software buffer into a widget (`CefView`) that
   forwards input; its GPU process draws WebGL on the GPU, or in software
-  (SwiftShader) where there is none (mitcad#1861, app/COMMANDS.md); CEF is given the view in physical pixels at a scale of 1
+  (SwiftShader) where there is none (mitcad#1861, app/COMMANDS.md), and in software only from the next start after the GPU path failed, with the browser's WebGL, GPU and page errors in the feedback diagnostics through a property of the application object (mitcad#1906, `webbrowser/BrowserDiagnostics.hpp`); CEF is given the view in physical pixels at a scale of 1
   and the page's zoom is the display's scale, as CEF paints windowless
   frames at 1 whatever it is told (mitcad#1657, app/COMMANDS.md). `ComponentBrowser` is a window of its own with
   one browsing profile for the application; its downloads go into
@@ -3486,7 +3534,9 @@ NativeText hints and the shortcut overview.
 `CommandPresenter` separates command-session actions and displayed state
 from controls. `NativeForms` builds real AppKit inputs from `InputDef`;
 `CommandPanel` remains the Qt presenter. Only one presenter is attached to
-a command. The AppKit form lays its captions and controls out as the
+a command. A preview being computed goes to `setBusy` (the Qt panel's busy
+mark beside OK and Cancel, which changes no size, mitcad#1907), not to the
+message. The AppKit form lays its captions and controls out as the
 shared form does and hands its OK and Cancel to the window as a footer
 under the scrolling inputs; its value fields run the shared
 `ParameterField` expression tools on hidden Qt proxies
@@ -3954,6 +4004,18 @@ immediately, retrying with exponential backoff from one minute; the remote
 is fetched on open, every 10 minutes and at the first change (both per
 project in Project Settings, Preferences' Cloud page giving the defaults).
 Save and Restore wait for a running sync.
+
+Every `RemoteTask` of a project (the remote controller's, the lock
+controller's, the Projects panel's pushes, Project Settings' Share) waits
+in that project's queue (`app/files/VersionQueue`, mitcad#1895), so two
+never run on one repository at once while other projects' run beside
+them. Commands that need no network but write the repository (Save's
+`commit`, `create_folder`, `new_design`, `move`, `delete`) run aside on a
+thread of their own while the UI thread keeps painting without taking
+input, and never wait for the queue. A design leaving the window has its
+versions synced and its edit lock released as one task in its project's
+queue instead of a modal progress; only closing the window waits, at most
+10 s.
 
 ### Projects
 

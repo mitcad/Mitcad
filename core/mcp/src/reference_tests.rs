@@ -198,7 +198,8 @@ fn a_section_by_its_heading_or_a_name_it_lists() {
         "curves and texts share one numbering",
         "A new point `[x, y]` is always a point of its own",
         "join the two ends afterwards with a `coincident`",
-        "not to ids a command earlier in the same array is expected to",
+        "never predict\nthe ids a command will make",
+        "a later entry\ntakes an earlier entry's ids from its result by name",
     ] {
         assert!(text(&answer).contains(phrase), "{phrase}");
     }
@@ -907,4 +908,343 @@ fn profiles_queries_ask_for_the_measures() {
     assert_eq!(kept["query"]["measures"], false);
     let other = mcp_defaults("model_query", &json!({"query": {"query": "bodies"}}));
     assert!(other["query"].get("measures").is_none());
+}
+
+// Complete command entries (mitcad#1897): a command described in prose
+// gets its section, brief answers are told from cut ones, and every
+// permitted command's lookup is checked.
+
+/// The names the backend permits, as the bridge gives them
+/// (`core/ffi/src/mcp.rs`), with the headless server's two print imports.
+fn permitted() -> Vocabulary {
+    let owned =
+        |names: &[&str]| -> Vec<String> { names.iter().map(|name| (*name).to_owned()).collect() };
+    let mut commands = owned(&mitcad_model_api::classes::external_commands());
+    commands.extend(owned(&["import_print_profile", "import_slicer_presets"]));
+    Vocabulary {
+        queries: owned(&mitcad_model_api::classes::external_queries()),
+        commands,
+        features: owned(<mitcad_model::FeatureDef>::TYPE_NAMES),
+    }
+}
+
+/// `model_reference {"command": name, ...}` with the permitted names.
+fn command_entry(name: &str, extra: Value) -> Value {
+    let mut arguments = json!({"command": name});
+    if let (Some(arguments), Some(extra)) = (arguments.as_object_mut(), extra.as_object()) {
+        arguments.extend(extra.clone());
+    }
+    reference::answer(&arguments, &permitted()).unwrap_or_else(|error| panic!("{name}: {error}"))
+}
+
+/// The two commands of the report (mitcad#1897): their whole section,
+/// with the fields, the result and the examples, not one line of it.
+#[test]
+fn a_print_plate_command_gets_its_whole_section() {
+    let edit = command_entry("edit_print_plate", json!({}));
+    assert_eq!(edit["section"], "Print plates");
+    assert_eq!(edit["path"], "Print plates");
+    assert_eq!(edit["truncated"], false);
+    let edit_text = text(&edit);
+    assert!(edit_text.starts_with("## Print plates\n"), "{edit_text}");
+    for part in [
+        // Its example and the paragraph that gives its fields.
+        "{\"cmd\": \"edit_print_plate\", \"plate\": \"Vase\", \"name\": \"Vases\",",
+        "\"values\": {\"spiral_vase\": true, \"layer_height\": null}}",
+        "`edit_print_plate` renames (`Rename …`),\nsets values and takes them away (a key's `null`)",
+        // What its values are.
+        "**Plate settings:** process values of the key map",
+    ] {
+        assert!(edit_text.contains(part), "edit_print_plate: {part}");
+    }
+    let place = command_entry("place_on_plate", json!({}));
+    assert_eq!(place["section"], "Print plates");
+    let place_text = text(&place);
+    for part in [
+        "\"items\": [{\"body\": \"Body1\", \"count\": 4}, {\"occurrence\": \"Arm:1\"}]}",
+        "`count` is 1 to 999",
+        // Its result, with its own example and fields.
+        "→ {\"moved\": [{\"body\": \"F1.b0\", \"name\": \"Body1\", \"count\": 2,",
+        "- An item is `{\"body\": uid}` or `{\"occurrence\": \"O1/O4\"}`",
+        "Through MCP, `model_command`'s `result` is this result",
+    ] {
+        assert!(place_text.contains(part), "place_on_plate: {part}");
+    }
+    // Nothing else names place_on_plate: the whole section is the whole
+    // entry.
+    assert_eq!(place["brief"], false, "{place}");
+    assert!(place.get("also_in").is_none());
+    // The slicer keys' section names edit_print_plate too: the whole
+    // section in brief, that one with extended: true.
+    assert_eq!(edit["brief"], true, "{edit}");
+    assert_eq!(edit["also_in"], json!(["Slicer keys in print values"]));
+    let edit_extended = command_entry("edit_print_plate", json!({"extended": true}));
+    assert!(text(&edit_extended).starts_with(edit_text.trim_end()));
+    assert!(text(&edit_extended).contains("Slicer keys in print values"));
+    let extended = command_entry("place_on_plate", json!({"extended": true}));
+    assert_eq!(text(&extended), place_text);
+    assert_eq!(extended["brief"], false);
+    // The commands with only an example in a code block are found too.
+    let add = command_entry("add_print_plate", json!({}));
+    assert_eq!(add["section"], "Print plates");
+    assert!(text(&add).contains("{\"cmd\": \"add_print_plate\", \"name\": \"Vase\"}"));
+}
+
+/// Other commands described in prose, so that the plates are no special
+/// case: a sketch command in a subsection and a design-wide one; and a
+/// row whose first cell says whose it is.
+#[test]
+fn other_commands_described_in_prose_get_their_sections() {
+    let scale = command_entry("sketch.scale", json!({}));
+    assert_eq!(scale["section"], "Scaling a sketch");
+    assert!(
+        scale["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("Scaling a sketch")
+    );
+    let scale_text = text(&scale);
+    assert!(
+        scale_text.starts_with("### Scaling a sketch\n"),
+        "{scale_text}"
+    );
+    assert!(scale_text.contains("`factor` (a\nnumber greater than zero)"));
+    assert!(
+        scale_text.contains("{\"cmd\": \"sketch.scale\", \"sketch\": \"F1\", \"factor\": 2.5}")
+    );
+    let reorient = command_entry("reorient_design", json!({}));
+    assert_eq!(reorient["section"], "Reorient Design");
+    assert!(
+        text(&reorient)
+            .contains("{\"cmd\": \"reorient_design\", \"axis\": \"x\", \"degrees\": 90}")
+    );
+    let table = command_entry("set_table", json!({}));
+    assert!(text(&table).contains("| command `set_table` |"), "{table}");
+    assert_eq!(table["section"], "Tables");
+}
+
+/// A brief entry says so and what extended: true adds; extended: true
+/// gives the rest, and pages when cut. (No permitted command is described
+/// only in prose in a section over the whole-entry size today, so the
+/// excerpt of such a section is not reached through the real reference.)
+#[test]
+fn a_brief_entry_is_told_from_a_cut_one_and_extended_gives_the_rest() {
+    // A command with rows: the rows in brief; extended: true adds every
+    // example and paragraph that names it, which is cut and pages.
+    let rows = command_entry("add_feature", json!({}));
+    assert_eq!(rows["brief"], true);
+    assert_eq!(rows["truncated"], false);
+    assert!(text(&rows).contains("| `add_feature` |"));
+    assert!(rows["note"].as_str().unwrap().contains("table rows"));
+    let first = command_entry("add_feature", json!({"extended": true}));
+    assert_eq!(first["brief"], false);
+    assert!(text(&first).starts_with(text(&rows)));
+    assert!(text(&first).len() > text(&rows).len());
+    if first["truncated"] != true {
+        // All of it fits one answer; paging is tested with a long section
+        // (a_long_section_is_cut_and_continues_from_its_offset).
+        return;
+    }
+    let note = first["note"].as_str().unwrap();
+    assert!(note.starts_with("cut at 64 kB"), "{note}");
+    let mut pages = text(&first).len();
+    let mut next = first["next_offset"].as_u64();
+    let mut count = 1;
+    while let Some(offset) = next {
+        let page = command_entry("add_feature", json!({"extended": true, "offset": offset}));
+        assert!(text(&page).len() <= reference::LIMIT);
+        pages += text(&page).len();
+        next = page["next_offset"].as_u64();
+        count += 1;
+        assert!(count < 100, "add_feature's pages do not end");
+    }
+    assert!(pages > reference::LIMIT);
+}
+
+/// mitcad#1897's audit: every command MCP permits gets an entry with its
+/// section; one without table rows gets the section that describes it,
+/// which shows or names it.
+#[test]
+fn every_permitted_command_gets_a_complete_entry() {
+    let vocabulary = permitted();
+    let mut problems = Vec::new();
+    let mut prose = Vec::new();
+    for name in &vocabulary.commands {
+        let answer = match reference::answer(&json!({"command": name}), &vocabulary) {
+            Ok(answer) => answer,
+            Err(error) => {
+                problems.push(format!("{name}: {error}"));
+                continue;
+            }
+        };
+        let entry = text(&answer);
+        if answer["section"].as_str().is_none_or(str::is_empty) || entry.is_empty() {
+            problems.push(format!("{name}: no section or text"));
+            continue;
+        }
+        if !entry.contains(&format!("| `{name}`"))
+            && !entry.contains(&format!("| command `{name}`"))
+        {
+            prose.push(name.as_str());
+            let example = entry.contains(&format!("\"cmd\": \"{name}\""));
+            let named = entry.contains(&format!("`{name}`"));
+            if !example && !named {
+                problems.push(format!("{name}: its entry neither shows nor names it"));
+            }
+        }
+        if answer["truncated"] == true {
+            problems.push(format!("{name}: its entry is cut"));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    // The prose-only commands of the audit are among them.
+    for name in [
+        "edit_print_plate",
+        "place_on_plate",
+        "sketch.scale",
+        "reorient_design",
+    ] {
+        assert!(prose.contains(&name), "{name}: {prose:?}");
+    }
+}
+
+/// A command's JSON Schema comes with its entry, on demand, with the
+/// server's restrictions; one MCP does not permit has none, and the tool
+/// listing carries none (mitcad#1897).
+#[test]
+fn a_commands_schema_comes_with_its_entry_only() {
+    let vocabulary = permitted();
+    let headless =
+        reference::answer_in(&json!({"command": "place_on_plate"}), &vocabulary, false).unwrap();
+    let schema = &headless["schema"];
+    assert_eq!(schema["properties"]["cmd"]["const"], "place_on_plate");
+    assert_eq!(schema["required"], json!(["cmd", "plate", "items"]));
+    assert_eq!(schema["x-mitcad-server"], "headless");
+    let live =
+        reference::answer_in(&json!({"command": "place_on_plate"}), &vocabulary, true).unwrap();
+    assert_eq!(live["schema"]["x-mitcad-server"], "live");
+    // The feature types are the permitted ones.
+    let add = reference::answer_in(&json!({"command": "add_feature"}), &vocabulary, true).unwrap();
+    assert_eq!(
+        add["schema"]["properties"]["def"]["properties"]["type"]["enum"],
+        json!(vocabulary.features)
+    );
+    // Not for a command MCP refuses, nor for a query.
+    let refused = reference::answer(&json!({"command": "begin_command"}), &names()).unwrap();
+    assert!(refused.get("schema").is_none());
+    let query = reference::answer(&json!({"query": "bodies"}), &vocabulary).unwrap();
+    assert!(query.get("schema").is_none());
+    // The contents name the commands with a schema; the tool listing holds
+    // none of them.
+    let contents = reference::answer(&json!({}), &vocabulary).unwrap();
+    assert!(
+        contents["schemas"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("edit_print_plate"))
+    );
+    for tools in [catalog::tools(), catalog::live_tools()] {
+        let listing = Value::Array(tools).to_string();
+        assert!(!listing.contains("x-mitcad-restrictions"));
+        assert!(!listing.contains("json-schema.org"));
+    }
+}
+
+/// A command's schema as a server with the permitted names gives it.
+fn schema_of(name: &str, live: bool) -> Value {
+    let answer = reference::answer_in(&json!({"command": name}), &permitted(), live);
+    answer.unwrap()["schema"].clone()
+}
+
+/// The sketch commands' schemas (mitcad#1912): a point input is an
+/// existing point or a position whose coordinates may be expressions; a
+/// field read once takes numbers only.
+#[test]
+fn the_sketch_commands_have_schemas_with_expression_coordinates() {
+    let line = schema_of("sketch.add_line", true);
+    assert_eq!(line["required"], json!(["cmd", "sketch", "end"]));
+    let end = &line["properties"]["end"];
+    assert_eq!(
+        end["oneOf"][1]["items"]["type"],
+        json!(["number", "string"])
+    );
+    assert!(end["description"].as_str().unwrap().contains("expression"));
+    let point = schema_of("sketch3d.add_point", false);
+    assert_eq!(point["properties"]["at"]["maxItems"], 3);
+    assert_eq!(point["x-mitcad-server"], "headless");
+    // A move is read once: its offset takes numbers only.
+    let moved = schema_of("sketch.move", true);
+    assert_eq!(moved["properties"]["by"]["items"]["type"], "number");
+    let contents = reference::answer(&json!({}), &permitted()).unwrap();
+    let schemas = contents["schemas"].as_array().unwrap();
+    assert!(schemas.contains(&json!("sketch.spline")));
+    assert!(schemas.contains(&json!("sketch3d.add_text")));
+}
+
+/// mitcad#1897: model_command's description, the server instructions and
+/// the long export and render descriptions are short labelled lines; the
+/// array's composition and the sketch ids' rules are next to each other,
+/// and the batch references point to the reference's Array section.
+#[test]
+fn descriptions_and_instructions_are_labelled_lines() {
+    for (tools, server) in [
+        (catalog::tools(), "Headless: "),
+        (catalog::live_tools(), "Live: "),
+    ] {
+        let command = tools
+            .iter()
+            .find(|tool| tool["name"] == "model_command")
+            .unwrap()["description"]
+            .as_str()
+            .unwrap();
+        let labels: Vec<&str> = command
+            .lines()
+            .skip(1)
+            .map(|line| line.split_once(": ").map_or(line, |(label, _)| label))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                "Array",
+                "Sketch IDs and points",
+                "Result",
+                "Errors",
+                server.trim_end_matches(": ")
+            ],
+            "{command}"
+        );
+        let array = command.lines().nth(1).unwrap();
+        for part in [
+            "\"as\": \"<name>\"",
+            "{\"ref\": \"<name>.<path>\"}",
+            "see the Array section of model_reference",
+            "undoes the entries before it",
+            "stopped_at",
+        ] {
+            assert!(array.contains(part), "{part}: {array}");
+        }
+        assert!(command.lines().nth(2).unwrap().contains("its id or ref"));
+        assert!(command.chars().count() <= catalog::DESCRIPTION_CHARS);
+        for name in ["model_export", "model_render", "model_reference"] {
+            let description =
+                tools.iter().find(|tool| tool["name"] == name).unwrap()["description"]
+                    .as_str()
+                    .unwrap();
+            assert!(description.lines().count() >= 4, "{name}: {description}");
+            assert!(description.chars().count() <= catalog::DESCRIPTION_CHARS);
+        }
+    }
+    for profile in [Profile::Headless, Profile::Live] {
+        let text = instructions(profile);
+        for label in [
+            "Documents: ",
+            "Reference: ",
+            "Units: ",
+            "Modeling: ",
+            "Commands: ",
+        ] {
+            assert!(text.lines().any(|line| line.starts_with(label)), "{label}");
+        }
+        assert!(text.chars().count() <= INSTRUCTIONS_CHARS);
+    }
 }

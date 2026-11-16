@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include "framework/TreeItemDelegate.hpp"
 
 #include <cstdio>
@@ -114,3 +115,4 @@ int treeItemDelegateTests() {
   QApplication::setPalette(original);
   return failures;
 }
+MITCAD_UNIT_TEST(treeItemDelegateTests);

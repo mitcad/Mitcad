@@ -286,6 +286,40 @@ void takeComponentOf(const SelectionItem& item, CommandState& state, const Comma
                            .arg(item.logDescription(), occurrence);
 }
 
+// A pick of Components as the occurrence it stands for: a component (a
+// browser row) as it is; a body as its own occurrence.
+SelectionItem pickedOccurrenceOf(const SelectionItem& item) {
+  SelectionItem occurrence{SelectKind::Component, QString(), QString(), QString()};
+  occurrence.occurrence = item.occurrence;
+  if (item.kind == SelectKind::Component) {
+    occurrence.owner = item.owner;
+  }
+  return occurrence;
+}
+
+// A body clicked while Move Object is Components (mitcad#1891): the
+// occurrence placed in the move's component on the body's path
+// (movedOccurrence, as Bodies mode and a selection made before take it),
+// so that a body of an imported assembly's part moves the import's
+// occurrence, not the part's own nested one, which the model refuses as
+// placed in another component. Its own occurrence when none on the path is
+// placed there (the model then says why); a component row as it is.
+SelectionItem movedOccurrenceOf(const SelectionItem& item, const CommandState& state, const CommandContext& context) {
+  SelectionItem occurrence = pickedOccurrenceOf(item);
+  if (item.kind == SelectKind::Component) {
+    return occurrence;
+  }
+  const QString component =
+      state.text(kMoveComponent).isEmpty() ? activeComponent(context) : state.text(kMoveComponent);
+  const QString moved = movedOccurrence(item.occurrence, component, context);
+  if (!moved.isEmpty() && moved != item.occurrence) {
+    occurrence.occurrence = moved;
+    qInfo().noquote() << QStringLiteral("Move/Copy: %1 is placed through %2: moving %2 (Move Object: Components)")
+                             .arg(item.logDescription(), moved);
+  }
+  return occurrence;
+}
+
 // The selection made before the command (the view's click on a placed
 // part, its context menu, a browser row): when every body or face in it
 // is of another component than the active one, their occurrences go to
@@ -976,14 +1010,10 @@ CommandDef moveCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("components"), QObject::tr("Objects"), SelectKind::Component | SelectKind::Body, 1, 0)
           .withTooltip(QObject::tr("Components in the browser, or a body a component's occurrence places"))
           .withAccepts([](const SelectionItem& item) { return !item.occurrence.isEmpty(); })
-          .withConvert([](const SelectionItem& item) {
-            SelectionItem occurrence{SelectKind::Component, QString(), QString(), QString()};
-            occurrence.occurrence = item.occurrence;
-            if (item.kind == SelectKind::Component) {
-              occurrence.owner = item.owner;
-            }
-            return occurrence;
-          })
+          .withConvert(pickedOccurrenceOf)
+          // A body clicked moves the occurrence placed in the move's
+          // component (mitcad#1891).
+          .withConvertNow(movedOccurrenceOf)
           .withVisible(choiceIs(QStringLiteral("move_type"), QStringLiteral("components")));
   def.inputs = {
       choiceInput(QStringLiteral("move_type"), QObject::tr("Move Object"),

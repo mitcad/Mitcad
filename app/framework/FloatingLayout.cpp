@@ -724,9 +724,15 @@ void FloatingLayout::layoutCards() {
   int leftTop = topLimit;
   for (std::size_t i = 0; i < left.size(); ++i) {
     Entry& entry = *left[i];
-    // A width the user chose (mitcad#529) within the view.
-    const int width = std::min(entry.sizing.width > 0 ? entry.sizing.width : 260,
-                               std::max(1, view.width() - 2 * kMargin));
+    // A width the user chose (mitcad#529), or one that follows the card's
+    // content (mitcad#1932), within the view.
+    int wanted = entry.sizing.width > 0 ? entry.sizing.width : 260;
+    if (entry.sizing.widthFor) {
+      if (const int asked = entry.sizing.widthFor(view.width()); asked > 0) {
+        wanted = asked;
+      }
+    }
+    const int width = std::min(wanted, std::max(1, view.width() - 2 * kMargin));
     // Within the column, above the card below it (the timeline): when the
     // cards' least heights do not fit, the lower ones give way, as before
     // the column was shared; a card never ends below the column.
@@ -852,7 +858,9 @@ void FloatingLayout::layoutCards() {
   std::vector<QRect> covered;
   for (const Entry& entry : m_entries) {
     if (visible(entry)) {
-      covered.push_back(entry.card->slot().translated(-view.topLeft()));
+      // A bare card (the Browser's Rows background) covers only where it
+      // takes the mouse (mitcad#1932).
+      covered.push_back(entry.card->coveredRect().translated(-view.topLeft()));
     }
   }
   if (m_band != nullptr && m_band->isShown()) {

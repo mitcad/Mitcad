@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# Patch picks a surface body's free edge as its opening and closes it
+# (mitcad#1927, GitHub mitcad/Mitcad#379), on patch-opening.json (a box
+# whose top face was unstitched and deleted: an open shell of five faces):
+#   Patch's Profiles or Edges offers the opening's free edges as edges
+#   (their pick places name the opening, not the wall beside them); the
+#   pointer over one hovers it, a click takes the whole opening as one
+#   edge item, Stitch is on, and OK makes the box a closed solid again
+#   (one body of 1000 mm3).
+# Run by tools/ui-patch-opening-test.sh (Linux),
+# tools/ui-windows-patch-opening-test.ps1 (Windows) and
+# tools/ui-macos-patch-opening-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+
+# Patch: a free edge of the opening is a pick place of its own, an edge of
+# Body1 named by its opening (the walls along it), not a wall's face.
+mark
+command surface.patch
+wait-log '^Pick places:' 20
+wait-log '^Pick edge F1[.]b0/[{]"faces":\["F1:side' 20
+wait-idle
+
+# The pointer over that edge, then a click on it: the whole opening.
+hover-logged '^Pick edge F1[.]b0/[{]"faces":\["F1:side'
+wait-idle
+mark
+click-pick 'edge F1[.]b0/[{]"faces":\["F1:side[^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge' 20
+expect-no-log ' not taken: '
+wait-log '^Preview Patch: ok' 30
+wait-idle 30
+
+# OK: the patch stitched on, the box a solid again.
+mark
+button '^OK$'
+wait-log '^Added patch of 1 items, stitched' 30
+wait-idle 30
+expect-model-bodies 1 1000
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

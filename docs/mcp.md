@@ -570,6 +570,19 @@ limit. Give
 `"triangles": true` for them, with `max_triangles` to cap them
 (mitcad#689).
 
+**Cancelling a call** (mitcad#1917): while a client's `tools/call` computes
+(a `model_command`, an open, an export), the client's
+`notifications/cancelled` with that call's `requestId` cancels the
+computation as the progress dialog's Cancel does, also inside a fillet,
+chamfer, shell, offset, sweep, loft or healing whose geometry kernel call
+does not return (mitcad#1922). The call answers at once with its error,
+`the computation was canceled`, and the design is as it was before the
+call. Such a feature whose kernel call runs longer than the kernel's time
+limit (300 s, `MITCAD_KERNEL_TIME_LIMIT`) fails
+with `the geometry kernel did not finish within N s; the operation was
+given up` among the call's `failed_features`. Other messages of the
+client wait until the call has answered.
+
 **Model commands** (`model_command`) are refused, with the reason, in
 these states:
 
@@ -601,7 +614,14 @@ array stays, and the error result names the entry (`entry`, `undone`,
 edited feature fails; that entry is applied, and `stopped_at` names it.
 `undo` and `redo` run alone, not in an array. The result of an array has
 `ran`, `results` (each entry's native result) and `result` (the last
-one's).
+one's). An entry names its result with `"as": "<name>"`, and a later
+entry takes a value of it with `{"ref": "<name>.<path>"}` (`sk.uid`,
+`l1.made.0`, `l1.end`: the point at the line's `end` as written), so that
+an agent never predicts an id (mitcad#1897). A malformed, unknown or
+forward reference refuses the array before any entry runs; one whose
+path or kind does not fit refuses its entry like any refused entry. See
+"References between the entries of a command array" in
+`core/model-api/src/commands.md`.
 
 **Command results** (mitcad#689) hold the document's `state` and what
 the command changed, in `changes`:
@@ -742,7 +762,7 @@ A new bridge can connect again to the same document. `--workspace`,
 | `model_command` | `document`, `command` (an object or an array). Optional `timeline` (`changed` default, `full`, `none`). | `document`, `applied`, native `result`, `failed_features`, `state`, `changes` (with `full` `timeline` and `bodies` instead). For an array also `ran`, `results`, `stopped_at`. In a sketch, also `sketch`. Refer to the command arrays above and [failed features](#transport-errors-and-limits). |
 | `model_export` | `document`, `path` (a new file in a folder for designs, or an existing one with `overwrite`), `format`. Optional `bodies`, `sketch`, `flat_pattern`, `drawing`, `refinement`, `overwrite` (default false), and the print plates and print bed fields (`plates`, `plate`, `dialect`, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`, `occurrence`, `occurrences`, `whole`), as in headless mode; each file a `file_per_plate` writes is in a folder for designs, new unless `overwrite` is true. | `document`, `path`, `exported`, native export `result`. |
 | `model_reference` | As in headless mode: none, or one of `section`, `query`, `command`, `feature`, `search`; optional `offset` and `extended`. | As in headless mode ([Look up the reference](#look-up-the-reference)). The protocol answers it, without the document. |
-| `model_render` | As in headless mode, without `quality` and its fields (fast only); `document` optional; `path` a new `.png` file in a folder for designs. | As in headless mode ([Preview images](#preview-images-model_render)): the same picture as the headless server's for the same design and arguments. |
+| `model_render` | As in headless mode, without `quality` and its fields (fast only); `document` optional; `path` a new `.png` file (`.svg` with `format: "svg"`) in a folder for designs. | As in headless mode ([Preview images](#preview-images-model_render)): the same picture as the headless server's for the same design and arguments. |
 | `document_save` | `document`. Optional `path`. Optional `overwrite` (default false). | `document`, `path`, `saved`, `status`, `state`. `status` is the text of the status bar, with the recorded version. Refer to the text below the table. |
 | `document_open` | `path`. Optional `discard` (default false). | `document` (the new handle), `path`, `name`, `state`, `busy`, `editable`, `opened`, `replaced` (the old handle). Refer to the text below the table. |
 | `document_new` | Optional `name`, `folder`. | `document` (the new design's handle), `path` (null for an untitled design), `name`, `state`, `busy`, `editable`, `created`, `previous` (the calling design's handle, still valid), `recorded` (true when a project recorded it), `note` when the current project's folder could not be used. Refer to the text below the table. |
@@ -858,9 +878,11 @@ Shell, …) has picks of a component other than the active one
 components that activating it drops). An agent's pick never activates the
 component by itself: cancel the command, activate the component
 (`activate_component`) and start the feature again.
-`panel` holds `message`, `result`, `ok_enabled`, `notes` by key and
+`panel` holds `message`, `result`, `ok_enabled`, `notes` by key,
 `message_action`, the text of the button under the message while it
-shows (`Activate Lid`). `app` holds `version`,
+shows (`Activate Lid`), and `busy` while the panel's preview computes
+(`Computing preview…`, the busy mark's text, mitcad#1907: no longer the
+`message`). `app` holds `version`,
 `build`, `qt`, `platform`, `ui` and `chrome`.
 
 **`ui_log`** returns the log lines after `since`. `lines` holds `seq`,
@@ -1209,7 +1231,7 @@ required.
 | `document_save` | `document`, `path`, `overwrite` (default false) | `document`, canonical `path`, saved `state` |
 | `model_export` | `document`, `path`, `format`. Optional `overwrite` (default false: an existing file is refused). Optional `bodies` (an array of names or UIDs). Optional `sketch`. For DXF, `flat_pattern`. For a drawing, `drawing`. For STL, OBJ, 3MF and USDZ, `refinement`. For 3MF, `plates`, `plate`, `dialect`, `occurrences`, `whole`; on the print bed of 3MF, STL or OBJ, `on_bed`, `center`, `drop`, `auto_orient`, `bed_face`, `spacing`; for USDZ, `print_colors` (mitcad#1596); for the bodies' formats, `occurrence`. Refer to the text below the table. | `document`, canonical `path`, native export `result` |
 | `model_reference` | None, or one of `section`, `query`, `command`, `feature`, `search`. Optional `offset` and `extended` (the whole section instead of the brief one). Refer to [Look up the reference](#look-up-the-reference). | The contents and the permitted names, or one part of the reference, at most 64 kB of text |
-| `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `print_colors`, `views`, `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views` |
+| `model_render` | `document`. Optional `view`, `projection`, `fit`, `bodies`, `hidden`, `size`, `edges`, `background`, `path`, `overwrite`, `max_bytes`, `colors`, `highlight`, `section`, `explode`, `print_colors`, `views`, `format` and `hidden_edges` ([Line art](#line-art-as-svg)), `quality` (`"raytrace"` with `samples`, `time_limit_s`, `denoise`: [Ray-traced pictures](#ray-traced-pictures)). Refer to [Preview images](#preview-images-model_render). | An MCP image block (PNG) after the text: `camera`, `width`, `height`, `bytes`, `bodies`, `timing_ms`, `warnings`, ...; with `views` an image block per view and `views`. With `format: "svg"` no image block: the SVG's text in `svg` and its `paths` |
 
 `document_open` imports a SolidCraft design (`.sc`, `.solidcraft` or
 `.solvecraft`) with its history into a new document without a `path`.
@@ -1394,9 +1416,9 @@ descriptions of `model_query` and `model_command` point to it.
 
 | Arguments | Result |
 |---|---|
-| none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `guides`: each guide topic's `id` and `read_when` (below); `queries`, `commands`, `features`: every query, command and feature type the server permits; `usage` |
+| none | `contents`: the `##` and `###` headings of the reference, one a line (`###` indented); `guides`: each guide topic's `id` and `read_when` (below); `queries`, `commands`, `features`: every query, command and feature type the server permits; `schemas`: the commands with a JSON Schema; `usage` |
 | `section` | One section with its subsections: `section` (its heading), `path` (the headings above it), `text`. In brief by default (below); `"extended": true` gives the whole text. The name is a heading (`"Values"`, `"Sketch commands"`, in any case), a name a heading lists (`"split_body"` finds *Face features: shell, …, split_body, split_face*) or a part of a heading, in that order; `other_sections` names the other matches |
-| `query`, `command` | The reference rows of that query or command, each table with its header and the headings above it, in `text`; `sections`: the headings that list the name; `permitted`. A name without rows gives the lines that name it |
+| `query`, `command` | Its entry (mitcad#1897) in `text`: the reference rows of that query or command, each table with its header and the headings above it; a name without rows gets the section that describes it in prose, whole up to 16 kB, else that section's paragraphs, examples and lists about it. `section` and `path`: the section; `sections`: the headings that list the name; `also_in`: other sections that name it; `brief`; `permitted`. A command also gets `schema`, its JSON Schema, where one exists (below) |
 | `feature` | The section of that feature type (the heading that lists it, or the section of its first example definition), as `section` gives it, with `feature`, `example` (its first example definition) and `permitted`; in brief by default like `section` |
 | `search` | `headings` that contain the text, and `hits`: `section` (the headings above the line) and `excerpt` (240 characters around the text) of each line that contains it, in any case; `total` |
 | `guide` | A guide on how to model well (below): `guide` (its id) and `text`. `"index"` gives the index |
@@ -1421,6 +1443,38 @@ names a missing or an unknown field gets its feature type's or command's
 brief reference in `reference`; a definition's `name` says that a name
 goes beside `def` or with `rename_feature`, and a parameter named like a
 unit, a function or a constant (`Round`) says to choose another name.
+
+For a `query` or a `command` (mitcad#1897), `"extended": true` adds
+what the rest of the reference says of it: for rows, every paragraph and
+example elsewhere that names it; for an entry in prose, the whole section
+and then the other sections' paragraphs about it. Every query or command
+answer has `brief`: `true` when `extended` gives more, with a `note` that
+says what and how much. `brief` (shortened on purpose) and `truncated`
+(cut at 64 kB; continue from `next_offset`) are separate, and both can
+hold at once.
+
+A command's `schema` (mitcad#1897) is a JSON Schema (2020-12) of its
+fields: types, enums, units, defaults, alternatives (`oneOf`), examples,
+and for `def` the server's feature types with
+`model_reference {"feature": "<type>"}` for their fields. It is given on
+demand, never in the tool listing, and only for a command this server
+permits; `x-mitcad-server` (`live` or `headless`) and
+`x-mitcad-restrictions` say what the server adds (a live document's
+sketch session and read-only state, undo and redo alone, an array
+entry's `as` and `ref`, a form MCP refuses such as a part read from a
+library). Every permitted command has one: `core/mcp/src/schemas.rs`
+writes the first ones and its modules one family each
+(`core/mcp/src/schemas/sketch.rs` every `sketch.*` and `sketch3d.*`
+command, mitcad#1912; `document.rs`, `appearance.rs`, `print.rs`,
+`data.rs`, `assembly.rs`, `joints.rs`, `build.rs`, `drawings.rs`,
+`annotations.rs`, `cam.rs` and `form.rs` the others, mitcad#1918).
+`core/model-tests/api/src/mcp_schema_tests.rs` checks each against the
+fields the model's API reads (`UNPROBED` names the few whose fields the
+API reads only after looking at the design, with the reason; their
+examples are still checked), and `WITHOUT_SCHEMA` would list a permitted
+command a schema cannot describe, with its reason (none now): a new
+permitted command needs a schema in its family's module or a place
+there.
 
 The tool and the resource give the reference as agents see it
 (mitcad#1509), without what an agent cannot use: the sections whose
@@ -1469,7 +1523,10 @@ An assistant reaches them three ways, all with the same text:
 | A skill | The folder itself is an Agent Skill, for clients that load skills |
 
 One sentence of the server instructions points at the index, and the
-description of `model_reference` names `guide`.
+description of `model_reference` names `guide`. The topic `bug-reporting`
+(mitcad#1897) says what evidence to collect after an unexpected result
+and how, with a report template; the instructions and `model_command`'s
+description point at it in a few words.
 
 To add a topic, write `references/<id>.md`, add its line to the index in
 `SKILL.md` and its `include_str!` to `TOPICS` in `core/mcp/src/guide.rs`.
@@ -1717,6 +1774,66 @@ argument; flat over its face, hidden behind others),
 `core/mcp/src/tests.rs` (the schema) and `tools/cli/mcp-test.py`
 (`test_model_render_overlays`: the overhang and the walls of a box on
 the real kernel, with `print_overhangs`' area).
+
+#### Line art as SVG
+
+With `format: "svg"` (mitcad#1736), `model_render` answers line art
+instead of a shaded picture, for figures in manuals: the camera's view
+as black vector lines. The bodies, the camera and `explode` are the
+PNG's; the lines are those a drawing's view projects (the kernel's
+hidden-line removal, `Kernel::project_view`), so the edges seen and the
+silhouettes of curved faces are drawn, and edges where faces meet
+tangentially are left out, as a drawing's views leave them by default.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `format` | `"png"` | `"png"`: the picture; `"svg"`: line art |
+| `hidden_edges` | `false` | With `"svg"`: also the hidden edges, dashed (refused without it) |
+
+- Always orthographic: the kernel projects along parallel lines. A view
+  without a projection of its own is drawn orthographic, framed as the
+  orthographic PNG of the same arguments; `projection: "perspective"` is
+  refused.
+- The SVG's user units are the picture's pixels (`size`, y down), its
+  numbers at most three decimals: the same arguments give the same text.
+  Each edge is one `<path>`: the edges seen in `<g id="visible">` (black,
+  1.5 px), the hidden ones in `<g id="hidden">` under them (1 px,
+  dashed), highlighted faces' boundaries and edges in
+  `<g id="highlight">` over everything (the selection blue, 2.5 px).
+- `colors` strokes a body's lines in its colour, `highlight` a whole
+  body's in the selection blue; a highlighted face's boundary and a
+  highlighted edge are drawn over everything, as the PNG draws an edge.
+- `background` a colour is a rectangle under the lines; `theme` and
+  `transparent` leave the SVG clear.
+- `section`, `overlay`, `print_colors` and `edges: false` are the PNG's
+  and refused, and so is `quality: "raytrace"`.
+- The result has no image block: `svg` (the text), `paths` (`visible`,
+  `hidden`, `highlight`: how many paths), `bytes`, `width`, `height`,
+  `camera`, `bodies`, `hidden_edges`, `polygonal` (the kernel projected
+  a triangulation), `timing_ms` (`project`, `write`, `total`) and
+  `warnings`. With `views`, each view's in its entry of `views`.
+- `max_bytes` counts the SVG's text, by default and at most 3 MiB (the
+  answer carries it twice, as its text and as `structuredContent`). A
+  larger one is refused with `render_too_large`, unless `path` writes it:
+  then the file holds it whole and the answer says `svg_omitted`.
+- `path` writes a new `.svg` file (the live server: in a folder for
+  designs).
+
+```json
+{"document": "D1", "view": "iso", "format": "svg", "hidden_edges": true}
+→ {"format": "svg", "mime_type": "image/svg+xml",
+   "paths": {"visible": 9, "hidden": 3, "highlight": 0},
+   "svg": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=…", …}
+```
+
+Tests: `render_lines_tests` (`core/model-tests/drawing`: the paths and
+groups, the frame in the picture's pixels, colors, highlight and explode,
+the options refused, on the mock kernel), `geometry/tests/test_drawing.cpp`
+(a box from the iso camera: nine edges seen, three hidden),
+`core/preview/src/tests.rs` (the arguments), `core/mcp/src/tests.rs`
+(the schema, a text answer) and `tools/cli/mcp-test.py`
+(`test_model_render_line_art`: the box from the iso camera end to end,
+nine paths seen and three dashed with `hidden_edges`).
 
 #### Ray-traced pictures
 
@@ -1983,7 +2100,14 @@ methods and invalid tool parameters also return protocol errors. A
 notification never invokes a tool, never changes a document and has no
 response. Model, workspace and file errors return tool results with
 `isError:true`, usually `structuredContent:{"error":"..."}`. If a
-command validation fails, the document stays unchanged.
+command validation fails, the document stays unchanged. An error about
+places in the design (mitcad#1897) leads with its short cause in
+`error`, which an agent tells the user; the exact text with the
+topological names, ids and coordinates is in `error_detail`, and the faces,
+edges and points with their exact references in `places`, which an agent
+keeps for diagnosis and bug reports. The command reference's
+[Errors](../core/model-api/src/commands.md#errors) section has the
+fields, where they come and the compatibility rule.
 
 Errors give the choices (mitcad#714), in both servers:
 
@@ -2127,7 +2251,11 @@ changes. They do not apply operating-system resource limits.
 
 Requests run synchronously, one at a time. This version does not report
 progress. It does not interrupt a geometry operation that runs.
-`notifications/cancelled` cannot cancel that operation.
+`notifications/cancelled` cannot cancel that operation. A fillet, chamfer,
+shell, offset, sweep, loft or healing whose geometry kernel call runs
+longer than the kernel's time limit (300 s, `MITCAD_KERNEL_TIME_LIMIT`)
+fails with `the geometry kernel did not finish within N s` (mitcad#1917,
+mitcad#1922).
 
 A client can stop the headless process. Then the unsaved session
 documents of that process are lost. That mode has no background

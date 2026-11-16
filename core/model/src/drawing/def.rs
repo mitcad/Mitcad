@@ -284,6 +284,11 @@ pub struct DrawingView {
     /// (`DETAIL B (2:1)`) when left out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// How far its label is moved from its place under the view, sheet mm
+    /// (mitcad#1909: dragged): it moves with the view; none, under the
+    /// middle of its box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_offset: Option<P2>,
     /// What a base view (or a section without a parent) shows; the whole
     /// design (or component) when left out, which only a design file
     /// written before mitcad#1293 has: such a view is pinned to the bodies

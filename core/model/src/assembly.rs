@@ -78,11 +78,34 @@ pub struct ExternalLink {
     /// last shown in full, which they keep using.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<EnvelopeFrame>,
+    /// Its bodies took the materials and appearances the design gives them
+    /// (mitcad#1921, mitcad#1923). False in a design saved before: its next
+    /// `update_links` gives them once, even when the file is unchanged.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub looks: bool,
+    /// Linked with options (a derived part, mitcad#1923): what the design
+    /// gave each body of the part, by the body's number, so that a body
+    /// follows the design unless its material or appearance was set on it
+    /// by hand. A linked base feature's bodies record it themselves
+    /// (`BaseBody::material`, `BaseBody::appearance`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub given: Vec<LinkLook>,
 }
 
 // The detail size is checked finite and positive before it is stored, and
 // the frames are rigid transforms of finite numbers.
 impl Eq for ExternalLink {}
+
+/// What a linked design gave one body of a component linked with options
+/// (mitcad#1923): ids of the design's material and appearance.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkLook {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<String>,
+}
 
 /// A joint origin's frame on a linked design's geometry, kept while the
 /// design is shown by its envelope (mitcad#1276): the geometry as the

@@ -5,6 +5,7 @@
 // next command starts; a hint does not push a problem away; faded, the
 // band is the stub of the latest message; the history is newest first,
 // a repeated message one entry, at most kMaxEntries.
+#include "UnitTests.hpp"
 #include "framework/MessageLog.hpp"
 
 #include <cstdio>
@@ -281,3 +282,4 @@ int messageLogTests() {
   actionTests();
   return failures;
 }
+MITCAD_UNIT_TEST(messageLogTests);

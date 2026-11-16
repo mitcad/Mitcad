@@ -3,6 +3,7 @@
 // grouped by vendor, each by its model and nozzle with where it comes from,
 // two printers of the same name from two libraries told apart by their
 // tags; the processes grouped by the printer their names name.
+#include "UnitTests.hpp"
 #include "print/ProfilePickerRows.hpp"
 
 #include <cstdio>
@@ -262,3 +263,4 @@ int profilePickerRowsTests() {
   builtInsApart();
   return failures;
 }
+MITCAD_UNIT_TEST(profilePickerRowsTests);

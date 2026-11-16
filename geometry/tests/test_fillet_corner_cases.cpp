@@ -247,7 +247,11 @@ void test_rounding_end_prolonged_across_a_seam() {
     CHECK(across.cone_area > 0.0);
     CHECK_NEAR_TOL(across.cone_area, away.cone_area, 1e-6);
     if (!spline_post) {
-      CHECK_NEAR_TOL(across.removed, away.removed, 1e-6);
+      // 1e-5 mm3: a volume of about 0.15 mm3 measured from two
+      // tessellated solids moves by about 1e-6 mm3 when the intersection
+      // is split into other pieces (port patch 0480, mitcad#1879), far
+      // below the 1e-6 mm length tolerance.
+      CHECK_NEAR_TOL(across.removed, away.removed, 1e-5);
     }
   }
 }

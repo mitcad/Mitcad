@@ -82,4 +82,39 @@ struct StepRead {
 // gets a node of its own holding the part's bodies moved there.
 StepRead read_step_structured(const std::string& path, bool keep_assembly);
 
+// A design's component tree to write (mitcad#1915): each component once,
+// as a definition with its bodies and the instances of the definitions it
+// places.
+struct StepTree {
+  struct Instance {
+    std::size_t definition = 0;
+    // The placement in the parent definition (rigid, millimetres); its
+    // name is the instance's (an occurrence's, such as "Pin:2").
+    Placement placement;
+  };
+  struct Definition {
+    std::string name;
+    // In the definition's coordinates, each at its placements in it (none:
+    // once as it is).
+    std::vector<Body> bodies;
+    std::vector<Instance> instances;
+  };
+  // definitions[0] is the design: the file's top assembly, named after
+  // the file.
+  std::vector<Definition> definitions;
+};
+
+// Writes a component tree as STEP assemblies: definitions[0] as the top
+// assembly named after the file, every other definition it reaches once,
+// instanced by each of its instances (named after them) at their
+// placements, as read_step_structured reads a file back. A definition
+// that holds bodies only, each once as it is, is a part named after the
+// definition: its one body, or bodies that are each one solid as the
+// solids of one part, each solid named and coloured as its body (so that
+// read_step gives the bodies back apart, with their names). Any other is
+// an assembly: its instances first, then a part per body (named after the
+// body) at each of the body's placements. Throws Error for an instance of
+// a definition that does not exist or one placed inside itself.
+void write_step_tree(const std::string& path, const StepTree& tree, const StepWriteOptions& options = {});
+
 } // namespace mitcad::io

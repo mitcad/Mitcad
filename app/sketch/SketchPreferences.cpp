@@ -22,6 +22,8 @@ bool scaleToFirstDimension() {
 
 void saveScaleToFirstDimension(bool on) { QSettings().setValue(QLatin1String(kSetting), on); }
 
+void resetScaleToFirstDimension() { QSettings().remove(QLatin1String(kSetting)); }
+
 QJsonObject withFirstDimensionScale(const QJsonObject& command) {
   if (command.value(QStringLiteral("cmd")).toString() != QStringLiteral("sketch.add_dimension") ||
       !scaleToFirstDimension()) {

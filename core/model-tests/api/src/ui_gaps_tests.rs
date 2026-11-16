@@ -563,3 +563,110 @@ fn a_text_in_a_missing_font_is_a_warning() {
         "{message}"
     );
 }
+
+#[test]
+fn a_short_tangent_chain_is_a_remark_not_a_warning() {
+    // mitcad#1914: a fillet's tangent chain that stops where other sharp
+    // edges meet, the edges that continue it left sharp, is pointed out
+    // while the panel is open (the preview: information with its places)
+    // and accepted with the feature: no warning, no level, nothing in the
+    // timeline marks it. Agents still find it as an information notice
+    // with its places, and in `remarks`. A chamfer's the same; design
+    // review counts neither.
+    use mitcad_model::notice::NoticePlace;
+    let mut b = block();
+    const REMARK: &str = "The fillet's tangent chain stops where other sharp edges meet: 2 edges \
+                          that continue it are left sharp.";
+    b.doc.kernel().remarks.borrow_mut().insert(
+        "fillet",
+        (
+            REMARK.to_owned(),
+            vec![
+                NoticePlace::edge("E{F2:a|F2:b}"),
+                NoticePlace::edge("E{F2:b|F2:c}"),
+            ],
+        ),
+    );
+    let places = json!([
+        {"kind": "edge", "body": "F2.b0", "name": "E{F2:a|F2:b}"},
+        {"kind": "edge", "body": "F2.b0", "name": "E{F2:b|F2:c}"}
+    ]);
+    let fillet = json!({"type": "fillet", "body": "F2.b0",
+                        "edges": [corner(b.extrude, 1, 0)], "radius": 2});
+    // The command panel's preview: information with its places.
+    let preview: Value = serde_json::from_str(
+        &b.doc
+            .preview(&json!({"cmd": "add_feature", "def": fillet}).to_string())
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["status"], "ok");
+    assert_eq!(preview["warnings"], json!([]));
+    assert_eq!(preview["infos"], Value::Null);
+    assert_eq!(preview["remarks"], json!([REMARK]));
+    assert_eq!(
+        preview["notices"],
+        json!([{"level": "info", "message": REMARK, "places": places}])
+    );
+    // The command's result tells agents.
+    let added = command(&mut b.doc, json!({"cmd": "add_feature", "def": fillet}));
+    assert_eq!(added["warnings"], Value::Null);
+    assert_eq!(added["remarks"], json!([REMARK]));
+    let notice = json!({"level": "info", "message": REMARK, "target": "F3", "places": places});
+    assert_eq!(added["notices"], json!([notice]));
+
+    // Accepted: the timeline item is `ok` with no level, the remark among
+    // its notices and in its `remarks`.
+    let item = timeline_item(&b.doc, "Fillet1");
+    assert_eq!(item["status"], "ok");
+    assert_eq!(item["level"], Value::Null);
+    assert_eq!(item["error"], Value::Null);
+    assert_eq!(item["notices"], json!([notice]));
+    assert_eq!(item["remarks"], json!([REMARK]));
+    let feature = query(&b.doc, json!({"query": "feature", "uid": "F3"}));
+    assert_eq!(feature["status"], "ok");
+    assert_eq!(feature["level"], Value::Null);
+    assert_eq!(feature["warnings"], Value::Null);
+    assert_eq!(feature["infos"], Value::Null);
+    assert_eq!(feature["notices"], item["notices"]);
+    assert_eq!(feature["remarks"], json!([REMARK]));
+    let script = json!([{"expect": {"feature": "Fillet1", "status": "ok"}}]);
+    b.doc.run_script(&script.to_string()).unwrap();
+
+    // Edited again: the panel's preview points it out again, and the
+    // edit's result tells agents.
+    let edit = json!({"cmd": "edit_feature", "uid": "F3",
+                      "def": {"type": "fillet", "body": "F2.b0",
+                              "edges": [corner(b.extrude, 1, 0)], "radius": 3}});
+    let preview: Value = serde_json::from_str(&b.doc.preview(&edit.to_string()).unwrap()).unwrap();
+    assert_eq!(preview["status"], "ok");
+    assert_eq!(preview["remarks"], json!([REMARK]));
+    let edited = command(&mut b.doc, edit);
+    assert_eq!(edited["remarks"], json!([REMARK]));
+    assert_eq!(timeline_item(&b.doc, "Fillet1")["level"], Value::Null);
+
+    // A chamfer's chain the same.
+    const CHAMFER: &str = "The chamfer's tangent chain stops where other sharp edges meet: an \
+                           edge that continues it is left sharp.";
+    b.doc.kernel().remarks.borrow_mut().insert(
+        "chamfer",
+        (CHAMFER.to_owned(), vec![NoticePlace::edge("E{F2:c|F2:d}")]),
+    );
+    let chamfer = json!({"type": "chamfer", "body": "F2.b0",
+                         "edges": [corner(b.extrude, 1, 2)],
+                         "size": {"type": "equal_distance", "distance": 1}});
+    command(&mut b.doc, json!({"cmd": "add_feature", "def": chamfer}));
+    let item = timeline_item(&b.doc, "Chamfer1");
+    assert_eq!(item["status"], "ok");
+    assert_eq!(item["level"], Value::Null);
+    assert_eq!(item["remarks"], json!([CHAMFER]));
+    assert_eq!(item["notices"][0]["level"], "info");
+
+    // Design review finds nothing to fix in either.
+    let review = query(
+        &b.doc,
+        json!({"query": "design_review", "checks": ["failed-feature", "auto-fixable"],
+               "print": false}),
+    );
+    assert_eq!(review["findings"], json!([]), "{review}");
+}

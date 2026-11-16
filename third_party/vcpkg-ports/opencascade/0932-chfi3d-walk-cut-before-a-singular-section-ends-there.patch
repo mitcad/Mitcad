@@ -27,11 +27,11 @@ the file's change (7.5193 mm3); before, a corner failed.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index 7d73a18d..8d0f3b99 100644
+index 1b114baa..e70b1f13 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-@@ -721,14 +721,16 @@ static bool ChFi3d_RegularUpToArc(const occ::handle<BRepBlend_Line>& Lin,
- //            tangency point). Where the walk ended there because a contact
+@@ -749,14 +749,16 @@ static bool ChFi3d_RegularUpToArc(const occ::handle<BRepBlend_Line>& Lin,
+ //            ended there because a contact
  //            reached its edge, the blend's end, the line is kept up to it
  //            while its sections are regular (ChFi3d_RegularUpToArc).
 +//            Returns the ends cut (1 the first, 2 the last).
@@ -50,7 +50,7 @@ index 7d73a18d..8d0f3b99 100644
    }
    const double SpF = Spine->FirstParameter(1);
    const double SpL = Spine->LastParameter(Spine->NbEdges());
-@@ -753,6 +755,7 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+@@ -781,6 +783,7 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
          {
            Lin->Remove(i, nb);
            UpdateLine(Lin, false);
@@ -58,7 +58,7 @@ index 7d73a18d..8d0f3b99 100644
          }
          break;
        }
-@@ -777,11 +780,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+@@ -805,11 +808,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
          {
            Lin->Remove(1, i);
            UpdateLine(Lin, true);
@@ -72,7 +72,7 @@ index 7d73a18d..8d0f3b99 100644
  }
  
  //=======================================================================
-@@ -3087,7 +3092,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -3115,7 +3120,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
        //  modified by eap Fri Feb  8 11:45:10 2002 ___END___
      }
    }
@@ -81,7 +81,7 @@ index 7d73a18d..8d0f3b99 100644
    {
      // (An end replaced at a vanishing end: no longer on the arcs found.)
      const int aTidied = ChFi3d_EndBeforeVanishing(Lin, Spine, Data, Func, tolapp3d);
-@@ -3274,6 +3279,17 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -3302,6 +3307,17 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
        intl = 0;
      }
    }

@@ -21,6 +21,16 @@ it continued the hole's wall, and failed. SetRegul now checks the faces'
 tangency along the edge (ChFi3d::IsTangentFaces, as for any edge) before it
 encodes the regularity.
 
+The faces SetRegul gets from the builder's lists (NewFaces, Merged) are
+each oriented as in the data structure, not as in the result: on a box
+rounded along two edges, the blend and one of the two faces beside it are
+opposite there. IsTangentFaces compares the faces' normals as oriented, and
+so took half of the blends' true tangent edges for folds; without their G1
+a draft after the rounding could not carry the drafted face on to the blend
+("Impossible edge recomputation", OCCT's draft/angle A2 B5 C3 C4 C5, an
+invalid shape in F1; mitcad#1880). The tangency is now taken whichever way
+the faces face: only the angle between them along the edge counts.
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 index a0a90b8..8d5e9ac 100644
@@ -34,7 +44,7 @@ index a0a90b8..8d5e9ac 100644
  #include <ChFi3d_Builder_0.hxx>
  #include <ChFi3d_FilBuilder.hxx>
  #include <ChFi3d_SearchSing.hxx>
-@@ -3222,6 +3223,15 @@ void ChFi3d_FilBuilder::SetRegul()
+@@ -3222,6 +3223,20 @@ void ChFi3d_FilBuilder::SetRegul()
        {
          TopoDS_Face   F1   = TopoDS::Face(its1.Value());
          TopoDS_Face   F2   = TopoDS::Face(its2.Value());
@@ -42,8 +52,13 @@ index a0a90b8..8d5e9ac 100644
 +        // boss's foot rounded as high as its wall) leaves the contact's
 +        // edge between the blend and the face beyond that edge, which the
 +        // blend meets at an angle: the regularity holds only where the
-+        // faces are tangent along the edge.
-+        if (!ChFi3d::IsTangentFaces(E, F1, F2))
++        // faces are tangent along the edge. The faces come from the
++        // builder's lists, each oriented as in the data structure and not
++        // as in the result (a blend's face and the face beside it are
++        // often opposite there), so the tangency is taken whichever way
++        // they face: only the angle between them along the edge counts.
++        if (!ChFi3d::IsTangentFaces(E, F1, F2)
++            && !ChFi3d::IsTangentFaces(E, F1, TopoDS::Face(F2.Reversed())))
 +        {
 +          continue;
 +        }

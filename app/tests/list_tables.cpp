@@ -2,6 +2,7 @@
 // The BUILD lists' tables as text (mitcad#1641): csvOf's rows end in CRLF,
 // and the plain-text table of Copy as Text and Save as Text… pads its
 // columns to their widest cell with the numbers right-aligned.
+#include "UnitTests.hpp"
 #include "build/ListTables.hpp"
 
 #include <cstdio>
@@ -139,3 +140,4 @@ int listTablesTests() {
   textTests();
   return failures;
 }
+MITCAD_UNIT_TEST(listTablesTests);

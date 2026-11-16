@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include "framework/MacToolButtonStyle.hpp"
 
 #include <cstdio>
@@ -259,3 +260,4 @@ int macToolButtonTests() {
 #endif
   return failures;
 }
+MITCAD_UNIT_TEST(macToolButtonTests);

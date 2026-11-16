@@ -7,6 +7,7 @@
 // outward normal (into the bore for a bore's wall), the polylines put
 // between their points, a flat profile laid onto the face, and the angle
 // Create Sketch sends for where a face was clicked.
+#include "UnitTests.hpp"
 #include "sketch/SketchSurface.hpp"
 
 #include <algorithm>
@@ -290,3 +291,4 @@ int sketchSurfaceTests() {
   angleTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchSurfaceTests);

@@ -6,6 +6,7 @@
 // drag starts from (a twentieth of it), never coarser than the zoom's step
 // and never below the value box's last decimal; and the sizes of shapes
 // the commands give as the scale.
+#include "UnitTests.hpp"
 #include "framework/HandleStep.hpp"
 
 #include <algorithm>
@@ -134,3 +135,4 @@ int handleStepTests() {
   shapeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(handleStepTests);

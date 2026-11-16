@@ -368,7 +368,9 @@ std::size_t occurrences_in(const std::string& text, const std::string& part) {
 // component twice) placed twice. Imported with its structure, each part is
 // one component holding its body once, placed by an occurrence per
 // instance, and the design file holds each part's B-rep once; as one base
-// feature, a body per placed copy.
+// feature, a body per placed copy. The export keeps the arm a sub-assembly
+// (mitcad#1915): it comes back as one component placed twice, placing the
+// pin twice.
 void test_step_assembly_import(const fs::path& dir) {
   auto source = mitcad::new_document();
   run(*source, R"({"cmd": "create_component", "name": "Plate"})");
@@ -402,7 +404,8 @@ void test_step_assembly_import(const fs::path& dir) {
   CHECK(contains(imported, R"("occurrences":8)"));
   const std::string components(document->query(R"({"query": "components"})"));
   CHECK(contains(components, R"("name":"Plate","occurrences":4)"));
-  CHECK(contains(components, R"("name":"Pin","occurrences":4)"));
+  CHECK(contains(components, R"("name":"Arm","occurrences":2)"));
+  CHECK(contains(components, R"("name":"Pin","occurrences":2)"));
   // Two body definitions, eight placed instances.
   const std::string bodies(document->query(R"({"query": "bodies"})"));
   CHECK(occurrences_in(bodies, R"("uid":")") == 2);

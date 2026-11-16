@@ -3,6 +3,7 @@
 // sketch's and Project's defaults, Shift's wider clicks, windows, body
 // edges in sight and behind faces, and other sketches' geometry (only
 // Project's and Intersect's sources, mitcad#904, mitcad#1031).
+#include "UnitTests.hpp"
 #include "framework/SelectionScope.hpp"
 
 #include <cstdio>
@@ -376,3 +377,4 @@ int selectionScopeTests() {
   itemSetTests();
   return failures;
 }
+MITCAD_UNIT_TEST(selectionScopeTests);

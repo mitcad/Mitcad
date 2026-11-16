@@ -56,6 +56,26 @@ pub enum Background {
     Color([u8; 3]),
 }
 
+/// What `model_render` answers (mitcad#1736).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Format {
+    /// A shaded picture (the rasterizer's).
+    #[default]
+    Png,
+    /// Line art: the edges seen, projected with hidden lines removed, as
+    /// SVG paths (`mitcad_model::preview`'s lines).
+    Svg,
+}
+
+impl Format {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Svg => "svg",
+        }
+    }
+}
+
 /// The arguments of `model_render` (without `document`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderArgs {
@@ -79,6 +99,10 @@ pub struct RenderArgs {
     pub inspect: Inspect,
     /// What an analysis finds, drawn over the bodies (mitcad#1488).
     pub overlay: Option<Overlay>,
+    /// A PNG, or an SVG of the edges (mitcad#1736).
+    pub format: Format,
+    /// The SVG's hidden edges too, dashed.
+    pub hidden_edges: bool,
 }
 
 impl Default for RenderArgs {
@@ -96,6 +120,8 @@ impl Default for RenderArgs {
             max_bytes: None,
             inspect: Inspect::default(),
             overlay: None,
+            format: Format::Png,
+            hidden_edges: false,
         }
     }
 }
@@ -179,6 +205,24 @@ impl RenderArgs {
         args.inspect = Inspect::from_json(object)?;
         if let Some(overlay) = object.get("overlay").filter(|o| !o.is_null()) {
             args.overlay = Some(Overlay::from_json(overlay)?);
+        }
+        // Line art (mitcad#1736).
+        if let Some(format) = object.get("format") {
+            args.format = match format.as_str() {
+                Some("png") => Format::Png,
+                Some("svg") => Format::Svg,
+                _ => return Err("format must be png or svg".to_owned()),
+            };
+        }
+        if let Some(hidden) = object.get("hidden_edges") {
+            args.hidden_edges = hidden
+                .as_bool()
+                .ok_or("hidden_edges must be true or false")?;
+            if args.hidden_edges && args.format != Format::Svg {
+                return Err(
+                    "hidden_edges are drawn in line art only: give format svg with it".to_owned(),
+                );
+            }
         }
         Ok(args)
     }

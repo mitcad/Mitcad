@@ -946,8 +946,8 @@ impl<K: Kernel> Evaluate<K> for ExtrudeDef {
         let (sketch, regions) = self.sketch_regions(ctx)?;
         // A sketch on a cylindrical or conical face (mitcad#1768): its
         // profiles raised or sunk along the face's normals.
-        if let Some(development) = sketch.developed.clone() {
-            return self.developed_output(ctx, &development, &regions);
+        if sketch.developed.is_some() {
+            return self.developed_output(ctx, &sketch, &regions);
         }
         if let (Some(face), Extent::Distance { distance, .. }) = (&self.wrap, &self.extent) {
             // Wrapped onto a cylinder or a cone (mitcad#473), as an emboss.
@@ -1117,12 +1117,14 @@ impl ExtrudeDef {
             ctx.warnings.len(),
             ctx.infos.len(),
             ctx.warning_places.len(),
+            ctx.remarks.len(),
         );
         let hits = flipped.cut_hits(ctx, scope, sketch, regions, through_all);
         ctx.cut_targets = report;
         ctx.warnings.truncate(notes.0);
         ctx.infos.truncate(notes.1);
         ctx.warning_places.truncate(notes.2);
+        ctx.remarks.truncate(notes.3);
         match hits {
             Err(detail)
                 if crate::kernel::KernelError::is_out_of_memory(&detail)
@@ -1151,15 +1153,21 @@ impl ExtrudeDef {
         } else {
             Vec::new()
         };
-        let uid = ctx.uid;
-        let tool = self.tool(
-            ctx,
-            sketch,
-            regions,
-            &participants,
-            &Transform::IDENTITY,
-            uid,
-        )?;
+        let tool = match &sketch.developed {
+            // A sketch on a curved face's profiles wrapped onto it (mitcad#1908).
+            Some(development) => self.developed_tool(ctx, development, regions)?,
+            None => {
+                let uid = ctx.uid;
+                self.tool(
+                    ctx,
+                    sketch,
+                    regions,
+                    &participants,
+                    &Transform::IDENTITY,
+                    uid,
+                )?
+            }
+        };
         scope.would_cut(ctx, &discovery, &tool)
     }
 
@@ -1167,13 +1175,82 @@ impl ExtrudeDef {
     /// (mitcad#1768) raised out of the material by the distance along the
     /// face's normals, or sunk into it with `flip` or a negative distance,
     /// as a wrap: a distance without a taper, from the face, along its
-    /// normals; no thin walls, wrap, direction or cut scope.
+    /// normals; no thin walls, wrap, direction or other start. Join and Cut
+    /// work on their bodies as a planar sketch's do (mitcad#1908): a Cut's
+    /// `cut_scope` decides the bodies it cuts, a Join's or Cut's
+    /// participants the bodies of its own component.
     fn developed_output<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        sketch: &SketchOutput,
+        regions: &[ProfileRegion],
+    ) -> Result<FeatureOutput<K::Shape>, String> {
+        let development = sketch
+            .developed
+            .as_ref()
+            .ok_or("the sketch is not on a curved face")?;
+        if self.thin.is_some() {
+            return Err("an extrusion of a sketch on a curved face has no thin walls".to_owned());
+        }
+        if self.wrap.is_some() {
+            return Err(
+                "an extrusion of a sketch on a curved face lies on that face already: it wraps \
+                 onto no other face"
+                    .to_owned(),
+            );
+        }
+        if self.direction.is_some() {
+            return Err(
+                "an extrusion of a sketch on a curved face goes along the face's normals, not \
+                 along a direction"
+                    .to_owned(),
+            );
+        }
+        if !matches!(self.start, Start::ProfilePlane) {
+            return Err(
+                "an extrusion of a sketch on a curved face starts on the face, not at an offset \
+                 or an object"
+                    .to_owned(),
+            );
+        }
+        // A Join's dormant cut targets do nothing, as on a plane.
+        let discovery = self
+            .active_cut_scope()
+            .map(|scope| scope.discover(ctx))
+            .transpose()?;
+        let participants = match &discovery {
+            Some(_) => Vec::new(),
+            None => participant_bodies(ctx, self.operation, &self.participants)?,
+        };
+        let tool = self.developed_tool(ctx, development, regions)?;
+        match (self.active_cut_scope(), discovery) {
+            (Some(scope), Some(discovery)) => match scope.apply(ctx, discovery, tool) {
+                // A cut that misses suggests Flip when the other direction
+                // would cut (mitcad#1676).
+                Err(message)
+                    if message == super::extrude_scope::NO_INTERSECTION
+                        && self.flipped_cut_hits(ctx, scope, sketch, regions, false)? =>
+                {
+                    if let Some(report) = &mut ctx.cut_targets {
+                        report.flip_would_cut = true;
+                    }
+                    Err(super::extrude_scope::NO_INTERSECTION_TRY_FLIP.to_owned())
+                }
+                result => result,
+            },
+            _ => apply_operation(ctx, self.operation, participants, tool, "extrusion"),
+        }
+    }
+
+    /// The tool of a developed sketch's profiles (mitcad#1768): raised out
+    /// of the material by the distance along the face's normals, or sunk
+    /// into it with `flip` or a negative distance.
+    fn developed_tool<K: Kernel>(
         &self,
         ctx: &mut EvalContext<'_, K>,
         development: &crate::developed::Development,
         regions: &[ProfileRegion],
-    ) -> Result<FeatureOutput<K::Shape>, String> {
+    ) -> Result<K::Shape, String> {
         let Extent::Distance {
             distance,
             taper: None,
@@ -1185,24 +1262,9 @@ impl ExtrudeDef {
                     .to_owned(),
             );
         };
-        if self.thin.is_some()
-            || self.wrap.is_some()
-            || self.direction.is_some()
-            || self.cut_scope.is_some()
-            || !matches!(self.start, Start::ProfilePlane)
-        {
-            return Err(
-                "an extrusion of a sketch on a curved face starts on the face and goes along \
-                 its normals: no thin walls, wrap, direction, other start or cut scope"
-                    .to_owned(),
-            );
-        }
         let d = ctx.param(*distance)?;
         let raise = (d > 0.0) != self.flip;
-        let participants = participant_bodies(ctx, self.operation, &self.participants)?;
-        let tool =
-            super::developed::wrapped_regions(ctx, development, regions, d.abs(), raise, 0.0)?;
-        apply_operation(ctx, self.operation, participants, tool, "extrusion")
+        super::developed::wrapped_regions(ctx, development, regions, d.abs(), raise, 0.0)
     }
 
     /// The evaluated sketch and the regions the profiles select (none for

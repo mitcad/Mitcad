@@ -1,0 +1,16 @@
+[
+  {"comment": "A design file of another format dropped on a face while a component that is not the root is active (mitcad#1894), run where cli.import_into_design_cube saved cube.mitcad (a 20 mm cube from the origin, Body1, centre 10, 10, 10). The view's drop point is the design's, (100, 50, 20) on a face whose normal is +Z; the app converts it into the active component's coordinates (activePlacement, dropPlacement in app/files/MainWindowFiles.cpp) because insert_component places the new component in the active one."},
+  {"comment": "Holder, active, placed turned a quarter about Z and moved 100 mm along X: the drop point in its coordinates is (50, 0, 20), the normal still +Z (no rotation)."},
+  {"cmd": "create_component", "name": "Holder",
+    "transform": {"translation": [100, 0, 0], "rotation": {"axis": [0, 0, 1], "angle": 1.5707963267948966}}},
+  {"cmd": "insert_component", "path": "cube.mitcad", "link": false, "name": "cube",
+    "transform": {"translation": [50, 0, 20]}},
+  {"comment": "The cube's corner at the drop point in the design: its centre at (100, 50, 20) + the quarter turn of (10, 10, 10) = (90, 60, 30)."},
+  {"expect": {"occurrence": "Holder:1/cube:1", "body": "Body1", "volume": 8000, "center": [90, 60, 30],
+    "tolerance": 1e-6}},
+  {"comment": "Placed by the design's point as given, without the conversion, it would land elsewhere: its corner (100, 50, 20) in Holder is (50, 100, 20) in the design, its centre (40, 110, 30)."},
+  {"cmd": "undo"},
+  {"cmd": "insert_component", "path": "cube.mitcad", "link": false, "name": "cube",
+    "transform": {"translation": [100, 50, 20]}},
+  {"expect": {"occurrence": "Holder:1/cube:1", "body": "Body1", "center": [40, 110, 30], "tolerance": 1e-6}}
+]

@@ -134,6 +134,12 @@ void saveAskToActivateComponent(bool on) {
   settings.setValue(QLatin1String(kSetting), on);
 }
 
+void resetAskToActivateComponent() {
+  QSettings settings;
+  moveOldSetting(settings);
+  settings.remove(QLatin1String(kSetting));
+}
+
 QString ActivateQuestion::text() const {
   const QString shown = pickedKind != SelectKind::None ? SelectionItem::kindText(pickedKind) : kind;
   return QObject::tr("The %1 belongs to %2, but %3 is active.").arg(shown, picked, active);

@@ -7,7 +7,9 @@
 // Standard and Supplier filters with the designation's standard (mitcad#949),
 // and the suppliers' articles as their table shows them (mitcad#979), with
 // the shops chosen in Preferences as a filter of several suppliers and the
-// articles' product links (mitcad#950).
+// articles' product links (mitcad#950); an inserted component's tried
+// values sent in `parameters` and a refusal in words (mitcad#1929).
+#include "UnitTests.hpp"
 #include "library/PartOptions.hpp"
 
 #include <cmath>
@@ -129,6 +131,47 @@ void requestTests() {
   component(QJsonObject{{QStringLiteral("Color"), QStringLiteral("White")}});
   CHECK(asked.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("Length")).toString() ==
         QStringLiteral("Shelf_L"));
+  // The model refuses `values` beside `component` (mitcad#1929): a changed
+  // value goes into `parameters`, a text option's text quoted.
+  CHECK(!asked.contains(QStringLiteral("values")));
+  CHECK(asked.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("Color")).toString() ==
+        QStringLiteral("'White'"));
+  // An expression wins over a plain value of the same option.
+  component(QJsonObject{{QStringLiteral("Length"), QStringLiteral("800 mm")}});
+  CHECK(asked.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("Length")).toString() ==
+        QStringLiteral("Shelf_L"));
+  CHECK(!asked.contains(QStringLiteral("values")));
+  // Without bound expressions: the values alone, a bare number with its
+  // option's unit, a number in mm as it is.
+  expressions = QJsonValue();
+  component(QJsonObject{{QStringLiteral("Length"), QStringLiteral("800")}});
+  const QJsonObject sent = asked.value(QStringLiteral("parameters")).toObject();
+  CHECK(sent.size() == 1 && sent.value(QStringLiteral("Length")).toString() == QStringLiteral("800 mm"));
+  CHECK(!asked.contains(QStringLiteral("values")));
+  component(QJsonObject{{QStringLiteral("Length"), 900.0}});
+  CHECK(asked.value(QStringLiteral("parameters")).toObject().value(QStringLiteral("Length")).toDouble() == 900.0);
+  // An option no answer has given yet: a constant number as it is, a text
+  // quoted.
+  const QJsonObject untried{{QStringLiteral("Width"), QStringLiteral("40 mm")},
+                            {QStringLiteral("Finish"), QStringLiteral("Oak")}};
+  const QJsonObject unknown = componentTrialParameters({}, untried, QJsonValue());
+  CHECK(unknown.value(QStringLiteral("Width")).toString() == QStringLiteral("40 mm"));
+  CHECK(unknown.value(QStringLiteral("Finish")).toString() == QStringLiteral("'Oak'"));
+
+  // A refused value in words, without the query's name; the first answer's
+  // failure (no values tried) as the model gives it.
+  const JsonRunner refusing = [&asked](const QJsonObject& request) {
+    asked = request;
+    return parse(R"({"error": {"message": "configure: Width: 5 mm is below the minimum 10 mm"}})");
+  };
+  const OptionsQuery refused = componentOptionsQuery(refusing, QStringLiteral("C3"), {});
+  const OptionsAnswer tried = refused(QJsonObject{{QStringLiteral("Width"), QStringLiteral("5 mm")}});
+  CHECK(!tried.ok());
+  CHECK(!tried.error.contains(QStringLiteral("configure")));
+  CHECK(tried.error == QStringLiteral("These values cannot be used: Width: 5 mm is below the minimum 10 mm"));
+  const OptionsAnswer first = refused(QJsonObject());
+  CHECK(!first.ok() && !asked.contains(QStringLiteral("parameters")));
+  CHECK(triedValuesRefused(QStringLiteral("configure: ")) == QStringLiteral("These values cannot be used."));
   const QJsonObject set = setComponentParametersCommand(
       QStringLiteral("C3"), QJsonObject{{QStringLiteral("Length"), QStringLiteral("Shelf_L")}});
   CHECK(set.value(QStringLiteral("cmd")).toString() == QStringLiteral("set_component_parameters"));
@@ -454,3 +497,4 @@ int partOptionsTests() {
   supplierArticleTests();
   return failures;
 }
+MITCAD_UNIT_TEST(partOptionsTests);

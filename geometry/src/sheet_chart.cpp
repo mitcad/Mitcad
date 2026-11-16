@@ -908,14 +908,41 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
       // Sewing closes the remaining exterior-wall vertices, within the
       // explicit modelling tolerance; it does not discover or guess material
       // adjacency.
+      //
+      // Each material region's faces are sewn on their own first, then the
+      // regions together. Walls that touch only along a line (an open
+      // corner, mitcad#1409; the corner of a flange on several edges with no
+      // gap, mitcad#1872) each have an edge on that line, so it carries four
+      // coincident free edges; sewn all at once, the sewing may pair one
+      // wall's edge with the other wall's and leave both walls open there.
+      // A region closes on its own edges first, so only the edges where
+      // regions meet are left to pair.
+      std::vector<const NamedFace*> mine;
+      std::vector<std::vector<std::size_t>> by_member;
+      std::vector<std::size_t> member_index(membership.size(), membership.size());
+      for (const auto& face : faces) {
+        if (root(member_patch[face.member]) != current) continue;
+        if (member_index[face.member] == membership.size()) {
+          member_index[face.member] = by_member.size();
+          by_member.emplace_back();
+        }
+        by_member[member_index[face.member]].push_back(mine.size());
+        mine.push_back(&face);
+      }
+      // Each face's image after its region's own sewing.
+      std::vector<TopoDS_Shape> images(mine.size());
       BRepBuilderAPI_Sewing sewing(spec.tolerance);
       sewing.SetMaxTolerance(spec.tolerance);
-      std::vector<const NamedFace*> mine;
-      for (const auto& face : faces) {
-        if (root(member_patch[face.member]) == current) {
-          sewing.Add(face.face);
-          mine.push_back(&face);
+      for (const auto& indices : by_member) {
+        BRepBuilderAPI_Sewing region(spec.tolerance);
+        region.SetMaxTolerance(spec.tolerance);
+        for (const std::size_t i : indices) region.Add(mine[i]->face);
+        detail::interruptible([&](const Message_ProgressRange& range) { region.Perform(range); });
+        if (region.NbMultipleEdges() != 0) throw std::runtime_error("sheet charts do not close into manifold shells");
+        for (const std::size_t i : indices) {
+          images[i] = region.IsModified(mine[i]->face) ? region.Modified(mine[i]->face) : mine[i]->face;
         }
+        sewing.Add(region.SewedShape());
       }
       detail::interruptible([&](const Message_ProgressRange& range) { sewing.Perform(range); });
       if (sewing.NbFreeEdges() != 0 || sewing.NbMultipleEdges() != 0) {
@@ -965,9 +992,10 @@ SheetChartGeometry construct(const SheetChartShapeSpec& spec, bool check_collisi
         }
         detail::FaceNamer namer(solid);
         std::set<std::size_t> members;
-        for (const NamedFace* face : mine) {
-          const auto image = sewing.IsModified(face->face) ? sewing.Modified(face->face) : face->face;
-          if (namer.contains(image)) { namer.add(image, face->name); members.insert(face->member); }
+        for (std::size_t i = 0; i < mine.size(); ++i) {
+          const auto& sewn = images[i];
+          const auto image = sewing.IsModifiedSubShape(sewn) ? sewing.ModifiedSubShape(sewn) : sewn;
+          if (namer.contains(image)) { namer.add(image, mine[i]->name); members.insert(mine[i]->member); }
         }
         namer.finish();
         SheetChartSolid output{namer.shape(), {}};

@@ -6,6 +6,7 @@
 // click on an axis or the origin selects, the selection's items for them,
 // and the picks a preselection of a point and an axis gives Coincident and
 // Sketch Dimension.
+#include "UnitTests.hpp"
 #include "sketch/SketchModel.hpp"
 
 #include <cmath>
@@ -351,3 +352,4 @@ int sketchAxesTests() {
   lineDirectionTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchAxesTests);

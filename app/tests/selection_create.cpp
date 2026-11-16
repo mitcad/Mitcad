@@ -4,6 +4,7 @@
 // profiles, none for an empty or mixed selection), whether a command can
 // use the whole selection (its first selection input), and the row's
 // buttons, changed in place.
+#include "UnitTests.hpp"
 #include "framework/SelectionCreate.hpp"
 
 #include <algorithm>
@@ -352,3 +353,4 @@ int selectionCreateTests() {
 
   return failures;
 }
+MITCAD_UNIT_TEST(selectionCreateTests);

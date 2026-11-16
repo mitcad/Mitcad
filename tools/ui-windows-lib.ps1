@@ -1013,7 +1013,9 @@ function Ui-PanelReveal([string]$Text) {
     $bottom = [int]$Matches[2]
     $bar = @([int]$Matches[3], [int]$Matches[4])
     $place = Ui-LastLineWith "$Text at "
-    if ("$place" -notmatch ' at (\d+),(\d+)' -or "$place".EndsWith('(hidden)')) { return }
+    # A place above the view is negative ("at 878,-98"): a new message
+    # scrolled into view (mitcad#1884) can leave the panel's top rows there.
+    if ("$place" -notmatch ' at (-?\d+),(-?\d+)' -or "$place".EndsWith('(hidden)')) { return }
     $y = [int]$Matches[2]
     $margin = 12
     if ($y -ge $top + $margin -and $y -le $bottom - $margin) { return }

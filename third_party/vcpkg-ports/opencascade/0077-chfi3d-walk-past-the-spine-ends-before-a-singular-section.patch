@@ -20,15 +20,72 @@ the last point within the spine outwards, the line is ended at the first
 point where the contacts run twice as fast along the guide as at the
 spine's end (the guide's plane has turned 60 degrees from the ball's), or
 where the walk reached a tangency point. Within the spine nothing changes;
-the extension that is kept still runs past the end.
+the extension that is kept still runs past the end. The line is cut only
+where the part kept still runs past the spine's end by more than twice the
+section's width there, on both contacts (ChFi3d_KeepsWellPastEnd), or where
+it runs on into a section near the singular one (its contacts a thousand
+times as fast as at the spine's end, or a tangency point,
+ChFi3d_RunsIntoSingularSection). A line that only speeds up close to the
+end keeps its extension: OCCT's blend/complex B4 (up to 73 times as fast,
+the cut keeping less than half a section's width past the end) was cut
+short of the faces at the end and came out invalid. A long extension is
+still cut: a chamfer of a reported design whose walk ran on 20 mm past the
+end, at up to 28 times the speed, kept 17 mm, eight times its width; its
+whole line made its faces degree 12 surfaces of 101 poles instead of
+degree 9 of 18, and a rounding along the chamfer's edges then failed.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index 2a4d6f1..10897e8 100644
+index 2a4d6f1a..b5089130 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-@@ -386,6 +386,84 @@ static void UpdateLine(occ::handle<BRepBlend_Line>& Line, const bool isfirst)
+@@ -386,6 +386,134 @@ static void UpdateLine(occ::handle<BRepBlend_Line>& Line, const bool isfirst)
    }
  }
  
++//=======================================================================
++// function : ChFi3d_KeepsWellPastEnd
++// purpose  : Cut at point Keep, the walked line still runs on past the
++//            spine's end (its point I0, the last within the spine) by more
++//            than twice the width of the section there, on both contacts:
++//            the faces at the end still cut the extension that is kept.
++//=======================================================================
++
++static bool ChFi3d_KeepsWellPastEnd(const occ::handle<BRepBlend_Line>& Lin,
++                                    const int                          I0,
++                                    const int                          Keep)
++{
++  const Blend_Point& P0    = Lin->Point(I0);
++  const Blend_Point& PK    = Lin->Point(Keep);
++  const double       Width = P0.PointOnS1().Distance(P0.PointOnS2());
++  return P0.PointOnS1().Distance(PK.PointOnS1()) > 2. * Width
++         && P0.PointOnS2().Distance(PK.PointOnS2()) > 2. * Width;
++}
++
++//=======================================================================
++// function : ChFi3d_RunsIntoSingularSection
++// purpose  : The points From to To of a walked line reach a section near
++//            the singular one: their contacts run a thousand times as fast
++//            along the guide as V0 (or reach a tangency point). A line that
++//            only speeds up past the spine's end (a guide's plane turning
++//            away from the ball's along a long extension) does not.
++//=======================================================================
++
++static bool ChFi3d_RunsIntoSingularSection(const occ::handle<BRepBlend_Line>& Lin,
++                                           const int                          From,
++                                           const int                          To,
++                                           const double                       V0)
++{
++  for (int i = From; i <= To; i++)
++  {
++    const Blend_Point& P = Lin->Point(i);
++    if (P.IsTangencyPoint()
++        || std::max(P.TangentOnS1().Magnitude(), P.TangentOnS2().Magnitude()) > 1000. * V0)
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
 +//=======================================================================
 +// function : ChFi3d_CutSingularExtension
 +// purpose  : Past an end of its spine a rolling ball's walk follows the
@@ -40,7 +97,8 @@ index 2a4d6f1..10897e8 100644
 +//            blend to be cut by the faces at the end: past the spine, the
 +//            line is ended before the point where the contacts run twice
 +//            as fast along the guide as at the spine's end (or reach a
-+//            tangency point).
++//            tangency point), where it runs on into a section near the
++//            singular one (ChFi3d_RunsIntoSingularSection).
 +//=======================================================================
 +
 +static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
@@ -73,7 +131,9 @@ index 2a4d6f1..10897e8 100644
 +    {
 +      if (Speed(Lin->Point(i)) > 2. * v0)
 +      {
-+        if (i - 1 >= i0)
++        if (i - 1 >= i0
++            && (ChFi3d_KeepsWellPastEnd(Lin, i0, i - 1)
++                || ChFi3d_RunsIntoSingularSection(Lin, i, nb, v0)))
 +        {
 +          Lin->Remove(i, nb);
 +          UpdateLine(Lin, false);
@@ -96,7 +156,9 @@ index 2a4d6f1..10897e8 100644
 +    {
 +      if (Speed(Lin->Point(i)) > 2. * v0)
 +      {
-+        if (i + 1 <= i0)
++        if (i + 1 <= i0
++            && (ChFi3d_KeepsWellPastEnd(Lin, i0, i + 1)
++                || ChFi3d_RunsIntoSingularSection(Lin, 1, i, v0)))
 +        {
 +          Lin->Remove(1, i);
 +          UpdateLine(Lin, true);
@@ -110,7 +172,7 @@ index 2a4d6f1..10897e8 100644
  //=======================================================================
  // function : CompleteData
  // purpose  : Calculates curves and CommonPoints from the data
-@@ -2341,6 +2419,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2341,6 +2469,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
        //  modified by eap Fri Feb  8 11:45:10 2002 ___END___
      }
    }

@@ -25,6 +25,8 @@ pub(crate) struct Imported {
     document: crate::Document,
     /// Its occurrences by their GUIDs.
     guids: HashMap<String, Vec<OccurrenceUid>>,
+    /// Its occurrences by their object ids in its file.
+    objects: HashMap<u64, OccurrenceUid>,
     /// Its bodies by the stored bodies they match
     /// ([`Referenced::stored_bodies`]).
     stored: HashMap<String, BodyUid>,
@@ -101,6 +103,7 @@ impl References {
                     Referenced {
                         document: &l.imported.document.0,
                         occurrence_guids: &l.imported.guids,
+                        occurrence_objects: &l.imported.objects,
                         name: l.name.clone(),
                         stored_bodies: &l.imported.stored,
                         entity_bodies: &l.imported.entities,
@@ -375,6 +378,7 @@ impl crate::Document {
                 .collect(),
             references: d.references.clone(),
             guids: d.components.occurrence_guids.clone(),
+            objects: d.components.occurrence_objects.clone(),
             stored,
             entities: d.body_entities.clone(),
             document,

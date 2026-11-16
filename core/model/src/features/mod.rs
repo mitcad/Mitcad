@@ -994,6 +994,10 @@ pub struct EvalContext<'a, K: Kernel> {
     /// Where its warnings are about, by message (mitcad#1327): the places
     /// the geometry gave with its notes ([`Kernel::note_places`]).
     pub(crate) warning_places: crate::notice::WarningPlaces,
+    /// What its panel points out while it is open but the user accepts
+    /// with the result, with their places (mitcad#1914: a fillet's tangent
+    /// chain that stops short): no warning, nothing marks it once accepted.
+    pub(crate) remarks: crate::notice::WarningPlaces,
     /// A pattern's elements, suppressed ones too (P9: the panel shows a
     /// toggle at each), by element number; element 0 is the original.
     pub(crate) elements: Vec<Transform>,
@@ -1040,6 +1044,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             warnings: Vec::new(),
             infos: Vec::new(),
             warning_places: Vec::new(),
+            remarks: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             cut_targets: None,
@@ -1175,9 +1180,26 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
         }
     }
 
+    /// A remark with the places it is about (mitcad#1914): what the
+    /// feature's panel points out while it is open, no warning.
+    pub fn remark(&mut self, message: impl Into<String>, places: Vec<crate::notice::NoticePlace>) {
+        let message = message.into();
+        match self.remarks.iter_mut().find(|(m, _)| *m == message) {
+            Some((_, known)) => {
+                for place in places {
+                    if !known.contains(&place) {
+                        known.push(place);
+                    }
+                }
+            }
+            None => self.remarks.push((message, places)),
+        }
+    }
+
     /// Warns about what the geometry gave up to build a shape
     /// ([`Kernel::notes`]), and tells what else is worth knowing of how it
-    /// was built ([`Kernel::infos`]).
+    /// was built ([`Kernel::infos`]) and what its panel points out while it
+    /// is open ([`Kernel::remarks`], mitcad#1914).
     pub fn warn_notes(&mut self, shape: &K::Shape) {
         let mut places = self.kernel.note_places(shape).into_iter();
         for note in self.kernel.notes(shape) {
@@ -1185,6 +1207,9 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
         }
         for info in self.kernel.infos(shape) {
             self.inform(info);
+        }
+        for (remark, places) in self.kernel.remarks(shape) {
+            self.remark(remark, places);
         }
     }
 

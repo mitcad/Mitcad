@@ -14,7 +14,10 @@
 // Logs for UI tests: "Drawing sheet view x0,y0 x1,y1 x2,y2" (where the
 // sheet points (0, 0), (100, 0) and (0, 100) are in the window) whenever
 // that changes, "Drawing view <id> at x,y" (the middle of its box in the
-// window), "Drawing annotation <id> at x,y" (the middle of its box),
+// window), "Drawing view <id> label at x,y" (its label's middle, which a
+// drag moves: "Drawing view <id> label dragged by dx,dy", mitcad#1909;
+// "Drawing view <id> label offset x,y" or "none" as the model keeps it),
+// "Drawing annotation <id> at x,y" (the middle of its box),
 // "Drawing view <id> selected", "Drawing annotation <id> selected",
 // "Drawing sheet drawn: <n> views, <n> items, <n> center marks" when a
 // sheet comes, "Drawing annotations drawn: 1 = 20 ±0.1 | 2 broken" when
@@ -80,6 +83,9 @@ struct SheetView {
   int parent = 0;
   QRectF box; // on the sheet, mm; empty when it shows nothing
   QString label;
+  // Its label's box on the sheet (mm), which a drag moves (mitcad#1909);
+  // empty when it writes none.
+  QRectF labelBox;
   QString error;
   QJsonObject json; // all the query says of it
 };
@@ -287,6 +293,8 @@ signals:
   // A selected detail's circle dragged on its parent: its new centre (sheet
   // mm).
   void detailCircleMoved(int id, QPointF center);
+  // A view's label dragged, by this on the sheet (mitcad#1909).
+  void viewLabelMoved(int id, QPointF delta);
   // An annotation tool's click (SheetPick::Picks) before its placing one:
   // the view under it (0: none) and where it is; the workspace asks the
   // model what it picks.
@@ -395,6 +403,10 @@ private:
   bool detailCircle(int id, QPointF* center, double* radius) const;
   void logPlaces();
   void logAnnotations();
+  // The view whose label is under a sheet point (mitcad#1909), 0 for none.
+  int labelAt(const QPointF& sheet) const;
+  // "Drawing view <id> label offset x,y" (or "none") when they change.
+  void logLabels();
   void resetPicks();
   // Ctrl+click: the view or annotation goes into the selection, or out of
   // it when it is in.
@@ -464,6 +476,8 @@ private:
   int m_parentView = 0;
   int m_hovered = 0;
   int m_hoveredAnnotation = 0;
+  // Where each view's label was dragged, as logged last (mitcad#1909).
+  QString m_loggedLabels;
   // A tool's picks so far, and the pointer for the rubber band.
   ToolPicks m_picks;
   QJsonArray m_pickMarks;
@@ -471,8 +485,9 @@ private:
   bool m_pointerIn = false;
   // A drag: of a view or an annotation with the selection, of the sheet
   // with the middle button, out of a view with the projected view's tool,
-  // of a selected detail's circle on its parent.
-  enum class Drag { None, View, Pan, OutOfView, DetailCircle, Annotation };
+  // of a selected detail's circle on its parent, of a view's label
+  // (mitcad#1909).
+  enum class Drag { None, View, Pan, OutOfView, DetailCircle, Annotation, Label };
   Drag m_drag = Drag::None;
   int m_dragView = 0; // the view, the detail or the annotation dragged
   QPointF m_dragFrom;   // sheet mm (a pan: widget px)

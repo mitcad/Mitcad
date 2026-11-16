@@ -4,8 +4,8 @@
 // its opening patched and the lid stitched on into a solid, a loop of a
 // solid's named edges patched, a fill through a point, faces sewn only
 // within the tolerance, and surfaces thickened to one side, the other and
-// both, with the names of every face. Every operation leaves its inputs as
-// they are (the input check is on).
+// both, with the names of every face; the opening also as its free edges.
+// Every operation leaves its inputs as they are (the input check is on).
 
 #include <cmath>
 #include <cstdio>
@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -151,6 +152,20 @@ void test_an_open_box_is_stitched_patched_and_closed() {
          g::NameList{"F2:patch(x0)", "F2:patch(x20)", "F2:patch(y0)", "F2:patch(y20)"}));
   for (const gp_Pnt& p : openings[0].points) {
     CHECK(std::abs(p.Z() - 20) < 1e-6);
+  }
+  // The same opening as its free edges (mitcad#1927: the view picks one of
+  // them as the opening): the four top edges, each of one wall only.
+  const std::vector<g::OpenBoundaryEdges> free = g::open_boundary_edges(*tray);
+  CHECK(free.size() == 1);
+  if (!free.empty()) {
+    CHECK(free[0].faces == openings[0].faces);
+    CHECK(free[0].edges.size() == 4);
+    for (const int e : free[0].edges) {
+      CHECK(tray->edge_name(e).empty());
+      BRepAdaptor_Curve curve(tray->edge(e));
+      CHECK(std::abs(curve.Value(curve.FirstParameter()).Z() - 20) < 1e-6);
+      CHECK(std::abs(curve.Value(curve.LastParameter()).Z() - 20) < 1e-6);
+    }
   }
   g::PatchLoop opening;
   opening.opening = 0;

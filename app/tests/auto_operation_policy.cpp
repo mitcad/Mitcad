@@ -3,6 +3,7 @@
 // (AutoOperationPolicy): a new feature until the user picks one; an edit
 // never, it keeps its stored operation (mitcad#868: Flip pointed an edited
 // boss into its arm and its Join became a Cut).
+#include "UnitTests.hpp"
 #include "framework/AutoOperationPolicy.hpp"
 
 #include <cstdio>
@@ -30,3 +31,4 @@ int autoOperationPolicyTests() {
   check(!state.active(), "commands without an automatic operation never follow one");
   return failures;
 }
+MITCAD_UNIT_TEST(autoOperationPolicyTests);

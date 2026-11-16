@@ -64,6 +64,12 @@ pub struct ComponentReport {
     /// the path's component is meant).
     #[serde(skip)]
     pub occurrence_guids: HashMap<String, Vec<OccurrenceUid>>,
+    /// The occurrences by their object ids in the file (the first placed
+    /// where a component placed several times shares one): a design that
+    /// inserts this one names the levels of its paths inside it so in the
+    /// placements it stores (mitcad#1892).
+    #[serde(skip)]
+    pub occurrence_objects: HashMap<u64, OccurrenceUid>,
     /// The captured positions of occurrences inside the components of other
     /// documents, which the replay leaves out (mitcad#196).
     #[serde(skip)]
@@ -485,6 +491,10 @@ impl<K: Kernel> Placer<'_, K> {
     fn placed(&mut self, node: &OccurrenceNode, occurrence: OccurrenceUid) {
         if let Some(o) = node.f3d.as_ref().and_then(|f| f.object_id) {
             self.out.occurrences.entry(o).or_insert(occurrence);
+            self.report
+                .occurrence_objects
+                .entry(o)
+                .or_insert(occurrence);
         }
         for g in node.f3d.iter().flat_map(|f| f.guids.iter().flatten()) {
             let list = self

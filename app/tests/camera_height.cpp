@@ -7,6 +7,7 @@
 // as the scale, as setCamera did before, showed a view taller than wide
 // zoomed out by 1/aspect. The focal length (mitcad#1717): its field of
 // view, set with the same height at the target.
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -164,3 +165,4 @@ int cameraHeightTests() {
   focalLengthTests();
   return failures;
 }
+MITCAD_UNIT_TEST(cameraHeightTests);

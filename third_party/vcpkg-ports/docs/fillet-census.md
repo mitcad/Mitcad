@@ -129,6 +129,16 @@ stopped at once ("Path failed", for any radius); at a hole's corner the walk
 went on past the corner onto the torus. The regularity is now encoded only
 where `ChFi3d::IsTangentFaces` finds the faces tangent along the edge.
 
+`SetRegul`'s faces come from the builder's lists, each oriented as in the
+data structure rather than as in the result, and `IsTangentFaces` compares
+their normals as oriented: on a box rounded along two edges, half of the
+blends' true tangent edges were taken for folds and lost their G1. A draft
+after the rounding then could not carry the drafted face on to the blend
+(OCCT's draft/angle A2 B5 C3 C4 C5 F1, mitcad#1880). The tangency is now
+taken whichever way the faces face: only the angle between them along the
+edge counts, so a blend's edges with its own faces keep their G1, and the
+boss's top edge, at a right angle, still gets none.
+
 ### 0351-chfi3d-closed-chain-consuming-a-face-all-round
 
 A pocket's wall foot of four lines and four arcs on a ledge as wide as its
@@ -212,7 +222,9 @@ Before, the results were invalid; fillets likewise.
   `geometry/tests/test_fillet_kernel.cpp` (the first needs 0330's API to
   compile, the second fails without 0331).
 - 0350: mitcad#300 and the boss's top rounded after its foot in
-  `geometry/tests/test_fillet_overflow.cpp`.
+  `geometry/tests/test_fillet_overflow.cpp`; mitcad#1880 and the box
+  rounded along two edges, its tangent edges kept and a draft beside the
+  roundings, there too (OCCT's draft/angle A2).
 - 0351 and 0352: mitcad#300 and the stepped pockets' wall feet in
   `geometry/tests/test_chamfer_overflow.cpp` (for 0352 also mitcad#327's
   flange with a rounded rim there).

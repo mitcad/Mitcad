@@ -4,6 +4,7 @@
 // categories, thumbnails (kept in the cache under MITCAD_TEXTURES_DIR) and
 // fetch, the registry, the cache's folder names, and Use's
 // create_appearance command with embedded and shared images.
+#include "UnitTests.hpp"
 #include <cstdio>
 #include <functional>
 
@@ -404,3 +405,4 @@ int textureSourceTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(textureSourceTests);

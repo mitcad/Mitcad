@@ -229,8 +229,20 @@ seam one of them within rounding (8.6e-9 rad off a wall square to it), the
 hyperbola crosses the seam twice some 1e8 mm away and only a piece of no
 length between those crossings was left, so the chamfer found no cut of its
 cone by the wall and failed. Those outer parts are now tested and kept as
-the inner ones are, and parts that meet are joined (a line wholly in both
-domains is one part, as with no vertices).
+the inner ones are, each as a part of its own.
+
+The first form of the patch also joined parts that meet, so that a line
+wholly in both domains came out as one part. That joined the parts between
+vertices too, which the line constructor had always kept apart, across a
+vertex where the line crosses a cone's seam: in OCCT's own cases
+boolean/volumemaker C5 C6 E4 E6 F7 F8 G2 (a cone and planes parallel to its
+axis, cut into cells by `mkvolume`) a hyperbola came out as one curve
+across the seam and cells were lost (mitcad#1879, found by mitcad#1875's
+run of OCCT's tests). The parts are no longer joined: a line whose outer
+parts lie outside a domain gets exactly the parts it got without the patch,
+and the post's chamfer builds as before with three parts of its hyperbola
+(the far tail, the piece between the seam crossings and the branch through
+the wall).
 
 ### 0481-chfi3d-kpart-gap-across-a-closed-spines-start-split-there
 
@@ -314,7 +326,9 @@ second point is taken as before, unless it lies on another arc and the
 first on the edge. Both ends of the bracket, either edge given first, get
 the same corner, a plate of 1.85 mm² meshed in about a thousand triangles,
 the body within 0.03 mm³ of the two bevels' prisms at each corner. Corners
-whose common points both lie on the sharp edge are unchanged.
+whose common points both lie on the sharp edge are unchanged, and so are
+those where neither does (OCCT's parameters on their arcs: with none, a
+step of OCCT's chamfer sequence equal_dist B9 failed, mitcad#1902).
 
 ## 1100: two blends meeting at a vertex of their pivot
 
@@ -426,7 +440,9 @@ plate's plane of symmetry within 1e-9 mm.
   `geometry/tests/test_chamfer_overflow.cpp`, which fails without either.
 - 0480 and 0481: mitcad#263 and the post beyond a square plate in
   `geometry/tests/test_chamfer_overflow.cpp` (its turned plate fails
-  without 0480, every seam in a gap without 0481).
+  without 0480, every seam in a gap without 0481); OCCT's
+  boolean/volumemaker C5 C6 E4 E6 F7 F8 G2 failed with 0480's first form
+  (mitcad#1879).
 - 0530 and 0531: mitcad#263 and the fin whose side strip is narrower than
   its tip's chamfer in `geometry/tests/test_chamfer_overflow.cpp` (the
   chamfer's volume from its sections, cut by the foot's chamfer, swept

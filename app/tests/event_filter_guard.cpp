@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // An event filter on the 3D view from a dialog or an overlay, when the main
 // window deletes its children in either order (mitcad#226).
+#include "UnitTests.hpp"
 #include "framework/EventFilterGuard.hpp"
 
 #include <cstddef>
@@ -145,3 +146,4 @@ int eventFilterGuardTests() {
   PoisonedView::release();
   return failures;
 }
+MITCAD_UNIT_TEST(eventFilterGuardTests);

@@ -161,6 +161,12 @@ public:
   // The header's box while bare, in the card's coordinates (empty without
   // a header).
   QRect headerBox() const;
+  // What the card covers of what is under it, in its parent's coordinates
+  // (FloatingLayout's covered area for fitting and pick places): its slot,
+  // or while bare the bounds of where it takes the mouse (its header's box
+  // and the content's region; mitcad#1932: the Browser's rows, not the
+  // card's whole rectangle).
+  QRect coveredRect() const;
 
   // A width the user drags (mitcad#529, the Projects card): a grip along
   // the card's right edge, with the resize cursor; while it is dragged
@@ -168,7 +174,10 @@ public:
   // widthChosen once it is released. The layout sets the width
   // (FloatingLayout::setCardWidth).
   void setWidthAdjustable(int minimum);
-  bool isWidthAdjustable() const { return m_grip != nullptr; }
+  // The grip taken away again (mitcad#1932: the Browser's card with the
+  // Rows background, whose width follows its rows).
+  void clearWidthAdjustable();
+  bool isWidthAdjustable() const;
   // The grip's middle in the card's coordinates.
   QPoint widthGripCenter() const;
 

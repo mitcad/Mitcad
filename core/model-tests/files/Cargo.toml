@@ -23,3 +23,5 @@ mitcad-usdz = { path = "../../usdz" }
 mitcad-zip = { path = "../../zip" }
 # glTF test files written for the import (mitcad#1826).
 mitcad-gltf = { path = "../../gltf" }
+# .serp test files written for the import (mitcad#1870).
+mitcad-serp = { path = "../../serp" }

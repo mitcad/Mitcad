@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The Browser's widths in the Floating layout (mitcad#1932), tools/ui-browser-widths-test.sh: a 200 x 200 x 10 plate centred on the origin in the root, and an empty component Short placed once (Short:1); the root active."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-100, -100],
+    "length": 200, "width": 200, "height": 10, "operation": "new_body"}},
+  {"cmd": "create_component", "name": "Short"},
+  {"cmd": "activate_component", "component": "Root"}
+]

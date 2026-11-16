@@ -56,6 +56,7 @@ char g_directory[kPathSize];
 #ifdef _WIN32
 constexpr DWORD kCxxException = 0xE06D7363; // MSVC's C++ exception ("msc")
 wchar_t g_directoryWide[kPathSize];
+wchar_t g_dumpDirectoryWide[kPathSize]; // where minidumps go (mitcad#1896)
 wchar_t g_symbolPath[kPathSize]; // the executable's folder, where its PDB file is
 #endif
 char g_actions[kActions][kActionSize];
@@ -322,6 +323,47 @@ void writeReport(const char* signal, const char* address, void* const* frames, i
   }
 }
 
+// A minidump of the process (mitcad#1896), `<dump folder>\crash-<time>-<pid>.dmp`
+// beside the session logs: the threads' stacks and the memory they point
+// to, the modules, for a debugger with the release's PDB files. `pointers`
+// and `thread`: the fault's, nullptr for an abort (then the aborting
+// thread's stack is where it waits for this one).
+void writeDump(EXCEPTION_POINTERS* pointers, DWORD thread) {
+  if (g_dumpDirectoryWide[0] == L'\0') {
+    return;
+  }
+  char digits[32];
+  char name[96] = "crash-";
+  append(name, sizeof name, number(static_cast<unsigned long long>(std::time(nullptr)), digits));
+  append(name, sizeof name, "-");
+  append(name, sizeof name, number(GetCurrentProcessId(), digits));
+  append(name, sizeof name, ".dmp");
+  constexpr int kWide = static_cast<int>(kPathSize + 100);
+  wchar_t path[kWide] = L"";
+  wcscpy_s(path, g_dumpDirectoryWide);
+  wcscat_s(path, L"\\");
+  const int used = static_cast<int>(wcslen(path));
+  MultiByteToWideChar(CP_UTF8, 0, name, -1, path + used, kWide - used);
+  const HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+  MINIDUMP_EXCEPTION_INFORMATION fault{};
+  fault.ThreadId = thread;
+  fault.ExceptionPointers = pointers;
+  fault.ClientPointers = FALSE;
+  const auto type = static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory |
+                                               MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+  MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type, pointers != nullptr ? &fault : nullptr,
+                    nullptr, nullptr);
+  CloseHandle(file);
+}
+
+DWORD WINAPI dumpAbort(void*) {
+  writeDump(nullptr, 0);
+  return 0;
+}
+
 const char* exceptionName(DWORD code) {
   switch (code) {
   case EXCEPTION_ACCESS_VIOLATION:
@@ -520,6 +562,8 @@ struct Crash {
   char address[40];
   const CONTEXT* context; // the crashed thread's, at the fault
   HANDLE thread;
+  EXCEPTION_POINTERS* pointers; // the fault, for the minidump
+  DWORD threadId;               // the crashed thread
 };
 
 DWORD WINAPI reportCrash(void* parameter) {
@@ -527,6 +571,7 @@ DWORD WINAPI reportCrash(void* parameter) {
   void* frames[kFrames];
   const int count = crash.context != nullptr ? walkStack(*crash.context, crash.thread, frames, kFrames) : 0;
   writeReport(crash.signal, crash.address, frames, count);
+  writeDump(crash.pointers, crash.threadId);
   return 0;
 }
 
@@ -544,6 +589,8 @@ LONG WINAPI onException(EXCEPTION_POINTERS* info) {
            number(record != nullptr ? reinterpret_cast<unsigned long long>(record->ExceptionAddress) : 0ULL, digits,
                   16));
     crash.context = info != nullptr ? info->ContextRecord : nullptr;
+    crash.pointers = info;
+    crash.threadId = GetCurrentThreadId();
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &crash.thread, 0, FALSE,
                     DUPLICATE_SAME_ACCESS);
     // On a thread of its own: little may be left of this one's stack (a
@@ -570,6 +617,12 @@ void onAbort(int) {
     // From the caller on: this handler's own frame left out.
     const int count = static_cast<int>(CaptureStackBackTrace(1, kFrames, frames, nullptr));
     writeReport("SIGABRT", "0x0", frames, count);
+    // The minidump from a thread of its own, so that this one's stack is
+    // in it as it is.
+    if (HANDLE dumper = CreateThread(nullptr, 256 * 1024, dumpAbort, nullptr, 0, nullptr)) {
+      WaitForSingleObject(dumper, 60000);
+      CloseHandle(dumper);
+    }
   }
   // abort() goes on to end the process.
 }
@@ -711,6 +764,10 @@ void install(const char* process, const char* version) {
   if (!directory.empty()) {
     setDirectory(directory.c_str());
   }
+  const std::string dumps = environment("MITCAD_CRASH_DUMP_DIR");
+  if (!dumps.empty()) {
+    setDumpDirectory(dumps.c_str());
+  }
   std::set_terminate(onTerminate);
 #ifdef _WIN32
   const DWORD length = GetModuleFileNameW(nullptr, g_symbolPath, static_cast<DWORD>(kPathSize));
@@ -747,6 +804,17 @@ void setDirectory(const char* directory) {
 #ifdef _WIN32
   g_directoryWide[0] = L'\0';
   MultiByteToWideChar(CP_UTF8, 0, g_directory, -1, g_directoryWide, static_cast<int>(kPathSize));
+#endif
+}
+
+void setDumpDirectory(const char* directory) {
+#ifdef _WIN32
+  g_dumpDirectoryWide[0] = L'\0';
+  if (directory != nullptr) {
+    MultiByteToWideChar(CP_UTF8, 0, directory, -1, g_dumpDirectoryWide, static_cast<int>(kPathSize));
+  }
+#else
+  (void)directory; // no minidumps here: the system keeps its own crash reports
 #endif
 }
 

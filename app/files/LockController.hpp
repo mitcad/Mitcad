@@ -30,9 +30,14 @@
 // - A lock that is no longer this session's (taken as stale, taken over)
 //   turns the window read-only; unsaved changes stay for Save as Copy or
 //   Save as New Version.
-// - Closing the design or quitting sends its unpublished versions (a sync)
-//   and releases its lock and requests; a sync that needs a choice asks
-//   Resolve Sync, Release Without Sending or Keep Lock.
+// - Closing the window sends the design's unpublished versions (a sync)
+//   and releases its lock and requests, waiting briefly (files/
+//   VersionQueue.hpp closeWaitSeconds); a sync that needs a choice asks
+//   Resolve Sync, Release Without Sending or Keep Lock. Another design
+//   opened in the window (Open, New Design, Save As, Save to Project) does
+//   the same in the project's version queue without waiting (mitcad#1895):
+//   a sync that needs a choice, or a server out of reach, keeps the lock
+//   and says so in the status bar.
 //
 // Lock commands run as RemoteTasks one at a time with a Project of their
 // own (the core keeps what it observed of a project's lock refs per folder
@@ -139,8 +144,13 @@ public:
   // sync, a restore, the editor's version shown) keeps its lock.
   void designOpened(const QString& path, bool readOnly);
   // Before the window's design is replaced by `next` ("" untitled; opened
-  // read-only): its versions sent and its lock released (a progress
-  // dialog). False to keep the design (Resolve Sync chosen).
+  // read-only): its versions sent and its lock released in the background
+  // (closeInBackground, mitcad#1895). When the project's state already
+  // says its sync needs a choice (a conflict, or versions to send beside
+  // newer ones on the remote: syncNeedsChoice), the sync is waited for and
+  // the choice asked first, as on closing (closeLock); false when the user
+  // chose to keep the design (Resolve Sync, mitcad#131 and #1916). A
+  // conflict only the background sync finds keeps the old lock and says so.
   bool designClosing(const QString& next, bool readOnly);
   // Save wrote the design to `path`: under another name (Save As, Save as
   // Copy), the lock of the old file goes and the new file's is taken.
@@ -198,7 +208,8 @@ private:
   void taskFinished();
   // A task while a progress dialog shows (after the running one, whose
   // answer is dropped); its answer.
-  QJsonObject runNow(RemoteTask* task, const QString& label);
+  // `limitSeconds` > 0: cancelled after that long (MitCad closes).
+  QJsonObject runNow(RemoteTask* task, const QString& label, int limitSeconds = 0);
   void dropRunning();
   RemoteTask* lockTask(const QString& name, const QList<QJsonObject>& commands);
   QJsonObject lockCommand(const char* name, QJsonObject fields = {}) const;
@@ -245,10 +256,19 @@ private:
   // Sends the versions and releases this session's locks and requests;
   // false when the user chose to keep the design (Resolve Sync).
   bool closeLock(bool quit);
+  // The design holds its lock in the current project, whose state says a
+  // sync needs or may need the user's choice (designClosing).
+  bool syncNeedsChoice() const;
   // Save As already wrote the new file; finish its lock transfer after
   // Resolve Sync succeeds, retaining the old lock and its timers meanwhile.
   void finishSavedTransition();
-  bool releaseAll(const QString& label);
+  bool releaseAll(const QString& label, int limitSeconds = 0);
+  // The design goes from the window (another design opened, Save As,
+  // Save to Project; mitcad#1895): its versions sent and this session's
+  // locks and requests of its project released in that project's version
+  // queue, without waiting; a sync that needs a choice or a server out of
+  // reach keeps the lock, said in the status bar.
+  void closeInBackground();
   void releaseByUser();
   void showDetails();
   void offlineWill(const QString& session, const QJsonObject& event);

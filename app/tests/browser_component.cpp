@@ -5,6 +5,7 @@
 // one in use, older ones removed (never the one in use or the one a run
 // loaded), the update manifest's offers read, an unpacked package checked
 // against the offer and this MitCad's interface, and the messages.
+#include "UnitTests.hpp"
 #include "webbrowser/BrowserComponent.hpp"
 #include "webbrowser/ComponentBrowserHost.hpp"
 
@@ -170,3 +171,4 @@ int browserComponentTests() {
   offerTests(QDir(directory.path()).filePath(QStringLiteral("offers")));
   return failures;
 }
+MITCAD_UNIT_TEST(browserComponentTests);

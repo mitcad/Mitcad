@@ -60,8 +60,10 @@ repeated and others lost, and the walks between the pieces threw
 A rounding whose end is cut by several faces around a cylinder's corner
 patch (`PerformIntersectionAtEnd`): the crossing with each common edge is
 taken on that edge (two arcs of one circle gave the same one), a crossing
-beyond the edge's end prolongs the faces' common boundary along the edge's
-curve and cuts the corner patch's edge there (not where the rounding passes
+beyond the edge's far end prolongs the faces' common boundary along the edge's
+curve and cuts the corner patch's edge there (not behind the vertex itself on
+an edge that starts there, which OCCT handles: OCCT's bug32929 gave two
+solids, mitcad#1902; not where the rounding passes
 beside a face between the end's first and last faces, such as a narrow
 chamfer at a step's corner), a seam on a face at the end only no longer
 counts as an edge of the vertex, and the end's intersection with that face
@@ -74,7 +76,9 @@ OnSame state) with its contact off any edge, on either side of the rounding,
 cut by several faces (`PerformIntersectionAtEnd` gave up): the face's edge
 at the vertex is prolonged to the contact by a piece of its curve on both
 its faces, the spine's edge is cut at the vertex, and the ends on a periodic
-face are taken into its domain (mitcad#133).
+face are taken into its domain (mitcad#133). Roundings only: a chamfer keeps
+OCCT's corner there (OCCT's chamfer sequences B9 gave no result where stock
+gives an invalid one, mitcad#1902).
 
 ## Reports and tests
 

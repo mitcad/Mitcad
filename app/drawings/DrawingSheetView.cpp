@@ -217,6 +217,11 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
     if (box.size() == 2) {
       entry.box = QRectF(pointOf(box.at(0)), pointOf(box.at(1))).normalized();
     }
+    // Its label's box, which a drag moves (mitcad#1909).
+    const QJsonArray labelBox = v.value(QStringLiteral("label_box")).toArray();
+    if (labelBox.size() == 2) {
+      entry.labelBox = QRectF(pointOf(labelBox.at(0)), pointOf(labelBox.at(1))).normalized();
+    }
     entry.json = v;
     m_views.append(entry);
   }
@@ -344,6 +349,41 @@ void DrawingSheetView::setSheet(const QJsonObject& sheet) {
                             .arg(marks);
   logAnnotations();
   logPlaces();
+  logLabels();
+}
+
+void DrawingSheetView::logLabels() {
+  QStringList lines;
+  for (const SheetView& v : std::as_const(m_views)) {
+    if (v.labelBox.isEmpty()) {
+      continue;
+    }
+    const QJsonArray offset = v.json.value(QStringLiteral("label_offset")).toArray();
+    lines << (offset.size() == 2 ? QStringLiteral("Drawing view %1 label offset %2,%3")
+                                       .arg(v.id)
+                                       .arg(offset.at(0).toDouble(), 0, 'f', 1)
+                                       .arg(offset.at(1).toDouble(), 0, 'f', 1)
+                                 : QStringLiteral("Drawing view %1 label offset none").arg(v.id));
+  }
+  const QString text = lines.join(QLatin1Char('\n'));
+  if (text == m_loggedLabels) {
+    return;
+  }
+  m_loggedLabels = text;
+  for (const QString& line : std::as_const(lines)) {
+    qDebug().noquote() << line;
+  }
+}
+
+int DrawingSheetView::labelAt(const QPointF& sheet) const {
+  // A little room round its letters: 1 mm of paper, 3 pixels at least.
+  const double room = std::max(1.0, 3.0 / m_zoom);
+  for (const SheetView& v : std::as_const(m_views)) {
+    if (!v.labelBox.isEmpty() && v.labelBox.adjusted(-room, -room, room, room).contains(sheet)) {
+      return v.id;
+    }
+  }
+  return 0;
 }
 
 void DrawingSheetView::sheetMoved() {
@@ -950,6 +990,10 @@ void DrawingSheetView::logPlaces() {
     if (v.box.width() > 0.0 || v.box.height() > 0.0) {
       lines << QStringLiteral("Drawing view %1 at %2").arg(v.id).arg(inWindow(v.box.center()));
     }
+    // Its label, which a drag moves (mitcad#1909).
+    if (!v.labelBox.isEmpty()) {
+      lines << QStringLiteral("Drawing view %1 label at %2").arg(v.id).arg(inWindow(v.labelBox.center()));
+    }
     QPointF center;
     double radius = 0.0;
     if (detailCircle(v.id, &center, &radius)) {
@@ -1078,6 +1122,18 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
       if ((m_drag == Drag::View && v.id == m_dragView) || (m_dragSelection && isSelectedView(v.id))) {
         outline(v, kSelected, Qt::DashLine, m_dragOffset);
       }
+    }
+  }
+  // A view's label being dragged (mitcad#1909): where it goes.
+  if (m_drag == Drag::Label && m_dragMoved) {
+    const SheetView* dragged = view(m_dragView);
+    if (dragged != nullptr && !dragged->labelBox.isEmpty()) {
+      const QRectF box = dragged->labelBox.translated(m_dragOffset);
+      QPen pen(kSelected, 1.5, Qt::DashLine);
+      pen.setCosmetic(true);
+      painter.setPen(pen);
+      painter.setBrush(Qt::NoBrush);
+      painter.drawRect(QRectF(toWidget(box.bottomLeft()), toWidget(box.topRight())).normalized());
     }
   }
   // Every corner the views show while Always show corners is on
@@ -1654,6 +1710,18 @@ void DrawingSheetView::mousePressEvent(QMouseEvent* event) {
       m_dragOffset = QPointF();
       break;
     }
+    // A view's label (mitcad#1909): a drag moves it from its place under
+    // the view, a click selects the view.
+    const int labelled = note == 0 ? labelAt(at) : 0;
+    if (labelled != 0) {
+      selectAnnotation(0);
+      selectView(labelled);
+      m_drag = Drag::Label;
+      m_dragView = labelled;
+      m_dragFrom = at;
+      m_dragOffset = QPointF();
+      break;
+    }
     // One of several selected: a drag moves them all.
     const bool ofSeveral = selectionSize() > 1 && (note != 0 ? isSelectedAnnotation(note) : isSelectedView(under));
     if (note != 0) {
@@ -1716,6 +1784,7 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   case Drag::View:
   case Drag::DetailCircle:
   case Drag::Annotation:
+  case Drag::Label:
     m_dragOffset = at - m_dragFrom;
     m_dragMoved = m_dragMoved || distance(m_dragOffset, QPointF()) * m_zoom > 3.0;
     // Where a dimension dragged alone snaps (mitcad#1173), or a leader's
@@ -1743,8 +1812,11 @@ void DrawingSheetView::mouseMoveEvent(QMouseEvent* event) {
   }
   const int under = viewAt(at);
   const int note = m_pick == SheetPick::None ? annotationAt(at) : 0;
-  const bool hoverChanged = !wasIn || under != m_hovered || note != m_hoveredAnnotation;
-  m_hovered = under;
+  // Over a view's label its view shows hovered (mitcad#1909: a drag there
+  // moves the label).
+  const int hovered = m_pick == SheetPick::None && under == 0 && note == 0 ? labelAt(at) : under;
+  const bool hoverChanged = !wasIn || hovered != m_hovered || note != m_hoveredAnnotation;
+  m_hovered = hovered;
   m_hoveredAnnotation = note;
   // A projected view's box beside its parent, a section's or a detail's
   // where it goes (mitcad#725).
@@ -1823,7 +1895,11 @@ void DrawingSheetView::contextMenuEvent(QContextMenuEvent* event) {
   }
   const QPointF at = toSheet(QPointF(event->pos()));
   const int note = annotationAt(at);
-  const int under = note == 0 ? viewAt(at) : 0;
+  int under = note == 0 ? viewAt(at) : 0;
+  // A view's label is its view's (mitcad#1909: Reset Label Position).
+  if (note == 0 && under == 0) {
+    under = labelAt(at);
+  }
   // The menu is for what is under the pointer: selected first, unless it is
   // one of several selected (the menu is then theirs).
   if (note != 0 && !isSelectedAnnotation(note)) {
@@ -1905,6 +1981,18 @@ void DrawingSheetView::mouseReleaseEvent(QMouseEvent* event) {
                                 .arg(m_dragOffset.x(), 0, 'f', 1)
                                 .arg(m_dragOffset.y(), 0, 'f', 1);
       emit viewMoved(m_dragView, m_dragOffset);
+    }
+    m_dragMoved = false;
+    update();
+    return;
+  }
+  if (drag == Drag::Label) {
+    if (m_dragMoved) {
+      qDebug().noquote() << QStringLiteral("Drawing view %1 label dragged by %2,%3")
+                                .arg(m_dragView)
+                                .arg(m_dragOffset.x(), 0, 'f', 1)
+                                .arg(m_dragOffset.y(), 0, 'f', 1);
+      emit viewLabelMoved(m_dragView, m_dragOffset);
     }
     m_dragMoved = false;
     update();

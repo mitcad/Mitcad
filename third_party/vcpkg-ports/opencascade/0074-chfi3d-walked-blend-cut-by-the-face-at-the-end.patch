@@ -23,10 +23,12 @@ top edge before the corner's edge reaches the top.
   Before, OCCT's corner at V intersected the blend with B from the
   stripe's end; where Fo is tangent to B at V this gave an invalid result
   (an open wire on Fo, a self-intersecting wire on the blend) or failed.
+  A walk that fails there leaves the builder's state as it was (PerformSurf
+  sets done: the whole fillet failed, OCCT's blend/encoderegularity A1).
 - ChFi3d_KPartLineParam: on a bounded line (a walked blend's contact) that
   has no foot of the point, the end of the line nearer to it.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index ba42ea6..5b87977 100644
+index ba42ea6f..5b87977b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -922,6 +922,13 @@ private:
@@ -44,7 +46,7 @@ index ba42ea6..5b87977 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 2636a3e..25eb8c8 100644
+index b679fac4..881887a5 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -4370,7 +4370,17 @@ static bool ChFi3d_KPartLineParam(const TopOpeBRepDS_DataStructure&   DStr,
@@ -66,7 +68,7 @@ index 2636a3e..25eb8c8 100644
    }
    t = aProj.LowerDistanceParameter();
    if (C->IsPeriodic())
-@@ -6051,6 +6061,285 @@ static bool ChFi3d_KPartCutToEnd(
+@@ -6078,6 +6088,289 @@ static bool ChFi3d_KPartCutToEnd(
    return true;
  }
  
@@ -230,6 +232,9 @@ index 2636a3e..25eb8c8 100644
 +  const double MaxStep = 0.05 * (Spine->LastParameter(nbed) - Spine->FirstParameter(1)) / nbed;
 +  const double Fleche  = (HGuide->LastParameter() - HGuide->FirstParameter()) * fleche;
 +  bool         walked  = false;
++  // (The stripe is walked already: a walk that fails here leaves the
++  // builder's state as it was, PerformSurf setting done.)
++  const bool aDone = done;
 +  try
 +  {
 +    OCC_CATCH_SIGNALS
@@ -240,6 +245,7 @@ index 2636a3e..25eb8c8 100644
 +  {
 +    walked = false;
 +  }
++  done = aDone;
 +  if (!walked || SeqSD.Length() != 1)
 +  {
 +    return false;
@@ -352,7 +358,7 @@ index 2636a3e..25eb8c8 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -7085,6 +7374,9 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -7112,6 +7405,9 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
  
    if (!Simul)
    {

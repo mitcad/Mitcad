@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use mitcad_dump::{Dump, OccurrenceNode};
 use mitcad_model::assembly::{Assembly, Occurrence, inverse, matrix_rows};
 use mitcad_model::{
     BodyUid, ComponentCopy, ComponentUid, Document, FeatureDef, FeatureUid, Kernel, OccurrenceUid,
@@ -42,6 +43,11 @@ pub struct Referenced<'a, K: Kernel> {
     /// [`crate::components::ComponentReport::occurrence_guids`], which this function also
     /// extends with those of the documents it filled in it).
     pub occurrence_guids: &'a HashMap<String, Vec<OccurrenceUid>>,
+    /// Its occurrences by their object ids in its file (its import's
+    /// [`crate::components::ComponentReport::occurrence_objects`]): the
+    /// placements the design stores for paths inside it name them so
+    /// ([`outer_placements`], mitcad#1892).
+    pub occurrence_objects: &'a HashMap<u64, OccurrenceUid>,
     /// The name its component takes (made unique).
     pub name: String,
     /// Its bodies by the names its import gave the stored bodies they
@@ -774,4 +780,100 @@ fn same(a: &Transform, b: &Transform) -> bool {
         (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() <= 1e-9)
             && (a.translation[r] - b.translation[r]).abs() <= 1e-6
     })
+}
+
+/// One occurrence's placements: its path's placement in the root component
+/// after each item (by timeline index), in timeline order.
+pub(crate) type Steps = Vec<(Option<i64>, Transform)>;
+
+/// Where the file places the occurrences of components of other documents
+/// that it stores placements for only along paths inside them (mitcad#1892:
+/// a joint on a part inside an inserted design moves the whole occurrence,
+/// and the file keeps the placement of the path to each occurrence inside,
+/// `_f3d.inside_placements`), by the occurrence's object id. Each path's
+/// placements with its inner levels' placement in the other document taken
+/// off are the occurrence's own; the paths whose inner levels the other
+/// document's import has (`sources`) are used, and where they part (by
+/// the last placement) the most of them agree on is taken.
+pub(crate) fn outer_placements<K: Kernel>(
+    dump: &Dump,
+    sources: &HashMap<String, Referenced<'_, K>>,
+) -> HashMap<u64, Steps> {
+    let mut out = HashMap::new();
+    let mut nodes: Vec<&OccurrenceNode> = dump.occurrences.iter().flatten().collect();
+    while let Some(node) = nodes.pop() {
+        nodes.extend(node.children.iter().flatten());
+        let Some(f3d) = node.f3d.as_ref() else {
+            continue;
+        };
+        let (Some(id), Some(inside)) = (f3d.object_id, f3d.inside_placements.as_ref()) else {
+            continue;
+        };
+        let Some(source) = f3d.external_document.as_ref().and_then(|d| sources.get(d)) else {
+            continue;
+        };
+        // The paths' own placements, grouped by where they leave it.
+        let mut groups: Vec<Vec<Steps>> = Vec::new();
+        for path in inside {
+            let Some(inner) = inner_placement(source, path.inner.as_deref().unwrap_or_default())
+            else {
+                continue;
+            };
+            let undo = inverse(&inner);
+            let steps: Option<Steps> = path
+                .placements
+                .iter()
+                .flatten()
+                .map(|s| {
+                    let t = crate::components::transform(s.transform.as_ref()?)?;
+                    Some((s.index, t.after(&undo)))
+                })
+                .collect();
+            let Some(steps) = steps.filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let last = |s: &Steps| s.last().map(|(_, t)| *t);
+            match groups
+                .iter_mut()
+                .find(|g| matches!((last(&g[0]), last(&steps)), (Some(a), Some(b)) if same(&a, &b)))
+            {
+                Some(g) => g.push(steps),
+                None => groups.push(vec![steps]),
+            }
+        }
+        if groups.len() > 1 && crate::tracing() {
+            eprintln!(
+                "import: occurrence object {id}: the paths inside it place it {} ways",
+                groups.len()
+            );
+        }
+        // The largest group (the first of equal ones).
+        let best = groups.into_iter().rev().max_by_key(Vec::len);
+        if let Some(steps) = best.and_then(|g| g.into_iter().next()) {
+            out.insert(id, steps);
+        }
+    }
+    out
+}
+
+/// The placement in the other document's root component of the path of
+/// its occurrences `inner` (object ids in its file, from the outermost
+/// down), each placed in the one before; None where a level is not one of
+/// its occurrences or not placed there.
+fn inner_placement<K: Kernel>(source: &Referenced<'_, K>, inner: &[u64]) -> Option<Transform> {
+    if inner.is_empty() {
+        return None;
+    }
+    let assembly = source.document.assembly();
+    let mut placement = Transform::IDENTITY;
+    let mut parent = ComponentUid::ROOT;
+    for id in inner {
+        let o = assembly.occurrence(*source.occurrence_objects.get(id)?)?;
+        if o.parent != parent {
+            return None;
+        }
+        placement = placement.after(&o.transform);
+        parent = o.component;
+    }
+    Some(placement)
 }

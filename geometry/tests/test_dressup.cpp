@@ -1426,8 +1426,8 @@ void test_own_tangent_chains() {
   CHECK(faces_named(*bevelled, "F5:chamfer(" + first + ")") == 1);
   // Where OCCT cannot build the chain it does not follow itself (it does
   // not bevel these two contours meeting end to end), the kernel's chain
-  // alone, with a note.
-  CHECK(faces_named(*bevelled, "F5:chamfer(" + second + ")") == 1 || !bevelled->notes().empty());
+  // alone, with a remark (mitcad#1914: no warning, the panel points it out).
+  CHECK(faces_named(*bevelled, "F5:chamfer(" + second + ")") == 1 || !bevelled->remarks().empty());
   // Without a tangent chain the one edge only.
   set.tangent_chain = false;
   const ShapePtr one = fillet("F5", *body, {set});

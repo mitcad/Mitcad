@@ -32,24 +32,31 @@ UpdateNotice::UpdateNotice(QWidget* parent) : QWidget(parent) {
   m_progress = new QProgressBar;
   m_progress->setMaximumWidth(240);
   layout->addWidget(m_progress);
-  const auto button = [this, layout](const QString& text, const QString& tip, void (UpdateNotice::*signal)()) {
+  // Each button has a name of its own (updateNoticeInstall, ...), which the
+  // tests find it by in any window (mitcad#1890).
+  const auto button = [this, layout](const char* name, const QString& text, const QString& tip,
+                                     void (UpdateNotice::*signal)()) {
     auto* b = new QPushButton(text);
+    b->setObjectName(QLatin1String(name));
     b->setToolTip(tip);
     b->setAutoDefault(false);
     connect(b, &QPushButton::clicked, this, signal);
     layout->addWidget(b);
     return b;
   };
-  m_notes = button(tr("&Release Notes"), tr("Opens the release's page"), &UpdateNotice::releaseNotesClicked);
-  m_install = button(tr("&Install"),
+  m_notes = button("updateNoticeReleaseNotes", tr("&Release Notes"), tr("Opens the release's page"),
+                   &UpdateNotice::releaseNotesClicked);
+  m_install = button("updateNoticeInstall", tr("&Install"),
                      tr("Downloads, verifies and installs the update, then starts MitCad again"),
                      &UpdateNotice::installClicked);
-  m_skip = button(tr("S&kip This Version"), tr("No more notices of this version"), &UpdateNotice::skipClicked);
-  m_later = button(tr("&Later"), tr("Hides the notice until the next check"), &UpdateNotice::laterClicked);
-  m_cancel = button(tr("&Cancel"), QString(), &UpdateNotice::cancelClicked);
-  m_retry = button(tr("&Try Again"), tr("Checks for the update again and offers to install it"),
-                   &UpdateNotice::retryClicked);
-  m_close = button(tr("Cl&ose"), QString(), &UpdateNotice::closed);
+  m_skip = button("updateNoticeSkip", tr("S&kip This Version"), tr("No more notices of this version"),
+                  &UpdateNotice::skipClicked);
+  m_later = button("updateNoticeLater", tr("&Later"), tr("Hides the notice until the next check"),
+                   &UpdateNotice::laterClicked);
+  m_cancel = button("updateNoticeCancel", tr("&Cancel"), QString(), &UpdateNotice::cancelClicked);
+  m_retry = button("updateNoticeRetry", tr("&Try Again"),
+                   tr("Checks for the update again and offers to install it"), &UpdateNotice::retryClicked);
+  m_close = button("updateNoticeClose", tr("Cl&ose"), QString(), &UpdateNotice::closed);
   connect(m_later, &QPushButton::clicked, this, &UpdateNotice::closed);
 }
 
@@ -106,7 +113,9 @@ void UpdateNotice::showProgress(const QString& plain, qint64 received, qint64 to
   } else {
     m_progress->setRange(0, 0);
   }
-  const bool changed = !m_cancel->isVisible() || m_text->text() != html;
+  // Its own state, not whether it is on screen: a window in the background
+  // (another design's tab) logs a new text only (mitcad#1890).
+  const bool changed = m_cancel->isHidden() || m_text->text() != html;
   for (QPushButton* b : {m_notes, m_install, m_skip, m_later, m_retry, m_close}) {
     b->hide();
   }

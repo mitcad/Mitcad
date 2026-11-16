@@ -1,0 +1,11 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"The UI saved Sketch1 after a text was placed at the origin, moved by 10 mm in X with Move/Copy, dragged onto the point at (10, 10) and placed at (-12.5, 7.25) by Edit Text's Position (mitcad#1911): one text, there; the points where they were."},
+  {"expect":{"query":{"query":"sketch","uid":"F1"},"result":{"entities":[
+    {"at":[-20,-15]},
+    {"at":[20,15]},
+    {"at":[10,10]}
+  ],"texts":[
+    {"text":"I","at":[-12.5,7.25]}
+  ]},"tolerance":0.000001}}
+]

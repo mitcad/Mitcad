@@ -146,6 +146,10 @@
 //   collapse-card <object-name> true|false  use the card's chevron button
 //   expect-setting <key> <value>     the current saved QSettings value
 //   set-setting <key> <value>        saves a QSettings value (text)
+//   update-fake-offer <seconds>      the updates offer the tests' fake
+//                           release from now on: MitCad 999.0.0, no
+//                           request, installable, "downloaded" in that
+//                           time, never installed (mitcad#1890)
 //   expect-native-configuration-layout complete visible configuration
 //                           controls/captions and reachable slider track/knob
 //   expect-dialog-gone <title-regex> no matching Qt tool window remains visible
@@ -221,7 +225,9 @@
 //                           (mitcad#1299)
 //   expect-formula-builder          the open expression editor's real controls
 //   open-formula-field <name>        open the editor attached to a real value field
-//   expect-navigation-controls <mode>  default|configure|restored|reset
+//   expect-navigation-controls <mode>  default|configure|restored|reset, or
+//                           lock-rotation-button: the 3D Mouse tab's button 2
+//                           chosen to run Lock Rotation (mitcad#1910)
 //   expect-selection-info <text-regex> [maximum-card-height] [with-create-row]
 //                           idle Qt selection measurements and compact card;
 //                           optionally add the visible Create row's size hint
@@ -740,6 +746,12 @@
 // The system:
 //   wait-idle [seconds]            no job computes (60 s)
 //   sleep <ms>
+//   freeze-ui <ms>          the UI thread blocked for the time, its event
+//                           loop not run: a hang for the hang marker
+//                           (HangWatchdog.hpp, MITCAD_HANG_WATCHDOG_MS;
+//                           mitcad#1896), noted as its last action
+//   expect-session-log <regex> [seconds]  a line of this run's session log
+//                           file matches (SessionLog.hpp; 6 s)
 //   color-scheme light|dark   ask the platform for that colour scheme, as
 //                           when the desktop's setting changes while Mitcad
 //                           runs (MITCAD_TEST_COLOR_SCHEME at a step of the
@@ -821,6 +833,13 @@ public:
   TestDriver& operator=(const TestDriver&) = delete;
 
   bool active() const { return m_active; }
+  // Whether the script ended (done or failed) and asked the application to
+  // exit, with the status it asked for. An exit asked before the main event
+  // loop runs (a step that failed while a start-up open still computed in
+  // its own loop) does not reach that loop, which would then never end:
+  // main() takes the status instead of starting it (mitcad#1933).
+  bool left() const { return m_left; }
+  int exitStatus() const { return m_exitStatus; }
 
   // A log line (from the message handler, any thread).
   void record(const QString& message);
@@ -944,6 +963,8 @@ private:
   int m_errorLine = 0;
   bool m_stay = false;
   bool m_finished = false;
+  bool m_left = false;
+  int m_exitStatus = 0;
   QMetaObject::Connection m_nativeJobClickConnection;
   QString m_nativeJobClickLabel;
   int m_nativeJobClickLine = 0;

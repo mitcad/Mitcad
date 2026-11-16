@@ -7,6 +7,7 @@
 // size; the style keys are found through the proxy; the application's
 // style is wrapped only at an Icon size other than 100 %. The run's Icon
 // size and the application's style are put back afterwards.
+#include "UnitTests.hpp"
 #include "framework/IconSizeStyle.hpp"
 
 #include <algorithm>
@@ -168,3 +169,4 @@ int iconSizeStyleTests() {
   applicationTests();
   return failures;
 }
+MITCAD_UNIT_TEST(iconSizeStyleTests);

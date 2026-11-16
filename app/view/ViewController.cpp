@@ -406,8 +406,9 @@ QString visualStyleName(VisualStyle style) {
 // ---------------------------------------------------------------------------
 // Settings
 
-ViewSettings ViewSettings::load() {
-  const QSettings store;
+ViewSettings ViewSettings::load() { return load(QSettings()); }
+
+ViewSettings ViewSettings::load(const QSettings& store) {
   ViewSettings s;
   const auto number = [&store](const char* key, int fallback) {
     return store.value(kGroup + QLatin1String(key), fallback).toInt();
@@ -468,6 +469,7 @@ ViewSettings ViewSettings::load() {
   s.focalLength = std::clamp(number("focalLength", s.focalLength), kMinFocalLength, kMaxFocalLength); // mitcad#1717
   s.anaglyphFocalLength =
       std::clamp(number("anaglyphFocalLength", s.anaglyphFocalLength), kMinFocalLength, kMaxFocalLength);
+  s.sketchesThroughBodies = flag("sketchesThroughBodies", s.sketchesThroughBodies); // mitcad#1931
   return s;
 }
 
@@ -498,6 +500,7 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("stereoConvergence"), stereoConvergence);
   store.setValue(kGroup + QStringLiteral("focalLength"), focalLength); // mitcad#1717
   store.setValue(kGroup + QStringLiteral("anaglyphFocalLength"), anaglyphFocalLength);
+  store.setValue(kGroup + QStringLiteral("sketchesThroughBodies"), sketchesThroughBodies); // mitcad#1931
 }
 
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
@@ -706,6 +709,18 @@ void ViewController::registerCommands() {
       {QStringLiteral("stereo"), QStringLiteral("anaglyph"), QStringLiteral("3d glasses"), QStringLiteral("red cyan"),
        QStringLiteral("depth"), QStringLiteral("camera")},
       tr("Shows the view in red/cyan stereo for 3D glasses, with a perspective camera"));
+  // Every shown sketch through the bodies outside sketch mode (mitcad#1931,
+  // GitHub mitcad/Mitcad#355): a preference, on by default.
+  add("view.sketches_through", tr("Sketches Through Bodies"), "sketch", [this] {
+    m_settings.sketchesThroughBodies = !m_settings.sketchesThroughBodies;
+    m_viewer.setSketchesThroughBodies(m_settings.sketchesThroughBodies);
+    m_settings.save();
+    syncChecks();
+    qDebug().noquote() << QStringLiteral("View sketches through bodies: %1")
+                              .arg(m_settings.sketchesThroughBodies ? QStringLiteral("on") : QStringLiteral("off"));
+  }, {QStringLiteral("sketch"), QStringLiteral("sketches"), QStringLiteral("profile"), QStringLiteral("hidden"),
+      QStringLiteral("behind"), QStringLiteral("through"), QStringLiteral("x-ray"), QStringLiteral("display")},
+      tr("Shows the parts of the shown sketches that bodies hide, faint and dashed"));
   // The design printer's bed and height (mitcad#640, view/BuildVolume.cpp).
   add("view.build_volume", tr("Show Build Volume"), "print-3d", [this] { setBuildVolumeShown(!m_buildVolume); },
       {QStringLiteral("printer"), QStringLiteral("bed"), QStringLiteral("print"), QStringLiteral("3d print"),
@@ -742,6 +757,15 @@ void ViewController::registerCommands() {
     m_host.runModelCommand({{QStringLiteral("cmd"), QStringLiteral("delete_named_view")},
                             {QStringLiteral("name"), QStringLiteral("Home")}});
   }, {QStringLiteral("home")});
+  // Lock Rotation of the 3D mouse (mitcad#1910), checkable, for a button
+  // of the device above all: the window's SpaceMouseController toggles it.
+  add(qPrintable(spaceMouseLockRotationCommand()), tr("Lock Rotation"), "orientation-cube", [this] {
+    if (toggleSpaceMouseRotation) {
+      toggleSpaceMouseRotation();
+    }
+  }, {QStringLiteral("3d mouse"), QStringLiteral("space mouse"), QStringLiteral("spacemouse"),
+      QStringLiteral("rotation"), QStringLiteral("lock"), QStringLiteral("orbit")},
+      tr("Locks or frees the 3D mouse's rotation; in a sketch, for that sketch only"));
 
   CommandDef preferences;
   preferences.id = QStringLiteral("tools.preferences");
@@ -840,6 +864,7 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
       kinds->addAction(kind);
     }
   }
+  view->addAction(checkable(QStringLiteral("view.sketches_through"))); // mitcad#1931
   view->addAction(checkable(QStringLiteral("view.component_colors")));
   view->addAction(checkable(QStringLiteral("view.build_volume")));
   auto* backgrounds = new QActionGroup(this);
@@ -872,6 +897,11 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
     view->addAction(pins);
   }
   view->addAction(action(QStringLiteral("view.export_snapshot"))); // mitcad#649
+  // Lock Rotation (mitcad#1910), in no menu: checked as the 3D mouse's
+  // rotation is locked now (the window's SpaceMouseController sets it).
+  if (QAction* lock = action(spaceMouseLockRotationCommand())) {
+    lock->setCheckable(true);
+  }
   view->addSeparator();
   // PreferencesRole: "Settings..." (Cmd+,) in the application menu on macOS,
   // where the Tools menu then has no separator before it.
@@ -920,6 +950,7 @@ void ViewController::apply() {
   }
   m_viewer.setGhostInactive(m_settings.ghostInactive); // mitcad#420
   m_viewer.setActivePickPriority(m_settings.activePickPriority);
+  m_viewer.setSketchesThroughBodies(m_settings.sketchesThroughBodies); // mitcad#1931
   syncChecks();
 }
 
@@ -940,6 +971,7 @@ void ViewController::syncChecks() {
   check(QStringLiteral("view.perspective"), m_settings.perspective || m_settings.anaglyph);
   check(QStringLiteral("view.anaglyph"), m_settings.anaglyph);
   check(QStringLiteral("view.component_colors"), m_settings.componentColors);
+  check(QStringLiteral("view.sketches_through"), m_settings.sketchesThroughBodies);
   check(QStringLiteral("view.grid"), m_settings.gridShown);
   check(QStringLiteral("view.snap_grid"), m_settings.snapToGrid);
   check(QStringLiteral("view.build_volume"), m_buildVolume);
@@ -1119,6 +1151,17 @@ void ViewController::setSnapToGrid(bool on) {
   }
   syncChecks();
   qDebug().noquote() << QStringLiteral("Snap to grid %1").arg(onOff(on));
+}
+
+void ViewController::setSpaceMouseSettings(const SpaceMouseSettings& settings) {
+  m_settings.navigation.spaceMouse = settings;
+  m_settings.save();
+  // The view's navigation as it is (an open Preferences page applies its
+  // changes to it at once) with the 3D mouse's new settings; its signal
+  // brings the 3D mouse and the open page along.
+  NavigationSettings live = m_viewer.navigation();
+  live.spaceMouse = settings;
+  m_viewer.setNavigation(live);
 }
 
 void ViewController::showStandardView(const QString& key) {
@@ -1859,8 +1902,14 @@ void ViewController::showPreferences(const QString& page) {
   offer(QStringLiteral("view.look_at"));
   offer(QStringLiteral("view.orthographic"));
   offer(QStringLiteral("view.perspective"));
+  offer(spaceMouseLockRotationCommand()); // mitcad#1910
   auto* navigation = new NavigationPreferences(m_settings.navigation, navigationSchemes, nullptr, buttonCommands);
   navigationLayout->addWidget(navigation);
+  // Lock Rotation's toggle and a device's default button change the 3D
+  // mouse's settings outside the tab (mitcad#1910): its Lock rotation and
+  // buttons follow, so that its next change does not undo them.
+  connect(&m_viewer, &OcctViewer::navigationChanged, navigation,
+          [this, navigation] { navigation->followSpaceMouse(m_viewer.navigation().spaceMouse); });
   navigation->changed = [this, navigation, window, saved] {
     const NavigationSettings chosen = navigation->chosen();
     m_viewer.setNavigation(chosen);
@@ -2507,6 +2556,7 @@ void ViewController::showPreferences(const QString& page) {
   // Docked layout (mitcad#429), for the Floating layout's next start, so that
   // the layout and the background are chosen in one visit.
   QComboBox* browserBackground = nullptr;
+  QSpinBox* browserRowsShare = nullptr;
   if (chromeStyle() == ChromeStyle::Floating || layoutChoosable()) {
     browserBackground = new QComboBox;
     browserBackground->setObjectName(QStringLiteral("browserBackground"));
@@ -2515,7 +2565,30 @@ void ViewController::showPreferences(const QString& page) {
     browserBackground->setCurrentIndex(
         browserBackground->findData(browserBackgroundId(savedBrowserBackground())));
     browserBackground->setToolTip(tr("Card: the Browser on a card; Rows: each row on a small box of its own"));
-    display->addRow(tr("&Browser background:"), browserBackground);
+    // With Rows, the widest the rows grow, as a share of the view's width
+    // (mitcad#1932); a longer name is elided. On the background's row, so
+    // that the page grows no higher (it fills a 768 px high screen).
+    browserRowsShare = new QSpinBox;
+    browserRowsShare->setObjectName(QStringLiteral("browserRowsShare"));
+    browserRowsShare->setRange(kMinimumBrowserRowsShare, kMaximumBrowserRowsShare);
+    browserRowsShare->setSingleStep(5);
+    browserRowsShare->setSuffix(QStringLiteral(" %"));
+    browserRowsShare->setValue(savedBrowserRowsShare());
+    browserRowsShare->setToolTip(
+        tr("With Rows, the Browser widens to its longest name, up to this share of the view's width"));
+    auto* browserRow = new QWidget;
+    auto* browserRowLayout = new QHBoxLayout(browserRow);
+    browserRowLayout->setContentsMargins(0, 0, 0, 0);
+    browserRowLayout->addWidget(browserBackground);
+    auto* browserRowsLabel = new QLabel(tr("R&ows at most:"));
+    browserRowsLabel->setBuddy(browserRowsShare);
+    browserRowLayout->addSpacing(12);
+    browserRowLayout->addWidget(browserRowsLabel);
+    browserRowLayout->addWidget(browserRowsShare);
+    browserRowLayout->addStretch(1);
+    auto* browserBackgroundLabel = new QLabel(tr("&Browser background:"));
+    browserBackgroundLabel->setBuddy(browserBackground);
+    display->addRow(browserBackgroundLabel, browserRow);
     if (chromeStyle() != ChromeStyle::Floating) {
       auto* note = new QLabel(tr("Applies in the Floating layout."));
       note->setObjectName(QStringLiteral("browserBackgroundNote"));
@@ -2976,6 +3049,80 @@ void ViewController::showPreferences(const QString& page) {
     };
     connect(browserBackground, &QComboBox::currentIndexChanged, host, changed);
   }
+  if (browserRowsShare != nullptr) {
+    // The share of the view the Browser's rows take at most (mitcad#1932),
+    // with the rest: saved and applied at once when it changed.
+    *commit = [rest = *commit, browserRowsShare] {
+      rest();
+      const int chosen = browserRowsShare->value();
+      if (chosen != savedBrowserRowsShare()) {
+        qDebug().noquote() << QStringLiteral("Preferences: browser rows at most %1%").arg(chosen);
+        saveBrowserRowsShare(chosen);
+      }
+    };
+    connect(browserRowsShare, &QSpinBox::valueChanged, host, changed);
+  }
+
+  // Restore Defaults (mitcad#1887, GitHub mitcad/Mitcad#357): beside OK in
+  // the dialog, at the left of the Settings window's footer. Its menu puts
+  // the page shown (`shownPage`, a row of kPreferencePages) or every page
+  // back to its defaults after a question (confirmRestoreDefaults);
+  // `restore` then does it and shows the pages again.
+  const auto restoreDefaultsButton = [this](const std::function<int()>& shownPage,
+                                            const std::function<void(const QStringList&, bool)>& restore) {
+    auto* button = new QPushButton(tr("Restore Defaults"));
+    button->setObjectName(QStringLiteral("preferencesRestoreDefaults"));
+    button->setAutoDefault(false); // Return keeps taking OK
+    button->setToolTip(tr("Puts the settings of this page, or of all pages, back to their defaults"));
+    auto* menu = new QMenu(button);
+    menu->setObjectName(QStringLiteral("preferencesRestoreDefaultsMenu"));
+    QAction* currentGroup = menu->addAction(QString());
+    QAction* allSettings = menu->addAction(tr("All Settings"));
+    connect(button, &QPushButton::clicked, menu, [button, menu, currentGroup, shownPage] {
+      const int row = std::clamp(shownPage(), 0, int(std::size(kPreferencePages)) - 1);
+      currentGroup->setText(
+          tr("Current Group (%1)").arg(QCoreApplication::translate("View", kPreferencePages[row].name)));
+      currentGroup->setData(row);
+      // A popup, not exec(): nothing waits on the menu.
+      menu->popup(button->mapToGlobal(QPoint(0, button->height())));
+    });
+    // The question once the menu has closed.
+    connect(currentGroup, &QAction::triggered, button, [this, button, currentGroup, restore] {
+      const int row = currentGroup->data().toInt();
+      QTimer::singleShot(0, button, [this, button, row, restore] {
+        const QString name = QCoreApplication::translate("View", kPreferencePages[row].name);
+        if (confirmRestoreDefaults(button->window(), name)) {
+          restore({QLatin1String(kPreferencePages[row].id)}, false);
+        }
+      });
+    });
+    connect(allSettings, &QAction::triggered, button, [this, button, restore] {
+      QTimer::singleShot(0, button, [this, button, restore] {
+        if (confirmRestoreDefaults(button->window(), QString())) {
+          QStringList every;
+          for (const PreferencePage& entry : kPreferencePages) {
+            every << QLatin1String(entry.id);
+          }
+          restore(every, true);
+        }
+      });
+    });
+    return button;
+  };
+  // Export Settings… and Import Settings… (mitcad#1889, GitHub
+  // mitcad/Mitcad#357) beside Restore Defaults: `run` takes what Preferences
+  // shows as OK does, then exports or imports (`importing`) and shows
+  // Preferences again.
+  const auto transferButton = [](bool importing, const std::function<void(bool importing)>& run) {
+    auto* button = new QPushButton(importing ? tr("Import Settings…") : tr("Export Settings…"));
+    button->setObjectName(importing ? QStringLiteral("preferencesImportSettings")
+                                    : QStringLiteral("preferencesExportSettings"));
+    button->setAutoDefault(false); // Return keeps taking OK
+    button->setToolTip(importing ? tr("Takes the settings from a file saved on this or another computer")
+                                 : tr("Saves the settings to a file to take to another computer"));
+    QObject::connect(button, &QPushButton::clicked, button, [importing, run] { run(importing); });
+    return button;
+  };
 
   if (window != nullptr) {
     // A pane per page; the pane's name is the group's title, which the
@@ -3072,6 +3219,38 @@ void ViewController::showPreferences(const QString& page) {
         connect(edit, &QLineEdit::editingFinished, host, changed);
       }
     }
+    // Restore Defaults: what is typed is taken as the window closes, then
+    // the pages are reset and a new window shows them on the same pane.
+    window->addFooterButton(restoreDefaultsButton(
+        [window] { return window->currentPane(); },
+        [this, window](const QStringList& ids, bool all) {
+          const int pane = std::clamp(window->currentPane(), 0, int(std::size(kPreferencePages)) - 1);
+          const QString shownId = QLatin1String(kPreferencePages[pane].id);
+          m_settingsWindow = nullptr;
+          window->close();
+          restorePreferenceDefaults(ids, all);
+          QTimer::singleShot(0, this, [this, shownId] { showPreferences(shownId); });
+        }));
+    // Export and Import Settings: the window closes as for Restore
+    // Defaults, then the file is written or read, and a new window shows
+    // the settings on the same pane.
+    const auto transfer = [this, window](bool importing) {
+      const int pane = std::clamp(window->currentPane(), 0, int(std::size(kPreferencePages)) - 1);
+      const QString shownId = QLatin1String(kPreferencePages[pane].id);
+      QWidget* const parent = m_window;
+      m_settingsWindow = nullptr;
+      window->close();
+      QTimer::singleShot(0, this, [this, parent, importing, shownId] {
+        if (importing) {
+          importSettings(parent);
+        } else {
+          exportSettings(parent);
+        }
+        showPreferences(shownId);
+      });
+    };
+    window->addFooterButton(transferButton(false, transfer));
+    window->addFooterButton(transferButton(true, transfer));
     window->setClosedHandler([window] {
       // Flush only an unfinished editor; closing an unchanged window commits nothing.
       if (QWidget* editor = window->focusWidget()) editor->clearFocus();
@@ -3134,6 +3313,29 @@ void ViewController::showPreferences(const QString& page) {
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
   connect(buttons, &QDialogButtonBox::accepted, dialog.get(), &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, dialog.get(), &QDialog::reject);
+  // Restore Defaults (mitcad#1887): the dialog is accepted as OK accepts
+  // it, so that the changes made on the other pages are saved; the pages
+  // are then reset, and Preferences opens again on the same page (below).
+  const auto restorePages = std::make_shared<QStringList>();
+  const auto restoreAll = std::make_shared<bool>(false);
+  QDialog* const restoring = dialog.get();
+  buttons->addButton(restoreDefaultsButton([pages] { return pages->currentRow(); },
+                                           [restoring, restorePages, restoreAll](const QStringList& ids, bool all) {
+                                             *restorePages = ids;
+                                             *restoreAll = all;
+                                             restoring->accept();
+                                           }),
+                     QDialogButtonBox::ResetRole);
+  // Export and Import Settings (mitcad#1889): accepted as OK, as Restore
+  // Defaults is, then the file is written or read and Preferences opens
+  // again on the same page (below).
+  const auto transferAfterOk = std::make_shared<int>(0); // 1 export, 2 import
+  const auto transferChosen = [restoring, transferAfterOk](bool importing) {
+    *transferAfterOk = importing ? 2 : 1;
+    restoring->accept();
+  };
+  buttons->addButton(transferButton(false, transferChosen), QDialogButtonBox::ResetRole);
+  buttons->addButton(transferButton(true, transferChosen), QDialogButtonBox::ResetRole);
   layout->addWidget(buttons);
   // The page list as wide as its entries in the style and fonts the dialog
   // shows them in (mitcad#690: measured before the dialog was polished, the
@@ -3233,9 +3435,33 @@ void ViewController::showPreferences(const QString& page) {
     return;
   }
   (*commit)();
+  if (!restorePages->isEmpty()) {
+    // Restore Defaults (above): the pages reset after the changes were
+    // saved, then shown again on the page that was shown.
+    restorePreferenceDefaults(*restorePages, *restoreAll);
+    QTimer::singleShot(0, this, [this] { showPreferences(m_preferencesPage); });
+  } else if (*transferAfterOk != 0) {
+    // Export or Import Settings (above), once the changes were saved.
+    const bool importing = *transferAfterOk == 2;
+    QTimer::singleShot(0, this, [this, importing] {
+      if (importing) {
+        importSettings(m_window);
+      } else {
+        exportSettings(m_window);
+      }
+      showPreferences(m_preferencesPage);
+    });
+  }
 }
 
 void ViewController::askLayoutRestart(ChromeStyle chosen) {
+  if (layoutPreference().value_or(defaultChromeStyle()) != chosen) {
+    // Another choice since it was asked for: Restore Defaults right after
+    // OK (mitcad#1887).
+    qDebug().noquote() << QStringLiteral("Layout restart: not asked, %1 is no longer chosen")
+                              .arg(chromeStyleName(chosen));
+    return;
+  }
   const QString name = chosen == ChromeStyle::Floating ? tr("Floating") : tr("Docked");
   QMessageBox box(QMessageBox::Question, tr("Restart MitCad"),
                   tr("The %1 layout takes effect when MitCad starts again. Restart now?").arg(name),

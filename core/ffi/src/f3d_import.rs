@@ -2605,13 +2605,16 @@ static ABANDONED_RUNNING: AtomicUsize = AtomicUsize::new(0);
 /// once its output is written; `mitcad-cli`, the application's import
 /// worker): the shared libraries' finalizers tear down OCCT's state under
 /// the thread, which then crashes (mitcad#82: a segmentation fault at exit
-/// on Linux after an import that hung, the thread healing a body).
+/// on Linux after an import that hung, the thread healing a body). With
+/// them the kernel calls a Cancel or the kernel's time limit gave up that
+/// still run (mitcad#1917, `kernel/abandon.rs`), in every process.
 pub fn abandoned_imports() -> usize {
     // (Workers that evaluate definitions ahead and still run, mitcad#95:
     // their results are no longer wanted once the import has ended.)
     ABANDONED_RUNNING.load(Ordering::SeqCst)
         + mitcad_import::running_workers()
         + BUILDING_AHEAD.load(Ordering::SeqCst)
+        + crate::kernel::abandon::abandoned_kernel_calls()
 }
 
 /// The model's JSON commands for the import (mitcad#778): the features a

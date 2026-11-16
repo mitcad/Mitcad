@@ -126,6 +126,9 @@ pub use mitcad_import_base::FreeMemoryRelease;
 pub use mitcad_import_base::{ImportMemoryGuard, memory_guard};
 // The outcomes of the .ipt, .iam and .dwg imports (mitcad#1051).
 pub use mitcad_import_base::outcomes;
+// The status of every row of an import's report and its verdict
+// (mitcad#1893).
+pub use mitcad_import_base::report_status;
 pub use report::{
     BodyReport, ComponentReport, DesignReport, ImportReport, InputProvenance, ItemReport,
     JointReport, LightBulbReport, LowMemoryReport, Outcome, ReferenceReport, RetryQuestionReport,
@@ -1715,7 +1718,13 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
         );
         // The components' part numbers and descriptions (mitcad#496).
         components::import_properties(self.doc, self.dump, &self.components);
-        self.captures = captures::read(self.dump, &self.components, self.doc.assembly());
+        // Occurrences of components of other documents placed only along
+        // paths inside them, by the documents' files (mitcad#1892).
+        let outer = self
+            .sources
+            .map(|s| references::outer_placements(self.dump, s))
+            .unwrap_or_default();
+        self.captures = captures::read(self.dump, &self.components, self.doc.assembly(), &outer);
         self.report.components.positions_inside = self.captures.inside.clone();
         let captures = &self.captures;
         components::assign_items(

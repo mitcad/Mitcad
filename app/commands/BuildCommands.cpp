@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QHash>
 #include <QImage>
 #include <QJsonArray>
@@ -1500,7 +1501,34 @@ QString snapText(const QString& kind) {
   if (kind == QStringLiteral("clamped")) {
     return QObject::tr("kept on the component");
   }
+  if (kind == QStringLiteral("inline")) {
+    return QObject::tr("in line");
+  }
+  if (kind == QStringLiteral("flush_face")) {
+    return QObject::tr("flush");
+  }
   return kind;
+}
+
+// How many line-ups with other profiles a side's preview marks, the
+// nearest to where the part stands (mitcad#1886).
+constexpr std::size_t kLineUpMarkers = 6;
+
+// A side snap's name with the profile a line-up is with (mitcad#1886):
+// "in line with Profile 3", "flush with Profile 3"; the others as above.
+QString snapText(const QJsonObject& snap) {
+  const QString kind = str(snap, "kind");
+  const QString with = str(snap.value(QStringLiteral("with")).toObject(), "name");
+  if (with.isEmpty()) {
+    return snapText(kind);
+  }
+  if (kind == QStringLiteral("inline")) {
+    return QObject::tr("in line with %1").arg(with);
+  }
+  if (kind == QStringLiteral("flush_face")) {
+    return QObject::tr("flush with %1").arg(with);
+  }
+  return snapText(kind);
 }
 
 QString targetText(const QJsonObject& target, const CommandContext& context) {
@@ -1799,7 +1827,7 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     const QString kind = str(side, "kind");
     const QString from = fromText(shown.from);
     lines << (kind.isEmpty() ? QObject::tr("%1 mm from %2").arg(shown.offset, 0, 'f', 1).arg(from)
-                             : QObject::tr("%1 mm from %2 (%3)").arg(shown.offset, 0, 'f', 1).arg(from, snapText(kind)));
+                             : QObject::tr("%1 mm from %2 (%3)").arg(shown.offset, 0, 'f', 1).arg(from, snapText(side)));
     sideLog = QStringLiteral("; snap %1 at %2 mm from %3")
                   .arg(kind.isEmpty() ? QStringLiteral("none") : kind)
                   .arg(shown.offset, 0, 'f', 1)
@@ -1922,17 +1950,35 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     markers.append(marker(QStringLiteral("%1 mm").arg(length, 0, 'f', 1),
                           frame.origin.Translated(gp_Vec(frame.z) * length)));
   }
+  // The line-ups with other profiles (mitcad#1886): a frame may have many,
+  // so only the kLineUpMarkers nearest where the part stands are marked,
+  // and not the one it stands on (the snap taken is marked below).
+  const std::optional<gp_Pnt> standsAt = pointFrom(side.value(QStringLiteral("point")));
+  std::vector<std::pair<double, QJsonObject>> lineUps;
   for (const QJsonValue& value : answer.value(QStringLiteral("snaps")).toArray()) {
     const QJsonObject snapped = value.toObject();
     const QString kind = str(snapped, "kind");
     const std::optional<gp_Pnt> point = pointFrom(snapped.value(QStringLiteral("point")));
-    if (point && kind != QStringLiteral("grid") && kind != str(side, "kind")) {
+    if (!point || kind == QStringLiteral("grid")) {
+      continue;
+    }
+    if (kind == QStringLiteral("inline") || kind == QStringLiteral("flush_face")) {
+      const double away = standsAt ? point->Distance(*standsAt) : 0.0;
+      if (away > 1e-6 || kind != str(side, "kind")) {
+        lineUps.emplace_back(away, snapped);
+      }
+    } else if (kind != str(side, "kind")) {
       markers.append(marker(snapText(kind), *point));
     }
   }
-  if (const std::optional<gp_Pnt> point = pointFrom(side.value(QStringLiteral("point")));
-      point && !str(side, "kind").isEmpty()) {
-    markers.append(marker(QStringLiteral("> %1").arg(snapText(str(side, "kind"))), *point));
+  std::stable_sort(lineUps.begin(), lineUps.end(), [](const auto& p, const auto& q) { return p.first < q.first; });
+  for (std::size_t i = 0; i < lineUps.size() && i < kLineUpMarkers; ++i) {
+    if (const std::optional<gp_Pnt> point = pointFrom(lineUps[i].second.value(QStringLiteral("point")))) {
+      markers.append(marker(snapText(lineUps[i].second), *point));
+    }
+  }
+  if (standsAt && !str(side, "kind").isEmpty()) {
+    markers.append(marker(QStringLiteral("> %1").arg(snapText(side)), *standsAt));
   }
   if (!end.isEmpty() && !state.items(kAt).isEmpty() && isEndFace(state.items(kAt).first())) {
     addEndMarkers(markers, end, state.items(kAt).first(), context);
@@ -1992,9 +2038,12 @@ void fillFromClick(const Shared& shared, const QString& role, bool profile, Comm
     state.setChoice(QStringLiteral("from"), str(side, "from"));
     state.setText(QStringLiteral("offset"), cmd::lengthText(std::round(offset.toDouble() * 100.0) / 100.0, context));
     state.setValue(QStringLiteral("offset"), kNaN);
-    qInfo().noquote() << QStringLiteral("BUILD side click: From %1, Offset %2 (%3)")
+    // A line-up says which profile it is with (mitcad#1886).
+    const QString with = str(side.value(QStringLiteral("with")).toObject(), "name");
+    qInfo().noquote() << QStringLiteral("BUILD side click: From %1, Offset %2 (%3%4)")
                              .arg(cmd::label(kSideFroms, str(side, "from")), state.text(QStringLiteral("offset")),
-                                  str(side, "kind").isEmpty() ? QStringLiteral("between snaps") : str(side, "kind"));
+                                  str(side, "kind").isEmpty() ? QStringLiteral("between snaps") : str(side, "kind"),
+                                  with.isEmpty() ? QString() : QStringLiteral(" with %1").arg(with));
     return;
   }
   QJsonObject end = answer.value(QStringLiteral("end")).toObject();
@@ -7379,6 +7428,132 @@ CommandDef turnCommand(DocumentHost& host, const CommandContext& context, bool r
   return def;
 }
 
+// Placement (mitcad#1885, GitHub mitcad/Mitcad#354): where a component on a
+// side or a rail is, its Offset and From as Profile places it, changed by
+// build_edit's `at` in one undo step, so that a part placed from the wrong
+// reference is fixed without removing it. A new From with the Offset as
+// loaded keeps the part where it is, measured from the new reference (`at`
+// with `from` alone); a typed Offset is from the From chosen.
+const QString kPlacementOffset = QStringLiteral("offset");
+const QString kPlacementFrom = QStringLiteral("from");
+// The Offset's text as the pick loaded it.
+const QString kPlacementLoaded = QStringLiteral("loaded_offset");
+
+// What a part on a side or a rail is placed from (build_parts' `from`);
+// empty for a part placed otherwise.
+QString sideFromOf(const BuildPart& part) {
+  return str(part.raw, "from");
+}
+
+// Whether the Offset is as the pick loaded it: then only From is sent.
+bool placementKeepsPlace(const CommandState& state) {
+  return state.text(kPlacementOffset).trimmed() == state.text(kPlacementLoaded).trimmed();
+}
+
+CommandDef placementCommand(DocumentHost& host, const CommandContext& context) {
+  CommandDef def;
+  def.id = QStringLiteral("build.placement");
+  def.name = QObject::tr("Placement");
+  def.icon = QStringLiteral("build-place-side");
+  def.tooltip = QObject::tr("Moves a component along the side or rail it is on: its Offset and From");
+  def.tab = kTab;
+  def.group = QStringLiteral("MODIFY");
+  def.keywords = {QStringLiteral("offset"), QStringLiteral("from"), QStringLiteral("side"), QStringLiteral("move"),
+                  QStringLiteral("build")};
+  def.inputs = {
+      selectionInput(kPart, QObject::tr("Component"), kPartKinds, 1, 1)
+          .withOnPick(
+              [](const SelectionItem& item, CommandState& state, const CommandContext& model) {
+                const std::optional<BuildPart> part = build::partOf(item, model);
+                if (!part) {
+                  return;
+                }
+                const QString from = sideFromOf(*part);
+                if (!from.isEmpty()) {
+                  state.setChoice(kPlacementFrom, from);
+                }
+                // Its offset from that reference (build_parts' `offset`).
+                const QJsonValue offset = part->raw.value(QStringLiteral("offset"));
+                if (offset.isDouble()) {
+                  state.setText(kPlacementOffset, cmd::lengthText(offset.toDouble(), model));
+                  state.setValue(kPlacementOffset, kNaN);
+                }
+                state.setText(kPlacementLoaded, state.text(kPlacementOffset));
+                qInfo().noquote() << QStringLiteral("BUILD placement of %1: from %2, offset %3")
+                                         .arg(part->component, from.isEmpty() ? QStringLiteral("none") : from,
+                                              state.text(kPlacementOffset));
+              },
+              false),
+      valueInput(kPlacementOffset, QObject::tr("Offset"), ValueKind::Length, QStringLiteral("0 mm"))
+          .withTooltip(QObject::tr("The distance from the reference From names; 0 is flush, or centered")),
+      choiceInput(kPlacementFrom, QObject::tr("From"), kSideFroms, QStringLiteral("a"))
+          .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
+                                   "what it is on changes length")),
+      textInput(kPlacementLoaded, kPlacementLoaded).withVisible([](const CommandState&) { return false; }),
+  };
+  def.enabled = [&context] { return build::hasBuildParts(context); };
+  def.inspect = [](const CommandState& state, const CommandContext& model) {
+    Inspection result;
+    const QVector<BuildPart> parts = build::partsOf(state.items(kPart), model);
+    if (parts.isEmpty()) {
+      result.error = QObject::tr("Pick a component of the Build tab.");
+      return result;
+    }
+    const BuildPart& part = parts.first();
+    if (sideFromOf(part).isEmpty()) {
+      // Said in words: where its place is changed instead.
+      result.error = QObject::tr("%1 is not on a side or a rail: its place is set by its joint, which Joint edits.")
+                         .arg(part.shownName());
+      result.log = QStringLiteral("%1 is not on a side or a rail").arg(part.component);
+      return result;
+    }
+    // The choice's label in the interface language, as the panel shows it.
+    const QString from = QCoreApplication::translate(
+        "Choice", cmd::label(kSideFroms, state.choice(kPlacementFrom)).toUtf8().constData());
+    const bool keeps = placementKeepsPlace(state);
+    const QString line = keeps ? QObject::tr("Measured from %1, where it is now").arg(from)
+                               : QObject::tr("%1 from %2").arg(state.text(kPlacementOffset), from);
+    result.text = QStringLiteral("<b>%1</b><br>%2").arg(part.shownName().toHtmlEscaped(), line.toHtmlEscaped());
+    result.log = QStringLiteral("%1 from %2, offset %3%4")
+                     .arg(part.component, state.choice(kPlacementFrom), state.text(kPlacementOffset),
+                          keeps ? QStringLiteral(" (kept in place)") : QString());
+    return result;
+  };
+  def.apply = [&host](CommandState& state, const CommandContext& model) {
+    const QVector<BuildPart> parts = build::partsOf(state.items(kPart), model);
+    if (parts.isEmpty()) {
+      host.showStatus(QObject::tr("Pick a component of the Build tab."), NoticeLevel::Error);
+      return false;
+    }
+    const BuildPart& part = parts.first();
+    if (sideFromOf(part).isEmpty()) {
+      host.showStatus(QObject::tr("%1 is not on a side or a rail: its place is set by its joint, which Joint edits.")
+                          .arg(part.shownName()),
+                      NoticeLevel::Error);
+      return false;
+    }
+    // A new From alone keeps the part in place; an Offset is from it.
+    const bool keeps = placementKeepsPlace(state);
+    QJsonObject at{{QStringLiteral("from"), state.choice(kPlacementFrom)}};
+    if (!keeps) {
+      at.insert(QStringLiteral("offset"), state.expression(kPlacementOffset));
+    }
+    QJsonObject result;
+    if (!host.runModelCommand(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
+                                          {QStringLiteral("component"), part.component},
+                                          {QStringLiteral("at"), at}},
+                              &result)) {
+      return false;
+    }
+    qInfo().noquote() << QStringLiteral("Placement of %1: from %2, %3")
+                             .arg(part.component, state.choice(kPlacementFrom),
+                                  keeps ? QStringLiteral("kept in place")
+                                        : QStringLiteral("offset ") + state.expression(kPlacementOffset));
+    return true;
+  };
+  return def;
+}
+
 // --- OUTPUT
 
 CommandDef listCommand(const CommandContext& context, QWidget* window, std::function<QString()> design, bool cut) {
@@ -7436,6 +7611,7 @@ void registerBuildCommands(CommandRegistry& registry, const CommandContext& cont
   registry.add(turnCommand(host, context, true));
   registry.add(spacingCommand(shared, host, context)); // mitcad#478
   registry.add(frameCommand(shared, host, context));   // mitcad#479
+  registry.add(placementCommand(host, context));       // mitcad#1885
   // OUTPUT
   registry.add(listCommand(context, window, designName, true));
   registry.add(listCommand(context, window, designName, false));

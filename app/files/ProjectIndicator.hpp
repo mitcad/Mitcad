@@ -45,6 +45,7 @@ public:
     QString problem; // the class of the latest failure, "" none
     QString problemMessage;
     QString busy;    // a running task ("sync", "push", "fetch", ...), "" none
+    bool queued = false; // `busy` waits for the project's other server work
     int percent = -1;
     bool conflict = false;
     QDateTime lastDone;

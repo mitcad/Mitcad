@@ -3,6 +3,7 @@
 // MainWindow::waitForJob makes them (a guard, released when the progress
 // dialog shows, else at the end), nested, left early; no override cursor
 // remains and the log lines pair up; the idle recovery of a cursor left on.
+#include "UnitTests.hpp"
 #include "framework/WaitCursor.hpp"
 
 #include <cstdio>
@@ -174,3 +175,4 @@ int waitCursorTests() {
   g_previous = nullptr;
   return failures;
 }
+MITCAD_UNIT_TEST(waitCursorTests);

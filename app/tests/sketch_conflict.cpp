@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A sketch edit refused for conflicting constraints (mitcad#1566): the
 // message shown without its ids line, the blocking items read from it.
+#include "UnitTests.hpp"
 #include "sketch/SketchConflict.hpp"
 
 #include <cstdio>
@@ -51,3 +52,4 @@ int sketchConflictTests() {
   splitTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchConflictTests);

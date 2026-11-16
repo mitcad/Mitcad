@@ -9,6 +9,7 @@
 // and delivers nothing; cancel() does not wait; the log lines of each
 // round pair up ("Computing section <label> started", then "done in" or
 // "cancelled after").
+#include "UnitTests.hpp"
 #include "framework/SectionWorker.hpp"
 
 #include <atomic>
@@ -331,3 +332,4 @@ int sectionWorkerTests() {
   g_previous = nullptr;
   return failures;
 }
+MITCAD_UNIT_TEST(sectionWorkerTests);

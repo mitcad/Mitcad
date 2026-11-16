@@ -102,6 +102,7 @@
 #include "files/VersionDialogs.hpp"
 #include "framework/AppSettings.hpp"
 #include "framework/ModelMessages.hpp"
+#include "framework/OpeningEdges.hpp"
 #include "framework/Appearances.hpp"
 #include "framework/AutoselectPanel.hpp"
 #include "framework/Dialogs.hpp"
@@ -165,6 +166,7 @@
 #include "view/SmallCirclesPreference.hpp"
 #include "view/SpaceMouseController.hpp"
 #include "view/ViewController.hpp"
+#include "view/NavigationBar.hpp"
 #include "view/ViewTessellation.hpp"
 #include "view/VersionWatermark.hpp"
 #include "mitcad/geometry/datum.hpp"
@@ -478,6 +480,52 @@ QWidget* wrapPalette(sketch::SketchPalette* palette, bool transparent) {
   return page;
 }
 
+// The update's host (mitcad#1890): every design's window, whichever window
+// was the first; the update belongs to the application.
+QList<MainWindow*> designWindows() {
+  if (WindowManager* manager = WindowManager::instance()) {
+    return manager->windows();
+  }
+  QList<MainWindow*> windows;
+  for (QWidget* widget : QApplication::topLevelWidgets()) {
+    if (auto* window = qobject_cast<MainWindow*>(widget)) {
+      windows.append(window);
+    }
+  }
+  return windows;
+}
+
+// Closes every design's window as Quit does, each asking to save; true
+// when they all closed.
+bool closeDesignWindows() {
+  WindowManager* manager = WindowManager::instance();
+  QList<QPointer<MainWindow>> windows;
+  for (MainWindow* window : designWindows()) {
+    windows.append(window);
+  }
+  for (const QPointer<MainWindow>& window : windows) {
+    if (window.isNull()) {
+      continue;
+    }
+    if (!(manager != nullptr ? manager->closeWindow(window) : window->closeDocumentWindow())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Calls `call` once no design's window computes anything.
+void whenDesignsIdle(QObject* context, std::function<void()> call) {
+  for (MainWindow* window : designWindows()) {
+    if (window->modelBusy()) {
+      QTimer::singleShot(200, context,
+                         [context, call = std::move(call)]() mutable { whenDesignsIdle(context, std::move(call)); });
+      return;
+    }
+  }
+  call();
+}
+
 } // namespace
 
 MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
@@ -650,6 +698,16 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     const auto retryPickPlaces = [this] {
       if (m_pickPlacesDeferred) logPickPlaces(m_pickPlacesFilter, true);
     };
+    // A camera change under a command's input (a view preset, a fit) moves
+    // every place: they are logged again where they now are, so that no
+    // step clicks where an item was before the camera moved. Marked at
+    // once, logged by the queued retry below.
+    connect(m_viewer, &OcctViewer::navigationFinished, this, [this] {
+      if (m_mode == Mode::Command &&
+          (m_pickPlacesFilter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile))) {
+        m_pickPlacesDeferred = true;
+      }
+    });
     connect(m_viewer, &OcctViewer::navigationFinished, this, retryPickPlaces, Qt::QueuedConnection);
     connect(m_viewer, &OcctViewer::viewChanged, this, retryPickPlaces, Qt::QueuedConnection);
     connect(m_viewer, &OcctViewer::coveredChanged, this, [this] {
@@ -710,17 +768,37 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
        [this](const QString& message) { showHint(message); },
        // Include the design (mitcad#1795).
        [this] { return designOpen(); }, [this] { return m_filePath; },
-       [this](const QJsonObject& request) { return queryObject(request); }},
+       [this](const QJsonObject& request) { return queryObject(request); },
+       // The session logs and crash dumps (mitcad#1896).
+       [this] { openLogFolder(); }},
       this);
-  // Automatic updates (mitcad#9): Help > Check for Updates and the notice.
-  m_updates = new UpdateController(
-      *this, {[this] { return close(); }, [this](std::function<void()> call) { whenIdle(this, std::move(call)); }},
-      this);
+  // Automatic updates (mitcad#9): Help > Check for Updates and the notice,
+  // one update for the application (mitcad#1890): every window shows its
+  // row, and closing this window keeps a download going in the others.
+  m_updates = &UpdateController::application();
+  m_updates->setHost({&closeDesignWindows, [](std::function<void()> call) {
+                        whenDesignsIdle(&UpdateController::application(), std::move(call));
+                      }});
   m_viewController =
       new ViewController(*m_viewer, *m_registry, *this, [this] { lookAtSelection(); }, this);
   m_viewController->gridSnapChanged = [this](bool on, double step) {
     m_sketch->setGridSnap(on);
     m_sketch->setGridStep(step);
+  };
+  // Preferences › Import Settings (mitcad#1889): the pins read again.
+  m_viewController->settingsImported = [this](const QStringList& groups) {
+    if (!groups.contains(QStringLiteral("pins"))) {
+      return;
+    }
+    if (m_navigationBar != nullptr) {
+      m_navigationBar->reloadPins();
+    }
+    if (m_ribbon != nullptr) {
+      m_ribbon->reloadPins();
+    }
+    for (QuickAccessGroup* quick : findChildren<QuickAccessGroup*>()) {
+      quick->rebuild();
+    }
   };
   // The sketch palette's Snap to grid is the View menu's too.
   connect(m_sketch, &sketch::SketchController::optionsChanged, this,
@@ -746,7 +824,23 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
     }
     command->trigger();
   };
+  // Lock Rotation (mitcad#1910): the settings it and a device's default
+  // button change are saved as Preferences saves them, and its check mark
+  // follows the rotation's lock in the view as it is now.
+  spaceMouseHooks.change = [this](const SpaceMouseSettings& settings) {
+    m_viewController->setSpaceMouseSettings(settings);
+  };
+  spaceMouseHooks.rotationLock = [this](bool locked) {
+    if (QAction* lock = m_registry->action(spaceMouseLockRotationCommand())) {
+      lock->setCheckable(true);
+      lock->setChecked(locked);
+    }
+  };
   m_spaceMouse = new SpaceMouseController(std::move(spaceMouseHooks), &createSpaceMouseBackend, this);
+  m_viewController->toggleSpaceMouseRotation = [this] {
+    const bool locked = m_spaceMouse->toggleRotationLock();
+    showStatus(locked ? tr("3D mouse rotation locked") : tr("3D mouse rotation unlocked"), NoticeLevel::Information);
+  };
   connect(m_viewer, &OcctViewer::navigationChanged, m_spaceMouse, [this] { m_spaceMouse->refresh(); });
   QTimer::singleShot(0, m_spaceMouse, [this] { m_spaceMouse->refresh(); });
 
@@ -918,7 +1012,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
                : tr("Some saved keyboard shortcuts conflict and are disabled. Open Keyboard Shortcuts "
                     "to repair them; commands remain available in menus."));
   TestSync::singleShot(500, this, [this] { m_ribbon->logLayout(); });
-  m_updates->startUp();
+  m_updates->attach(*this);
   m_remote->startUp();
   m_live->startUp();
   m_locks->startUp();
@@ -1975,8 +2069,42 @@ void MainWindow::createFloatingPanels() {
   // it (mitcad#1020). On every platform: macOS's cap of 55 % of the view,
   // kept by the owner on 18.10.2026, was lifted by the owner for
   // mitcad#1020 on 31.10.2026.
-  m_floating->addCard(browserCard, FloatingLayout::Anchor::TopLeft,
-                      {260, [browser = m_controller->browser()] { return browser->contentHeight(); }, 1.0});
+  // Its width: with the Rows background as wide as its rows up to a share
+  // of the view, with Card as the user dragged it and remembered
+  // (mitcad#1932).
+  const int rememberedBrowserWidth = savedBrowserCardWidth();
+  if (rememberedBrowserWidth > 0) {
+    qInfo().noquote() << QStringLiteral("Browser card width %1 (remembered)").arg(rememberedBrowserWidth);
+  }
+  FloatingLayout::Sizing browserSizing{rememberedBrowserWidth > 0 ? rememberedBrowserWidth : kBrowserCardWidth,
+                                       [browser = m_controller->browser()] { return browser->contentHeight(); }, 1.0};
+  browserSizing.widthFor = [browserCard, browser = m_controller->browser()](int viewWidth) {
+    return browserCardWidthFor(browserCard, browser, viewWidth);
+  };
+  m_floating->addCard(browserCard, FloatingLayout::Anchor::TopLeft, browserSizing);
+  connect(browserCard, &GlassCard::widthChosen, this, [browserCard] {
+    // As the layout placed it (within the view).
+    saveBrowserCardWidth(browserCard->slot().width());
+    qInfo().noquote() << QStringLiteral("Browser card width %1 remembered").arg(savedBrowserCardWidth());
+  });
+  // Where its width grip is, for UI tests: "Browser card edge at x,y" (main
+  // window coordinates) when it moved, "Browser card edge: none" with Rows.
+  // Also when the background changes (the grip comes or goes in place).
+  const auto logBrowserEdge = std::make_shared<std::function<void()>>([browserCard, logged = QString()]() mutable {
+    if (!browserCard->isVisible()) {
+      return;
+    }
+    QString line = QStringLiteral("Browser card edge: none");
+    if (browserCard->isWidthAdjustable()) {
+      const QPoint at = GlassCard::mapToHost(browserCard, browserCard->widthGripCenter());
+      line = QStringLiteral("Browser card edge at %1,%2").arg(at.x()).arg(at.y());
+    }
+    if (line != logged) {
+      logged = line;
+      qDebug().noquote() << line;
+    }
+  });
+  new PlaceWatcher(browserCard, [logBrowserEdge] { (*logBrowserEdge)(); });
   // The user's split of the left column, as last dragged (mitcad#1020).
   m_floating->setSplitKey(QStringLiteral("floating/leftSplit"));
   m_floating->addCard(timelineCard, FloatingLayout::Anchor::Bottom);
@@ -1998,7 +2126,15 @@ void MainWindow::createFloatingPanels() {
   connect(m_controller->browser(), &BrowserPanel::contentHeightChanged, m_floating,
           &FloatingLayout::requestLayout);
   // Its card, or a box behind each row (Preferences, mitcad#419).
-  followBrowserBackground(browserCard, m_controller->browser());
+  // Its width follows its rows and the share of the view they may take
+  // (mitcad#1932).
+  followBrowserBackground(browserCard, m_controller->browser(),
+                          [floating = QPointer<FloatingLayout>(m_floating), logBrowserEdge] {
+                            if (floating != nullptr) {
+                              floating->requestLayout();
+                            }
+                            (*logBrowserEdge)();
+                          });
   // A design that opens is folded when its rows would not fit the card at
   // its largest (mitcad#426).
   m_controller->browser()->setAvailableHeight(
@@ -2704,9 +2840,24 @@ void MainWindow::editFeature(const QString& uid) {
   const CommandDef* def = editorOf(uid);
   if (def == nullptr) {
     // Inputs Mitcad's panels do not have yet (U4) would be lost: said in
-    // plain words, not as an error, with what can be done (mitcad#1812).
-    qInfo().noquote() << QStringLiteral("Edit of %1 (%2): no edit panel; Edit Parameters offered").arg(uid, type);
-    showActionStatus(tr("This feature has no edit panel yet. Its values can be changed in Edit Parameters."),
+    // plain words, not as an error, with what can be done (mitcad#1812);
+    // with what the panel does not hold where its command says
+    // (CommandDef::editRefusal, mitcad#1885: a joint on fixed geometry).
+    QString why;
+    try {
+      why = m_registry->editRefusal(
+          queryObject({{QStringLiteral("query"), QStringLiteral("feature")}, {QStringLiteral("uid"), uid}})
+              .value(QStringLiteral("def"))
+              .toObject());
+    } catch (const std::exception&) {
+      why.clear(); // the plain notice
+    }
+    qInfo().noquote() << QStringLiteral("Edit of %1 (%2): no edit panel%3; Edit Parameters offered")
+                             .arg(uid, type, why.isEmpty() ? QString() : QStringLiteral(" (") + why + QLatin1Char(')'));
+    showActionStatus(why.isEmpty()
+                         ? tr("This feature has no edit panel yet. Its values can be changed in Edit Parameters.")
+                         : tr("Its panel cannot edit this feature: %1 Its values can be changed in Edit Parameters.")
+                               .arg(why),
                      NoticeLevel::Information, tr("Edit Parameters"), [this] { openParameterTable(); });
     return;
   }
@@ -3021,6 +3172,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
     // (what is known to come so waits: whenIdle): refused, as the model
     // refuses what it cannot do.
     m_lastError = errorText(ModelBusy());
+    m_lastModelError = m_lastError;
     m_lastCancelled = false;
     qWarning().noquote() << QStringLiteral("Command %1 refused: %2").arg(name, m_lastError);
     return false;
@@ -3036,12 +3188,14 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   } catch (const ComputationCancelled& cancelled) {
     // Not an error: the model is as it was before the command.
     m_lastError = errorText(cancelled);
+    m_lastModelError = m_lastError;
     m_lastCancelled = true;
     showHint(tr("Computation canceled."));
     qInfo().noquote() << QStringLiteral("Command %1 cancelled").arg(name);
     return false;
   } catch (const rust::Error& error) {
     m_lastError = errorText(error);
+    m_lastModelError = modelText(error);
     m_lastCancelled = false;
     showError(m_lastError);
     return false;
@@ -3050,6 +3204,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   } catch (const ReadOnlyError& error) {
     // A read-only window (mitcad#89): nothing changed.
     m_lastError = errorText(error);
+    m_lastModelError = modelText(error);
     m_lastCancelled = false;
     qInfo().noquote() << QStringLiteral("Read-only: refused %1").arg(name);
     showError(m_lastError);
@@ -3057,6 +3212,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   } catch (const std::exception& error) {
     // Not the model's answer: an internal error (mitcad#62).
     m_lastError = errorText(error);
+    m_lastModelError = modelText(error);
     m_lastCancelled = false;
     if (m_reports != nullptr) {
       m_reports->internalError(QStringLiteral("model command %1").arg(name), m_lastError);
@@ -3655,6 +3811,26 @@ private:
 };
 
 TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
+  // A joint's origin on a part's mount frame (mitcad#1885): its triad where
+  // the model resolves it through the occurrence path, in the design.
+  if (isMountFrame(item)) {
+    try {
+      QJsonObject request{{QStringLiteral("query"), QStringLiteral("joint_frame")},
+                          {QStringLiteral("geometry"), item.reference()}};
+      if (!item.occurrence.isEmpty()) {
+        request.insert(QStringLiteral("occurrence"), item.occurrence);
+      }
+      const QJsonObject frame = queryObject(request);
+      const QJsonObject datum{{QStringLiteral("type"), QStringLiteral("plane")},
+                              {QStringLiteral("origin"), frame.value(QStringLiteral("origin"))},
+                              {QStringLiteral("x_axis"), frame.value(QStringLiteral("x_axis"))},
+                              {QStringLiteral("y_axis"), frame.value(QStringLiteral("y_axis"))},
+                              {QStringLiteral("normal"), frame.value(QStringLiteral("z_axis"))}};
+      return frameTriadShape(datum, kDatumSize / 2.0);
+    } catch (const std::exception&) {
+      return TopoDS_Shape(); // gone from the model
+    }
+  }
   if (!item.occurrence.isEmpty()) {
     // In the component's coordinates, placed by the occurrence.
     if (!m_placements.contains(item.occurrence)) {
@@ -3715,7 +3891,9 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
         return TopoDS_Shape();
       }
       const std::string name = utf8(item.name);
-      const std::vector<int> found = item.kind == SelectKind::Face   ? shape->find_faces(name)
+      // An opening picked by a free edge: its whole loop (mitcad#1927).
+      const std::vector<int> found = isOpeningEdge(item)              ? openingEdges(*shape, openingOf(item))
+                                     : item.kind == SelectKind::Face ? shape->find_faces(name)
                                      : item.kind == SelectKind::Edge ? shape->find_edges(name)
                                                                      : shape->find_vertices(name);
       if (found.empty()) {
@@ -3775,8 +3953,27 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       }
       return compound;
     }
-    case SelectKind::Profile:
-      return occtShape(idleDocument().profile_shape(utf8(item.owner), utf8(item.name)));
+    case SelectKind::Profile: {
+      const TopoDS_Shape flat = occtShape(idleDocument().profile_shape(utf8(item.owner), utf8(item.name)));
+      if (flat.IsNull()) {
+        return flat;
+      }
+      // A sketch on a cylindrical or conical face (mitcad#1768): its region
+      // laid onto the face, as the view draws the sketch's profiles
+      // (showProfiles), not flat on the face's carrier plane, so that a
+      // selected or hovered profile lies where it is extruded (mitcad#1908,
+      // GitHub mitcad/Mitcad#362). Null when it cannot be laid there.
+      std::optional<mitcad::sketch::SketchSurface> surface;
+      try {
+        surface = mitcad::sketch::SketchSurface::fromJson(
+            query({{QStringLiteral("query"), QStringLiteral("sketch_surface")}, {QStringLiteral("sketch"), item.owner}})
+                .toObject()
+                .value(QStringLiteral("surface")));
+      } catch (const std::exception&) {
+        // A sketch just taken back: as the model gives the region.
+      }
+      return surface ? mitcad::sketch::wrappedFace(flat, *surface) : flat;
+    }
     case SelectKind::SketchCurve:
     case SelectKind::SketchPoint: {
       if (m_sketchShapes) {
@@ -5131,11 +5328,13 @@ bool MainWindow::runModelCommandSteps(const QJsonArray& commands, const QString&
     if (!runCommand(value.toObject())) {
       // A cancel takes back the whole step too: the model is as it was.
       const QString error = m_lastError;
+      const QString modelError = m_lastModelError;
       const bool cancelled = m_lastCancelled;
       for (int guard = 0; guard < commands.size() && undoDepth() > depth; ++guard) {
         runCommand({{QStringLiteral("cmd"), QStringLiteral("undo")}});
       }
       m_lastError = error;
+      m_lastModelError = modelError;
       m_lastCancelled = cancelled;
       refreshScene();
       if (cancelled) {
@@ -6760,6 +6959,9 @@ void MainWindow::enterSketch(const QString& uid, bool existing, const QString& p
   // sketch's frame, curves and profiles are placed by it once.
   m_sketchOccurrence = sketchEditOccurrence(uid, picked);
   m_sketch->enter(uid);
+  if (m_spaceMouse != nullptr) {
+    m_spaceMouse->sketchChanged(); // its rotation starts locked (mitcad#1910)
+  }
   // Every sketch edit starts with the filter's defaults (mitcad#217).
   m_sketchScope.reset();
   selectionScopeChanged(QStringLiteral("defaults"));
@@ -6896,6 +7098,9 @@ void MainWindow::leaveSketchMode() {
   m_sketch->leave();
   if (m_sketch3d != nullptr) {
     m_sketch3d->leave(); // a 3D sketch's context (mitcad#1524)
+  }
+  if (m_spaceMouse != nullptr) {
+    m_spaceMouse->sketchChanged(); // a sketch's freed rotation ends with it (mitcad#1910)
   }
   m_sketchOccurrence.clear();
   m_mode = Mode::Idle;
@@ -7139,6 +7344,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     m_closePending = true;
     m_documentSession->cancelJob();
     qDebug() << "Close while computing: cancelling";
+    return;
+  }
+  // The last design's window does not drop an update's download silently
+  // (mitcad#1890): MitCad asks whether to keep going (it stays open).
+  const bool lastWindow = m_windowManager == nullptr || m_windowManager->windows().size() <= 1;
+  if (lastWindow && m_updates != nullptr && !m_updates->mayCloseLastWindow(this)) {
+    if (m_windowManager != nullptr) m_windowManager->cancelQuit(this);
+    event->ignore();
     return;
   }
   if (m_session) {

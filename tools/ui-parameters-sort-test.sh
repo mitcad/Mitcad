@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser/ParametersDialog.cpp app/browser/ParametersDialog.hpp
+# check-all sources: app/browser/ParametersDialog.cpp app/browser/ParametersDialog.hpp app/framework/ParameterUnits.cpp
 # check-all sources: app/browser/ParameterSort.cpp app/browser/ParameterSort.hpp app/framework/TestDriver.cpp tools/cli
 # check-all sources: tools/ui-scripts/parameters-sort.mitcad-ui tools/ui-scripts/parameters-sort.json
 # Edit Parameters sorted by a column (mitcad#1866, GitHub mitcad/Mitcad#338)
@@ -17,6 +17,8 @@
 #     the settings and when the dialog opens again.
 #   - An edited row and an added one move to their place in the sort and
 #     stay selected; the search filter works on the sorted table.
+#   - The Unit column shows Number for a parameter without a unit, and Add
+#     User Parameter's Number adds one (mitcad#1920).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-parameters-sort-test.sh

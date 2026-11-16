@@ -7,9 +7,14 @@
 # log line naming it and giving the motion's duration, frame rate, longest
 # frame and grid rebuilds (mitcad#1023), and the spin's axes line naming
 # what the model did (mitcad#1720); Preferences > Navigation's 3D
-# Mouse tab has the Navigation mode and Lock horizon (mitcad#978). Run by
-# ui-space-mouse-test.sh on Linux and ui-windows-space-mouse-test.ps1 in the
-# Windows VM, on the demo design.
+# Mouse tab has the Navigation mode and Lock horizon (mitcad#978). Lock
+# Rotation (mitcad#1910): the second button chosen to run it locks and
+# frees the rotation outside a sketch, the tab's Lock rotation following;
+# in a sketch the rotation starts locked, the button frees it for that
+# sketch, and the next sketch starts locked again. Run by
+# ui-space-mouse-test.sh on Linux, ui-windows-space-mouse-test.ps1 in the
+# Windows VM and ui-macos-space-mouse-test.sh in the macOS VM, on the demo
+# design.
 wait-idle
 expect-ever '^3D mouse: (none|.+ connected \()'
 capture-view-orientation turned
@@ -44,3 +49,95 @@ focus-widget navigationScheme
 key Escape
 expect-dialog-gone '^(Settings|Preferences)$'
 focus-main
+# Lock Rotation (mitcad#1910): button 2 chosen on the 3D Mouse tab to run
+# it; a press locks the rotation (the tab's Lock rotation shows it when
+# Preferences opens again) and a spin of the cap leaves the view as it
+# was, a press again frees it and the spin turns the view. The buttons are
+# pressed with Preferences closed: on Windows its window blocks the main
+# window's input; the choice is kept with OK (Return; ctrl+w closes the
+# macOS Settings window: MITCAD_TEST_PREFERENCES_DONE from the runner).
+# The tab following a toggle while it is open is the unit
+# test's (app/tests/navigation_preferences.cpp, followSpaceMouse).
+command tools.preferences.navigation
+focus-dialog '^(Settings|Preferences)$'
+expect-navigation-controls lock-rotation-button
+expect-log '^Navigation controls: 3D mouse button 2 runs view\.space_mouse_lock_rotation \(Lock Rotation\)$'
+expect-widget-property navigationSpaceMouseLockRotation checked false
+focus-widget navigationReversePanVertical
+key ${MITCAD_TEST_PREFERENCES_DONE}
+expect-dialog-gone '^(Settings|Preferences)$'
+focus-main
+mark
+space-mouse-button 2
+wait-log '^3D mouse: button 2 runs view\.space_mouse_lock_rotation$'
+wait-log '^3D mouse: rotation locked$'
+wait-log '^Status info: 3D mouse rotation locked$'
+expect-setting view/spaceMouseLockRotation true
+command tools.preferences.navigation
+focus-dialog '^(Settings|Preferences)$'
+expect-widget-property navigationSpaceMouseLockRotation checked true
+focus-widget navigationScheme
+key Escape
+expect-dialog-gone '^(Settings|Preferences)$'
+focus-main
+wait-idle
+capture-view-orientation locked
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-idle
+expect-no-log '^3D mouse motion: '
+expect-view-orientation ${locked} unchanged
+mark
+space-mouse-button 2
+wait-log '^3D mouse: rotation unlocked$'
+wait-log '^Status info: 3D mouse rotation unlocked$'
+expect-setting view/spaceMouseLockRotation false
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${locked} changed
+# In a sketch the rotation starts locked although Lock rotation is off: a
+# spin leaves its view as it was; the button frees it for that sketch (the
+# spin turns the view, the sketch stays in edit). Finished, the next
+# sketch starts locked again.
+mark
+click-visible-face
+expect-selection 1 0
+command sketch.create
+wait-log '^Sketch started on '
+wait-idle
+capture-view-orientation sketched
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-idle
+expect-no-log '^3D mouse motion: '
+expect-view-orientation ${sketched} unchanged
+mark
+space-mouse-button 2
+wait-log '^3D mouse: rotation unlocked in the sketch$'
+wait-log '^Status info: 3D mouse rotation unlocked$'
+expect-setting view/spaceMouseLockRotation false
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-log '^3D mouse motion: [1-9][0-9]* frame\(s\), .*turned [0-9.]+ degrees, '
+expect-view-orientation ${sketched} changed
+expect-no-log '^Sketch finished'
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+wait-idle
+mark
+click-visible-face
+expect-selection 1 0
+command sketch.create
+wait-log '^Sketch started on '
+wait-idle
+capture-view-orientation again
+mark
+space-mouse 0 0 0 0 0.8 0 600
+wait-idle
+expect-no-log '^3D mouse motion: '
+expect-view-orientation ${again} unchanged
+mark
+command sketch.finish
+wait-log '^Sketch finished'

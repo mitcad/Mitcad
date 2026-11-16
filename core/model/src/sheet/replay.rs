@@ -405,6 +405,15 @@ fn moved_flange(
     thickness: f64,
     transform: &Transform,
 ) -> Result<crate::features::sheet_folded::SheetFlangeDef<f64>, String> {
+    // A flange on several edges (mitcad#1872) is not carried onto a joined
+    // copy edge by edge.
+    if !d.boundaries.is_empty() {
+        return Err(
+            "a flange on several edges is not repeated on a copy joined to the sheet; keep the \
+             copies apart, or flange each copy"
+                .into(),
+        );
+    }
     // The original boundary on its panel's front surface, the bend's side
     // and the canonical axial direction.
     let edge = boundary(original, &d.boundary)?;

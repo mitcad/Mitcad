@@ -3,6 +3,7 @@
 // feature's sketches, else those of the profiles, curves and points a new
 // command starts with; which of them the command alone shows (drawn
 // lighter, logged); what each goes back to when it ends.
+#include "UnitTests.hpp"
 #include "view/CommandSketches.hpp"
 
 #include <cstdio>
@@ -115,3 +116,4 @@ int commandSketchesTests() {
   cancelTests();
   return failures;
 }
+MITCAD_UNIT_TEST(commandSketchesTests);

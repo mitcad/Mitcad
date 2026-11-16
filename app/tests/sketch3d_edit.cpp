@@ -9,6 +9,7 @@
 // when the selection takes none; what a delete takes with a point; the
 // drag goals of a curve and of a tangent handle; the handles shown at a
 // free or tangent end only; a cubic's samples; the palette's words.
+#include "UnitTests.hpp"
 #include "sketch/Sketch3dEdit.hpp"
 
 #include <cmath>
@@ -380,3 +381,4 @@ int sketch3dEditTests() {
   sampleAndTextTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketch3dEditTests);

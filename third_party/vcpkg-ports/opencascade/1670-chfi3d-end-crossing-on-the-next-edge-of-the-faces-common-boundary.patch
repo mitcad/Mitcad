@@ -40,10 +40,10 @@ other face: the result had a free edge, an open shell.
   edges between a prolonged edge's end and the vertex are).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index b233b4b..b2da9da 100644
+index 0a110e17..39865abe 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -10195,6 +10195,107 @@ static bool containE(const TopoDS_Face& F1, const TopoDS_Edge& E)
+@@ -10241,6 +10241,107 @@ static bool containE(const TopoDS_Face& F1, const TopoDS_Edge& E)
    return contain;
  }
  
@@ -151,7 +151,7 @@ index b233b4b..b2da9da 100644
  //=======================================================================
  // function : IsShrink
  // purpose  : check if U (if <isU>==True) or V of points of <PC> is within
-@@ -11831,6 +11932,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -11877,6 +11978,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    TopoDS_Face                faceprol[nn];
    int                        indcurve[nn], indpoint2 = 0, indpoint1 = 0;
    occ::handle<TopOpeBRepDS_CurvePointInterference>   Interfp1, Interfp2, Interfedge[nn];
@@ -162,7 +162,7 @@ index b233b4b..b2da9da 100644
    occ::handle<TopOpeBRepDS_SurfaceCurveInterference> Interfc, InterfPC[nn], InterfPS[nn];
    double                                             u2, v2, p1, p2, paredge1;
    double                                             paredge2 = 0., tolex = 1.e-4;
-@@ -12304,50 +12409,81 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -12350,52 +12455,83 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
              const TopoDS_Edge   aForwardE2 = TopoDS::Edge(E2.Oriented(TopAbs_FORWARD));
              const TopoDS_Vertex anEnd      = aW > aLastE2 ? TopExp::LastVertex(aForwardE2)
                                                            : TopExp::FirstVertex(aForwardE2);
@@ -220,7 +220,9 @@ index b233b4b..b2da9da 100644
 +              gapmin   = 0.;
              }
 -            isBesideMiddleFace = isOutOfBothFaces;
--            if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
+-            // (Only beyond the edge's far end: a crossing behind the vertex
+-            // itself, on an edge that starts there, is taken as before.)
+-            if (!isOutOfBothFaces && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull()
 -                && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
 -                     > BRep_Tool::Tolerance(anEnd))
 +            else
@@ -267,7 +269,9 @@ index b233b4b..b2da9da 100644
 +                }
 +              }
 +              isBesideMiddleFace = isOutOfBothFaces;
-+              if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
++              // (Only beyond the edge's far end: a crossing behind the vertex
++              // itself, on an edge that starts there, is taken as before.)
++              if (!isOutOfBothFaces && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull()
 +                  && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
 +                       > BRep_Tool::Tolerance(anEnd))
 +              {
@@ -281,7 +285,7 @@ index b233b4b..b2da9da 100644
              }
            }
            if (!extend)
-@@ -12943,7 +13079,14 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -12991,7 +13127,14 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
  
      if (nb != nbface || oneintersection1 || oneintersection2)
      {
@@ -297,7 +301,7 @@ index b233b4b..b2da9da 100644
        {
          V1 = TopExp::FirstVertex(Edge[nb]);
          V2 = TopExp::LastVertex(Edge[nb]);
-@@ -13010,6 +13153,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -13058,6 +13201,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        {
          int Iarc2      = DStr.AddShape(Edge[nb]);
          Interfedge[nb] = ChFi3d_FilPointInDS(ori, Iarc2, indpoint2, paredge2);

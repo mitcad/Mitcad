@@ -7,6 +7,7 @@
 //! this crate (core/model-tests/README.md).
 #![cfg(test)]
 
+mod sheet_edges_tests;
 mod sheet_flat_tests;
 mod sheet_more_tests;
 mod sheet_profile_tests;

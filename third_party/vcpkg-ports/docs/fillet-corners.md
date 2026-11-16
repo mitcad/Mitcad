@@ -111,7 +111,12 @@ the arcs' curves on the face lie a period apart, and the cut of the blend by
 the face was sought between them round nearly the whole face (it then
 crossed the other roundings' ends, or the body came out invalid). The second
 point is now taken within half a period of the first (`PerformOneCorner`),
-and the cut crosses the seam, where it is split as before.
+and the cut crosses the seam, where it is split as before. Only where the
+face goes round the surface's whole period (mitcad#1883): a face on part of
+a periodic surface has no seam (a revolve of 270 degrees, its axis edge
+rounded up to the pole of an ellipse's surface of revolution, OCCT's
+blend/simple H4 and blend/buildevol D6), and the point moved by a period
+lay outside the face: the body came out invalid (`test_fillet_occt_cases.cpp`).
 
 ## 0280 to 0283: corners among several faces
 
@@ -139,7 +144,8 @@ curve and p-curves continued to the contact's end
 The walk round the vertex in `PerformIntersectionAtEnd` takes, at each
 vertex it passes, the common edge of the faces on both sides there (two
 faces may share several edges; the first found was taken, the far end of a
-groove), and an edge it reached past a short edge of the vertex (13
+groove; a chamfer keeps the first found, OCCT's chamfer sequences A5 getting
+invalid corners with the other, mitcad#1902), and an edge it reached past a short edge of the vertex (13
 micrometres, the corner's wall above a rim's torus) is prolonged from the
 vertex where the walk reached it, the short edge in the removed corner
 (before, from the corner's vertex, which is off the faces' intersection:

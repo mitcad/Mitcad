@@ -21,7 +21,8 @@ namespace mitcad::mcp {
 //
 // main() installs the handler once, for the whole run, after the UI test
 // driver's: it passes every message on to the one installed before it
-// (stderr, the test driver), then to the sink (the debug log's file).
+// (stderr, the test driver), then to the sinks (the session log's file,
+// mitcad#1896, and the debug log's).
 // The longest formatted line (formatLogLine) the ring keeps, in UTF-8
 // bytes, for a thread name of up to 400 characters.
 constexpr qsizetype kMaxLogLineBytes = 4096;
@@ -52,6 +53,9 @@ QString formatLogLine(const LogLine& line);
 // message the sink itself causes is not passed to it again.
 using LogSink = void (*)(QtMsgType type, const LogLine& line);
 void setLogSink(LogSink sink);
+// The session log's sink (framework/SessionLog.hpp, mitcad#1896), called
+// before the debug log's, likewise.
+void setSessionLogSink(LogSink sink);
 
 // What the ring's lines take, about, in bytes (at most 8 MiB, mitcad#935).
 std::size_t logRingBytes();

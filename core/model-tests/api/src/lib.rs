@@ -95,3 +95,9 @@ mod form_tests;
 // Where construction planes and axes are drawn: fitted to what they are
 // made from, under the resize handles' size (mitcad#1827).
 mod datum_drawn_extent_tests;
+// MCP's command schemas against the fields the API reads (mitcad#1897).
+mod mcp_schema_tests;
+// References between the entries of a model_command array: a parametric
+// outline and its extrusion in one array, refusals and failed features
+// (mitcad#1897).
+mod array_refs_1897_tests;

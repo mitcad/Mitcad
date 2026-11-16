@@ -6,6 +6,7 @@
 // numbers without a unit and texts; limits by their own numbers or a
 // feature's fixed ones; boxes on before off; blank cells last both ways;
 // equal keys in the creation order.
+#include "UnitTests.hpp"
 #include "browser/ParameterSort.hpp"
 
 #include <cstdio>
@@ -198,3 +199,4 @@ int parameterSortTests() {
   limitAndBoxTests();
   return failures;
 }
+MITCAD_UNIT_TEST(parameterSortTests);

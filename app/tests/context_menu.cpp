@@ -2,7 +2,9 @@
 // The view's context menu's split (mitcad#494): whether a selection alone
 // completes a command (its first entries) or the command needs further
 // picks (under More), computed from the definition (CommandDef::completedBy);
-// and what the menu offers at its top level (mitcad#735, takenWholeByOneOf).
+// and what the menu offers at its top level (mitcad#735, takenWholeByOneOf);
+// and which inputs take an opening picked by a free edge (mitcad#1927).
+#include "UnitTests.hpp"
 #include "framework/Command.hpp"
 
 #include <cstdio>
@@ -157,5 +159,22 @@ int contextMenuTests() {
   CHECK(start.text(QStringLiteral("distance")) == QStringLiteral("2 mm"));
   CHECK(start.choice(QStringLiteral("mode")) == QStringLiteral("points"));
   CHECK(fillet.initialState().rows(QStringLiteral("sets")) == 1);
+
+  // An opening picked by a free edge (mitcad#1927): an edge of the body
+  // named by the opening; only an input that takes openings takes it.
+  const QJsonObject wall{{QStringLiteral("faces"), QJsonArray{QStringLiteral("F2:side(c1)")}},
+                         {QStringLiteral("index"), 1}};
+  const SelectionItem opening = openingEdgeItem(QStringLiteral("F2.b0"), wall);
+  CHECK(opening.kind == SelectKind::Edge && opening.owner == QStringLiteral("F2.b0"));
+  CHECK(isOpeningEdge(opening) && !isOpeningEdge(edge) && !isOpeningEdge(face));
+  CHECK(openingOf(opening) == wall);
+  CHECK(openingOf(edge).isEmpty());
+  CHECK(opening == openingEdgeItem(QStringLiteral("F2.b0"), wall));
+  const InputDef edges = selectionInput(QStringLiteral("edges"), QStringLiteral("Edges"), SelectKind::Edge, 1, 0);
+  CHECK(edges.accepts(edge) && !edges.accepts(opening));
+  InputDef openings = edges;
+  openings.withOpenings();
+  CHECK(openings.accepts(edge) && openings.accepts(opening));
   return failures;
 }
+MITCAD_UNIT_TEST(contextMenuTests);

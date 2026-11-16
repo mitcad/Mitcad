@@ -251,6 +251,70 @@ void test_offset_faces() {
   CHECK(faces_named(*sized, "F6:side(c9)") == 1);
 }
 
+// A piece of a split face offset alone (mitcad#1928): the piece moves, the
+// other piece stays, and the seam between them becomes a step,
+// <feature>:step(<piece>). The geometry kernel's offset alone gave an
+// invalid shape there: the piece that stays cannot extend along its own
+// plane to meet the moved one.
+void test_offset_split_faces() {
+  const std::string top = end_cap("F2", 1);
+  // The top split at x = 20: piece #0 is the 20 x 40 one (test_split).
+  const Tool at20 = Tool::of_plane(gp_Pln(gp_Pnt(20, 0, 0), gp_Dir(1, 0, 0)));
+  const ShapePtr split = split_faces("F7", *block(), {top}, at20);
+  const std::string piece = top + "#0";
+  const std::string step = "F8:step(" + piece + ")";
+  for (const double distance : {-1.0, 1.0}) {
+    const ShapePtr moved = offset_faces("F8", *split, {piece}, distance);
+    CHECK_NEAR(volume(*moved), kBlock + distance * 20.0 * 40.0);
+    CHECK(faces_named(*moved, piece) == 1);
+    CHECK(faces_named(*moved, top + "#1") == 1);
+    CHECK(faces_named(*moved, step) == 1);
+    CHECK(moved->face_count() == 8);
+    CHECK(edge_names_unique(*moved));
+    // The moved piece at its new height, the other at the old one.
+    for (const FaceInfo& info : face_infos(*moved)) {
+      if (has_name(info.names, piece)) {
+        CHECK(near(info.area, 20.0 * 40.0));
+      }
+      if (has_name(info.names, step)) {
+        CHECK(near(info.area, 40.0 * 1.0));
+      }
+    }
+  }
+
+  // A disc split out of the top by a circle: the disc pressed in and
+  // pulled out, the ring around it stays; the step is a cylinder.
+  Tool curves;
+  curves.kind = Tool::Kind::Curves;
+  curves.regions = {circle(9, 30, 20, 5)};
+  curves.curves = {"c9"};
+  const ShapePtr ringed = split_faces("F7", *block(), {top}, curves);
+  std::string disc;
+  for (const FaceInfo& info : face_infos(*ringed)) {
+    for (const std::string& name : info.names) {
+      if (near(info.area, kPi * 25.0) && (name == top + "#0" || name == top + "#1")) {
+        disc = name;
+      }
+    }
+  }
+  CHECK(!disc.empty());
+  if (disc.empty()) {
+    return;
+  }
+  for (const double distance : {-1.0, 1.0}) {
+    const ShapePtr moved = offset_faces("F8", *ringed, {disc}, distance);
+    CHECK_NEAR(volume(*moved), kBlock + distance * kPi * 25.0);
+    CHECK(faces_named(*moved, disc) == 1);
+    CHECK(faces_named(*moved, "F8:step(" + disc + ")") == 1);
+    CHECK(moved->face_count() == 8);
+  }
+
+  // Both pieces moved together are a whole face again: no step.
+  const ShapePtr both = offset_faces("F8", *split, {piece, top + "#1"}, -1);
+  CHECK_NEAR(volume(*both), kBlock - 60.0 * 40.0);
+  CHECK(faces_named(*both, step) == 0);
+}
+
 void test_delete_faces() {
   // T0 delface_fillet: deleting the rounding brings the sharp corner back.
   const ShapePtr rounded = fillet("F3", *block(), {edge(side("F2", 1, 3), side("F2", 1, 0))}, 5);
@@ -645,6 +709,7 @@ void faceops_tests() {
   guarded("test_shell", test_shell);
   guarded("test_draft", test_draft);
   guarded("test_offset_faces", test_offset_faces);
+  guarded("test_offset_split_faces", test_offset_split_faces);
   guarded("test_delete_faces", test_delete_faces);
   guarded("test_replace_faces", test_replace_faces);
   guarded("test_replace_curved_faces", test_replace_curved_faces);

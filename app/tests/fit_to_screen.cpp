@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A scroll area as tall as its contents and a window sized to them within
 // the screen (mitcad#631), on Qt's offscreen platform (no window).
+#include "UnitTests.hpp"
 #include "framework/FitToScreen.hpp"
 
 #include <QDialog>
@@ -173,3 +174,4 @@ int fitToScreenTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(fitToScreenTests);

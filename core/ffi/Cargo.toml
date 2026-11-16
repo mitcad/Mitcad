@@ -61,3 +61,5 @@ mitcad-ifc = { path = "../ifc" }
 mitcad-dwg = { path = "../dwg", features = ["solids"] }
 # The .3dm import (mitcad#1715): B-reps, extrusions, meshes and blocks.
 mitcad-3dm = { path = "../3dm" }
+# The .serp import's test file with B-reps OCCT wrote (mitcad#1870).
+mitcad-serp = { path = "../serp" }

@@ -4,6 +4,7 @@
 // row (the same size and volume, the same placed part, or the same body
 // placed twice), the summary of several bodies, even units and the text
 // Copy puts on the clipboard.
+#include "UnitTests.hpp"
 #include "commands/PropertiesReport.hpp"
 
 #include <cmath>
@@ -219,3 +220,4 @@ int propertiesReportTests() {
   oneBodyTests();
   return failures;
 }
+MITCAD_UNIT_TEST(propertiesReportTests);

@@ -1,0 +1,8 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for moving a text (mitcad#1911): two free points that frame the view's fit at (-20, -15) and (20, 15), and a free point at (10, 10) a dragged text's anchor snaps onto. The text itself is placed with the Text tool."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-20,-15]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[20,15]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[10,10]}
+]

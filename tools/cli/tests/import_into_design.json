@@ -1,0 +1,22 @@
+[
+  {"comment": "Design files of other formats as components (mitcad#1894), run where cli.import_ipt and cli.import_ipt_design_saved saved the two .ipt test parts as part.mitcad (a cube and a cylinder, aluminium, two base features) and designed.mitcad (a parameter, Sketch1 and Extrude1). The app's Import into this design: each a copy with its history named after its file, the second beside the first, the whole import one undo step."},
+  {"cmd": "insert_component", "path": "part.mitcad", "link": false, "name": "part"},
+  {"cmd": "insert_component", "path": "designed.mitcad", "link": false, "name": "designed",
+    "transform": {"translation": [60, 0, 0]}},
+  {"cmd": "merge_undo", "depth": 0, "label": "Import 2 files"},
+  {"expect": {"bodies": 3, "instances": 3}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"name": "part"}, {"name": "designed"}]}}},
+  {"expect": {"feature": "Base1", "status": "ok"}},
+  {"expect": {"feature": "Base2", "status": "ok"}},
+  {"expect": {"feature": "Sketch1", "status": "ok"}},
+  {"expect": {"feature": "Extrude1", "status": "ok"}},
+  {"comment": "The part's material comes along with its bodies."},
+  {"expect": {"query": {"query": "bodies"}, "some": {"material": "aluminum"}}},
+  {"expect": {"occurrence": "part:1", "body": "Body2", "volume": 6283.185307179586, "tolerance": 1e-6}},
+
+  {"comment": "One undo takes both components out."},
+  {"cmd": "undo"},
+  {"expect": {"bodies": 0, "instances": 0}},
+  {"expect": {"query": {"query": "components"}, "result": {"components": [{"uid": "C0"}]}}}
+]

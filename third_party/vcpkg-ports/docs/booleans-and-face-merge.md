@@ -203,6 +203,19 @@ passed over, and only when every one is the point rejected as before. The
 box is computed only then; classifications whose segments did not run out
 are unchanged.
 
+A fixed line through an edge is passed over even where the transition
+across the edge's two faces is clear, which decides a segment
+(mitcad#1881). A flat shell, every face in one plane and its volume 0,
+gives a point in that plane no segment (every face's surface holds it),
+and its box being flat, every fixed line runs in the plane too; the faces'
+transition across an edge met there counted points outside the shell
+inside it. OCCT's TKBO GTests BCutSimpleTest1 K1, K5, K7 and L1 cut a
+block by such a shell (their translation of the DRAW cases' plane
+`p 0 0 -1 1 0 0` is a plane of normal x, so the swept tool lies in its own
+plane), and the cut came out empty, the block classified inside the tool;
+it is now the block unchanged, as without the patch, which is within the
+GTests' area tolerance of the DRAW cases' value.
+
 ## 1695: no point read past a walking line's ends
 
 The patch 1695 comes from mitcad#1819: the table of dressups that take a
@@ -257,7 +270,11 @@ of the line keeps its result.
   points inside it OUT, and the checker accepts the block (without the
   patch `BRepCheck_SubshapeNotInShape`). The join of the reported design's
   257 bodies in `geometry/tests/test_join_many_bodies.cpp` keeps its merged
-  union.
+  union. mitcad#1881 and a flat shell (a rectangle swept within its own
+  plane) in the same test file: points in its plane outside it classify
+  OUT, and a pocketed block cut by it keeps its volume (with the patch's
+  earlier form three of the points came out IN and the cut empty, as in
+  OCCT's GTests BCutSimpleTest1 K1, K5, K7 and L1).
 - 1695: mitcad#1819 and the chains part of
   `geometry/tests/test_dressup_consumes_face.cpp` (ctest
   `geometry.dressup_consumes_face.chains`): its third row, a concave

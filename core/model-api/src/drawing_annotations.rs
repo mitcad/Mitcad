@@ -40,6 +40,7 @@ use super::ApiError;
 use super::annotations::{
     FormatEdit, ModelItem, ModelShape, Units as WordUnits, frame_words, present, value_text,
 };
+use super::drawing_silhouettes::{self as silhouettes, SeenOutline};
 use super::drawing_tables::{PartsList, RowKey, TableEdit, row_of};
 use super::drawings::{Evaluated, Shown};
 use super::prelude::*;
@@ -56,9 +57,9 @@ use mitcad_model::{
     AnnotationFormat, Document, GeometricTolerance, MeasureKind, MeasurePick, Tolerance,
 };
 use mitcad_model_drawing::annotate::{
-    self, Along, AnnotationType, BodyGeometry, Drawn, FlatFace, Frame, MarkArm, PenPattern,
-    PenWidth, PickPoint, RoundFace, Seen, SheetNote, SketchItem, SketchPen, SketchPenName,
-    SurfaceFinish, Terminator, TorusFace, ViewAnnotation, ViewPick, Want,
+    self, Along, AnnotationType, BodyGeometry, CurvedFace, Drawn, FlatFace, Frame, MarkArm,
+    PenPattern, PenWidth, PickPoint, RoundFace, Seen, SheetNote, SketchItem, SketchPen,
+    SketchPenName, SurfaceFinish, Terminator, TorusFace, ViewAnnotation, ViewPick, Want,
 };
 use mitcad_model_drawing::clip::ViewMap;
 use mitcad_model_drawing::compose::{
@@ -96,6 +97,9 @@ pub(super) enum Series {
     Chain,
 }
 
+/// The view's x and y, either way: the directions a click finds extreme
+/// points along (mitcad#1909).
+const AXES: [P2; 4] = [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]];
 /// The paper between the dimension lines of a baseline series, mm.
 const BASELINE_STEP: f64 = 7.0;
 /// How far a model point may lie in front of a section's plane and still
@@ -277,6 +281,11 @@ pub(super) struct PickQuery {
     /// corner or an edge belongs to).
     #[serde(default)]
     outline: bool,
+    /// A dimension's first pick's point on the sheet (mitcad#1909): the
+    /// extreme points of circles and round faces are found too, and those
+    /// along the line from it.
+    #[serde(default)]
+    from: Option<P2>,
 }
 
 /// The `drawing_corners` query (mitcad#1338): the corners each drawn view
@@ -1094,6 +1103,19 @@ fn torus_reaches(geometry: &BodyGeometry, torus: &TorusFace, toward: Vec3) -> bo
     })
 }
 
+/// A point of the drawing's coordinates in a body's (its placement undone,
+/// as [`body_direction`] undoes its turn; mitcad#1909: a silhouette's point
+/// kept in its body's coordinates).
+fn body_point(transform: &Transform, p: Vec3) -> Vec3 {
+    body_direction(transform, sub3(p, transform.translation))
+}
+
+/// Whether a pick names its edge, face or silhouette whole: no point of it
+/// and no extreme point (mitcad#1909).
+fn whole(pick: &ViewPick) -> bool {
+    pick.point.is_none() && pick.extreme.is_none()
+}
+
 /// A direction of the drawing's coordinates in a body's (its placement's
 /// turn undone: the transpose of a rigid one's).
 fn body_direction(transform: &Transform, d: Vec3) -> Vec3 {
@@ -1776,6 +1798,21 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                     let Some(face) = names.first().cloned() else {
                         continue;
                     };
+                    // The curved faces that are no cylinders, whose
+                    // silhouettes are picked (mitcad#1909).
+                    if matches!(
+                        surface,
+                        SurfaceGeometry::Cone { .. }
+                            | SurfaceGeometry::Sphere { .. }
+                            | SurfaceGeometry::Torus { .. }
+                            | SurfaceGeometry::Other { .. }
+                    ) {
+                        geometry.curved.push(CurvedFace {
+                            face: face.clone(),
+                            names: names.clone(),
+                            surface: surface.clone(),
+                        });
+                    }
                     match surface {
                         SurfaceGeometry::Cylinder {
                             origin,
@@ -2577,7 +2614,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
             .want
             .or_else(|| query.kind.map(AnnotationType::wants))
             .unwrap_or(Want::Dimension);
-        let Some(found) = self.pick_at(&view, query.at, want) else {
+        let Some(found) = self.pick_at_from(&view, query.at, want, query.from) else {
             return Ok(json!({"view": id, "pick": null}));
         };
         let map = &view.placed.map;
@@ -3386,6 +3423,8 @@ fn kept_pick<K: Kernel>(
         on_cut: None,
         drawn: None,
         side: None,
+        outline: None,
+        extreme: None,
     };
     if let Some(edge) = &pick.edge {
         let whole = ViewPick {
@@ -3513,8 +3552,19 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// from the side or end on, and on a section the pieces of the cut
     /// lines of the planar faces its plane cuts (and their ends where no
     /// edge's end is seen, mitcad#1361); what the section takes away left
-    /// out.
+    /// out; and the silhouettes of its curved faces that are lines or
+    /// circles (mitcad#1909).
     fn candidates(&self, view: &ViewAt<'_>) -> Vec<Candidate>;
+
+    /// [`Self::candidates`], with every silhouette the view sees of its
+    /// bodies' curved faces (mitcad#1909: those of other curves too, which
+    /// are picked by their extreme points), each with its pick (the face
+    /// and a point of the outline); one that lies on an edge's line is that
+    /// edge's and none of them.
+    fn candidates_and_outlines(
+        &self,
+        view: &ViewAt<'_>,
+    ) -> (Vec<Candidate>, Vec<(ViewPick, SeenOutline)>);
 
     /// The pick nearest a sheet point on a view, of what is wanted: a
     /// point within 2 mm of paper first, else an edge or a face within
@@ -3522,6 +3572,38 @@ trait DrawingAnnotationsLocal<K: Kernel> {
     /// detail's circle, beside a break's bands). Of picks as near, the one
     /// the view draws as a visible line, then the one nearest the eye.
     fn pick_at(&self, view: &ViewAt<'_>, at: P2, want: Want) -> Option<Candidate>;
+
+    /// [`Self::pick_at`] of a dimension's second pick when `from` (a sheet
+    /// point) is its first's (mitcad#1909): a point, a corner or a snap
+    /// also finds the extreme points of curves, of silhouettes always
+    /// along the view's x and y, and with `from` those of circles and
+    /// round faces too and along the line from it.
+    fn pick_at_from(
+        &self,
+        view: &ViewAt<'_>,
+        at: P2,
+        want: Want,
+        from: Option<P2>,
+    ) -> Option<Candidate>;
+
+    /// The extreme points a click may pick (mitcad#1909) of what the view
+    /// sees: of its silhouettes along the view's x and y (and from `from`,
+    /// a view point, the farthest and the nearest), and with `from` of its
+    /// circles seen end on and round faces seen from the side likewise;
+    /// those where a pick's point already is left out.
+    fn extreme_candidates(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &[Candidate],
+        outlines: &[(ViewPick, SeenOutline)],
+        from: Option<P2>,
+    ) -> Vec<Candidate>;
+
+    /// A silhouette picked (`outline`, mitcad#1909) as its view sees it
+    /// now: of the face's silhouettes seen along the view's direction, the
+    /// one nearest the point it was picked at; why not, when the face has
+    /// none there any more.
+    fn resolve_outline(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<SeenOutline, String>;
 
     /// A planar face the view sees face on with the view point `q` inside
     /// its outline (the one nearest the eye), picked at `q`: its pick the
@@ -3722,8 +3804,16 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
     }
 
     fn candidates(&self, view: &ViewAt<'_>) -> Vec<Candidate> {
+        self.candidates_and_outlines(view).0
+    }
+
+    fn candidates_and_outlines(
+        &self,
+        view: &ViewAt<'_>,
+    ) -> (Vec<Candidate>, Vec<(ViewPick, SeenOutline)>) {
         let mut out = Vec::new();
         let mut ends = Vec::new();
+        let mut outlines = Vec::new();
         for s in &view.shown {
             let Ok(geometry) = self.body_geometry(s.body) else {
                 continue;
@@ -3739,6 +3829,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 on_cut: None,
                 drawn: None,
                 side: None,
+                outline: None,
+                extreme: None,
             };
             for (edge, curve) in &geometry.edges {
                 let curve = placed_curve(curve, &s.transform);
@@ -3799,6 +3891,57 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     });
                 }
             }
+            // The silhouettes of its curved faces (mitcad#1909): one on an
+            // edge's line or a face's outline is that pick; lines and
+            // circles are picked whole, as edges are, the others by their
+            // extreme points.
+            let spec = &view.placed.spec;
+            let toward = mitcad_vec3::unit(body_direction(&s.transform, spec.toward_eye));
+            if let Some(toward) = toward.filter(|_| !geometry.curved.is_empty()) {
+                let found = silhouettes::body_silhouettes(self, s.body, &geometry, toward);
+                for (face, curves) in found.iter() {
+                    let Some(curved) = silhouettes::curved_face(&geometry, face) else {
+                        continue;
+                    };
+                    for curve in curves {
+                        let Some(seen) =
+                            SeenOutline::of(curve, &s.transform, spec, &curved.surface)
+                        else {
+                            continue;
+                        };
+                        let (middle, depth) = seen.middle();
+                        let at = silhouettes::lift(spec, middle, depth);
+                        if !view.kept(at) || !view.sees(middle) {
+                            continue;
+                        }
+                        let taken = out.iter().any(|c: &Candidate| {
+                            c.pick.body == s.body
+                                && c.pick.path() == s.path.as_slice()
+                                && c.pick.point.is_none()
+                                && c.pick.on_cut.is_none()
+                                && seen.lies_on(&c.found.seen, silhouettes::ON_EDGE)
+                        });
+                        if taken {
+                            continue;
+                        }
+                        let picked = ViewPick {
+                            outline: Some(body_point(&s.transform, at)),
+                            ..pick(None, Some(face), None)
+                        };
+                        if seen.whole {
+                            out.push(Candidate {
+                                pick: picked.clone(),
+                                found: Found {
+                                    seen: seen.seen,
+                                    at,
+                                },
+                                line: None,
+                            });
+                        }
+                        outlines.push((picked, seen));
+                    }
+                }
+            }
             if view.cut().is_some() {
                 // Each piece of a planar face's cut line, picked at its
                 // middle (mitcad#1361), and its ends.
@@ -3851,10 +3994,20 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 out.push(end);
             }
         }
-        out
+        (out, outlines)
     }
 
     fn pick_at(&self, view: &ViewAt<'_>, at: P2, want: Want) -> Option<Candidate> {
+        self.pick_at_from(view, at, want, None)
+    }
+
+    fn pick_at_from(
+        &self,
+        view: &ViewAt<'_>,
+        at: P2,
+        want: Want,
+        from: Option<P2>,
+    ) -> Option<Candidate> {
         let map = &view.placed.map;
         let q = map.view_point(at);
         let reach = annotate::PICK_REACH / map.scale;
@@ -3868,13 +4021,19 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             PICK_TIE / map.scale
         };
         let eye = view.placed.spec.toward_eye;
-        let mut candidates = self.candidates(view);
+        let (mut candidates, outlines) = self.candidates_and_outlines(view);
+        // The extreme points of curves are points too (mitcad#1909).
+        if matches!(want, Want::Any | Want::Dimension | Want::Point | Want::Snap) {
+            let from = from.map(|f| map.view_point(f));
+            let extremes = self.extreme_candidates(view, &candidates, &outlines, from);
+            candidates.extend(extremes);
+        }
         if want == Want::Snap {
             // A line or an arc drawn outside the model snaps to straight
             // edges' middles too (mitcad#1272).
             let middles: Vec<Candidate> = candidates
                 .iter()
-                .filter(|c| c.pick.point.is_none() && matches!(c.found.seen, Seen::Line(..)))
+                .filter(|c| whole(&c.pick) && matches!(c.found.seen, Seen::Line(..)))
                 .map(|c| {
                     let mut middle = c.clone();
                     middle.pick.point = Some(PickPoint::Center);
@@ -3909,12 +4068,10 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 })
                 .map(|(.., c)| c.clone())
         };
-        let is_point = |c: &Candidate| c.pick.point.is_some();
-        let is_line =
-            |c: &Candidate| c.pick.point.is_none() && matches!(c.found.seen, Seen::Line(..));
+        let is_point = |c: &Candidate| !whole(&c.pick);
+        let is_line = |c: &Candidate| whole(&c.pick) && matches!(c.found.seen, Seen::Line(..));
         let is_round = |c: &Candidate| {
-            c.pick.point.is_none()
-                && matches!(c.found.seen, Seen::Circle { .. } | Seen::Axis { .. })
+            whole(&c.pick) && matches!(c.found.seen, Seen::Circle { .. } | Seen::Axis { .. })
         };
         // A centre mark's line (mitcad#1338): a click on a line of a centre
         // mark the view draws (its automatic ones, or a centre mark
@@ -3940,9 +4097,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         // line, at the click's foot on it (the line shown with it).
         let on_centre_line = || {
             let axes = candidates.iter().filter_map(|c| match c.found.seen {
-                Seen::Axis { a, b, .. } if c.pick.point.is_none() => {
-                    Some((c, [map.at(a), map.at(b)]))
-                }
+                Seen::Axis { a, b, .. } if whole(&c.pick) => Some((c, [map.at(a), map.at(b)])),
                 _ => None,
             });
             let (_, hit, [a, b], foot) = axes
@@ -3977,7 +4132,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             };
             let d = [b[0] - a[0], b[1] - a[1]];
             let length = d[0].hypot(d[1]);
-            if c.pick.point.is_some()
+            if !whole(&c.pick)
                 || length < 1e-12
                 || annotate::segment_distance(q, a, b) <= radius / 2.0
             {
@@ -3987,7 +4142,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             let near = VISIBLE_NEAR / map.scale;
             candidates
                 .iter()
-                .filter(|e| e.pick.point.is_none() && e.pick.edge.is_some())
+                .filter(|e| whole(&e.pick) && e.pick.edge.is_some())
                 .filter_map(|e| {
                     let Seen::Line(p, r) = e.found.seen else {
                         return None;
@@ -4042,13 +4197,14 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         // click on it picks the arc); a centre stays the point it is.
         let point_first = || {
             let point = nearest(&is_point, point_reach)?;
-            if point.pick.point == Some(PickPoint::Center) {
+            // An extreme point (mitcad#1909) lies on its curve: a click near
+            // it picks it, not the curve, however the click falls on the
+            // screen's pixels.
+            if point.pick.point == Some(PickPoint::Center) || point.pick.extreme.is_some() {
                 return Some(point);
             }
             let round = nearest(
-                &|c: &Candidate| {
-                    c.pick.point.is_none() && matches!(c.found.seen, Seen::Circle { .. })
-                },
+                &|c: &Candidate| whole(&c.pick) && matches!(c.found.seen, Seen::Circle { .. }),
                 reach,
             );
             match round {
@@ -4062,7 +4218,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         };
         match want {
             Want::Any => point_first()
-                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge))
+                .or_else(|| nearest(&|c: &Candidate| whole(&c.pick), reach).map(own_edge))
                 .or_else(center_line),
             // The Dimension tool's Auto (mitcad#1693): as Any, a drawn line
             // its own edge's (mitcad#1691), or a centre pattern's circle
@@ -4070,7 +4226,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             Want::Dimension => point_first()
                 .or_else(|| {
                     either(
-                        nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge),
+                        nearest(&|c: &Candidate| whole(&c.pick), reach).map(own_edge),
                         drawn_nearest(true),
                     )
                 })
@@ -4093,15 +4249,167 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
             // A datum label (mitcad#1296): as Any, else a planar face seen
             // face on under the click.
             Want::Datum => nearest(&is_point, point_reach)
-                .or_else(|| nearest(&|c: &Candidate| c.pick.point.is_none(), reach).map(own_edge))
+                .or_else(|| nearest(&|c: &Candidate| whole(&c.pick), reach).map(own_edge))
                 .or_else(|| self.face_on_at(view, q)),
             // The edge whose line Edit Line changes (mitcad#1546): an edge,
             // whole, whatever its curve.
             Want::Edge => nearest(
-                &|c: &Candidate| c.pick.point.is_none() && c.pick.edge.is_some(),
+                &|c: &Candidate| whole(&c.pick) && c.pick.edge.is_some(),
                 reach,
             ),
         }
+    }
+
+    fn extreme_candidates(
+        &self,
+        view: &ViewAt<'_>,
+        candidates: &[Candidate],
+        outlines: &[(ViewPick, SeenOutline)],
+        from: Option<P2>,
+    ) -> Vec<Candidate> {
+        use mitcad_vec3::vec2::{norm as len2, sub as sub2, unit as unit2};
+        let spec = &view.placed.spec;
+        let shown = |pick: &ViewPick| {
+            view.shown
+                .iter()
+                .find(|s| s.body == pick.body && s.path.as_slice() == pick.path())
+        };
+        // Each pick tried, its body's placement, the direction of the view,
+        // the point it gives, that point in the drawing's coordinates and
+        // how far from square to the direction the curve runs there.
+        let mut tried: Vec<(&ViewPick, &Shown, P2, P2, Vec3, f64)> = Vec::new();
+        let slant =
+            |along: Option<P2>, d: P2| along.map_or(1.0, |t| (t[0] * d[0] + t[1] * d[1]).abs());
+        for (pick, outline) in outlines {
+            let Some(s) = shown(pick) else {
+                continue;
+            };
+            let mut directions = AXES.to_vec();
+            if let Some(f) = from {
+                let (far, near) = outline.farthest_and_nearest(f);
+                directions.extend(unit2(sub2(far, f)));
+                directions.extend(unit2(sub2(f, near)));
+            }
+            for d in directions {
+                let (p, depth) = outline.extreme(d);
+                let at = silhouettes::lift(spec, p, depth);
+                tried.push((pick, s, d, p, at, slant(outline.along(p), d)));
+            }
+        }
+        // With a first pick, a circle's and a round face's too.
+        if let Some(f) = from {
+            for c in candidates {
+                if !whole(&c.pick) || c.pick.drawn.is_some() || c.pick.outline.is_some() {
+                    continue;
+                }
+                let mut directions = AXES.to_vec();
+                match c.found.seen {
+                    Seen::Circle {
+                        center,
+                        end_on: true,
+                        ..
+                    } => {
+                        if let Some(u) = unit2(sub2(center, f)) {
+                            directions.push(u);
+                            directions.push([-u[0], -u[1]]);
+                        }
+                    }
+                    Seen::Axis { a, b, radius } => {
+                        let n = mitcad_vec3::vec2::perp(unit2(sub2(b, a)).unwrap_or([1.0, 0.0]));
+                        let corners =
+                            [1.0, -1.0].map(|k: f64| [n[0] * k * radius, n[1] * k * radius]);
+                        let far = [a, b]
+                            .into_iter()
+                            .flat_map(|e| corners.map(|o| [e[0] + o[0], e[1] + o[1]]))
+                            .max_by(|x, y| len2(sub2(*x, f)).total_cmp(&len2(sub2(*y, f))));
+                        directions.extend(far.and_then(|p| unit2(sub2(p, f))));
+                        directions.extend(unit2(sub2(f, c.found.seen.nearest(f))));
+                    }
+                    _ => continue,
+                }
+                let Some(s) = shown(&c.pick) else {
+                    continue;
+                };
+                let q = c.found.seen.point();
+                for d in directions {
+                    let p = c.found.seen.extreme(d);
+                    let shift = silhouettes::in_plane(spec, sub2(p, q));
+                    let at = mitcad_vec3::add(c.found.at, shift);
+                    tried.push((&c.pick, s, d, p, at, slant(c.found.seen.along(p), d)));
+                }
+            }
+        }
+        // Of the directions that give one point, the one the curve runs
+        // square to there: the top of an arc that ends at its top is its
+        // extreme point along y, not along x, which only reaches its end.
+        let mut out: Vec<(Candidate, f64)> = Vec::new();
+        for (pick, s, d, p, at, slanted) in tried {
+            if !view.sees(p) || !view.kept(at) {
+                continue;
+            }
+            // A pick's point there stands for it.
+            let there =
+                |c: &Candidate| !whole(&c.pick) && len2(sub2(c.found.seen.point(), p)) <= 1e-7;
+            if candidates.iter().any(there) {
+                continue;
+            }
+            let same = out.iter().position(|(c, _)| there(c));
+            if same.is_some_and(|i| out[i].1 <= slanted + 1e-9) {
+                continue;
+            }
+            let direction = body_direction(&s.transform, silhouettes::in_plane(spec, d));
+            let Some(toward) = mitcad_vec3::unit(direction) else {
+                continue;
+            };
+            let found = Candidate {
+                pick: ViewPick {
+                    extreme: Some(toward),
+                    ..pick.clone()
+                },
+                found: Found {
+                    seen: Seen::Point(p),
+                    at,
+                },
+                line: None,
+            };
+            match same {
+                Some(i) => out[i] = (found, slanted),
+                None => out.push((found, slanted)),
+            }
+        }
+        out.into_iter().map(|(c, _)| c).collect()
+    }
+
+    fn resolve_outline(&self, view: &ViewAt<'_>, pick: &ViewPick) -> Result<SeenOutline, String> {
+        let gone = || {
+            "the outline of a curved face it was picked on is gone: the view no longer sees the \
+             face turn away there"
+                .to_owned()
+        };
+        let s = view
+            .shown
+            .iter()
+            .find(|s| s.body == pick.body && s.path.as_slice() == pick.path())
+            .ok_or_else(|| {
+                "the view does not show the body the outline was picked on".to_owned()
+            })?;
+        let (Some(face), Some(point)) = (&pick.face, pick.outline) else {
+            return Err("an outline is a pick of a curved face with a point of it".to_owned());
+        };
+        let geometry = self.body_geometry(s.body)?;
+        let curved = silhouettes::curved_face(&geometry, face).ok_or_else(gone)?;
+        let spec = &view.placed.spec;
+        let toward =
+            mitcad_vec3::unit(body_direction(&s.transform, spec.toward_eye)).ok_or_else(gone)?;
+        let found = silhouettes::body_silhouettes(self, s.body, &geometry, toward);
+        let q = spec.project(s.transform.apply_point(point));
+        found
+            .iter()
+            .filter(|(f, _)| *f == curved.face)
+            .flat_map(|(_, curves)| curves.iter())
+            .filter_map(|curve| SeenOutline::of(curve, &s.transform, spec, &curved.surface))
+            .min_by(|a, b| a.distance(q).total_cmp(&b.distance(q)))
+            .ok_or_else(gone)
     }
 
     fn face_on_at(&self, view: &ViewAt<'_>, q: P2) -> Option<Candidate> {
@@ -4183,6 +4491,8 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                             on_cut: None,
                             drawn: None,
                             side: None,
+                            outline: None,
+                            extreme: None,
                         },
                         found: Found {
                             seen: Seen::Point(spec.project(at)),
@@ -4252,6 +4562,37 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let shape = self
             .body_shape(s.body)
             .ok_or_else(|| format!("the body {} is gone", s.body))?;
+        let spec = &view.placed.spec;
+        // An extreme point (mitcad#1909): of what the rest of the pick
+        // names as the view sees it now, the point furthest along its
+        // direction.
+        if let Some(toward) = pick.extreme {
+            let d = silhouettes::view_direction(spec, s.transform.apply_vector(toward))
+                .ok_or_else(|| {
+                    "an extreme point's direction is the view's own: nothing lies furthest that \
+                     way"
+                    .to_owned()
+                })?;
+            let rest = ViewPick {
+                extreme: None,
+                ..pick.clone()
+            };
+            if rest.outline.is_some() {
+                let (p, depth) = self.resolve_outline(view, &rest)?.extreme(d);
+                return Ok(Found {
+                    seen: Seen::Point(p),
+                    at: silhouettes::lift(spec, p, depth),
+                });
+            }
+            let found = self.resolve_found(view, &rest)?;
+            let p = found.seen.extreme(d);
+            let q = found.seen.point();
+            let shift = silhouettes::in_plane(spec, [p[0] - q[0], p[1] - q[1]]);
+            return Ok(Found {
+                seen: Seen::Point(p),
+                at: mitcad_vec3::add(found.at, shift),
+            });
+        }
         if let Some(edge) = &pick.edge {
             let curve = self
                 .kernel()
@@ -4259,6 +4600,27 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 .map_err(|_| format!("the edge {edge} of {} is gone", s.name))?;
             return seen_edge(view, &placed_curve(&curve, &s.transform), pick.point)
                 .map_err(|e| format!("the edge {edge} of {}: {e}", s.name));
+        }
+        // A silhouette of a curved face (mitcad#1909): the face's outline
+        // nearest the point it was picked at.
+        if pick.outline.is_some() {
+            let outline = self.resolve_outline(view, pick)?;
+            let (middle, depth) = outline.middle();
+            let at = silhouettes::lift(spec, middle, depth);
+            // A circle's centre (a point picked on its rim).
+            return Ok(match (pick.point, outline.seen) {
+                (Some(PickPoint::Center), Seen::Circle { center, .. }) => {
+                    let shift = [center[0] - middle[0], center[1] - middle[1]];
+                    Found {
+                        seen: Seen::Point(center),
+                        at: mitcad_vec3::add(at, silhouettes::in_plane(spec, shift)),
+                    }
+                }
+                _ => Found {
+                    seen: outline.seen,
+                    at,
+                },
+            });
         }
         let face = pick
             .face
@@ -4478,6 +4840,35 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     }
                     Seen::Circle { .. } | Seen::Axis { .. } => {
                         Ok(alone(AnnotationType::Diameter, kept, seen))
+                    }
+                    // A straight silhouette (mitcad#1909: a cone's side seen
+                    // from the side): its length, between its extreme points
+                    // along it.
+                    Seen::Line(a, b) if pick.outline.is_some() && whole(&pick) => {
+                        let s = view
+                            .shown
+                            .iter()
+                            .find(|s| s.body == pick.body && s.path.as_slice() == pick.path())
+                            .ok_or_else(|| {
+                                "the view does not show the body the outline was picked on"
+                                    .to_owned()
+                            })?;
+                        let spec = &view.placed.spec;
+                        let along = silhouettes::in_plane(spec, [b[0] - a[0], b[1] - a[1]]);
+                        let along = mitcad_vec3::unit(body_direction(&s.transform, along))
+                            .ok_or_else(|| "the outline has no length".to_owned())?;
+                        let ends: Vec<ViewPick> = [mitcad_vec3::scale(along, -1.0), along]
+                            .into_iter()
+                            .map(|toward| ViewPick {
+                                extreme: Some(toward),
+                                ..pick.clone()
+                            })
+                            .collect();
+                        let found = ends
+                            .iter()
+                            .map(|p| self.resolve_found(view, p))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        linear(ends, found)
                     }
                     Seen::Line(..) if has_length => {
                         // Its length: from its start to its end.
@@ -4825,6 +5216,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let mut more: Vec<(P2, ViewPick)> = Vec::new();
         for c in self.candidates(view) {
             if c.pick.point.is_some()
+                || c.pick.outline.is_some()
                 || c.pick.body != pick.body
                 || c.pick.path() != pick.path()
                 || c.pick.face.is_some() != pick.face.is_some()

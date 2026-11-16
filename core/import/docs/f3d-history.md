@@ -1099,7 +1099,12 @@ reached little of the design. Each cause and its fix, all general:
   every field after it was read 10 bytes early (the operation 0, the
   extents nonsense). It is read as `FromEntityStartDefinition` with the
   face and its `ProfileOffset`, which the face profiles' extrusions use
-  too. A curved start face (text engraved into a cylinder's side,
+  too. The two bytes after the selection are 0 and 1 after a face, 0 and
+  0 after a construction plane (mitcad#1904: such a cut read as an
+  unknown operation came in as the file's bodies, which replaced its body
+  after every earlier feature, so an edit before it changed nothing); the
+  selection is taken where they are 0 and 0 or 1 and the operation's code
+  after them is a known one. A curved start face (text engraved into a cylinder's side,
   mitcad#1848) replays as the extrusion from that face: the profile
   projected onto it along the extrusion's direction, each side its
   distance from there; before, the kernel refused a face that is not

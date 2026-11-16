@@ -363,6 +363,30 @@ public:
   }
   NavigationSettings chosen() const { return m_settings; }
   std::function<void()> changed;
+  // The 3D mouse's Lock rotation and buttons as changed outside the page
+  // (mitcad#1910: Lock Rotation's command, a device's default button): the
+  // check box and the button choices show them, without a change of the
+  // page's own.
+  void followSpaceMouse(const SpaceMouseSettings& live) {
+    m_settings.spaceMouse.lockRotation = live.lockRotation;
+    m_settings.spaceMouse.buttons = live.buttons;
+    if (auto* lock = findChild<QCheckBox*>(QStringLiteral("navigationSpaceMouseLockRotation"))) {
+      const QSignalBlocker blocker(lock);
+      lock->setChecked(live.lockRotation);
+    }
+    for (int row = 0; row < 32; ++row) {
+      auto* command = findChild<QComboBox*>(QStringLiteral("navigationSpaceMouseButton%1").arg(row));
+      if (command == nullptr) {
+        break;
+      }
+      const QSignalBlocker blocker(command);
+      const QString bound = live.buttons.value(row);
+      if (!bound.isEmpty() && command->findData(bound) < 0) {
+        command->addItem(bound, bound); // as the page keeps a command its list does not offer
+      }
+      command->setCurrentIndex(std::max(0, command->findData(bound)));
+    }
+  }
 protected:
   void showEvent(QShowEvent* event) override {
     QWidget::showEvent(event);
@@ -484,7 +508,8 @@ private:
   }
   // The 3D mouse's tab (mitcad#951): on or off, its speed, its Navigation
   // mode, each axis on and reversed, the locks, the dominant axis, its
-  // Lock horizon (mitcad#978) and its buttons' commands.
+  // Lock horizon (mitcad#978), the cross-talk filter (mitcad#1720) and its
+  // buttons' commands.
   void addSpaceMouse(QVBoxLayout* layout) {
     auto* group = new QWidget;
     group->setObjectName(QStringLiteral("navigationSpaceMouse"));
@@ -587,10 +612,34 @@ private:
     };
     lock(0, 0, tr("Lock rotation"), "navigationSpaceMouseLockRotation", &SpaceMouseSettings::lockRotation);
     lock(0, 1, tr("Lock translation"), "navigationSpaceMouseLockTranslation", &SpaceMouseSettings::lockTranslation);
-    lock(1, 0, tr("Dominant axis only"), "navigationSpaceMouseDominant", &SpaceMouseSettings::dominantAxis);
+    auto* dominant =
+        lock(1, 0, tr("Dominant axis only"), "navigationSpaceMouseDominant", &SpaceMouseSettings::dominantAxis);
+    // The axis is held until the cap is released (mitcad#1720).
+    dominant->setToolTip(tr("Only the axis moved most moves the view, and it stays the same until the 3D mouse is "
+                            "released"));
     lock(1, 1, tr("Lock horizon"), "navigationSpaceMouseLockHorizon", &SpaceMouseSettings::lockHorizon)
         ->setToolTip(tr("Keeps Z upright and the view level; the roll axis does nothing"));
     box->addLayout(locks);
+    // The cross-talk filter (mitcad#1720): Off, or the share of the
+    // strongest axis below which an axis does nothing. Dominant axis only
+    // keeps one axis anyway, so the filter waits while it is on.
+    auto* crossTalkForm = new QFormLayout;
+    auto* crossTalk = new QSpinBox;
+    crossTalk->setObjectName(QStringLiteral("navigationSpaceMouseCrossTalk"));
+    crossTalk->setRange(0, kSpaceMouseCrossTalkMax);
+    crossTalk->setSingleStep(5);
+    crossTalk->setSuffix(QStringLiteral(" %"));
+    crossTalk->setSpecialValueText(tr("Off"));
+    crossTalk->setValue(sanitizeSpaceMouseCrossTalk(m_settings.spaceMouse.crossTalk));
+    crossTalk->setToolTip(tr("An axis moved less than this share of the most moved axis does not move the view"));
+    crossTalk->setEnabled(!m_settings.spaceMouse.dominantAxis);
+    crossTalkForm->addRow(tr("Ignore weaker axes:"), crossTalk);
+    box->addLayout(crossTalkForm);
+    connect(crossTalk, &QSpinBox::valueChanged, this, [this](int percent) {
+      m_settings.spaceMouse.crossTalk = percent;
+      notify();
+    });
+    connect(dominant, &QCheckBox::toggled, crossTalk, [crossTalk](bool only) { crossTalk->setEnabled(!only); });
     // The buttons the device has, at least two, and those bound before.
     const int rows = std::clamp(std::max({2, int(m_settings.spaceMouse.buttons.size()), spaceMouseStatus().buttonsSeen}),
                                 2, 32);

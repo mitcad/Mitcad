@@ -189,4 +189,20 @@ rust::Vec<rust::String> shape_infos(const geometry::Shape& shape) {
   return infos;
 }
 
+rust::Vec<rust::String> shape_remarks(const geometry::Shape& shape) {
+  rust::Vec<rust::String> remarks;
+  for (const std::string& remark : shape.remarks()) {
+    remarks.push_back(rust::String(remark));
+  }
+  return remarks;
+}
+
+rust::Vec<rust::String> shape_remark_places(const geometry::Shape& shape) {
+  rust::Vec<rust::String> places;
+  for (const std::vector<geometry::Shape::NotePlace>& remark : shape.remark_places()) {
+    places.push_back(rust::String(places_json(remark)));
+  }
+  return places;
+}
+
 } // namespace mitcad::bridge

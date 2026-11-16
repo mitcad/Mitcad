@@ -23,6 +23,8 @@
 //! - [`memory_guard`]: what the memory guard's measurements tell an
 //!   import's progress, measured as often and looking ahead as the guard
 //!   of model commands (mitcad#1505).
+//! - [`report_status`]: the status of every row of an import's report and
+//!   the verdict, and the notes in plain words (mitcad#1893).
 
 pub mod body_scope;
 pub mod geom;
@@ -52,3 +54,7 @@ pub use memory_guard::ImportMemoryGuard;
 /// the replay's geometry may be from the file's where no exact result is
 /// (`mitcad_import::Options::geometric_tolerance`).
 pub const DEFAULT_GEOMETRIC_TOLERANCE: f64 = 0.01;
+
+// The status of every row of an import's report and its verdict, and the
+// notes in plain words (mitcad#1893).
+pub mod report_status;

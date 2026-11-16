@@ -225,6 +225,13 @@
             <numerusform>%n edits applied in this panel</numerusform>
         </translation>
     </message>
+    <message numerus="yes">
+        <source>Import %n files into this design as components, or each as a new design?</source>
+        <translation>
+            <numerusform>Import %n file into this design as a component, or as a new design?</numerusform>
+            <numerusform>Import %n files into this design as components, or each as a new design?</numerusform>
+        </translation>
+    </message>
 </context>
 <context>
     <name>Sketch3d</name>
@@ -282,6 +289,30 @@
         <translation>
             <numerusform>Profiles: %n region in the sketch plane</numerusform>
             <numerusform>Profiles: %n regions in the sketch plane</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>SyncState</name>
+    <message numerus="yes">
+        <source>Offline: changes are kept and sent later (%n version(s) waiting)</source>
+        <translation>
+            <numerusform>Offline: changes are kept and sent later (%n version waiting)</numerusform>
+            <numerusform>Offline: changes are kept and sent later (%n versions waiting)</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n version(s) to send, and newer ones on the server: Sync takes them</source>
+        <translation>
+            <numerusform>%n version to send, and newer ones on the server: Sync takes them</numerusform>
+            <numerusform>%n versions to send, and newer ones on the server: Sync takes them</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n version(s) waiting to be sent</source>
+        <translation>
+            <numerusform>%n version waiting to be sent</numerusform>
+            <numerusform>%n versions waiting to be sent</numerusform>
         </translation>
     </message>
 </context>
@@ -493,6 +524,16 @@
 <context>
     <name>mitcad::LockController</name>
     <message numerus="yes">
+        <source>Sending the versions of %1 before MitCad closes…
+What is not sent within %n second(s) is sent the next time the project opens.</source>
+        <translation>
+            <numerusform>Sending the versions of %1 before MitCad closes…
+What is not sent within %n second is sent the next time the project opens.</numerusform>
+            <numerusform>Sending the versions of %1 before MitCad closes…
+What is not sent within %n seconds is sent the next time the project opens.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Someone else holds the edit lock of %n file(s) whose versions Sync would send: %1.</source>
         <translation>
             <numerusform>Someone else holds the edit lock of %n file whose versions Sync would send: %1.</numerusform>
@@ -606,6 +647,20 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>Import %n files</source>
+        <translation>
+            <numerusform>Import %n file</numerusform>
+            <numerusform>Import %n files</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Imported %n files into this design.</source>
+        <translation>
+            <numerusform>Imported %n file into this design.</numerusform>
+            <numerusform>Imported %n files into this design.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Exported %1 (%n body(ies), %2).</source>
         <translation>
             <numerusform>Exported %1 (%n body, %2).</numerusform>
@@ -706,6 +761,16 @@
         <translation>
             <numerusform>%n newer version on the remote</numerusform>
             <numerusform>%n newer versions on the remote</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Sending the project&apos;s versions before MitCad closes…
+What is not sent within %n second(s) is sent the next time the project opens.</source>
+        <translation>
+            <numerusform>Sending the project&apos;s versions before MitCad closes…
+What is not sent within %n second is sent the next time the project opens.</numerusform>
+            <numerusform>Sending the project&apos;s versions before MitCad closes…
+What is not sent within %n seconds is sent the next time the project opens.</numerusform>
         </translation>
     </message>
     <message numerus="yes">

@@ -37,7 +37,7 @@ Fv's edge. E vanishes.
   surfaces.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 64a188b..dc5de34 100644
+index 64a188b6..dc5de34d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -1875,7 +1875,11 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
@@ -54,7 +54,7 @@ index 64a188b..dc5de34 100644
              PerformMoreSurfdata(Index);
              // PerformMoreSurfdata returns without a corner where the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 24bd712..ae0ca00 100644
+index 24bd7122..ae0ca00d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -830,6 +830,11 @@ private:
@@ -70,13 +70,13 @@ index 24bd712..ae0ca00 100644
  
    Standard_EXPORT bool FindFace(const TopoDS_Vertex&      V,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 2788ff6..26d1498 100644
+index c8e84170..b4c4d052 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -38,6 +38,10 @@
- #include <NCollection_List.hxx>
+@@ -39,6 +39,10 @@
  #include <ChFiDS_Map.hxx>
  #include <ChFiDS_Spine.hxx>
+ #include <ChFiDS_ChamfSpine.hxx>
 +#include <ChFiDS_FilSpine.hxx>
 +#include <Geom_Ellipse.hxx>
 +#include <GeomAdaptor_Curve.hxx>
@@ -84,7 +84,7 @@ index 2788ff6..26d1498 100644
  #include <ElCLib.hxx>
  #include <Extrema_ExtCC.hxx>
  #include <Extrema_ExtPC.hxx>
-@@ -2871,6 +2875,466 @@ static bool ProlongOnSameEdge(TopOpeBRepDS_DataStructure& DStr,
+@@ -2872,6 +2876,466 @@ static bool ProlongOnSameEdge(TopOpeBRepDS_DataStructure& DStr,
    return true;
  }
  

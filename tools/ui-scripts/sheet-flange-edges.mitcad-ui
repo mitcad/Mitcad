@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: MIT
+# A Flange on several edges with mitred corners (mitcad#1872, GitHub
+# mitcad/Mitcad#337; app/COMMANDS.md "Flange"), on sheet-flange-edges.json
+# (the 40 x 30 sheet F3.b0 of Sketch1 F2, t = 1):
+#   1. Flange; the side faces y = 0, x = 40 and y = 30 picked into its
+#      Edge input: Miter, Own Corner Gap and Corners are shown, Hem,
+#      Corner and Width hidden.
+#   2. Own Corner Gap on, Corner Gap 1 mm, Position Inside, Length 10 mm
+#      (tangent): the preview is ok.
+#   3. One corner's own Miter (mitcad#1877): Add Corner, the corner edge
+#      between the first two side faces picked into its row, its Miter
+#      Earlier Edge Runs Past: the preview is ok.
+#   4. A refusal's places (mitcad#1877): Corner Gap 0, where a wall runs
+#      past the other, is refused in words; the pointer over the panel's
+#      message paints the two walls that meet there and the corner, and
+#      leaving it takes them away. Corner Gap 1 mm again; OK adds one
+#      flange on the three edges.
+#   5. The flange edited from the timeline loads its three edges, its gap
+#      (Corner Gap shown) and its corner's own Miter (a Corners row); Esc
+#      cancels.
+# Run by tools/ui-sheet-flange-edges-test.sh (Linux, which also checks the
+# body's volume, 2267.5253779686504 mm3 as cli.sheet_flange_edges gives
+# for that corner's own miter) and tools/ui-windows-sheet-flange-edges-test.ps1.
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+
+# 1. A new Flange on three edges.
+mark
+command sheet.flange
+wait-log '^Pick places:' 30
+wait-idle
+click-pick 'face F3[.]b0/F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c1[[]c4,c2[]][)][)] at'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)] at'
+wait-log '^Panel Flange input miter at (?!.*[(]hidden[)])' 30
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c3[[]c2,c4[]][)][)] at'
+wait-log '^Preview Flange: ok' 30
+wait-idle
+expect-ever '^Panel Flange input custom_gap at (?!.*[(]hidden[)])'
+expect-ever '^Panel Flange input corner_miters at (?!.*[(]hidden[)])'
+expect-ever '^Panel Flange input hem at .*[(]hidden[)]'
+expect-ever '^Panel Flange input width_type at .*[(]hidden[)]'
+
+# 2. The gap, the position and the length.
+mark
+click-logged '^Panel Flange input custom_gap at '
+wait-log '^Panel Flange input corner_gap at (?!.*[(]hidden[)])' 30
+wait-idle
+type-in '^Panel Flange input corner_gap at ' '1 mm'
+wait-idle
+qt-choice input_position 'Inside'
+wait-idle
+type-in '^Panel Flange input length at ' '10 mm'
+wait-log '^Preview Flange: ok' 60
+wait-idle
+
+# 3. One corner's own Miter: the corner of the first two edges.
+mark
+click-logged '^Panel Flange add corner_miters at '
+wait-log '^Flange: added corner_miters row 1$' 30
+wait-idle
+mark
+# The corner's vertex: under the preview the flange's walls cover the
+# corner edge itself, the vertex stays pickable. Which of its two ends (the
+# sheet's front or back) is clear of the preview's walls differs by
+# platform (the back one only on Windows); either names the same corner.
+click-pick 'vertex F3[.]b0/V[{]F3:sheet_(?:front|back)[(]0[)][|]F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c1[[]c4,c2[]][)][)][|]F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)][}]'
+wait-log '^Flange Corner: 1 ' 30
+wait-log '^Preview Flange: ok' 60
+wait-idle
+mark
+qt-choice input_corner_miters.0.miter 'Earlier Edge Runs Past'
+wait-log '^Flange: Miter = Earlier Edge Runs Past$' 30
+wait-log '^Preview Flange: ok' 60
+wait-idle
+
+# 4. Corner Gap 0 where a wall runs past: refused in words, its places
+# painted while the pointer is over the message.
+mark
+type-in '^Panel Flange input corner_gap at ' '0 mm'
+wait-log '^Panel Flange error: .*A corner where one wall runs past the other needs a Corner Gap above 0' 60
+wait-log '^Panel Flange message at ' 10
+wait-idle
+expect-never '^Panel Flange (error|message box): .*([EV][{]|sheet_side|sheet_curve)'
+mark
+hover-logged '^Panel Flange message at '
+wait-log '^Panel Flange message hovered: 3 places$' 10
+wait-log '^Notice hover highlighted: panel: face F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c1[[]c4,c2[]][)][)] of F3[.]b0, face F3:sheet_side[0-9]*[(]F2:sheet_curve[(]c2[[]c1,c3[]][)][)] of F3[.]b0, point .*[(][1-9][0-9]* drawn[)]$' 10
+mark
+leave-widget commandMessage
+wait-log '^Notice hover highlighted: none$' 10
+wait-idle
+mark
+type-in '^Panel Flange input corner_gap at ' '1 mm'
+wait-log '^Preview Flange: ok' 60
+wait-idle
+mark
+key Return
+wait-log '^Added flange on 3 edges, .*, 1 corner miters' 60
+wait-log '^Added Flange as F4$' 60
+wait-idle
+expect-never 'Failed features: [^n]'
+expect-ever '^Timeline SheetFlange1 at '
+
+# 5. Edited again: three edges, the gap and the corner's own Miter loaded.
+mark
+dblclick-logged '^Timeline SheetFlange1 at '
+wait-log '^Editing F4 with Flange$'
+wait-log '^Panel Flange input corner_gap at (?!.*[(]hidden[)])' 30
+wait-log '^Panel Flange input corner_miters[.]0[.]miter at (?!.*[(]hidden[)])' 30
+wait-idle
+mark
+key Escape
+wait-log '^Command Flange cancelled$'
+wait-idle

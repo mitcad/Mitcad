@@ -5,6 +5,7 @@
 // leave the process's memory under 50 MB more), waiting connections give
 // way to new ones without holding the clients' slots, and the token is
 // compared in constant time.
+#include "UnitTests.hpp"
 #include <cstdio>
 #include <vector>
 
@@ -232,3 +233,4 @@ int mcpEndpointLimitsTests() {
   ringTests();
   return failures;
 }
+MITCAD_UNIT_TEST(mcpEndpointLimitsTests);

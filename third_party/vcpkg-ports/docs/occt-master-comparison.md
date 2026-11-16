@@ -51,6 +51,297 @@ taking single fixes from upstream. Back to the [port's README](../README.md).
   0950 (0054, 0149, 0230, 0352, 1110, 1655, ...) need a new look if those
   two are dropped for upstream's fixes.
 
+## OCCT's own tests against the patches
+
+Part 1 of mitcad#1875 ran OCCT 8.0.1's own DRAW tests (blend, boolean,
+chamfer, fillet2d, offset, heal, lowalgos, pipe, evolved, thrusection,
+draft, sewing, mkface, feat, geometry and the bugs grids of modelling,
+healing, meshing and data; 15801 cases) and all its GTests (7553) once
+against stock 8.0.1 and once with the port's patches, same compiler and
+third-party pins. Without OCCT's separate test dataset 4158 cases ran.
+Every difference was traced to the first patch that brings it by
+bisecting over the patches in the portfile's order. The tests and the
+raw results are kept outside this repository; only the case names are
+given here.
+
+| Patch | Cases it breaks (pass on stock 8.0.1, fail with the patches) |
+|---|---|
+| 0100 | none on purpose (an intended change, below): offset/faces_type_i B4 B5 C2 D1 E8 E9 F1 F3 F4 F5 I5 J5 K6 M6 M8, offset/bugs bug5806, bugs/modalg_2 bug427_6, bugs/modalg_7 bug25939, bugs/modalg_8 bug31601 report "not done"; 14 cases with a known problem likewise (offset/faces_type_i A9 B6 C1 C5 C9 E7 F2 N1, bugs/modalg_2 bug5805_18 19 20 42 43 44) |
+| 0480 | none since mitcad#1879; its first form broke boolean/volumemaker C5 C6 E4 E6 F7 F8 G2 (wrong volumes) and made E5 worse: it joined parts of a line across a cone's seam |
+| 0350 | none since mitcad#1880 (draft/angle A2 B5 C3 C4 C5 F1, a draft after a fillet, failed until 0350 took the tangency whichever way the faces face; they now pass with stock's values) |
+| 1285 | none since mitcad#1881 (below): the GTests BCutSimpleTest1 K1 K5 K7 L1 of TKBO gave an empty cut |
+| 0075 | none on purpose (an intended change, below): blend/simple C8 D1 (area 1.4 % larger; the reference values are stock's blend, which is not the rolling ball) |
+| 0211 | none since mitcad#1883 (fixed): blend/simple H4, blend/buildevol D6 (invalid result) |
+| 0721 | none since mitcad#1883 (fixed): blend/simple H3 (invalid result), bugs/modalg_7 bug28828_16 (tolerance) |
+| 0153 | none on purpose since mitcad#1883 (fixed, then an intended change, below): bugs/moddata_1 bug119 (invalid result) |
+| 0620 | none since mitcad#1883 (fixed): blend/simple H9 (no result); blend/buildevol D8 and blend/simple H8 worse; with the dataset also chamfers, none since mitcad#1901 (below) |
+| 0771 | none since mitcad#1883 (fixed): blend/bfuseblend B7 |
+
+**0100's cases are an intended change (mitcad#1878).** In all 19 of
+them and the 14 known problems, stock 8.0.1's offset fails, and
+`BRepOffset_MakeOffset::MakeThickSolid` then returns the input body
+unchanged as a done thick solid: the result
+has the input's faces and volume (the 14 known-problem cases with some
+faces reversed). The cases' reference values are that body's (B4's
+235.619 is the cone's own volume, I5's 589.049 the cylinder's). 0100
+reports such a thick solid as not done instead (its last paragraph), and
+MitCad's `geometry/tests/test_shell_vanishing.cpp` checks that it does.
+0100's own part, the faces whose offset vanishes (`FindVanishingFaces`),
+marks no face in any of them; without the not-done check the patched
+offset returns exactly stock's results in all of them. bug31601 checks
+only that the offset does not crash, which still holds.
+
+**0075's cases are an intended change (mitcad#1882).** C8 and D1 round
+three edges of a quarter cone with its apex (radius 10): its axis edge
+between the two cut planes, its base or apex arc, and a cone line between
+the cone and a cut plane. The blend along the cone line is walked
+(`BlendFunc_ConstRad`). Measured at about 1700 points of each rounding
+face: the ball's centre (the point moved by the radius along the face's
+normal) lies at the radius from both faces the edge joins within 0.000017
+with the patch; stock's is off by up to 0.052 (C8) and 3.4 (D1), mean
+0.004 and 0.1. With the patch the three balls meet in one at the vertex
+where the three edges meet, and the corner there is an exact sphere at the
+radius from all three faces; stock's sections do not meet there, and its
+corner is a filling surface. The added area is that corner's and the
+cone-line roundings' with the faces beside them, whose contacts moved:
+of C8's 141, the corner 103 and its two cone-line roundings 40; of D1's
+136, the corner 15, the rounding 59 and the cut plane beside it 57. C2 and C6 (a truncated cone, two of the 27 cases below)
+show the same with smaller numbers: stock 0.0016 and 0.0010 off, the patch
+0.000002. The cases' reference values are stock's blend; making them pass
+would bring back sections that are not the rolling ball, which 0075 fixes
+and `geometry/tests/test_fillet_rolling_ball.cpp` checks.
+**1285's GTests were a fault of the patch, fixed (mitcad#1881).** The
+four GTests translate the DRAW cases' profile plane `p 0 0 -1 1 0 0`
+(normal -z) as a plane of normal x, so their last tool is a rectangle
+swept within its own plane: a flat shell of volume 0 touching the block
+along an edge. Stock 8.0.1 rejects the block's point in that plane and
+counts it outside, leaving the block unchanged (area 95000, within the
+GTests' 5000 of the DRAW cases' 97000). 1285 classified the point along
+its fixed lines, all of them in the plane (the tool's box is flat), and
+took the transition across an edge met there, which counted the point
+inside the tool: the cut came out empty. A fixed line through an edge is
+now passed over, as the patch meant to; the four pass with the block
+unchanged, as on stock.
+
+**0211, 0721, 0153, 0620 and 0771 corrected (mitcad#1883).** Each case
+was run on stock 8.0.1, on the patched build and on the corrected one;
+the corrected port passes all of them but bug119, and no other case
+changes (the DRAW scope and all GTests run again against the patched
+results: we break 0; the two "changed" cases, boolean/periodicity A2 and
+offset/shape_type_a A4, list the same values in another order).
+
+- 0211 moved the second point on the face at a rounding's end by a period
+  on any periodic surface. H4 and D6 round a 270-degree revolve's axis edge
+  (concave) up to the pole of an ellipse's surface of revolution, whose
+  face covers 270 degrees only: no seam, and the point moved off the face.
+  Now only on a face going round the whole period; H4 and D6 are stock's
+  again (valid; OCCT's corner at the pole leaves the volume below the
+  unrounded body's, as on stock).
+- 0721 continued the ellipse edge's own curve past the pole (H3: the
+  meridian with the end plane, rounded with the rim and the cone's edge),
+  its p-curve on the surface of revolution past the meridian's range, and
+  took the pole's point on that face a period away: now neither (a p-curve
+  end outside a non-periodic parameter range refuses the continuation; one
+  period only on a face round the whole period); H3 valid, area as stock's.
+  bug28828_16 (a throat chamfer whose ends' prolongations run along a
+  circle): the circle's p-curve was made a B-spline of another
+  parametrization, the edges' tolerance 1.5e-4 against the case's 1e-4;
+  a p-curve with the 3d curve's range is now kept, tolerance 8.7e-5
+  (stock 1e-4).
+- 0620 took, beside a cone's apex at the spine's start (H9), the first
+  section's contact on the cone's base edge round the far side, 280 from
+  the spine, for an edge the ball rolls on before the end; a contact more
+  than ten radii from the spine's point is no longer taken. H9 passes; H8
+  and D8 are OCCT's known problem again, as on stock.
+- 0771 stopped the contour at every vertex where the faces come tangent
+  within the angular tolerance (0.01 rad). B7's crossing cylinders, axes
+  1e-3 apart, cross at 0.008 rad there and the rounding failed; the
+  contour now stops only within 5e-4 rad, the width at which 0771's own
+  walk into a vanishing end stops (MitCad's case: within 7e-5). B7 passes.
+- 0153 (its pair rule as 0270 has it): bug119 rounds a box 100 wide on its
+  top's two edges and two vertical edges at their ends with 50: a full
+  round. Stock throws, which the case's first step accepts. The patch built
+  an invalid body (the corners with the vertical roundings round the top
+  that vanishes); the pair is now not recorded where another rounding
+  reaches a vertex of the two edges, and the body is valid, its volume
+  809366.2 the full round and the vertical roundings cut by each other
+  (809366.23 integrated apart). **The case still fails, on purpose:** with
+  a result, its second step rounds the edges result_1_20, result_1_22 and
+  result_1_10, and the correct body has 19 edges. Stock passes only by
+  failing the first rounding.
+
+MitCad's `geometry/tests/test_fillet_occt_cases.cpp` builds these bodies
+with OCCT alone (its own geometry, not OCCT's scripts) and fails with the
+patches as they were.
+
+The patches fix bugs/modalg_7 bug25478_1 and bug25478_2 (0014, which
+upstream fixed after 8.0.1) and bug28119_1. 33 cases pass on both with
+other values: 27 blends from 0075 (relative 2e-6 to 4e-3, the rolling
+ball), boolean/bopcut_simple ZL1 and boolean/boptuc_simple ZK9 (0480's
+first form; the same values as stock since mitcad#1879),
+boolean/periodicity A2 (0006) and offset/shape_type_a A4 (0750). A2's
+values are those of stock in another order (its six faces generated from
+the top face, each with the same area and centre of gravity), and A4's
+result is the same (volume 2462.04, the same three faces of areas 754.17,
+55.93 and 238.84): only the order in which their faces are listed changed,
+the order of shapes taken from OCCT's maps, so the first face's area A4's
+log prints went from 754.17 to 238.84 (mitcad#1879's TKGeomAlgo, changed
+only in GeomInt_LineConstructor, gave both a third order of the same
+values). With 0480's present form, pipe/bugs bug24909_2, a known problem on
+stock too, ends in a plain "Not Done" instead of an exception, which its
+optional `TODO` lines count as a pass.
+
+### The run over OCCT's dataset
+
+The same comparison was run again over OCCT's published test dataset
+(7.9.0) and the source archive's data, with the port as of mitcad#1883 (dev
+b0bbea69c): 10376 of the 15801 cases ran (the other 5425 read data files the
+dataset does not hold). Stock passes 9932, the patched build 9872. Every
+break below failed again on a second run and was traced to its patch by
+bisecting; 23 cases give other values on two runs of the same build, stock
+included (boolean/periodicity A2 and offset/shape_type_a A4 among them), so
+their differences are not the patches'. All GTests pass on both (7549, 4
+skipped).
+
+| Patch | Cases it breaks with the dataset | Ticket |
+|---|---|---|
+| 0100 | the 19 above and bugs/modalg_2 bug5805_3 bug5805_4, bug31845_f bug31845_i, offset/compshape A1 A4, offset/shape A1: stock's "done" result is the input body (the same intended change) | mitcad#1878 |
+| 0075 | blend/simple C8 D1 (above) | mitcad#1882 |
+| 0153 | bugs/moddata_1 bug119 (above) | mitcad#1883 |
+| 0671 | none since mitcad#1898 (fixed, below): chamfer/dist_angle_sequence A1 A6 A8 C2, dist_dist_sequence A1 C2, equal_dist_sequence A1 A4 C2, bugs/moddata_2 bug354_2 | mitcad#1898 |
+| 0055 | none since mitcad#1900 (fixed, below): blend/simple S1 T1 T4 T7 U4 | mitcad#1900 |
+| 1661-1666 | none since mitcad#1899 (fixed, below): pipe/specific H4 H6 I5 I7 J6 J8 (1661), Z5 Z7 ZA8 ZB1 ZC2 ZC4 (1666, other face counts), bug32444 (1661), bug1477_11 (1666), bug32445 bug32807 (1664), bug1477_9 bug1477_10 (1663), bug32447_1 (1662) | mitcad#1899 |
+| 0620 | none since mitcad#1901 (fixed, below): chamfer/dist_angle_sequence B3 B4, equal_dist_sequence B3 (and no result for dist_dist B7, equal_dist B5 B7 where stock's was invalid) | mitcad#1901 |
+| 0025, 0057, 0074, 0077, 0593, 1601 | none since mitcad#1902 (fixed, below): bug32929, blend/simple S7, blend/encoderegularity A1, blend/complex B4, buc60555_3, boolean/bcutblend A1 | mitcad#1902 |
+| 0170 | blend/complex A6 (open, below) | mitcad#1902 |
+| 0026, 0281, 1090 | none worse than stock since mitcad#1902 (below): chamfer dist_dist and equal_dist_sequence B9, the three sequences' A5 (failing on stock too) | mitcad#1902 |
+
+Seven cases fail on both but now give a valid result where stock fails
+(blend/complex A7 and B2, blend/simple Q3 Q8 U7 W7, bug602): they report a
+failure only because 8.0.1's scripts expect no result. Six more pass with
+the patches only (bug25206, bug27711_2, bug28354, bug32931, chamfer
+dist_angle B6, pipe bug24909_2).
+
+**0671 and 0620 corrected for chamfers (mitcad#1898, mitcad#1901).**
+
+- 0671 cut a chamfer's end by a chain of faces beyond wherever the
+  contact on one face left it near the end. In the sequence cases the
+  contact leaves its face at the end's section itself (a box's corner,
+  the face at the end meeting the edge there), and in bug354_2 already
+  along the edge before the end edge (a spine of several edges, 0.25 before
+  its last edge's start). Now only where the contact leaves its face
+  inside the end edge's own range, more than 1 % of the chamfer's width
+  from both of its ends, as in the thread groove the patch was written for
+  (0.8 of the edge's length 2 from each end). A1 A4 A6 A8 C2 of the three
+  sequences and bug354_2 give stock's values again (A4's two extra
+  vertices are gone).
+- 0620 took a contact leaving its face before the spine's end for an edge
+  to roll on in chamfers too. A chamfer has no piece that rolls on an edge
+  (ChFi3d_ChBuilder's PerformSurf on an arc is not implemented), so the
+  stripe was left with no next piece; the contacts were near (0.04 to 0.08
+  from the spine, the chamfer 0.08), so mitcad#1883's ten radii did not
+  apply. 0620 now leaves chamfers out. dist_angle B3 B4 and equal_dist B3
+  pass with stock's values; equal_dist B5 B7 fail as on stock (OCCT's
+  known problem, the same values); dist_dist B7 fails as on stock with
+  the same masses and one edge fewer (19 for 20).
+- equal_dist_sequence A5 is no longer "not done": it is invalid as on
+  stock (OCCT's known problem), with 8 faulty sub-shapes for stock's 10,
+  as dist_angle and dist_dist A5 are (0281, mitcad#1902).
+
+The chamfer and blend groups run again against the dataset run's patched
+results: we break 0, we fix 12 (the cases above), and against stock the
+only breaks left in them are the blends of other tickets.
+**0055, 0025, 0074, 0077, 0593 and 1601 corrected (mitcad#1900, mitcad#1902).**
+
+- 0055 filled the gaps of a rounding whose contact runs into a face that
+  rises from the contact's face (a box's edge rounded past a cylinder
+  standing out of its front face, S1 T1 T4 T7 U4, and through 0057 S7): T7
+  lost the cylinder (-7.2 % in area), the others were invalid. The gap is
+  now filled only where that face falls away (their edge convex: a hole, a
+  cut-out); a rounding into a boss or lug keeps OCCT's handling, a chamfer
+  is still cut (teeth on a flange's top). The six give stock's values again.
+  Q6 (+0.15 %), R8 and S2 (+0.03 %) keep 0055's cut over a cut-out of their
+  face, the case it was written for (intended); the other changed results
+  of the dataset run (R9 S3 S6 S9 T3 T6 U6 X3, up to 0.011 %) do not come
+  from 0055 (the same with its gap filling switched off).
+- 0025 prolonged the faces' common boundary from the vertex itself where the
+  fillet crossed a line edge 1 behind it (bug32929: two solids). Now only
+  beyond the edge's far end; bug32929 passes.
+- 0074's walk past the stripe's end, failing, left the builder's `done`
+  false and the whole fillet failed (encoderegularity A1). It is restored
+  after the walk; A1 passes.
+- 0077 cut the walk past the spine's end where the contacts ran twice as
+  fast, though the line went on regular (B4: up to 73 times, no tangency
+  point); the cut extension missed the faces at the end (area 678 for 9856).
+  Now only where the line runs on into a near-singular section (a thousand
+  times as fast, or a tangency point), or where the part kept still runs
+  past the end by more than twice the section's width (B4's cut kept less
+  than half of it; a design's chamfer, kept whole, made a later rounding
+  along its edges fail); B4 passes. MitCad's three walks that need the cut
+  reach 2065 to 3.7e8 times.
+- 0593 spread its at most 1001 grid parameters evenly over the range; a
+  curve of 206 knots nearly all in a hundredth of its range lost its detail
+  and the half-space of buc60555_3 came out on the wrong side (empty). Now
+  every k-th of the knot-following parameters; buc60555_3 passes.
+- 1601 joined two stripes at a box's corner of bcutblend A1 because its
+  test of B's edges past the section passed with no such edge (invalid
+  result). It now needs at least one; A1 passes.
+
+The blend, chamfer and boolean groups run again against the dataset run's
+patched results: we break 0, we fix 9 (B4, encoderegularity A1, S1 S7 T1 T4
+T7 U4, bcutblend A1); bug32929 and buc60555_3 pass in their own runs.
+
+**The chamfer sequences B9 and A5 (0026, 0281, 1090; mitcad#1902).** Both
+fail on stock too (OCC22909); ours were worse, traced by bisecting over the
+patches:
+
+- 0026 cut a chamfer's OnSame end by several faces as it does a rounding's:
+  B9 (dist_dist, equal_dist) gave no result where stock's is invalid. It
+  now does so for roundings only. (dist_angle_sequence B6, which the
+  patches alone had made valid, is invalid again through the same change,
+  with 2 faulty sub-shapes for stock's 4.)
+- 1090 then left a corner's sharp edge without a limit where neither common
+  point lies on it, and a step of equal_dist B9 failed; there OCCT's choice
+  is kept. B9 gives stock's results again (8 and 4 faulty sub-shapes).
+- 0281 took the common edge at the walk's vertex for chamfers too: A5's
+  corners came out with more faulty sub-shapes (dist_angle 8 or 12 for
+  stock's 6) or invalid where stock's is valid (dist_dist). A chamfer keeps
+  OCCT's first common edge: A5 fails one step as on stock, with 4, 0 and 8
+  faulty sub-shapes for stock's 6, 0 and 10.
+
+With these (and mitcad#1898/#1901 merged), the blend, chamfer and boolean
+groups against the dataset run's patched results: we fix 21, the one break
+being B6 above; MitCad's geometry tests pass (170).
+
+**Left open (mitcad#1902).**
+
+- blend/complex A6 (0170) fails at scale 10 of its five scales: the walk of
+  the blend rolling on two edges takes not one step (each step too large,
+  down to the guide's tolerance) from where 0170's rolling-ball inverse
+  function (`BRepBlend_SurfCurvConstRadInv`) ended the surface/edge piece;
+  with OCCT's equations in that inverse function alone, A6 passes at all
+  five scales, but eight of MitCad's geometry tests then give no fillet
+  (fillet_overflow, fillet_rolling_ball, fillet_corners, dressup_takes_face,
+  fillet_lens_overflow, fillet_rolled_end_cut, fillet_fin_end_strips,
+  fillet_end_edge_turn). Without 0170's rolling ball, pivot and inverse,
+  thirteen fail. No narrower condition was found.
+
+**1661 to 1666 corrected for OCCT's pipes (mitcad#1899).** Each now acts
+only where OCCT's own route fails or does not apply: 1661 ends a seam at
+its crossing with the other side only where the two crossings are
+distinct vertices near the bisector plane, and compares a section edge's
+ends in 3D only where OCCT's comparison on the face finds neither; 1662
+no longer changes `SetTransitionMode`'s default but adds
+`SetTransitionMode(Mode, theAngleMin)`, which MitCad's pipes and surface
+sweeps call with 1e-4 rad for mitred corners; 1663 and 1666 refuse the
+cut along the bisector plane where it throws; 1664 extends the sides as
+OCCT does at a corner between lines and circles of the path; 1666 refuses
+a round's turn only where the second side's end lies a tenth of its
+extent off the turned first. All 19 cases give stock's status and values
+again (the details: [pipe-corners-1661.md](pipe-corners-1661.md#occts-own-tests-mitcad1899)).
+The groups pipe, evolved, thrusection and draft against the dataset
+run's patched results: we break 0, we fix 13; against stock no breaks.
+
 ## The patches
 
 | Patch | Title | Class | Upstream reference or reason |

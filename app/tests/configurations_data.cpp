@@ -7,6 +7,7 @@
 // table and an option's values from a column (mitcad#849); a closed
 // table's parameter columns added and removed (mitcad#999); Add Option on a
 // closed table, the rows CSV's commands and a pasted block (mitcad#1044).
+#include "UnitTests.hpp"
 #include "browser/ConfigurationsData.hpp"
 
 #include <cstdio>
@@ -527,3 +528,4 @@ int configurationsDataTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(configurationsDataTests);

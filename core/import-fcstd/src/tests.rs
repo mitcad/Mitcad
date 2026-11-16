@@ -8971,3 +8971,103 @@ fn a_joint_on_a_face_of_a_body_in_a_linked_part_follows_a_face_on_its_surface() 
     // The parts where the file places them: 5 mm apart along z.
     assert_eq!(number(&doc, &def["offset"]), -5.0, "{def}");
 }
+
+#[test]
+fn a_coordinate_system_s_driven_offset_moves_the_sketch_on_its_plane() {
+    // (mitcad#1930) A bend's profile sketch lies on the XZ plane of a
+    // local coordinate system whose attachment offset along x is
+    // `-VarSet.Radius`: the sketch's place on its plane is that
+    // expression, so a new radius moves the profile with it.
+    let xml = document(&[
+        (
+            "App::VarSet",
+            "VarSet",
+            variable("Radius", "Length", "<Float value=\"45\"/>"),
+        ),
+        (
+            "Part::LocalCoordinateSystem",
+            "LCS",
+            format!(
+                "{}{}{}{}",
+                links("OriginFeatures", "App::PropertyLinkList", &["XZ_Plane001"]),
+                named_placement("AttachmentOffset", [-45.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                placement([-45.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+                expressions(&[(".AttachmentOffset.Base.x", "-VarSet.Radius")])
+            ),
+        ),
+        (
+            "App::Plane",
+            "XZ_Plane001",
+            format!(
+                "{}{}",
+                prop(
+                    "Role",
+                    "App::PropertyString",
+                    "<String value=\"XZ_Plane\"/>",
+                ),
+                placement([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 90.0)
+            ),
+        ),
+        (
+            "Sketcher::SketchObject",
+            "Profile",
+            format!(
+                "{}{}{}{}",
+                prop(
+                    "AttachmentSupport",
+                    "App::PropertyLinkSubList",
+                    "<LinkSubList count=\"1\"><Link obj=\"LCS\" sub=\"XZ_Plane001\"/></LinkSubList>"
+                ),
+                enumeration("MapMode", 5),
+                geometry(&[segment([0.0, 0.0], [5.0, 0.0], false)]),
+                placement([-45.0, 0.0, 0.0], [1.0, 0.0, 0.0], 90.0)
+            ),
+        ),
+    ]);
+    let file = fcstd(&xml, None, &[]);
+    let (mut doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    // The offset's expression is carried, by the sketch.
+    let row = expression_row(&report, "LCS", ".AttachmentOffset.Base.x");
+    assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
+    let sketch = report
+        .sketches
+        .iter()
+        .find(|s| s.object == "Profile")
+        .unwrap();
+    assert!(
+        sketch
+            .notes
+            .iter()
+            .any(|n| n.contains("by its coordinate system's attachment offset")),
+        "{sketch:?}"
+    );
+    let def = sketch_def(&doc, &report, "Profile");
+    assert_eq!(def["plane"], "xz", "{def}");
+    let x = &def["placement"]["x"];
+    assert_eq!(number(&doc, x), -45.0, "{def}");
+    let id = doc.parameters().find(x.as_str().unwrap()).unwrap();
+    assert!(
+        doc.parameters()
+            .get(id)
+            .unwrap()
+            .expression()
+            .contains("Radius"),
+        "{def}"
+    );
+    assert!(def["placement"].get("y").is_none(), "{def}");
+    assert!(def["placement"].get("offset").is_none(), "{def}");
+    let uid = feature_uid(sketch.feature.as_deref().unwrap());
+    let near = |a: [f64; 3], b: [f64; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6);
+    let frame = doc.sketch_output(uid).unwrap().frame;
+    assert!(near(frame.origin, [-45.0, 0.0, 0.0]), "{frame:?}");
+    assert!(near(frame.x_axis, [1.0, 0.0, 0.0]), "{frame:?}");
+    assert!(near(frame.y_axis, [0.0, 0.0, 1.0]), "{frame:?}");
+
+    // A new radius moves it along x, on the same plane.
+    doc.set_parameter_expression("Radius", "50 mm", None)
+        .unwrap();
+    assert!(doc.status(uid).and_then(|s| s.error()).is_none());
+    let frame = doc.sketch_output(uid).unwrap().frame;
+    assert!(near(frame.origin, [-50.0, 0.0, 0.0]), "{frame:?}");
+    assert!(near(frame.y_axis, [0.0, 0.0, 1.0]), "{frame:?}");
+}

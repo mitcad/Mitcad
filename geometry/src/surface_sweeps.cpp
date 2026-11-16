@@ -187,7 +187,8 @@ TopoDS_Shape pipe_of(const ChainWire& chain, const TopoDS_Wire& spine, const Pat
       pipe.SetMode(false);
     }
   }
-  pipe.SetTransitionMode(BRepBuilderAPI_RightCorner);
+  // Mitred from a turn of 1e-4 rad on, as the pipes' mitres (port patch 1662).
+  pipe.SetTransitionMode(BRepBuilderAPI_RightCorner, 1.0e-4);
   pipe.Add(chain.wire, false, false);
   detail::build(pipe);
   if (!pipe.IsDone()) {

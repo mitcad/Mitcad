@@ -2455,9 +2455,9 @@ fn ui_command_lists_the_commands_and_the_descriptions_say_how_ids_are_found() {
         .as_str()
         .unwrap();
     assert!(model_command.contains("points, curves and texts share one numbering"));
-    assert!(model_command.contains(
-        "do not guess the ids a command earlier in the same model_command array will make"
-    ));
+    // An array's entries refer to earlier results by name (mitcad#1897).
+    assert!(model_command.contains("never predict them"));
+    assert!(model_command.contains("a later entry takes its result with {\"ref\": \"l1.end\"}"));
     assert!(!model_command.contains("ui_command"));
 }
 
@@ -2533,7 +2533,9 @@ fn the_instructions_arrive_whole_and_the_moved_rules_are_in_their_tools() {
     let moved = [
         // How a sketch's ids are given out (mitcad#1269).
         "model_command: points, curves and texts share one numbering",
-        "model_command: do not guess the ids a command earlier in the same model_command array",
+        "model_command: never predict them",
+        // References between an array's entries (mitcad#1897).
+        "model_command: a later entry takes its result with {\"ref\"",
         "model_command: A point input [x, y] is always a new point",
         "model_command: hold the two ends together afterwards with a coincident constraint",
         // How the application's command ids are found (mitcad#1269).
@@ -2845,7 +2847,7 @@ fn model_render_takes_an_overlay() {
 }
 
 /// A model refusal with its places (mitcad#1612): agents read its detail,
-/// with the names, in place of the plain message, and its places.
+/// with the names, beside the plain message (mitcad#1897), and its places.
 #[test]
 fn a_refusal_s_tail_becomes_its_detail_and_places() {
     let tail = r#"{"message":"an edge is listed more than once","detail":"edge E{F2:a|F2:b} is listed more than once","places":[{"kind":"edge","name":"E{F2:a|F2:b}"}]}"#;
@@ -2862,6 +2864,10 @@ fn a_refusal_s_tail_becomes_its_detail_and_places() {
     let error = tool_error(text);
     assert_eq!(
         error["structuredContent"]["error"],
+        "commands[1]: an edge is listed more than once"
+    );
+    assert_eq!(
+        error["structuredContent"]["error_detail"],
         "commands[1]: edge E{F2:a|F2:b} is listed more than once"
     );
     assert_eq!(error["structuredContent"]["places"][0]["kind"], "edge");
@@ -2977,4 +2983,266 @@ fn live_input_tools_only_where_the_application_allows_them() {
             .iter()
             .all(|name| !input.contains(&name.as_str()))
     );
+}
+
+/// `model_render`'s line art (mitcad#1736): `format` and `hidden_edges` in
+/// both servers' schemas, and an SVG answer stays text with the SVG in
+/// structuredContent (no image block).
+#[test]
+fn model_render_answers_line_art_as_text() {
+    for tools in [catalog::tools(), catalog::live_tools()] {
+        let render = tools.iter().find(|t| t["name"] == "model_render").unwrap();
+        let properties = &render["inputSchema"]["properties"];
+        assert_eq!(properties["format"]["enum"], json!(["png", "svg"]));
+        assert_eq!(properties["hidden_edges"]["type"], "boolean");
+        assert!(
+            render["description"]
+                .as_str()
+                .unwrap()
+                .contains("format svg")
+        );
+    }
+    let mut session = ready();
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+    session.backend.result = Some(json!({
+        "document": "D1", "format": "svg", "mime_type": "image/svg+xml",
+        "svg": svg, "paths": {"visible": 9, "hidden": 3, "highlight": 0}
+    }));
+    let response = session
+        .handle(call(
+            "model_render",
+            json!({"document": "D1", "view": "iso", "format": "svg", "hidden_edges": true}),
+        ))
+        .unwrap();
+    let result = &response["result"];
+    assert_eq!(result["isError"], false);
+    assert_eq!(result["content"].as_array().unwrap().len(), 1);
+    assert_eq!(result["structuredContent"]["svg"], svg);
+    assert_eq!(result["structuredContent"]["paths"]["hidden"], 3);
+    for bad in [
+        json!({"document": "D1", "format": "jpeg"}),
+        json!({"document": "D1", "format": "svg", "hidden_edges": "yes"}),
+    ] {
+        let response = session.handle(call("model_render", bad.clone())).unwrap();
+        assert_eq!(response["error"]["code"], -32602, "{bad}");
+    }
+}
+
+// Errors in MCP results (mitcad#1897, the command reference's "Errors"):
+// the short cause a person reads first, the exact one beside it, nothing
+// lost.
+
+/// An edge's name as a chamfer on a profile with long region keys gives it.
+fn long_edge(n: usize) -> String {
+    let region = (1..=24)
+        .map(|c| format!("c{c}[c{},c{}]", c + 1, c + 2))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("E{{F2:side(r{{{region}}}){n}|F2:end(r{{{region}}})}}")
+}
+
+/// A chamfer's failure with two such edges, as the model passes it on as
+/// text (its message, then its `[placed: …]` tail): the text, the person's
+/// message, the agents' detail and the edges' names.
+fn long_chamfer_failure() -> (String, String, String, Vec<String>) {
+    let edges = vec![long_edge(1), long_edge(2)];
+    let message = "the chamfer is wider than the face beside its edge and would take that \
+                   face away, but cannot meet the face beyond it";
+    let detail = format!(
+        "the chamfer of edges {} and {} is wider than the face beside them, which it would \
+         take away, and cannot meet the face beyond it",
+        edges[0], edges[1]
+    );
+    let places: Vec<Value> = edges
+        .iter()
+        .map(|name| json!({"kind": "edge", "body": "F2.b0", "name": name}))
+        .collect();
+    let tail = json!({"message": message, "detail": detail, "places": places});
+    let text = format!("Chamfer4: {message}\n[placed: {tail}]");
+    (
+        text,
+        format!("Chamfer4: {message}"),
+        format!("Chamfer4: {detail}"),
+        edges,
+    )
+}
+
+/// Whether a text names no edge, face or region by its name.
+fn names_nothing(text: &str) -> bool {
+    !text.contains("E{") && !text.contains("r{") && !text.contains("F2:")
+}
+
+#[test]
+fn a_refusal_with_long_names_leads_with_its_short_cause() {
+    let (text, message, detail, edges) = long_chamfer_failure();
+    assert!(text.len() > 1500, "{}", text.len());
+    // A refused command (the headless server's Err).
+    let mut session = ready();
+    session.backend.failure = Some(text.clone());
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "doc1", "command": {"cmd": "add_feature",
+                   "def": {"type": "chamfer"}}}),
+        ))
+        .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    let value = &response["result"]["structuredContent"];
+    // The short cause, as a person reads it.
+    assert_eq!(value["error"], message);
+    assert!(names_nothing(&message) && message.len() < 200, "{message}");
+    // The exact one, as the error said it before, word for word.
+    assert_eq!(value["error_detail"], detail);
+    assert_eq!(
+        value["error_detail"].as_str(),
+        Some(agent_text(&text).0.as_str())
+    );
+    // Each edge's exact name, to select or query it.
+    let places = value["places"].as_array().unwrap();
+    for edge in &edges {
+        assert!(detail.contains(edge.as_str()));
+        assert!(
+            places
+                .iter()
+                .any(|p| p["name"] == edge.as_str() && p["kind"] == "edge"),
+            "{edge}"
+        );
+    }
+    // The text block is the same JSON, the short cause before the detail.
+    let block = response["result"]["content"][0]["text"].as_str().unwrap();
+    let shown: Value = serde_json::from_str(block).unwrap();
+    assert_eq!(&shown, value);
+    assert!(block.find("\"error\":").unwrap() < block.find("\"error_detail\":").unwrap());
+
+    // An array's refused entry (its result, with the entry named and the
+    // text after the tail kept on both sides).
+    let mut session = ready();
+    let undone = "; the 2 step(s) of the entries before it were undone";
+    session.backend.result = Some(json!({
+        "document": "doc1", "applied": false, "entry": 1, "undone": 2,
+        "error": format!("commands[1]: {text}{undone}"),
+    }));
+    session.backend.is_error = true;
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "doc1", "command": [{"cmd": "add_parameter"},
+                   {"cmd": "add_feature", "def": {"type": "chamfer"}}]}),
+        ))
+        .unwrap();
+    let value = &response["result"]["structuredContent"];
+    assert_eq!(value["error"], format!("commands[1]: {message}{undone}"));
+    assert_eq!(
+        value["error_detail"],
+        format!("commands[1]: {detail}{undone}")
+    );
+    assert_eq!(value["entry"], 1);
+    assert_eq!(value["applied"], false);
+    assert_eq!(value["places"].as_array().unwrap().len(), 2);
+
+    // The live server's refusal the same.
+    let mut session = ready_live();
+    assert!(matches!(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": {"cmd": "add_feature",
+                       "def": {"type": "chamfer"}}}),
+            ))
+            .unwrap(),
+        PreparedMessage::Tool { .. }
+    ));
+    let response = session.finish(json!({"error": text}), true).unwrap();
+    let value = &response["result"]["structuredContent"];
+    assert_eq!(value["error"], message);
+    assert_eq!(value["error_detail"], detail);
+    assert_eq!(value["places"].as_array().unwrap().len(), 2);
+
+    // A refusal without a tail stays as it was: no detail, no places.
+    let mut session = ready();
+    session.backend.failure = Some("no open document D9".to_owned());
+    let response = session
+        .handle(call(
+            "model_command",
+            json!({"document": "D9", "command": {"cmd": "recompute"}}),
+        ))
+        .unwrap();
+    let value = &response["result"]["structuredContent"];
+    assert_eq!(value["error"], "no open document D9");
+    assert!(value.get("error_detail").is_none() && value.get("places").is_none());
+}
+
+#[test]
+fn a_failed_feature_with_long_names_leads_with_its_short_cause() {
+    let (_, message, detail, edges) = long_chamfer_failure();
+    let message = message.trim_start_matches("Chamfer4: ").to_owned();
+    let detail = detail.trim_start_matches("Chamfer4: ").to_owned();
+    let places: Vec<Value> = edges
+        .iter()
+        .map(|name| json!({"kind": "edge", "body": "F2.b0", "name": name}))
+        .collect();
+    // The model's failed feature: its exact error, the person's message and
+    // the places (core/model/src/document/command_outcome.rs).
+    let chamfer = json!({"uid": "F4", "name": "Chamfer4", "error": detail, "message": message,
+                         "places": places, "edited": true, "new": true});
+    let added = json!({"uid": "F4", "name": "Chamfer4", "failed_features": [chamfer]});
+    let mut value = json!({"applied": true, "result": added});
+    assert!(command_outcome(&mut value));
+    let stays = ". It stays in the timeline; edit it, or remove it with undo or delete_feature";
+    let short = format!("F4 (Chamfer4) was added but failed: {message}{stays}");
+    assert_eq!(value["error"], short);
+    assert!(short.len() < 300, "{short}");
+    assert_eq!(
+        value["error_detail"],
+        format!("F4 (Chamfer4) was added but failed: {detail}{stays}")
+    );
+    assert_eq!(value["places"], json!(places));
+    // The failed feature itself as the model gave it: nothing taken away.
+    assert_eq!(value["failed_features"][0], chamfer);
+    for edge in &edges {
+        assert!(
+            value["error_detail"]
+                .as_str()
+                .unwrap()
+                .contains(edge.as_str())
+        );
+    }
+
+    // Through the live server, in an array that stopped at it.
+    let mut session = ready_live();
+    assert!(matches!(
+        session
+            .prepare(call(
+                "model_command",
+                json!({"document": "live-1", "command": [{"cmd": "add_feature",
+                       "def": {"type": "chamfer"}}, {"cmd": "recompute"}]}),
+            ))
+            .unwrap(),
+        PreparedMessage::Tool { .. }
+    ));
+    let response = session
+        .finish(
+            json!({"document": "live-1", "applied": true, "ran": 1, "stopped_at": 0,
+                   "results": [added], "result": added}),
+            false,
+        )
+        .unwrap();
+    assert_eq!(response["result"]["isError"], true);
+    let value = &response["result"]["structuredContent"];
+    let after = "; the entries after it did not run";
+    let entry = |cause: &str| {
+        format!("commands[0]: F4 (Chamfer4) was added but failed: {cause}{stays}{after}")
+    };
+    assert_eq!(value["error"], entry(&message));
+    assert_eq!(value["error_detail"], entry(&detail));
+    assert_eq!(value["places"].as_array().unwrap().len(), 2);
+    assert_eq!(value["stopped_at"], 0);
+
+    // A failure that has no message of its own: its error is the cause,
+    // and there is no detail beside it.
+    let mut value = json!({"applied": true,
+                           "result": {"failed_features": [failed_feature("F5", true)]}});
+    assert!(command_outcome(&mut value));
+    assert!(value["error"].as_str().unwrap().contains("fillet failed"));
+    assert!(value.get("error_detail").is_none() && value.get("places").is_none());
 }

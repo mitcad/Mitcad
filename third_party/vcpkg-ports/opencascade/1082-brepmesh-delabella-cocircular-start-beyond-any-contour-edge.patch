@@ -1,0 +1,90 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Delabella (the sweep-hull Delaunay triangulation BRepMesh's Delabella
+algorithms take a plane's base triangulation from): at its start, a point
+cocircular with the points before it that lies beyond any edge of their
+contour, not only beyond one of the two edges at the point added last, is
+added to the contour (mitcad#1919).
+
+The case: a rectangular plane face, its boundary four points. BRepMesh
+gives Delabella the points with four corners of their enlarged box, each
+coordinate scaled into -0.5 to 0.5, and Delabella sorts them by their
+lifted z = x^2 + y^2, which ties for points on a circle round the origin:
+the rectangle's corners are cocircular (exactly: an axis-aligned rectangle
+stays one), and their z's are equal but for their rounding, so that their
+order is the rounding's. While the points are cocircular, Delabella grows
+their contour (head -> tail -> ... -> last -> head) and expects each next
+point beyond one of the two edges at `last`; with the rectangle's third
+corner opposite the fourth, the fourth lies beyond the edge head -> tail,
+and 1070's guard ended the triangulation as failed ("a cocircular point
+on neither side"): the plane was left without a triangulation (MitCad's
+checked planes made it again by the default insertion). With 64-bit long
+double (GCC and Clang on x86) the four z's come out ordered as their
+exact values, and the third corner is never opposite the fourth; with 53
+bits (MSVC, ARM) a z's rounding decides: of a sweep of 9,415 squares and
+as many rectangles, 287 squares and 91 rectangles failed, and so did a
+10 mm cube's six faces and perf_holes' five square notch walls (MitCad's
+`cli.perf_holes_mesh`).
+
+- The point is added on the edge a -> b of the contour it lies beyond
+  (the orientation sign of a, the point and b equal to the contour's, as
+  for the two edges at `last`), found by walking the contour; the contour
+  goes on from it as from a point added on the edges at `last`
+  (tail = a, head = b, f = (b, a, point), whose orientation is the
+  contour's). The contour of cocircular points is convex, so the point
+  lies beyond exactly one edge; when it does not, the guard ends the
+  triangulation as before.
+- Only the points the two edges at `last` did not take reach the walk:
+  every triangulation Delabella made before is the same. Of the sweep, all
+  squares and rectangles are triangulated with both long doubles, each in
+  10 triangles covering the points' box.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
+--- a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
++++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
+@@ -771,6 +771,43 @@ struct CDelaBella : IDelaBella
+         v->next    = last;
+         head       = last;
+       }
++      else if (f.n.z != 0)
++      {
++        // Beyond another edge of the contour: the points are sorted by
++        // their lifted z, which ties for cocircular points around the
++        // origin, so that a later point can lie beyond any edge of the
++        // contour (a rectangle's corners, the first points of a
++        // rectangular plane, whose z's are equal but for their rounding).
++        // The contour of cocircular points is convex: the point lies
++        // beyond exactly one of its edges, a -> b; it goes in between them,
++        // and the contour goes on from it as from a point added on the
++        // edges at `last` (tail -> last -> head).
++        Vert* a     = head;
++        Vert* found = nullptr;
++        int   edges = 0;
++        do
++        {
++          Vert* b = (Vert*)a->next;
++          if (orientSign(a->x, a->y, v->x, v->y, b->x, b->y) == f.n.z)
++          {
++            found = a;
++            ++edges;
++          }
++          a = b;
++        } while (a != head && edges < 2);
++        if (edges != 1)
++        {
++          return Inconsistent("a cocircular point on neither side");
++        }
++        Vert* b     = (Vert*)found->next;
++        f.v[0]      = b;
++        f.v[1]      = found;
++        f.v[2]      = v;
++        found->next = v;
++        v->next     = b;
++        tail        = found;
++        head        = b;
++      }
+       else
+       {
+         return Inconsistent("a cocircular point on neither side");

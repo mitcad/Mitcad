@@ -3,6 +3,7 @@
 // commands with their names and kinds, whether an agent may run each and
 // whether it can run now, a search by words, and the nearest ids to an id
 // the registry does not have, in a text that names no repository file.
+#include "UnitTests.hpp"
 #include "mcp/UiCommandList.hpp"
 
 #include <cstdio>
@@ -161,3 +162,4 @@ int uiCommandListTests() {
   CHECK(mitcad::mcp::dialogViewRefusal(QStringLiteral("file.export")).contains(QStringLiteral("files")));
   return failures;
 }
+MITCAD_UNIT_TEST(uiCommandListTests);

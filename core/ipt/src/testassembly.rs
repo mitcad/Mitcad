@@ -299,19 +299,27 @@ pub fn assembly_file(a: &TestAssembly) -> Vec<u8> {
 /// A part file with a `UFRxDoc` stream that lists its version id (as a
 /// part's own list does), the other streams as they are.
 pub fn with_document_id(part: &[u8], id: [u8; 16]) -> Vec<u8> {
-    let file = CompoundFile::parse(part.to_vec()).expect("a compound file");
+    let mut list = vec![0; 40];
+    list.extend_from_slice(&id);
+    list.extend_from_slice(&[0; 8]);
+    with_stream(part, REFERENCES_STREAM, &list)
+}
+
+/// A compound file with one more stream (or one written anew), the other
+/// streams as they are.
+pub fn with_stream(file: &[u8], stream: &str, bytes: &[u8]) -> Vec<u8> {
+    let file = CompoundFile::parse(file.to_vec()).expect("a compound file");
     let mut w = Writer::new();
     w.clsid("", file.root().clsid);
     for (path, entry) in file.entries() {
-        if entry.kind == EntryKind::Stream {
+        if entry.kind == EntryKind::Stream
+            && path.trim_start_matches('/') != stream.trim_start_matches('/')
+        {
             let data = file.read(entry).expect("readable");
             w.stream(path, &data);
         }
     }
-    let mut list = vec![0; 40];
-    list.extend_from_slice(&id);
-    list.extend_from_slice(&[0; 8]);
-    w.stream(REFERENCES_STREAM, &list);
+    w.stream(stream, bytes);
     w.finish()
 }
 
@@ -435,15 +443,169 @@ pub fn sub_assembly() -> TestAssembly {
     }
 }
 
-/// Writes the test project into `dir`: `top.iam`, `cube.ipt` (the cube
-/// with its design), `sub/sub.iam`, `parts/pair.ipt` (the cube and the
-/// cylinder, bodies only) and `elsewhere/found.ipt` (the same pair); the
+/// An assembly of placements that mirror or scale (mitcad#1903), saved in
+/// `C:\Elsewhere\Project`: the cube as it is, mirrored in x and moved
+/// 5 cm along x, scaled by 2 and moved 20 cm along y, and the
+/// sub-assembly mirrored in y and moved 10 cm along -y.
+pub fn mirrored_assembly() -> TestAssembly {
+    let cube = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
+    let pair = [[-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]];
+    let diagonal = |d: [f64; 3], t: [f64; 3]| {
+        [
+            [d[0], 0.0, 0.0, t[0]],
+            [0.0, d[1], 0.0, t[1]],
+            [0.0, 0.0, d[2], t[2]],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    };
+    let occurrence = |reference, key, instance, matrix, document, range| TestOccurrence {
+        reference,
+        key,
+        instance,
+        matrix,
+        flags: 0,
+        label: None,
+        document,
+        range,
+    };
+    TestAssembly {
+        saved_path: r"C:\Elsewhere\Project\mirrored.iam".into(),
+        references: vec![
+            (2, r"C:\Elsewhere\Project\cube.ipt".into()),
+            (3, r"C:\Elsewhere\Project\sub\sub.iam".into()),
+        ],
+        occurrences: vec![
+            occurrence(2, 2, 1, placement(0.0, [0.0; 3]), CUBE_ID, cube),
+            occurrence(
+                2,
+                3,
+                2,
+                diagonal([-1.0, 1.0, 1.0], [5.0, 0.0, 0.0]),
+                CUBE_ID,
+                cube,
+            ),
+            occurrence(
+                2,
+                4,
+                3,
+                diagonal([2.0, 2.0, 2.0], [0.0, 20.0, 0.0]),
+                CUBE_ID,
+                cube,
+            ),
+            occurrence(
+                3,
+                5,
+                1,
+                diagonal([1.0, -1.0, 1.0], [0.0, -10.0, 0.0]),
+                SUB_ID,
+                pair,
+            ),
+        ],
+        length_unit: 11269,
+    }
+}
+
+/// The version ids of the converted assembly's parts without bodies.
+pub const EMPTY_ID: [u8; 16] = [0xC5; 16];
+pub const BARE_ID: [u8; 16] = [0xC6; 16];
+pub const LISTED_ID: [u8; 16] = [0xC7; 16];
+
+/// Where the converted assembly keeps its translation report: an embedded
+/// object's OLE 1.0 package, where the converted assembly of the test files
+/// keeps it.
+pub const CONVERTED_REPORT_STREAM: &str = "RSeStorage/RSeEmbeddings/Embedding 1/\u{1}Ole10Native";
+
+/// An assembly converted from a building model (mitcad#1913), saved in
+/// `C:\Elsewhere\Project`: the cube, two occurrences of a part the
+/// conversion made without bodies (`empty.ipt`), a part without bodies
+/// its report does not list (`bare.ipt`) and a part whose result lists a
+/// body its B-rep record does not hold (`listed.ipt`).
+pub fn converted_assembly() -> TestAssembly {
+    let cube = [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]];
+    let occurrence = |reference, key, x: f64, document| TestOccurrence {
+        reference,
+        key,
+        instance: 1,
+        matrix: placement(0.0, [x, 0.0, 0.0]),
+        flags: 0,
+        label: None,
+        document,
+        range: cube,
+    };
+    TestAssembly {
+        saved_path: r"C:\Elsewhere\Project\converted.iam".into(),
+        references: vec![
+            (2, r"C:\Elsewhere\Project\cube.ipt".into()),
+            (3, r"C:\Elsewhere\Project\empty.ipt".into()),
+            (4, r"C:\Elsewhere\Project\bare.ipt".into()),
+            (5, r"C:\Elsewhere\Project\listed.ipt".into()),
+        ],
+        occurrences: vec![
+            occurrence(2, 2, 0.0, CUBE_ID),
+            occurrence(3, 3, 5.0, EMPTY_ID),
+            TestOccurrence {
+                instance: 2,
+                ..occurrence(3, 4, 10.0, EMPTY_ID)
+            },
+            occurrence(4, 5, 15.0, BARE_ID),
+            occurrence(5, 6, 20.0, LISTED_ID),
+        ],
+        length_unit: 11269,
+    }
+}
+
+/// The translation report the converted assembly keeps: from a `.rvt`
+/// file, the assembly and the cube made without messages, the empty part
+/// with the message the conversion gives a part it read no bodies for.
+pub fn converted_report() -> crate::translation::Report {
+    use crate::translation::{Component, Message, Report};
+    let made = |name: &str, status: &str, messages: &[&str]| Component {
+        name: name.into(),
+        status: status.into(),
+        messages: messages
+            .iter()
+            .map(|m| Message {
+                severity: "Warning".into(),
+                text: (*m).into(),
+            })
+            .collect(),
+    };
+    Report {
+        source: Some(r"C:\Elsewhere\Models\building.rvt".into()),
+        translator: Some("Building model".into()),
+        components: vec![
+            made("converted.iam", "Successful", &[]),
+            made("cube.ipt", "Successful", &[]),
+            made("empty.ipt", "Warning", &["No Bodies Read From File."]),
+        ],
+    }
+}
+
+/// The converted assembly's file, its translation report embedded.
+pub fn converted_file() -> Vec<u8> {
+    let page = utf16(&write_html(&converted_report()));
+    with_stream(
+        &assembly_file(&converted_assembly()),
+        CONVERTED_REPORT_STREAM,
+        &write_package("converted.htm", &page),
+    )
+}
+
+/// Writes the test project into `dir`: `top.iam`, `mirrored.iam`,
+/// `converted.iam`, `cube.ipt` (the cube with its design), `sub/sub.iam`,
+/// `parts/pair.ipt` (the cube and the cylinder, bodies only),
+/// `elsewhere/found.ipt` (the same pair) and the converted assembly's
+/// parts without bodies, `empty.ipt`, `bare.ipt` and `listed.ipt`; the
 /// missing part is not written.
 pub fn write_test_project(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join("sub"))?;
     std::fs::create_dir_all(dir.join("parts"))?;
     std::fs::create_dir_all(dir.join("elsewhere"))?;
     std::fs::write(dir.join("top.iam"), assembly_file(&top_assembly()))?;
+    std::fs::write(
+        dir.join("mirrored.iam"),
+        assembly_file(&mirrored_assembly()),
+    )?;
     std::fs::write(
         dir.join("sub").join("sub.iam"),
         assembly_file(&sub_assembly()),
@@ -455,5 +617,78 @@ pub fn write_test_project(dir: &Path) -> std::io::Result<()> {
     let pair = with_document_id(&crate::testdata::test_part(), PAIR_ID);
     std::fs::write(dir.join("parts").join("pair.ipt"), &pair)?;
     std::fs::write(dir.join("elsewhere").join("found.ipt"), &pair)?;
+    std::fs::write(dir.join("converted.iam"), converted_file())?;
+    let empty = crate::testdata::test_empty_part();
+    std::fs::write(dir.join("empty.ipt"), with_document_id(&empty, EMPTY_ID))?;
+    std::fs::write(dir.join("bare.ipt"), with_document_id(&empty, BARE_ID))?;
+    std::fs::write(
+        dir.join("listed.ipt"),
+        with_document_id(
+            &crate::testdata::test_part_listing_a_missing_body(),
+            LISTED_ID,
+        ),
+    )?;
     Ok(())
+}
+
+/// A page in the layout of a translation report (mitcad#1913): the header
+/// with the source file and the translator, and a row per document with
+/// its messages.
+pub fn write_html(report: &crate::translation::Report) -> String {
+    use crate::translation::REPORT_NAMESPACE;
+    let mut html = format!(
+        "<html {REPORT_NAMESPACE}=\"urn:test\">\r\n<head><title>Translation Report</title></head>\r\n<body>\
+         <table><tr><td class=\"header-heading\">Source File:</td><td>{}</td></tr>\
+         <tr><td class=\"header-heading\">Translator Type:</td><td>{}</td></tr></table>\
+         <table><tr><th>Name</th><th>File</th><th>Status</th></tr>",
+        report.source.as_deref().unwrap_or_default(),
+        report.translator.as_deref().unwrap_or_default(),
+    );
+    for (i, c) in report.components.iter().enumerate() {
+        html += &format!(
+            "<tr class=\"row-style0\" id=\"component-row{i}\"><td><div>[+]</div></td><td>{}</td>\
+             <td><a href=\"C:\\test\\{0}\">C:\\test\\{0}</a></td><td><div>{}</div></td></tr>",
+            c.name, c.status
+        );
+        html += &format!(
+            "<tr id=\"component-details{i}\" style=\"display: none\"><td><p></p><table>\
+             <tr><th>Severity</th><th>Entity Id</th><th>Message</th></tr>"
+        );
+        for m in &c.messages {
+            html += &format!(
+                "<tr><td><div>{}</div></td><td>0</td><td>{}</td></tr>",
+                m.severity, m.text
+            );
+        }
+        html += "</table><p></p></td></tr>";
+    }
+    html + "</table></body></html>\r\n"
+}
+
+/// An OLE 1.0 package stream holding `data` as the file `label`.
+pub fn write_package(label: &str, data: &[u8]) -> Vec<u8> {
+    let path = format!("C:\\test\\{label}");
+    let mut body = 2u16.to_le_bytes().to_vec();
+    for text in [label, path.as_str()] {
+        body.extend_from_slice(text.as_bytes());
+        body.push(0);
+    }
+    body.extend_from_slice(&0x0003_0000u32.to_le_bytes());
+    body.extend_from_slice(&(path.len() as u32 + 1).to_le_bytes());
+    body.extend_from_slice(path.as_bytes());
+    body.push(0);
+    body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    body.extend_from_slice(data);
+    let mut out = (body.len() as u32).to_le_bytes().to_vec();
+    out.extend_from_slice(&body);
+    out
+}
+
+/// The page as UTF-16 with a byte order mark, as reports are kept.
+pub fn utf16(text: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xFE];
+    for unit in text.encode_utf16() {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
 }

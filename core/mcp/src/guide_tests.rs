@@ -455,3 +455,212 @@ fn the_guides_keep_the_slicer_export_and_the_field_tested_pitfalls() {
         assert!(features.contains(point), "choosing-features: {point}");
     }
 }
+
+// The bug-reporting topic (mitcad#1897): what an agent collects for a
+// report of an unexpected result and how, in both servers.
+
+#[test]
+fn the_bug_reporting_guide_is_listed_and_readable_in_both_servers() {
+    let id = "bug-reporting";
+    let uri = "mitcad://guide/bug-reporting";
+    let text = topic_text(id);
+    // Headless: in the contents' guides and the index, through the tool
+    // and the resource.
+    let mut session = ready();
+    let (contents, _) = lookup(&mut session, json!({}));
+    assert!(
+        contents["guides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|guide| guide["id"] == id)
+    );
+    let (index, _) = lookup(&mut session, json!({"guide": "index"}));
+    assert!(
+        index["text"].as_str().unwrap().contains(
+            "- [bug-reporting](references/bug-reporting.md): when a result is unexpected"
+        )
+    );
+    let (answer, is_error) = lookup(&mut session, json!({"guide": id}));
+    assert!(!is_error);
+    assert_eq!(answer["text"], text);
+    assert_eq!(answer["truncated"], false);
+    let list = session
+        .handle(request(3, "resources/list", json!({})))
+        .unwrap();
+    assert!(
+        list["result"]["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|resource| resource["uri"] == uri)
+    );
+    let read = session
+        .handle(request(4, "resources/read", json!({"uri": uri})))
+        .unwrap();
+    assert_eq!(read["result"]["contents"][0]["text"], text);
+    // Live: the protocol answers both without the application.
+    let mut live = LiveSession::new();
+    let respond = |live: &mut LiveSession, message: Value| match live.prepare(message).unwrap() {
+        PreparedMessage::Response(response) => response,
+        PreparedMessage::Tool { .. } => panic!("the protocol answers it"),
+    };
+    let initialize = request(
+        1,
+        "initialize",
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"}
+        }),
+    );
+    let initialized = respond(&mut live, initialize).unwrap();
+    assert!(
+        respond(
+            &mut live,
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        )
+        .is_none()
+    );
+    let response = respond(
+        &mut live,
+        request(
+            5,
+            "tools/call",
+            json!({"name": "model_reference", "arguments": {"guide": id}}),
+        ),
+    )
+    .unwrap();
+    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(response["result"]["structuredContent"]["text"], text);
+    let read = respond(&mut live, request(6, "resources/read", json!({"uri": uri}))).unwrap();
+    assert_eq!(read["result"]["contents"][0]["text"], text);
+    // The startup guidance points at it in a few words: the instructions
+    // of both servers and model_command's description.
+    let headless = Session::new(NoBackend)
+        .handle(request(
+            1,
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"}
+            }),
+        ))
+        .unwrap();
+    for instructions in [
+        &initialized["result"]["instructions"],
+        &headless["result"]["instructions"],
+    ] {
+        let instructions = instructions.as_str().unwrap();
+        assert!(instructions.contains("{\"guide\": \"bug-reporting\"}"));
+        assert!(instructions.chars().count() <= INSTRUCTIONS_CHARS);
+    }
+    for tools in [catalog::tools(), catalog::live_tools()] {
+        let command = tools
+            .iter()
+            .find(|tool| tool["name"] == "model_command")
+            .unwrap();
+        assert!(
+            command["description"]
+                .as_str()
+                .unwrap()
+                .contains("model_reference {\"guide\": \"bug-reporting\"}")
+        );
+    }
+}
+
+#[test]
+fn the_bug_reporting_guide_covers_the_seven_kinds_of_evidence_with_valid_calls() {
+    let text = topic_text("bug-reporting");
+    for heading in [
+        "## 1. Summary, intended result and impact",
+        "## 2. Provenance",
+        "## 3. Reproduction",
+        "## 4. State and geometry evidence",
+        "## 5. Artifacts",
+        "## 6. Scope and limits",
+        "## 7. Safe collection and delivery",
+        "## Report template",
+    ] {
+        assert!(text.contains(&format!("\n{heading}\n")), "{heading}");
+    }
+    // The template asks for each kind, with observations kept apart from
+    // hypotheses and the missing evidence said.
+    let template = text
+        .split_once("## Report template")
+        .unwrap()
+        .1
+        .split_once("## Two short examples")
+        .unwrap()
+        .0;
+    for part in [
+        "## Summary",
+        "## Provenance",
+        "## Reproduction (<verified by running it | proposed, not run>)",
+        "## State and geometry evidence",
+        "## Observations",
+        "## Hypotheses",
+        "## Scope and limits",
+        "Not available:",
+        "## Artifacts",
+        "SHA-256",
+    ] {
+        assert!(template.contains(part), "the template: {part}");
+    }
+    // The rules the ticket names.
+    for point in [
+        "Never fabricate",
+        "Never substitute the client's own version",
+        "isError",
+        "stopped_at",
+        "`failed_features`",
+        "stays in the timeline",
+        "A green status, a changed face count or a picture alone proves neither",
+        "Check that every file the\n  report names exists",
+        "never into public source code",
+        "Preparing a report does not authorize filing or uploading it",
+        "an untested GUI claim is not a confirmed\n  bug",
+        "proposed reproduction recipe",
+    ] {
+        assert!(text.contains(point), "bug-reporting: {point}");
+    }
+    // Every example call is valid for a server that has its tool; a bare
+    // query object names a permitted query (the_guides_name_only_what_mcp_permits).
+    let tools: Vec<Value> = catalog::tools()
+        .into_iter()
+        .chain(catalog::live_tools())
+        .collect();
+    let mut calls = 0;
+    let mut queries = 0;
+    let mut fence: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(info) = line.strip_prefix("```") {
+            fence = if fence.is_some() { None } else { Some(info) };
+            continue;
+        }
+        if fence != Some("json") {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_str(line).unwrap_or_else(|error| panic!("{line}: {error}"));
+        if let Some(name) = value.get("name").and_then(Value::as_str) {
+            let valid = tools
+                .iter()
+                .filter(|tool| tool["name"] == name)
+                .any(|tool| {
+                    catalog::validate(&value["arguments"], &tool["inputSchema"], "arguments")
+                        .is_ok()
+                });
+            assert!(valid, "not a valid call of a tool: {line}");
+            calls += 1;
+        } else {
+            assert!(value["query"].is_string(), "{line}");
+            queries += 1;
+        }
+    }
+    assert!(
+        calls >= 5 && queries >= 5,
+        "{calls} calls, {queries} queries"
+    );
+}

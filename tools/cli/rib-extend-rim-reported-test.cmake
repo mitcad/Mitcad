@@ -63,4 +63,4 @@ execute_process(COMMAND "${CLI}" run "${SCRIPTS}/rib_extend_rim_reported.json" -
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "rib_extend_rim_reported failed (${status}):\n${out}${err}")
 endif()
-message(STATUS "ok   the reported rib fills up to the higher boss's wall without a warning and joins the body")
+message(STATUS "ok   the reported rib fills up to the higher boss's wall and its top face without a warning and joins the body")

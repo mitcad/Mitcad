@@ -58,6 +58,7 @@
 #include "sketch/SketchPalette.hpp"
 #include "sketch/SketchSurface.hpp"
 #include "sketch/SketchTool.hpp"
+#include "view/SpaceMouseController.hpp"
 
 namespace mitcad {
 namespace {
@@ -353,6 +354,9 @@ void MainWindow::enterSketch3d(const QString& uid, bool existing, const QString&
   m_sketchOccurrence = sketchEditOccurrence(uid, picked);
   m_loggedSketch3dEntities.clear();
   m_sketch3d->enter(uid);
+  if (m_spaceMouse != nullptr) {
+    m_spaceMouse->sketchChanged(); // Lock Rotation's state as the view is now (mitcad#1910)
+  }
   m_sketchEnterDepth = undoDepth();
   m_sketchEnterRevision = documentRevision(); // Esc leaving it unchanged (mitcad#1623)
   m_sketchEscHinted = false;

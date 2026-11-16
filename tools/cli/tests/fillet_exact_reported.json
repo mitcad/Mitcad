@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. A rounding as large as the side faces beside its edges (GitHub #353, mitcad#1819), on the reported design (opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): a block 10 x 10 in plan, 5 high for half its depth and 10 high for the other half (Extrude1 F2 and Extrude2 F3, Body1 F2.b0), and Fillet1 (F11), radius 5, on the lower top's two side edges and the step's two upright side edges. Each rounding ends exactly on a side face's far edge (the bottom's, the back's). Before the fix the geometry kernel could not build it at that size and it was built 0.1 % smaller with a warning, a sliver of each side face left. Now it is built at its size with no warning or information: the two side faces taken away, the roundings meeting as full rounds and mitred at the step's foot, the volume 250 pi - 500/3, no face under 0.01 mm2."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F11"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 618.7314967, "min_face_area": 0.01}}
+]

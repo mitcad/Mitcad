@@ -16,18 +16,9 @@
 #include "../framework/TestSync.hpp"
 #include "../framework/ChromeStyle.hpp"
 #include "../framework/Theme.hpp"
+#include "SyncState.hpp"
 
 namespace mitcad {
-namespace {
-
-// "14:02" today, else "2026-10-05 14:02".
-QString shortTime(const QDateTime& time) {
-  const QDateTime local = time.toLocalTime();
-  return local.date() == QDate::currentDate() ? local.toString(QStringLiteral("HH:mm"))
-                                              : local.toString(QStringLiteral("yyyy-MM-dd HH:mm"));
-}
-
-} // namespace
 
 ProjectIndicator::ProjectIndicator(std::function<void(const QString& id)> trigger, QWidget* parent)
     : QToolButton(parent), m_trigger(std::move(trigger)) {
@@ -171,6 +162,18 @@ void ProjectIndicator::refresh() {
     logged << name << QStringLiteral("cloud");
     tip << tr("Cloud project %1, shared through %2").arg(QDir::toNativeSeparators(m_project.root), m_project.remoteUrl);
     const Remote& remote = m_remote;
+    {
+      // Its sync state in words first (mitcad#1895).
+      SyncState state;
+      state.ahead = remote.ahead;
+      state.behind = remote.behind;
+      state.problem = remote.problem;
+      state.busy = remote.busy;
+      state.queued = remote.queued;
+      state.conflict = remote.conflict;
+      state.lastDone = remote.lastDone;
+      tip << syncWords(state).text;
+    }
     const QString cls = remote.problem;
     const QString up = QString(QChar(0x2191));
     const QString down = QString(QChar(0x2193));
@@ -179,8 +182,13 @@ void ProjectIndicator::refresh() {
                            : remote.busy == QLatin1String("push")    ? tr("Sending")
                            : remote.busy == QLatin1String("connect") ? tr("Connecting")
                                                                      : tr("Checking");
-      shown << (remote.percent >= 0 ? tr("%1 %2%").arg(verb).arg(remote.percent) : verb);
-      logged << remote.busy;
+      if (remote.queued) {
+        shown << tr("Waiting");
+        logged << QStringLiteral("%1 waiting").arg(remote.busy);
+      } else {
+        shown << (remote.percent >= 0 ? tr("%1 %2%").arg(verb).arg(remote.percent) : verb);
+        logged << remote.busy;
+      }
     } else if (remote.conflict) {
       shown << tr("Conflict");
       logged << QStringLiteral("conflict");
@@ -227,8 +235,6 @@ void ProjectIndicator::refresh() {
       if (remote.ahead == 0 && remote.behind == 0) {
         shown << QString(QChar(0x2713));
         logged << QStringLiteral("synced");
-        tip << (remote.lastDone.isValid() ? tr("Up to date, last sync %1").arg(shortTime(remote.lastDone))
-                                          : tr("Up to date"));
       } else if (remote.ahead < 0 || remote.behind < 0) {
         shown << tr("Not synced yet");
         logged << QStringLiteral("not synced");

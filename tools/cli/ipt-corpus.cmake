@@ -6,7 +6,8 @@
 # every solid valid; every parameter expression must agree with its stored
 # value (in the file and in Mitcad); the replay's final bodies must be the
 # file's (none missing, none extra), and a file whose B-rep records hold
-# bodies must not come in without any. The line per file gives the features'
+# bodies, or whose result lists bodies, must not come in without any
+# (mitcad#1913). The line per file gives the features'
 # outcomes. A file with a STEP file of the same part next to
 # it (<name>.stp or <name>.step) is compared with it: the same number of
 # solids, each one's volume and area within a relative limit, 1e-6 unless
@@ -121,6 +122,11 @@ function(check_file file label)
     math(EXPR stored "${stored} + ${n}")
   endforeach()
   if(stored GREATER 0 AND out MATCHES "Imported 0 bodies")
+    set(status 1)
+  endif()
+  # Nor a file whose result lists bodies that neither its B-rep records nor
+  # its mesh features hold (mitcad#1913).
+  if(out MATCHES "bodies that neither its B-rep record nor a mesh feature holds")
     set(status 1)
   endif()
   # Every body built and valid.

@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: MIT
+# The Browser's width in the Floating layout (mitcad#1932) after a restart,
+# run after browser-widths.mitcad-ui with the same settings: the Browser on
+# its card (Card, as chosen), as wide as its width grip left it, 380 px.
+wait-idle
+window-resize 1260 860
+wait-idle
+expect-ever '^Browser card width 380 [(]remembered[)]$'
+expect-ever '^Browser background: card$'
+wait-log '^Browser card edge at '
+wait-log '^Floating cards: .*browserDock -?[0-9]+,-?[0-9]+ 380x'
+expect-setting appearance/browserCardWidth 380
+expect-never 'Recompute failed|TestDriver: FAIL'

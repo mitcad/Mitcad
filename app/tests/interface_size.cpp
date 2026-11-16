@@ -5,6 +5,7 @@
 // QT_SCALE_FACTOR; what applyInterfaceSize leaves in the environment for
 // itself and for a process started from it (a restart), which must not
 // multiply the factor again. The environment is put back afterwards.
+#include "UnitTests.hpp"
 #include "framework/InterfaceSize.hpp"
 
 #include <cmath>
@@ -140,3 +141,4 @@ int interfaceSizeTests() {
   environmentTests();
   return failures;
 }
+MITCAD_UNIT_TEST(interfaceSizeTests);

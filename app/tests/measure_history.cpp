@@ -3,6 +3,7 @@
 // pick's own row becomes the pair's when the second pick follows in the
 // same panel, never an earlier panel's row; the same picks again update
 // their row in place; gone rows; numbers after Clear; tab-separated text.
+#include "UnitTests.hpp"
 #include "commands/MeasureHistory.hpp"
 
 #include <cstdio>
@@ -101,3 +102,4 @@ int measureHistoryTests() {
   CHECK(history.rows().size() == 1);
   return failures;
 }
+MITCAD_UNIT_TEST(measureHistoryTests);

@@ -37,11 +37,13 @@ a few milliseconds.
   plate of 1.85 mm2 between them, and the body within 0.03 mm3 of the two
   bevels' prisms at each corner.
 
-Corners whose common points both lie on the sharp edge are unchanged.
+Corners whose common points both lie on the sharp edge are unchanged, and so
+are those where neither does (OCCT's parameters on their arcs: with none,
+a step of OCCT's chamfer sequence equal_dist B9 failed, mitcad#1902).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
-index c7a31b93..8c11bf2b 100644
+index c7a31b93..4cd10ba0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
 @@ -73,6 +73,7 @@
@@ -93,15 +95,25 @@ index c7a31b93..8c11bf2b 100644
  static void RemoveSD(occ::handle<ChFiDS_Stripe>& Stripe, const int num1, const int num2)
  {
    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Seq =
-@@ -2320,14 +2355,20 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+@@ -2320,14 +2355,30 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
          {
            samecompoint = cp1.Point().Distance(cp2.Point()) < tolapp;
          }
 +        // (Only a common point on the edge limits it: ParameterOnSharpEdge.)
 +        const TopoDS_Edge& Esharp = TopoDS::Edge(Evive.Value(ic));
 +        double             w1 = 0., w2 = 0.;
-+        const bool         on1 = !sharp.Value(icplus) && ParameterOnSharpEdge(cp1, Esharp, w1);
-+        const bool         on2 = !sharp.Value(icmoins) && ParameterOnSharpEdge(cp2, Esharp, w2);
++        bool               on1 = !sharp.Value(icplus) && ParameterOnSharpEdge(cp1, Esharp, w1);
++        bool               on2 = !sharp.Value(icmoins) && ParameterOnSharpEdge(cp2, Esharp, w2);
++        if (!on1 && !on2)
++        {
++          // (Neither lies on the edge: OCCT's choice, their parameters on
++          // their arcs; OCCT's chamfer sequence equal_dist B9 failed a
++          // step with none.)
++          on1 = cp1.IsOnArc();
++          on2 = cp2.IsOnArc();
++          w1  = on1 ? cp1.ParameterOnArc() : 0.;
++          w2  = on2 ? cp2.ParameterOnArc() : 0.;
++        }
          if ((dS < d1 || dS < d2) && !samecompoint)
          {
            // step back till Common Points
@@ -116,7 +128,7 @@ index c7a31b93..8c11bf2b 100644
              p.SetValue(ic, icplus, p.Value(ic, icmoins));
              isfirst = (sens.Value(icplus) == 1);
              jfp     = 3 - jf.Value(icplus);
-@@ -2338,10 +2379,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+@@ -2338,10 +2389,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
                tolcp = cp1.Tolerance();
              }
            }
@@ -129,7 +141,7 @@ index c7a31b93..8c11bf2b 100644
              p.SetValue(ic, icplus, p.Value(ic, icmoins));
              isfirst = (sens.Value(icmoins) == 1);
              Calcul_Param(CD.Value(icmoins), jf.Value(icmoins), i.Value(icmoins, ic), isfirst, para);
-@@ -2357,11 +2398,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+@@ -2357,11 +2408,10 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
            // step back till Common Point only if it is very close
            if (!sharp.Value(icplus))
            {
@@ -143,7 +155,7 @@ index c7a31b93..8c11bf2b 100644
                ponctuel.SetValue(ic, true);
                p.SetValue(ic, icplus, p.Value(ic, icmoins));
                isfirst = (sens.Value(icplus) == 1);
-@@ -2376,12 +2416,11 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+@@ -2376,12 +2426,11 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
            }
            if (!sharp.Value(icmoins))
            {

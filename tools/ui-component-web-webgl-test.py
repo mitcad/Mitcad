@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# check-all sources: app/webbrowser
+# check-all sources: app/webbrowser app/report
 """WebGL in Insert > Component from Web's browser (mitcad#1861): a page of
 the test's own HTTP server makes a WebGL context, clears it green, draws a
 red triangle over its middle and reads two pixels back; it then goes to a
@@ -8,6 +8,17 @@ noprogram with the reason), which the browser's log and the server's log
 show. Through the GPU where the machine has one, else in software
 (SwiftShader): the test machines' hidden displays (Xvfb, the Windows VM's
 session 0) have none, so there it is the software path.
+
+The GPU path's fallback and the feedback diagnostics (mitcad#1906), in two
+sessions with one browsing profile:
+  1. A failure of the GPU process as after WebGL had been drawn on the GPU
+     (MITCAD_TEST_WEB_GPU_FAILURE, as a line of CEF's log: the test
+     machines have no GPU to fail): the profile's marker is written, the
+     window says WebGL is drawn in software from the next start, and Help >
+     Send Feedback's diagnostics carry how WebGL was drawn, the GPU
+     process's failure and the WebGL page's own console error.
+  2. The next start follows the marker: WebGL in software only, and the
+     page still draws; the diagnostics say so.
 
 Usage: ui-component-web-webgl-test.py <app> <output folder> [<Qt's bin> [<the built web browser component>]]
        ui-component-web-webgl-test.py prepare <output folder>
@@ -33,6 +44,8 @@ function report(state, detail) {
   location.replace("result.html?webgl=" + state + "&detail=" + encodeURIComponent(detail));
 }
 window.addEventListener("load", function () {
+  // The page's own error, for the feedback diagnostics (mitcad#1906).
+  console.error("A test page error from the WebGL page");
   var canvas = document.getElementById("view");
   var why = "";
   canvas.addEventListener("webglcontextcreationerror", function (event) {
@@ -115,14 +128,53 @@ def start_server(directory):
     return server
 
 
-def workflow(port):
-    """The in-process test driver's steps (MITCAD_TEST_INPUT)."""
+# The failure of the GPU process the first session is given (as a line of
+# CEF's log), and the page's own console error.
+FAILURE = "GPU process exited unexpectedly: exit_code=139"
+PAGE_ERROR = "A test page error from the WebGL page"
+# The sessions: the GPU's failure, then the next start in software only.
+SESSIONS = (1, 2)
+
+
+def feedback(session):
+    """Help > Send Feedback's preview: the diagnostics carry the browser."""
+    if session == 1:
+        webgl = "(on the GPU|in software)"
+        state = "Component browser GPU process: failures in CEF.s log: [0-9]+; WebGL in software from the next start"
+    else:
+        webgl = "in software"
+        state = "Component browser: CEF [^ ]+, WebGL in software only \\(the GPU failed in an earlier session"
+    return [
+        "focus-main",
+        "mark",
+        "command help.send_feedback",
+        "expect-log '^Send Feedback: the form shows$' 20",
+        "focus-dialog '^Send Feedback$'",
+        "button '^Preview.*$'",
+        "focus-dialog '^Review Report$'",
+        "expect-log '^Report section diagnostics: .*Component browser WebGL: %s, WebGL [12], ' 20" % webgl,
+        "expect-log '^Report section diagnostics: .*%s' 2" % state,
+        "expect-log '^Report section diagnostics: .*Component browser page error: 127\\.0\\.0\\.1: %s' 2" % PAGE_ERROR,
+        "button '^Cancel$'",
+        "focus-dialog '^Send Feedback$'",
+        "button '^Cancel$'",
+    ]
+
+
+def workflow(port, session=1):
+    """The in-process test driver's steps (MITCAD_TEST_INPUT) of a session."""
     host = "http://127\\.0\\.0\\.1:%d" % port
     lines = [
         "wait-idle",
         "command insert.component_web",
         "focus-dialog '^Component from Web$'",
         "expect-log '^Component browser opened: 0 site\\(s\\)$' 20",
+    ]
+    if session == 2:
+        # The marker of the first session followed: no GPU this run.
+        lines.append("expect-ever '^Component browser: WebGL in software only \\(the GPU failed in an earlier "
+                     "session \\([0-9-]+\\): %s\\)$' 5" % FAILURE)
+    lines += [
         # The start page loaded first, so that nothing of it can come after the
         # address typed below.
         "expect-log '^Component browser load end data:' 60",
@@ -135,19 +187,36 @@ def workflow(port):
         # reason, is in the log above the failure).
         "expect-log '^Component browser load end %s/result\\.html\\?webgl=' 90" % host,
         "expect-log '^Component browser load end %s/result\\.html\\?webgl=drawn&' 2" % host,
+        # The probe asked the page how it draws WebGL (mitcad#1906).
+        "expect-ever '^Component browser WebGL: (on the GPU|in software), WebGL [12], ' 30",
+    ]
+    if session == 1:
+        # The GPU's failure given: the marker written, the window says so.
+        lines += [
+            "expect-ever '^Component browser: the GPU failed \\(%s\\); WebGL in software from the next start$' 30"
+            % FAILURE,
+            "expect-ever '^Component browser: the GPU note shows$' 10",
+        ]
+    lines += feedback(session)
+    lines += [
         "focus-main",
         "quit",
     ]
     return "\n".join(lines) + "\n"
 
 
+def script_path(directory, session):
+    return Path(directory) / ("webgl-%d.mitcad-ui" % session)
+
+
 def serve(directory):
     """For the macOS wrapper: serves until <output>/stop exists, the
-    driver's steps written once the port is known."""
+    sessions' steps written once the port is known (the second last)."""
     directory = Path(directory).resolve()
     (directory / "stop").unlink(missing_ok=True)
     server = start_server(directory)
-    (directory / "webgl.mitcad-ui").write_text(workflow(server.server_address[1]), encoding="utf-8")
+    for session in SESSIONS:
+        script_path(directory, session).write_text(workflow(server.server_address[1], session), encoding="utf-8")
     try:
         while not (directory / "stop").exists():
             time.sleep(0.2)
@@ -163,9 +232,15 @@ def verify(directory):
     results = [line for line in served.splitlines() if "GET /result.html?" in line]
     if not results:
         raise RuntimeError("the WebGL page did not go on to its result: " + served)
-    if not any("GET /result.html?webgl=drawn&" in line for line in results):
-        raise RuntimeError("WebGL did not draw in the component browser: " + " | ".join(results))
-    print("WebGL: " + results[-1])
+    drawn = [line for line in results if "GET /result.html?webgl=drawn&" in line]
+    if len(drawn) < len(SESSIONS):
+        raise RuntimeError("WebGL did not draw in the component browser in every session (%d of %d): %s"
+                           % (len(drawn), len(SESSIONS), " | ".join(results)))
+    # The first session's GPU failure left the marker the second followed.
+    marker = directory / "profile" / "gpu-software.json"
+    if not marker.is_file() or '"cef"' not in marker.read_text(encoding="utf-8"):
+        raise RuntimeError("the GPU's failure left no marker in the browsing profile: " + str(marker))
+    print("WebGL: " + " | ".join(drawn))
 
 
 def environment_for(directory, temporary, qt_bin=None, component=None):
@@ -180,10 +255,33 @@ def environment_for(directory, temporary, qt_bin=None, component=None):
                        MITCAD_WEB_PROFILE_DIR=str(directory / "profile"),
                        # Never the user's installed components.
                        MITCAD_BROWSER_COMPONENTS_DIR=str(directory / "components"))
+    # The GPU's choice is the profile marker's (mitcad#1906).
+    environment.pop("MITCAD_WEB_GPU", None)
+    environment.pop("MITCAD_TEST_WEB_GPU_FAILURE", None)
     # The web browser component the build made (no download).
     if component:
         environment["MITCAD_BROWSER_COMPONENT_DIR"] = str(component)
     return environment
+
+
+def run_session(app, directory, session, port, qt_bin=None, component=None):
+    """One session of the application: the path of its log, and whether it
+    failed."""
+    log_path = directory / ("webgl-%d.log" % session)
+    script = script_path(directory, session)
+    script.write_text(workflow(port, session), encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="settings-", dir=directory) as temporary:
+        environment = environment_for(directory, temporary, qt_bin, component)
+        environment["MITCAD_TEST_INPUT"] = str(script)
+        if session == 1:
+            environment["MITCAD_TEST_WEB_GPU_FAILURE"] = FAILURE
+        with log_path.open("wb") as log:
+            result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp"],
+                                    env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=210)
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        failed = (result.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines())
+                  or "TestDriver: quit" not in text)
+    return log_path, failed
 
 
 def run(app, directory, qt_bin=None, component=None):
@@ -191,30 +289,27 @@ def run(app, directory, qt_bin=None, component=None):
     prepare(directory)
     (directory / "server.log").unlink(missing_ok=True)
     server = start_server(directory)
-    log_path = directory / "webgl.log"
+    failure = None
     try:
-        script = directory / "webgl.mitcad-ui"
-        script.write_text(workflow(server.server_address[1]), encoding="utf-8")
-        with tempfile.TemporaryDirectory(prefix="settings-", dir=directory) as temporary:
-            environment = environment_for(directory, temporary, qt_bin, component)
-            environment["MITCAD_TEST_INPUT"] = str(script)
-            with log_path.open("wb") as log:
-                result = subprocess.run([app, "--ui=qt", "--no-native-dialogs", "--no-recovery", "--no-mcp"],
-                                        env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=240)
-            text = log_path.read_text(encoding="utf-8", errors="replace")
-            failed = (result.returncode or any(line.startswith("TestDriver: FAIL") for line in text.splitlines())
-                      or "TestDriver: quit" not in text)
+        for session in SESSIONS:
+            log_path, failed = run_session(app, directory, session, server.server_address[1], qt_bin, component)
+            if failed:
+                failure = (session, log_path)
+                break
     finally:
         server.shutdown()
-    if failed:
+    if failure:
+        session, log_path = failure
         # The page's own result (no context, or what it read back) first.
         try:
             verify(directory)
         except (OSError, RuntimeError) as error:
-            raise RuntimeError("Component from Web WebGL workflow failed (%s): %s" % (error, log_path))
-        raise RuntimeError("Component from Web WebGL workflow failed: " + str(log_path))
+            raise RuntimeError("Component from Web WebGL workflow failed in session %d (%s): %s"
+                               % (session, error, log_path))
+        raise RuntimeError("Component from Web WebGL workflow failed in session %d: %s" % (session, log_path))
     verify(directory)
-    print("PASS: Component from Web: a page's WebGL context made, a triangle drawn and read back")
+    print("PASS: Component from Web: a page's WebGL context made, a triangle drawn and read back; after the GPU's "
+          "failure the next start in software only; the feedback diagnostics carry the browser")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 // with its modifier toggled) changes nothing; a Ctrl pressed with another
 // modifier, during a drag or where it may not hide does nothing. And which
 // widgets count as text fields.
+#include "UnitTests.hpp"
 #include "framework/PreviewHold.hpp"
 
 #include <cstdio>
@@ -241,3 +242,4 @@ int previewHoldTests() {
   textFieldTests();
   return failures;
 }
+MITCAD_UNIT_TEST(previewHoldTests);

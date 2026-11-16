@@ -4,6 +4,7 @@
 // encoding fits, in the format asked for, within a bounded number of
 // encodings; one that cannot fit, or an encoder that fails, is reported
 // without an endless loop.
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -179,3 +180,4 @@ int screenshotBudgetTests() {
   cannotFit();
   return failures;
 }
+MITCAD_UNIT_TEST(screenshotBudgetTests);

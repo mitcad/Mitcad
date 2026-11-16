@@ -15,9 +15,13 @@
 #include "../WindowManager.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <functional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include <QAction>
 #include <QApplication>
@@ -34,10 +38,19 @@
 #include <QLocale>
 #include <QMimeData>
 #include <QPushButton>
+#include <QRectF>
+#include <QSaveFile>
+#include <QScopeGuard>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
 #include <QtLogging>
+
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include "../browser/BrowserController.hpp"
 #include "../browser/DocumentSnapshot.hpp"
@@ -46,7 +59,9 @@
 #include "../framework/CommandRegistry.hpp"
 #include "../framework/IdleCall.hpp"
 #include "../framework/Json.hpp"
+#include "../framework/ModelShapes.hpp"
 #include "../framework/WaitCursor.hpp"
+#include "../render/RenderLights.hpp"
 #include "../report/ReportCenter.hpp"
 #include "../web/GltfExport.hpp"
 #include "../web/WebPage.hpp"
@@ -192,7 +207,90 @@ void showImported(DocumentHost& host, const QString& name, const QJsonObject& re
            QStringLiteral("Import of %1").arg(name));
 }
 
+// The active component's placement in the design (its first occurrence,
+// depth first as the `components` query lists the tree, as Mount places by
+// it): from the active component's coordinates, in which insert_component
+// places a component, to the design's; the identity for the root.
+gp_Trsf activePlacement(const QJsonObject& components) {
+  gp_Trsf world;
+  const QString active = components.value(QStringLiteral("active")).toString();
+  if (active.isEmpty() || active == QStringLiteral("C0")) {
+    return world;
+  }
+  bool found = false;
+  std::function<void(const QJsonArray&)> walk = [&](const QJsonArray& level) {
+    for (const QJsonValue& value : level) {
+      if (found) {
+        return;
+      }
+      const QJsonObject node = value.toObject();
+      if (node.value(QStringLiteral("component")).toString() == active) {
+        world = trsfOf(node.value(QStringLiteral("world")).toArray());
+        found = true;
+        return;
+      }
+      walk(node.value(QStringLiteral("children")).toArray());
+    }
+  };
+  walk(components.value(QStringLiteral("occurrences")).toArray());
+  return world;
+}
+
+// insert_component's `transform` for a design file dropped on a face
+// (mitcad#1894): at the point, its Z along the face's normal (the rotation
+// about the origin first, then the move), both given in the design's
+// coordinates and placed in the active component's (`active`:
+// activePlacement).
+QJsonObject dropPlacement(const gp_Pnt& worldPoint, const gp_Dir& worldNormal, const gp_Trsf& active) {
+  const gp_Trsf back = active.Inverted();
+  const gp_Pnt point = worldPoint.Transformed(back);
+  const gp_Dir normal = worldNormal.Transformed(back);
+  QJsonObject transform{{QStringLiteral("translation"), QJsonArray{point.X(), point.Y(), point.Z()}}};
+  const gp_Dir z(0.0, 0.0, 1.0);
+  const double angle = z.Angle(normal);
+  if (angle > 1e-9) {
+    gp_Vec axis = gp_Vec(z).Crossed(gp_Vec(normal));
+    if (axis.Magnitude() < 1e-9) {
+      axis = gp_Vec(1.0, 0.0, 0.0); // straight down: turned over about X
+    } else {
+      axis.Normalize();
+    }
+    transform.insert(QStringLiteral("rotation"),
+                     QJsonObject{{QStringLiteral("axis"), QJsonArray{axis.X(), axis.Y(), axis.Z()}},
+                                 {QStringLiteral("angle"), angle}});
+  }
+  return transform;
+}
+
+// The gap between files imported side by side into a design (mitcad#1894).
+constexpr double kImportGapMm = 10.0;
+
 } // namespace
+
+// Design files of other formats into the open design (mitcad#1894,
+// MainWindow::importDesignsIntoDesign).
+struct DesignImportBatch {
+  QStringList paths;
+  int next = 0;        // the index of the next file to import
+  bool linked = false; // saved in the project and linked, else copies
+  QJsonValue at;       // the first file's placement (a drop), else none
+  int depth = 0;       // the undo depth before the first file
+  // The imported designs as files for insert_component (copies): gone
+  // with the batch, as the copies need them no longer.
+  QTemporaryDir copies;
+  // The progress dialog between two files (F3dImport::takeProgress).
+  QPointer<QDialog> progress;
+  // The largest X of what came in so far, in the design's coordinates.
+  std::optional<double> right;
+  QStringList inserted; // the files that came in
+  struct Report {
+    QString name;
+    QJsonObject result;
+    int bodies = 0;
+  };
+  std::vector<Report> reports;
+  QStringList failed; // "file: why", for those that did not
+};
 
 // ---------------------------------------------------------------------------
 // Commands and the File menu
@@ -291,7 +389,7 @@ void MainWindow::registerFileCommands() {
                         QStringLiteral("ifc"),     QStringLiteral("ifczip"), QStringLiteral("rvt"),
                         QStringLiteral("rfa"),     QStringLiteral("solidcraft"), QStringLiteral("sc"),
                         QStringLiteral("dwg"),     QStringLiteral("3dm"),   QStringLiteral("open"),
-                        QStringLiteral("gltf"),    QStringLiteral("glb")};
+                        QStringLiteral("gltf"),    QStringLiteral("glb"),   QStringLiteral("serp")};
   m_registry->add(importDef);
   CommandDef exportDef = def("file.export", tr("Export…"), "export",
                              tr("Bodies to STEP, IGES, STL, OBJ or BRep; a sketch to DXF"),
@@ -733,20 +831,67 @@ void MainWindow::dropEvent(QDropEvent* event) {
   }
   event->acceptProposedAction();
   qDebug().noquote() << QStringLiteral("Dropped %1").arg(paths.join(QStringLiteral(", ")));
-  openDropped(paths);
+  // Over the 3D view (mitcad#1894): where, in its pixels.
+  std::optional<QPointF> onView;
+  if (m_viewer != nullptr && m_viewer->isVisible() && !startPageShown()) {
+    const QPointF at = m_viewer->mapFromGlobal(mapToGlobal(event->position()));
+    if (QRectF(m_viewer->rect()).contains(at)) {
+      onView = at;
+    }
+  }
+  openDropped(paths, onView);
 }
 
-void MainWindow::openDropped(const QStringList& paths) {
+void MainWindow::openDropped(const QStringList& paths, std::optional<QPointF> onView) {
   // Later, so that the drag ends first; a design opens, the rest come in
   // (from the Start page too, mitcad#1258, which the import leaves).
-  afterEventWhenIdle(*this, this, [this, paths] {
+  afterEventWhenIdle(*this, this, [this, paths, onView] {
+    // Design files of other formats dropped on the view of a design with
+    // content come in as its components, without asking (mitcad#1894).
+    QStringList designs;
+    if (onView && m_mode == Mode::Idle) {
+      for (const QString& path : paths) {
+        if (importsAsComponent(fileKind(path)) && designHasContent(path)) {
+          designs << path;
+        }
+      }
+    }
     for (const QString& path : paths) {
-      if (fileKind(path) == FileKind::Design) {
+      const FileKind kind = fileKind(path);
+      if (designs.contains(path)) {
+        continue;
+      }
+      if (kind == FileKind::Design) {
         openPath(path);
-      } else if (m_mode == Mode::Idle || fileKind(path) == FileKind::Drawing) {
+      } else if (importsAsComponent(kind) && m_mode == Mode::Idle) {
+        // As before: a new document of its own.
+        leaveStartPage();
+        if (maybeSave()) {
+          startF3dImport(path, QJsonObject(), true);
+        }
+      } else if (m_mode == Mode::Idle || kind == FileKind::Drawing) {
         leaveStartPage();
         importPath(path, true);
       }
+    }
+    if (!designs.isEmpty()) {
+      // The first at the point of the face under the drop, its Z along the
+      // face's normal; at the origin over empty space. The view's point is
+      // the design's; the component goes into the active component, placed
+      // in its coordinates.
+      QJsonValue at;
+      if (const std::optional<std::pair<gp_Pnt, gp_Dir>> hit = render::surfaceAt(*m_viewer, *onView)) {
+        gp_Trsf active;
+        try {
+          active = activePlacement(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}));
+        } catch (const std::exception& e) {
+          qWarning().noquote() << QStringLiteral("Import into this design: the active component's placement not "
+                                                 "known: %1")
+                                      .arg(errorText(e));
+        }
+        at = dropPlacement(hit->first, hit->second, active);
+      }
+      importDesignsIntoDesign(designs, false, at);
     }
   });
 }
@@ -755,13 +900,92 @@ void MainWindow::openDropped(const QStringList& paths) {
 // Import
 
 void MainWindow::importFile() {
-  const QString path = dialogOpenFileName(this, tr("Import"), dialogFolder(DialogGroup::Import), importFilter());
-  if (!path.isEmpty()) {
-    rememberDialogFolder(DialogGroup::Import, path);
-    // What comes in shows in the 3D view (from the Start tab's Import
-    // File…, mitcad#1258).
-    leaveStartPage();
-    importPath(path, true);
+  // One file or more (mitcad#1894).
+  const QStringList paths =
+      dialogOpenFileNames(this, tr("Import"), dialogFolder(DialogGroup::Import), importFilter());
+  if (paths.isEmpty()) {
+    return;
+  }
+  rememberDialogFolder(DialogGroup::Import, paths.first());
+  // What comes in shows in the 3D view (from the Start tab's Import
+  // File…, mitcad#1258).
+  leaveStartPage();
+  if (paths.size() == 1) {
+    importPath(paths.first(), true);
+    return;
+  }
+  // Several: the design files of other formats together (each a component
+  // of this design, or each a new design), the others one by one, each
+  // asking what it asks alone.
+  QStringList designs;
+  for (const QString& path : paths) {
+    if (importsAsComponent(fileKind(path))) {
+      designs << path;
+    } else {
+      importPath(path, true);
+    }
+  }
+  if (!designs.isEmpty()) {
+    importDesignFiles(designs);
+  }
+}
+
+bool MainWindow::designHasContent(const QString& path) {
+  try {
+    return queryObject({{QStringLiteral("query"), QStringLiteral("file_structure")},
+                        {QStringLiteral("path"), QFileInfo(path).absoluteFilePath()}})
+        .value(QStringLiteral("content"))
+        .toBool();
+  } catch (const std::exception& e) {
+    // Asked then: nothing is lost by a question.
+    qDebug().noquote() << QStringLiteral("file_structure of %1: %2").arg(path, errorText(e));
+    return true;
+  }
+}
+
+bool MainWindow::importDesignFiles(const QStringList& paths) {
+  if (paths.isEmpty()) {
+    return false;
+  }
+  // One file into an empty design: a new design, as before, nothing asked.
+  if (paths.size() == 1 && !designHasContent(paths.first())) {
+    if (!maybeSave()) {
+      return false;
+    }
+    startF3dImport(paths.first(), QJsonObject(), true);
+    return true;
+  }
+  // Linked is offered for a saved design in a project with versions.
+  const bool inProject = m_project.hasHistory() && !m_filePath.isEmpty();
+  const std::optional<DesignImportPlace> place = askDesignImportPlace(this, paths, inProject);
+  if (!place) {
+    return false;
+  }
+  if (place->intoDesign) {
+    importDesignsIntoDesign(paths, place->linked);
+    return true;
+  }
+  for (const QString& path : paths) {
+    openDesignBeside(path);
+    // (Without a window manager the first replaces this design; the rest
+    // would replace it again.)
+    if (m_windowManager == nullptr) {
+      break;
+    }
+  }
+  return true;
+}
+
+void MainWindow::openDesignBeside(const QString& path) {
+  if (m_windowManager == nullptr) {
+    if (maybeSave()) {
+      startF3dImport(path, QJsonObject(), true);
+    }
+    return;
+  }
+  QString error;
+  if (m_windowManager->openFileBeside(this, path, error, true) == nullptr && !error.isEmpty()) {
+    sheetWarning(this, tr("Import"), tr("Could not import %1:\n%2").arg(QDir::toNativeSeparators(path), error));
   }
 }
 
@@ -786,8 +1010,13 @@ bool MainWindow::importPath(const QString& path, bool interactive, QString* erro
         break;
       }
     }
-    // A design with its history is a document of its own (a FreeCAD
-    // document too, and a part file, whose history comes later).
+    // A design with its history (an .ipt part, an .iam assembly, an .f3d
+    // design, a FreeCAD document) into the open design as a component, or
+    // as a new design (mitcad#1894): asked while the design has content.
+    if (interactive && importsAsComponent(fileKind(path))) {
+      return importDesignFiles({path});
+    }
+    // Another one is a document of its own.
     if (interactive && !maybeSave()) {
       return false;
     }
@@ -1251,9 +1480,12 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
     showError(tr("An import is running."));
     return;
   }
+  // A file of an import into this design (mitcad#1894): inserted as a
+  // component when it is in, not opened as the document.
+  const std::shared_ptr<DesignImportBatch> batch = rerun.isEmpty() ? m_designImport : nullptr;
   // A new import of a design: nothing decided about its deviating results
   // yet (mitcad#379).
-  if (rerun.isEmpty()) {
+  if (rerun.isEmpty() && !batch) {
     m_deviationsPath = path;
     m_deviationsDeclined.clear();
     m_deviationsRerunFrom = -1;
@@ -1265,9 +1497,46 @@ void MainWindow::startF3dImport(const QString& path, const QJsonObject& rerun, b
     m_import->setOptions(rerun);
   }
   m_import->setAskChoices(ask);
+  if (batch) {
+    // One progress dialog for the batch: the one before's, kept shown
+    // while more files follow.
+    const auto count = static_cast<int>(batch->paths.size());
+    m_import->setBatch(batch->next, count);
+    m_import->setKeepProgress(batch->next < count);
+    m_import->adoptProgress(batch->progress.data());
+    batch->progress = nullptr;
+  }
   connect(m_import, &F3dImport::finished, this,
-          [this, path](bool ok, const QByteArray& project, const QJsonObject& result, const QString& error) {
+          [this, path, batch](bool ok, const QByteArray& project, const QJsonObject& result, const QString& error) {
             const QString name = QFileInfo(path).fileName();
+            if (batch) {
+              // Into this design (mitcad#1894): its progress dialog for the
+              // next file, then the design inserted.
+              if (m_import) {
+                batch->progress = m_import->takeProgress();
+              }
+              m_import.clear();
+              if (batch != m_designImport) {
+                // (The batch ended meanwhile.)
+                if (batch->progress) {
+                  batch->progress->hide();
+                  batch->progress->deleteLater();
+                }
+                return;
+              }
+              if (!ok) {
+                if (error.isEmpty()) {
+                  finishDesignImport(tr("Import of %1 canceled.").arg(name), true);
+                } else {
+                  qWarning().noquote() << QStringLiteral("Import of %1 failed: %2").arg(name, error);
+                  finishDesignImport(
+                      tr("Could not import %1:\n%2").arg(QDir::toNativeSeparators(path), error));
+                }
+                return;
+              }
+              insertImportedDesign(path, project, result);
+              return;
+            }
             // (The import's object goes once this returns: no import runs
             // from now on, and one may start again, mitcad#379.)
             const QJsonObject options = m_import ? m_import->options() : QJsonObject();
@@ -1455,6 +1724,247 @@ void MainWindow::offerDeviations(const QString& path, const QJsonObject& result,
   m_deviationsRerunFrom = first;
   qInfo().noquote() << QStringLiteral("Import of %1 runs again keeping %2 items parametric").arg(name).arg(accepted.size());
   startF3dImport(path, options);
+}
+
+// ---------------------------------------------------------------------------
+// Design files of other formats into the open design (mitcad#1894)
+
+void MainWindow::importDesignsIntoDesign(const QStringList& paths, bool linked, const QJsonValue& at) {
+  if (paths.isEmpty()) {
+    return;
+  }
+  if (m_import || m_designImport) {
+    showError(tr("An import is running."));
+    return;
+  }
+  if (!canChangeModel()) {
+    showError(changeBlockedReason());
+    return;
+  }
+  auto batch = std::make_shared<DesignImportBatch>();
+  batch->paths = paths;
+  // Linked only into a saved design of a project with versions: the file
+  // goes next to it.
+  batch->linked = linked && m_project.hasHistory() && !m_filePath.isEmpty();
+  batch->at = at;
+  batch->depth = undoDepth();
+  if (!batch->linked && !batch->copies.isValid()) {
+    showError(tr("No temporary directory for the import."));
+    return;
+  }
+  m_designImport = batch;
+  qInfo().noquote() << QStringLiteral("Import into this design: %1 file(s), %2%3")
+                           .arg(paths.size())
+                           .arg(batch->linked ? QStringLiteral("linked") : QStringLiteral("copies"),
+                                at.isObject() ? QStringLiteral(", the first at the drop point") : QString());
+  importNextDesign();
+}
+
+void MainWindow::importNextDesign() {
+  const std::shared_ptr<DesignImportBatch> batch = m_designImport;
+  if (!batch) {
+    return;
+  }
+  if (batch->next >= batch->paths.size()) {
+    finishDesignImport(QString());
+    return;
+  }
+  const QString path = batch->paths.at(batch->next);
+  ++batch->next;
+  // Its choices asked as Import's (an .iam assembly's parts with their
+  // history, mitcad#507).
+  startF3dImport(path, QJsonObject(), true);
+}
+
+void MainWindow::insertImportedDesign(const QString& path, const QByteArray& design, const QJsonObject& result) {
+  const std::shared_ptr<DesignImportBatch> batch = m_designImport;
+  if (!batch) {
+    return;
+  }
+  // The next file once this one is in, from the event loop (the import
+  // that finished is still ending).
+  const auto next = qScopeGuard([this] { QTimer::singleShot(0, this, [this] { importNextDesign(); }); });
+  const QString name = QFileInfo(path).fileName();
+  const QString stem = QFileInfo(path).completeBaseName();
+  // The imported design as a design file, named after the imported file,
+  // as its component is: in the project next to the open design, linked
+  // (another name when that one is taken), or a temporary copy.
+  QString file;
+  QString base;
+  if (batch->linked) {
+    const QDir folder = QFileInfo(m_filePath).absoluteDir();
+    file = folder.filePath(QStringLiteral("%1.mitcad").arg(stem));
+    for (int n = 2; QFileInfo::exists(file); ++n) {
+      file = folder.filePath(QStringLiteral("%1 (%2).mitcad").arg(stem).arg(n));
+    }
+    base = folder.absolutePath();
+  } else {
+    const QString folder = batch->copies.filePath(QString::number(batch->next));
+    QDir().mkpath(folder);
+    file = QDir(folder).filePath(QStringLiteral("%1.mitcad").arg(stem));
+  }
+  QSaveFile out(file);
+  if (!out.open(QIODevice::WriteOnly) || out.write(design) != design.size() || !out.commit()) {
+    qWarning().noquote() << QStringLiteral("Import into this design: %1 not written to %2: %3")
+                                .arg(name, file, out.errorString());
+    batch->failed << tr("%1: the imported design could not be written").arg(name);
+    return;
+  }
+  QJsonObject command = cmd("insert_component", {{QStringLiteral("path"), file}, {QStringLiteral("link"), batch->linked}});
+  if (!base.isEmpty()) {
+    command.insert(QStringLiteral("base"), base);
+  }
+  // The first where it was dropped.
+  if (batch->inserted.isEmpty() && batch->at.isObject()) {
+    command.insert(QStringLiteral("transform"), batch->at);
+  }
+  QJsonObject inserted;
+  if (!runModelCommand(command, &inserted)) {
+    qWarning().noquote() << QStringLiteral("Import into this design: %1 not inserted: %2").arg(name, m_lastError);
+    batch->failed << QStringLiteral("%1: %2").arg(name, m_lastError);
+    if (batch->linked) {
+      QFile::remove(file); // nothing links it
+    }
+    return;
+  }
+  const QString occurrence = inserted.value(QStringLiteral("occurrence")).toString();
+  const QString component = inserted.value(QStringLiteral("component")).toString();
+  const QString componentName = inserted.value(QStringLiteral("name")).toString();
+  // Beside what came in before it, along X, so that they do not overlap:
+  // its placed bodies' box from 10 mm past theirs.
+  double low = std::numeric_limits<double>::infinity();
+  double high = -std::numeric_limits<double>::infinity();
+  try {
+    const QJsonArray instances = query({{QStringLiteral("query"), QStringLiteral("instances")},
+                                        {QStringLiteral("properties"), true}})
+                                     .toArray();
+    for (const QJsonValue& value : instances) {
+      const QJsonObject instance = value.toObject();
+      if (!instance.value(QStringLiteral("path")).toArray().contains(QJsonValue(occurrence))) {
+        continue;
+      }
+      const QJsonObject box = instance.value(QStringLiteral("bbox")).toObject();
+      if (box.isEmpty()) {
+        continue;
+      }
+      low = std::min(low, box.value(QStringLiteral("min")).toArray().at(0).toDouble());
+      high = std::max(high, box.value(QStringLiteral("max")).toArray().at(0).toDouble());
+    }
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Import into this design: the box of %1 not known: %2")
+                                .arg(name, errorText(e));
+  }
+  if (low <= high) {
+    if (batch->right) {
+      const double move = *batch->right + kImportGapMm - low;
+      // Along the design's X, given in the active component's coordinates
+      // (its occurrence is placed there, at the identity until now).
+      gp_Trsf active;
+      try {
+        active = activePlacement(queryObject({{QStringLiteral("query"), QStringLiteral("components")}}));
+      } catch (const std::exception& e) {
+        qDebug().noquote() << QStringLiteral("components: %1").arg(errorText(e));
+      }
+      const gp_Vec local = gp_Vec(move, 0.0, 0.0).Transformed(active.Inverted());
+      const QJsonObject placed =
+          cmd("set_occurrence_transform",
+              {{QStringLiteral("occurrence"), occurrence},
+               {QStringLiteral("transform"),
+                QJsonObject{{QStringLiteral("translation"), QJsonArray{local.X(), local.Y(), local.Z()}}}}});
+      if (runModelCommand(placed)) {
+        low += move;
+        high += move;
+      } else {
+        qWarning().noquote() << QStringLiteral("Import into this design: %1 not moved beside the others: %2")
+                                    .arg(name, m_lastError);
+      }
+    }
+    batch->right = batch->right ? std::max(*batch->right, high) : high;
+  }
+  // Its features (the history it came with) and bodies, for the log.
+  int features = 0;
+  try {
+    const QJsonArray components = queryObject({{QStringLiteral("query"), QStringLiteral("components")}})
+                                      .value(QStringLiteral("components"))
+                                      .toArray();
+    for (const QJsonValue& value : components) {
+      const QJsonObject c = value.toObject();
+      if (c.value(QStringLiteral("uid")).toString() == component) {
+        features = static_cast<int>(c.value(QStringLiteral("features")).toArray().size());
+      }
+    }
+  } catch (const std::exception& e) {
+    qDebug().noquote() << QStringLiteral("components: %1").arg(errorText(e));
+  }
+  const int bodies = static_cast<int>(inserted.value(QStringLiteral("bodies")).toArray().size());
+  batch->inserted << name;
+  batch->reports.push_back({name, result, bodies});
+  qInfo().noquote() << QStringLiteral("Imported %1 into this design as component %2 (%3): %4 bodies, %5 features%6")
+                           .arg(name, componentName, batch->linked ? QStringLiteral("linked") : QStringLiteral("copy"))
+                           .arg(bodies)
+                           .arg(features)
+                           .arg(batch->linked ? QStringLiteral(", saved as %1").arg(QFileInfo(file).fileName())
+                                              : QString());
+}
+
+void MainWindow::finishDesignImport(const QString& stopped, bool cancelled) {
+  const std::shared_ptr<DesignImportBatch> batch = m_designImport;
+  m_designImport.reset();
+  if (!batch) {
+    return;
+  }
+  if (batch->progress) {
+    batch->progress->hide();
+    batch->progress->deleteLater();
+  }
+  const auto count = static_cast<int>(batch->inserted.size());
+  // The whole import one undo step.
+  if (count > 0 && undoDepth() > batch->depth) {
+    const QString label =
+        count == 1 ? tr("Import %1").arg(batch->inserted.first()) : tr("Import %n files", nullptr, count);
+    runCommand(cmd("merge_undo", {{QStringLiteral("depth"), batch->depth}, {QStringLiteral("label"), label}}));
+    m_viewer->fitAll();
+  }
+  qInfo().noquote() << QStringLiteral("Import into this design: %1 of %2 file(s) in%3%4")
+                           .arg(count)
+                           .arg(batch->paths.size())
+                           .arg(batch->failed.isEmpty()
+                                    ? QString()
+                                    : QStringLiteral("; not in: %1").arg(batch->failed.join(QStringLiteral("; "))),
+                                stopped.isEmpty() ? QString() : QStringLiteral("; stopped: %1").arg(stopped.simplified()));
+  // Its warnings as every import's (mitcad#1040): those of the files that
+  // came in and the files that did not.
+  QStringList warnings;
+  for (const DesignImportBatch::Report& report : batch->reports) {
+    for (const QString& warning : resultWarnings(report.result)) {
+      warnings << QStringLiteral("%1: %2").arg(report.name, warning);
+    }
+  }
+  warnings << batch->failed;
+  if (count > 0) {
+    showDone(*this,
+             count == 1 ? tr("Imported %1 into this design.").arg(batch->inserted.first())
+                        : tr("Imported %n files into this design.", nullptr, count),
+             warnings, QStringLiteral("Import into this design"));
+  }
+  if (cancelled) {
+    showHint(stopped);
+  } else if (!stopped.isEmpty()) {
+    sheetCritical(this, tr("Import"), stopped);
+  } else if (count == 0 && !batch->failed.isEmpty()) {
+    sheetWarning(this, tr("Import"),
+                 tr("Could not import into this design:\n%1").arg(batch->failed.join(QLatin1Char('\n'))));
+  }
+  // Each file's import report, one after another, once the design shows
+  // what came in.
+  const std::vector<DesignImportBatch::Report> reports = batch->reports;
+  if (!reports.empty()) {
+    afterEventWhenIdle(*this, this, [this, reports] {
+      for (const DesignImportBatch::Report& report : reports) {
+        showImportReport(this, report.name, report.result, report.bodies);
+      }
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

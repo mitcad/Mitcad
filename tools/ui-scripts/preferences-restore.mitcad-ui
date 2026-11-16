@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Restore Defaults (mitcad#1887, GitHub mitcad/Mitcad#357) on
+# a new design, in the Preferences dialog (OK and Cancel) and in macOS's
+# Settings window, whose changes apply as they are made:
+#   1. A few preferences changed on three pages: Display (Orientation cube
+#      Perspective, Small circles Full Detail, Ghost inactive components
+#      off), General (Open in the current window on) and Sketch (Click adds
+#      to the selection in sketches on); a recent file and a library source
+#      saved beside them.
+#   2. Display, Restore Defaults › Current Group (Display): the question says
+#      what is reset and what is kept; Restore Defaults puts Display back to
+#      its defaults, the page shows them at once and the settings store holds
+#      them, while General and Sketch keep their changes.
+#   3. Restore Defaults › All Settings: General and Sketch back to their
+#      defaults too, shown and saved; the recent file and the library source
+#      stay.
+# Run by tools/ui-preferences-restore-test.sh (Linux),
+# tools/ui-windows-preferences-restore-test.ps1 (Windows) and
+# tools/ui-macos-preferences-restore-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+set-setting recentFiles kept-recent.mitcad
+set-setting libraries/sources kept-library-sources
+
+# 1. Changes on Display, General and Sketch.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesCubeProjection Perspective
+qt-choice preferencesSmallCircles 'Full Detail'
+button '^Ghost inactive components$' ghostInactive
+key Return
+wait-log '^Preferences: small circles full$'
+wait-log '^Preferences: ghost inactive components off$'
+focus-main
+wait-idle
+expect-setting view/cubeProjection perspective
+expect-setting view/smallCircles full
+expect-setting view/ghostInactive false
+mark
+command tools.preferences.general
+focus-dialog '^(Preferences|Settings)$'
+button '^Open in the current window$' openInCurrentWindow
+key Return
+wait-log '^Preferences: navigation [a-z-]+, zoom to cursor '
+focus-main
+wait-idle
+expect-setting documents/openInCurrentWindow true
+mark
+command tools.preferences.sketch
+focus-dialog '^(Preferences|Settings)$'
+button '^Click adds to the selection in sketches$' clickAddsToSelection
+key Return
+wait-log '^Preferences: click adds to the selection in sketches on$'
+focus-main
+wait-idle
+expect-setting sketch/clickAddsToSelection true
+
+# 2. Restore Defaults › Current Group on Display.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+button '^Restore Defaults$' preferencesRestoreDefaults
+popup 'Current Group (Display)'
+wait-log '^Preferences restore defaults asked: Restore the defaults of the Display settings[?] The settings on the Display page go back to their defaults[.] .*Kept: recent files, library sources and fetched libraries, favorites, window sizes and places, API keys, chat histories, and keyboard shortcuts'
+focus-dialog '^Restore Defaults$'
+button '^Restore Defaults$'
+wait-log '^Preferences: restore defaults, current group: display$'
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+expect-widget-property preferencesCubeProjection currentIndex 0
+expect-widget-property preferencesSmallCircles currentIndex 0
+expect-widget-property ghostInactive checked true
+expect-widget-property openInCurrentWindow checked true
+expect-widget-property clickAddsToSelection checked true
+expect-setting view/cubeProjection follow-view
+expect-setting view/smallCircles adaptive
+expect-setting view/ghostInactive true
+expect-setting documents/openInCurrentWindow true
+expect-setting sketch/clickAddsToSelection true
+
+# 3. Restore Defaults › All Settings.
+mark
+button '^Restore Defaults$' preferencesRestoreDefaults
+popup 'All Settings'
+wait-log '^Preferences restore defaults asked: Restore the defaults of all settings[?] Every setting in Preferences goes back to its default[.] .*Kept: recent files'
+focus-dialog '^Restore Defaults$'
+button '^Restore Defaults$'
+wait-log '^Preferences: restore defaults, all settings: general, navigation, display, .*sketch, suppliers, assembly$'
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+expect-widget-property openInCurrentWindow checked false
+expect-widget-property clickAddsToSelection checked false
+expect-widget-property preferencesCubeProjection currentIndex 0
+expect-widget-property ghostInactive checked true
+expect-setting documents/openInCurrentWindow false
+expect-setting sketch/clickAddsToSelection false
+expect-setting view/cubeProjection follow-view
+expect-setting recentFiles kept-recent.mitcad
+expect-setting libraries/sources kept-library-sources
+key Escape
+focus-main
+wait-idle
+expect-never 'TestDriver: FAIL'

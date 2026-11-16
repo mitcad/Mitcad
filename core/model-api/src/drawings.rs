@@ -259,6 +259,13 @@ pub(super) struct EditViewCommand {
     /// `""` for the default.
     #[serde(default)]
     label: Option<String>,
+    /// Where its label goes from under the middle of its box, sheet mm
+    /// (mitcad#1909); `[0, 0]` puts it back.
+    #[serde(default)]
+    label_offset: Option<P2>,
+    /// Its label moved by this on the sheet (a drag, mitcad#1909).
+    #[serde(default)]
+    label_move: Option<P2>,
     #[serde(default)]
     direction: Option<Value>,
     #[serde(default)]
@@ -1210,6 +1217,8 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 let other = c.scale.is_some()
                     || c.style.is_some()
                     || c.label.is_some()
+                    || c.label_offset.is_some()
+                    || c.label_move.is_some()
                     || c.direction.is_some()
                     || c.subject.is_some()
                     || c.side.is_some()
@@ -1677,6 +1686,7 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                         map,
                         bounds,
                         label: sheet.label(view.id),
+                        label_offset: view.label_offset.unwrap_or([0.0, 0.0]),
                         hatch,
                         shading: shading_shown,
                         holes: None,
@@ -2034,6 +2044,12 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                                 } else {
                                     json!([b.min, b.max])
                                 };
+                                // Its label's box, which a drag moves
+                                // (mitcad#1909).
+                                if let Some(label) = evaluated.views[*i].label_group() {
+                                    let b = mitcad_model_drawing::annotate::group_bounds(&label);
+                                    view["label_box"] = json!([b.min, b.max]);
+                                }
                             }
                         }
                     }
@@ -2350,6 +2366,7 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             scale,
             style: c.style,
             label: c.label.clone().filter(|l| !l.trim().is_empty()),
+            label_offset: None,
             subject,
             breaks: Vec::new(),
             aligned: true,
@@ -2574,6 +2591,23 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             if let Some(label) = &c.label {
                 view.label = (!label.trim().is_empty()).then(|| label.trim().to_owned());
             }
+            // Its label dragged, or put where it is given (mitcad#1909):
+            // kept as an offset from its own place, so that it moves with
+            // the view; none where it is not moved at all.
+            if c.label_offset.is_some() || c.label_move.is_some() {
+                let mut offset = c
+                    .label_offset
+                    .unwrap_or_else(|| view.label_offset.unwrap_or([0.0, 0.0]));
+                if let Some(d) = c.label_move {
+                    offset = [offset[0] + d[0], offset[1] + d[1]];
+                }
+                if offset.iter().any(|v| !v.is_finite()) {
+                    return Err(ApiError(
+                        "a label's place is two numbers of millimetres".to_owned(),
+                    ));
+                }
+                view.label_offset = (offset != [0.0, 0.0]).then_some(offset);
+            }
             if let Some(subject) = subject {
                 if !matches!(view.kind, ViewKind::Base { .. }) {
                     return Err(ApiError("only a base view has a subject".to_owned()));
@@ -2741,6 +2775,17 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             && turn.is_none()
         {
             format!("Move view {id} of {}", old.name)
+        } else if (c.label_offset.is_some() || c.label_move.is_some())
+            && !moved
+            && c.scale.is_none()
+            && c.style.is_none()
+            && c.label.is_none()
+            && c.direction.is_none()
+            && c.subject.is_none()
+            && turn.is_none()
+        {
+            // Its label dragged (mitcad#1909).
+            format!("Move the label of view {id} of {}", old.name)
         } else if update && only_subject(&old, &changed, si, id) {
             // Nothing else changed: Update from Model (mitcad#1293).
             format!("Update view {id} of {}", old.name)
@@ -2900,6 +2945,8 @@ fn view_json(sheet: &DrawingSheet, view: &DrawingView) -> Value {
         "style": sheet.style(view.id),
         "own_style": view.style.is_some(),
         "label": sheet.label(view.id),
+        // Where its label was dragged (mitcad#1909), null when it was not.
+        "label_offset": view.label_offset,
         "aligned": sheet.aligned_axis(view.id).map(|k| if k == 0 { "x" } else { "y" }),
         "breaks": view.breaks,
         "center_marks": view.center_marks,

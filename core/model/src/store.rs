@@ -425,6 +425,9 @@ struct VariantHead {
     /// Where its warnings are about, by message (mitcad#1327).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     warning_places: crate::notice::WarningPlaces,
+    /// Its remarks with their places (mitcad#1914).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    remarks: crate::notice::WarningPlaces,
     /// A pattern's elements: linear part (row-major) and translation.
     elements: Vec<([[f64; 3]; 3], [f64; 3])>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -942,6 +945,7 @@ impl ResultStore {
                 warnings: output.warnings.clone(),
                 infos: output.infos.clone(),
                 warning_places: output.warning_places.clone(),
+                remarks: output.remarks.clone(),
                 pattern_anchor: output.pattern_anchor.clone(),
                 sweep_place: output.sweep_place,
                 move_basis: output.move_basis,
@@ -1281,6 +1285,7 @@ fn restore<K: Kernel>(
         warnings: head.warnings.clone(),
         infos: head.infos.clone(),
         warning_places: head.warning_places.clone(),
+        remarks: head.remarks.clone(),
         pattern_anchor: head.pattern_anchor.clone(),
         sweep_place: head.sweep_place,
         move_basis: head.move_basis,

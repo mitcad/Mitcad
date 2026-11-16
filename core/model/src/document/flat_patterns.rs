@@ -449,6 +449,24 @@ impl<K: Kernel> Document<K> {
         Ok(json!({"body": body, "edges": edges}))
     }
 
+    /// The `sheet_flange_corners` query (mitcad#1877): the corners a
+    /// flange on the boundaries `edges` of the sheet `body` would have
+    /// (each pair of them that meets, by their indices, and the corner's
+    /// point), for the Flange panel's per-corner Miter.
+    pub fn sheet_flange_corners_json(
+        &self,
+        body: BodyUid,
+        edges: &[crate::sheet::BoundaryRef],
+    ) -> Result<Value, String> {
+        let (state, thickness) = self.sheet_at(body)?;
+        let corners = crate::sheet::folded::flange_edges::edge_corners(state, thickness, edges)?;
+        let corners: Vec<Value> = corners
+            .into_iter()
+            .map(|(edges, at)| json!({"edges": edges, "at": at}))
+            .collect();
+        Ok(json!({"body": body, "corners": corners}))
+    }
+
     /// The `sheet_seam` query (mitcad#210): the boundaries of the seam two
     /// panels of a sheet share, which a Bend folds.
     pub fn sheet_seam_json(

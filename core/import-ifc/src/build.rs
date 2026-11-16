@@ -460,6 +460,8 @@ impl<'b, 'a> Builder<'b, 'a> {
                     number: None,
                     first_face: None,
                     cage: None,
+                    material: None,
+                    appearance: None,
                 }]);
                 if let Op::With(o, participants) = &op {
                     def.operation = match *o {

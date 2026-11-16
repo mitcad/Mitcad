@@ -17,6 +17,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointF>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -78,6 +79,7 @@ struct PrintImport;
 struct PrintBedChoices;
 struct MeshPlan;
 struct MeshInsertChoice;
+struct DesignImportBatch;
 class FloatingLayout;
 class GlassCard;
 class LockController;
@@ -1554,6 +1556,38 @@ private:
   void startF3dImport(const QString& path, const QJsonObject& rerun = QJsonObject(), bool ask = false);
   // While openPath opens a file: its import asks its choices.
   bool m_askImportChoices = false;
+  // Design files of other formats (.ipt, .iam, .f3d, .FCStd) into the open
+  // design as components (mitcad#1894, files/MainWindowFiles.cpp): each
+  // imported by the import process into a design of its own
+  // (startF3dImport), then inserted with insert_component as a copy, or
+  // saved next to the open design in its project and linked (`linked`);
+  // one file after another behind one progress dialog, each after the
+  // first placed beside the ones before, the whole import one undo step
+  // ("Import part.ipt", "Import 3 files"); their import reports shown at
+  // the end, one per file. `at`: the first file's placement (a drop on a
+  // face, insert_component's `transform`), else the origin. `linked` only
+  // for a saved design in a project with versions.
+  void importDesignsIntoDesign(const QStringList& paths, bool linked, const QJsonValue& at = QJsonValue());
+  // The batch's next file, or its end.
+  void importNextDesign();
+  // A file of the batch imported (its design file's text): inserted.
+  void insertImportedDesign(const QString& path, const QByteArray& design, const QJsonObject& result);
+  // The batch ended: one undo step, the status, the reports. `stopped`:
+  // why it ended before its last file (a failed import's error, or the
+  // hint of a cancelled one, `cancelled`).
+  void finishDesignImport(const QString& stopped, bool cancelled = false);
+  std::shared_ptr<DesignImportBatch> m_designImport;
+  // Whether the open design has content (the file_structure query's
+  // `content`, asked with the file to import): Import asks Where to Import.
+  bool designHasContent(const QString& path);
+  // Design files of other formats chosen in Import (mitcad#1894): into
+  // this design, asked first when it has content or there are several, or
+  // each as a new design in a tab of its own.
+  bool importDesignFiles(const QStringList& paths);
+  // Opens a design file of another format as a new design beside this one
+  // (a tab of its own), its import asking its choices; without a window
+  // manager, in this window as before.
+  void openDesignBeside(const QString& path);
   // The items of an imported .f3d design whose results deviate from the
   // file's (mitcad#379): asked which to keep parametric, and the import run
   // again with them (`options`: those it ran with).
@@ -1891,7 +1925,7 @@ private:
   CommandSearch* m_search = nullptr;
   ViewController* m_viewController = nullptr;
   SpaceMouseController* m_spaceMouse = nullptr; // 3D mice (mitcad#951)
-  UpdateController* m_updates = nullptr; // automatic updates (mitcad#9)
+  UpdateController* m_updates = nullptr; // automatic updates (mitcad#9), the application's (mitcad#1890)
   ReportCenter* m_reports = nullptr;     // feedback and error reports (mitcad#61, mitcad#62)
   sketch::SketchController* m_sketch = nullptr;
   sketch::ShownDimensions* m_shownDimensions = nullptr; // (mitcad#1772)
@@ -1938,6 +1972,7 @@ private:
   QHash<QByteArray, Bnd_Box> m_reachBoxes;
   QString m_loggedThreads = QStringLiteral("Cosmetic threads shown: 0"); // as last logged
   QString& m_lastError = m_documentSession->state().lastError;
+  QString& m_lastModelError = m_documentSession->state().lastModelError; // with its tail, for the MCP (mitcad#1897)
   bool& m_lastCancelled = m_documentSession->state().lastCancelled;
   QString m_placementNote; // the last command's placement warning (mitcad#292)
   QStackedWidget* m_commandPages = nullptr;
@@ -2588,8 +2623,12 @@ private:
   static QByteArray designPreviewPng(const QImage& image);
   void saveDesignPreview(const QString& path, const QImage& image);
   // Dropped files, on the window or the Start page: a design opens, the
-  // other files come in (an import while no command runs).
-  void openDropped(const QStringList& paths);
+  // other files come in (an import while no command runs). Design files
+  // of other formats dropped on the 3D view of a design with content
+  // (`onView`: where, in the view's logical pixels) come in as components
+  // without asking, the first at the point of the face under the drop
+  // (mitcad#1894).
+  void openDropped(const QStringList& paths, std::optional<QPointF> onView = std::nullopt);
   StartPage* m_startPage = nullptr;
   QStringList m_startHiddenDocks; // the Docked layout's docks it hid
 

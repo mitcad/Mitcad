@@ -2,6 +2,8 @@
 #include "Dialogs.hpp"
 #include "ModelMessages.hpp"
 
+#include <utility>
+
 #include <QAbstractItemView>
 #include <QCompleter>
 #include <QDialog>
@@ -273,12 +275,13 @@ QString dialogItem(QWidget* parent, const QString& title, const QString& label,
 }
 
 namespace {
-QString fileNameDialog(QWidget* parent, const QString& title, const QString& directory,
-                       const QString& filter, QString* selectedFilter, QFileDialog::AcceptMode mode) {
+QStringList fileNamesDialog(QWidget* parent, const QString& title, const QString& directory,
+                            const QString& filter, QString* selectedFilter, QFileDialog::AcceptMode mode,
+                            QFileDialog::FileMode fileMode) {
   QFileDialog dialog(parent, title, directory, filter);
   prepareFileDialog(&dialog);
   dialog.setAcceptMode(mode);
-  dialog.setFileMode(mode == QFileDialog::AcceptSave ? QFileDialog::AnyFile : QFileDialog::ExistingFile);
+  dialog.setFileMode(fileMode);
   if (selectedFilter && !selectedFilter->isEmpty()) {
     dialog.selectNameFilter(*selectedFilter);
   }
@@ -297,18 +300,36 @@ QString fileNameDialog(QWidget* parent, const QString& title, const QString& dir
   {
     files = dialog.selectedUrls();
   }
-  return files.isEmpty() ? QString() : files.first().toLocalFile();
+  QStringList paths;
+  for (const QUrl& file : std::as_const(files)) {
+    paths << file.toLocalFile();
+  }
+  return paths;
 }
+
+QString firstOf(const QStringList& paths) { return paths.isEmpty() ? QString() : paths.first(); }
 } // namespace
 
 QString dialogOpenFileName(QWidget* parent, const QString& title, const QString& directory,
                            const QString& filter, QString* selectedFilter) {
-  return fileNameDialog(parent, title, directory, filter, selectedFilter, QFileDialog::AcceptOpen);
+  return firstOf(fileNamesDialog(parent, title, directory, filter, selectedFilter, QFileDialog::AcceptOpen,
+                                 QFileDialog::ExistingFile));
+}
+
+QStringList dialogOpenFileNames(QWidget* parent, const QString& title, const QString& directory,
+                                const QString& filter, QString* selectedFilter) {
+  const QStringList paths = fileNamesDialog(parent, title, directory, filter, selectedFilter,
+                                            QFileDialog::AcceptOpen, QFileDialog::ExistingFiles);
+  if (paths.size() > 1) {
+    qDebug().noquote() << QStringLiteral("File dialog %1: %2 files chosen").arg(title).arg(paths.size());
+  }
+  return paths;
 }
 
 QString dialogSaveFileName(QWidget* parent, const QString& title, const QString& directory,
                            const QString& filter, QString* selectedFilter) {
-  return fileNameDialog(parent, title, directory, filter, selectedFilter, QFileDialog::AcceptSave);
+  return firstOf(fileNamesDialog(parent, title, directory, filter, selectedFilter, QFileDialog::AcceptSave,
+                                 QFileDialog::AnyFile));
 }
 
 QStringList dxfUnits(const QString& first) {

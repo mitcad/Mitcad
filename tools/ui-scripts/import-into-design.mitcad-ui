@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: MIT
+# Design files of other formats into the open design as components
+# (mitcad#1894), the shared input script of
+# tools/ui-import-into-design-test.sh (Linux),
+# tools/ui-windows-import-into-design-test.ps1 and
+# tools/ui-macos-import-into-design-test.sh, on
+# tools/ui-scripts/import-into-design.json saved as assembly.mitcad (a
+# 20 mm cube, 8000 mm3), with two .ipt test parts in ${MITCAD_TEST_WORK}
+# (test_exchange --write-ipt: part.ipt, a cube and a cylinder, aluminium,
+# two base features; --write-ipt-design: designed.ipt, a parameter, a
+# sketch and an extrusion):
+#   1. File > Import of both at once (the file dialog takes several):
+#      Where to Import asks once, Into This Design (Enter): each imported
+#      with its history and inserted as a copy named after its file, the
+#      second beside the first; the Browser lists both components, the
+#      timeline has their history (designed's Extrusion1); one undo step,
+#      then each file's import report.
+#   2. Undo takes both out at once: the cube alone again.
+#   3. File > Import of part.ipt again, A New Design: it opens as a new
+#      design in a tab of its own, this one staying as it is.
+wait-idle
+capture-undo-depth before
+
+# 1. Both parts into this design.
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "\"${MITCAD_TEST_WORK}/part.ipt\" \"${MITCAD_TEST_WORK}/designed.ipt\""
+sleep 300
+key Return
+wait-log 'File dialog Import: 2 files chosen'
+wait-log 'Where to Import dialog opened: part\.ipt, designed\.ipt$'
+# Message boxes have no window title on macOS; match the question too.
+focus-dialog '^Where to Import$|^Import 2 files into this design as components, or each as a new design\?$'
+key Return
+wait-log 'Where to Import: this design \(copy\)'
+focus-main
+wait-log 'Import into this design: 2 file\(s\), copies$'
+wait-log 'Imported part\.ipt into this design as component part \(copy\): 2 bodies, 2 features$' 180
+wait-log 'Imported designed\.ipt into this design as component designed \(copy\): 1 bodies, ([2-9]|[1-9][0-9]+) features$' 180
+wait-log 'Import into this design: 2 of 2 file\(s\) in$' 30
+# Each file's report, one after another.
+focus-dialog '^Import Report$' 60
+key Return
+focus-dialog '^Import Report$' 30
+key Return
+focus-main
+wait-idle 60
+expect-ever 'Import report: part\.ipt: '
+expect-ever 'Import report: designed\.ipt: '
+# The Browser's two components, the timeline's history of each.
+wait-log '^Browser colors: .*/part:1 #[0-9a-f]{6}, .*/designed:1 #[0-9a-f]{6}' 30
+wait-log '^Timeline component colors: .*part #[0-9a-f]{6}.*designed #[0-9a-f]{6}' 30
+expect-undo-depth ${before} 1
+
+# 2. One undo takes both out.
+mark
+key ctrl+z
+wait-log 'Undo: Import 2 files'
+wait-idle 30
+expect-undo-depth ${before} 0
+expect-model-bodies 1 8000
+
+# 3. A New Design: a tab of its own, this design as it is.
+mark
+command file.import
+focus-dialog '^Import$'
+key ctrl+a
+type "${MITCAD_TEST_WORK}/part.ipt"
+sleep 300
+key Return
+wait-log 'Where to Import dialog opened: part\.ipt$'
+focus-dialog '^Where to Import$|^Import part\.ipt into this design as a component, or as a new design\?$'
+button '^A New Design$'
+wait-log 'Where to Import: new design'
+wait-log 'Import report: part\.ipt: ' 180
+focus-dialog '^Import Report$' 30
+key Return
+wait-log 'Imported part\.ipt: 2 bodies' 30
+expect-document-windows 2
+# The new design in front: the part's cube and cylinder (1000 + 2000 pi mm3).
+expect-model-bodies 2 7283.185307179586
+expect-never 'TestDriver: FAIL|Could not import|Import into this design: .* not (written|inserted|moved)'

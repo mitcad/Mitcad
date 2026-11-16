@@ -23,7 +23,10 @@ things went wrong there:
   prolonged along the edge's own curve from that end vertex (the faces keep
   their surfaces), and the edge of the corner patch that runs from there to
   the vertex (or to the end of an edge prolonged before) is cut at that
-  end, so that the corner patch goes with the corner. Not so where the
+  end, so that the corner patch goes with the corner. Only beyond the
+  edge's far end: a crossing behind the vertex itself, on an edge that
+  starts at the vertex, is taken as OCCT takes it (OCCT's bug32929, a line
+  crossed 1 before the vertex, gave two solids). Not so where the
   fillet passes beside a face between the end's first and last faces (a
   narrow chamfer at a corner of a step): when the crossing with that
   face's first edge lies beyond the corner where the previous edge meets
@@ -42,9 +45,10 @@ things went wrong there:
   where it crosses the seam (each piece with its own p-curve) and the seam
   is cut there, as PerformOneCorner does.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 3e77230e..6dfe7b49 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -2281,7 +2281,18 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2358,7 +2358,18 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    F1 = TopoDS::Face(DStr.Shape(Fd->IndexOfS1()));
    F2 = TopoDS::Face(DStr.Shape(Fd->IndexOfS2()));
    F3 = F1;
@@ -64,7 +68,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
    {
      nface = nface + 1;
    }
-@@ -2758,11 +2769,20 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2835,11 +2846,20 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
      nb = 1;
    }
    bool intersOnSameFailed = false;
@@ -87,7 +91,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      if (!nb)
      {
        F = F1;
-@@ -2905,6 +2925,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -2982,6 +3002,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
  
        occ::handle<Geom_Curve> C;
        C                                    = BRep_Tool::Curve(E2, Ubid, Vbid);
@@ -95,7 +99,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
        occ::handle<Geom_TrimmedCurve> Ctrim = new Geom_TrimmedCurve(C, Ubid, Vbid);
        double                         Utrim, Vtrim;
        Utrim = Ctrim->BasisCurve()->FirstParameter();
-@@ -3039,14 +3060,34 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3116,14 +3137,34 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          }
          else
          {
@@ -135,7 +139,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
                distmin = dist;
                nbp     = i;
              }
-@@ -3054,6 +3095,67 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3131,6 +3172,69 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
            gp_Pnt2d pt2d(inters.Point(nbp).U(), inters.Point(nbp).V());
            pfil2    = pt2d;
            paredge2 = inters.Point(nbp).W();
@@ -188,7 +192,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
 +              }
 +            }
 +            isBesideMiddleFace = isOutOfBothFaces;
-+            if (!isOutOfBothFaces && !C2dint1.IsNull() && !C2dint2.IsNull()
++            // (Only beyond the edge's far end: a crossing behind the vertex
++            // itself, on an edge that starts there, is taken as before.)
++            if (!isOutOfBothFaces && !anEnd.IsSame(Vtx) && !C2dint1.IsNull() && !C2dint2.IsNull()
 +                && inters.Point(nbp).Pnt().Distance(BRep_Tool::Pnt(anEnd))
 +                     > BRep_Tool::Tolerance(anEnd))
 +            {
@@ -203,7 +209,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
            if (!extend)
            {
              cfacemoins1 = BRep_Tool::CurveOnSurface(E2, F, u2, v2);
-@@ -3246,6 +3348,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3323,6 +3427,23 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
      //       pfac2.SetX(xx2);
      //     }
  
@@ -227,7 +233,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      Pardeb(1) = pfil1.X();
      Pardeb(2) = pfil1.Y();
      Pardeb(3) = pfac1.X();
-@@ -3347,7 +3466,40 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3424,7 +3545,40 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        TopOpeBRepDS_Point& tpt = DStr.ChangePoint(indpoint1);
        tpt.Tolerance(std::max(tpt.Tolerance(), to1));
      }
@@ -269,7 +275,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
      indcurve[nb - 1] = DStr.AddCurve(tcurv3d);
  
      Interfp1 = ChFi3d_FilPointInDS(TopAbs_FORWARD,
-@@ -3356,14 +3508,41 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3433,14 +3587,41 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
                                     Cc->FirstParameter(),
                                     Isvtx1);
  
@@ -316,7 +322,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
  
      //////////////////////////////////////////////////////////////////////
      // storage for the face
-@@ -3467,7 +3646,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3544,7 +3725,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          int    indp1, indp2, ind;
          gp_Pnt pext;
          double ubid, vbid;
@@ -325,7 +331,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
          GeomAdaptor_Curve       cad;
          occ::handle<Geom_Curve> csau;
          if (!(oneintersection1 || oneintersection2))
-@@ -3534,7 +3713,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3611,7 +3792,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          if (par1 > par2)
          {
            indp1 = ind;
@@ -334,7 +340,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
            vtx2  = true;
            par   = par1;
            par1  = par2;
-@@ -3542,7 +3721,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3619,7 +3800,7 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          }
          else
          {
@@ -343,7 +349,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
            indp2 = ind;
            vtx1  = true;
          }
-@@ -3581,12 +3760,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3658,12 +3839,17 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          else
          {
            indice = DStr.AddShape(Face[nb - 1]);
@@ -363,7 +369,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
            Geom2dAPI_ProjectPointOnCurve Projector(P2d, C2dint1);
            par          = Projector.LowerDistanceParameter();
            double shift = par - ParVtx;
-@@ -3652,7 +3836,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3729,7 +3915,10 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          else
          {
            indice = DStr.AddShape(Face[nb]);
@@ -375,7 +381,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/
            if (Face[nb].Orientation() == Face[nb - 1].Orientation())
            {
              orient = TopAbs::Reverse(orient);
-@@ -3663,6 +3850,39 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3740,6 +3929,39 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
            Interfc = ChFi3d_FilCurveInDS(indcurv, indice, C2dint2, orient);
            DStr.ChangeShapeInterferences(indice).Append(Interfc);
          }

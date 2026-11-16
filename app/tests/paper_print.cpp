@@ -10,6 +10,7 @@
 // onto another paper's pages; the paper remembered by its key whatever the
 // language's name for it. mitcad#1308: a sketch fitted to its page keeps
 // its constraint symbols whole inside the page's area.
+#include "UnitTests.hpp"
 #include "printing/PaperPrint.hpp"
 #include "printing/SketchPicture.hpp"
 
@@ -750,3 +751,4 @@ int paperPrintTests() {
   waitForWorkTests();
   return failures;
 }
+MITCAD_UNIT_TEST(paperPrintTests);

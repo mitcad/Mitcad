@@ -130,6 +130,14 @@ pub mod steps;
 // A linked projection whose source edge was merged with, or split from,
 // edges on the same curve (mitcad#1784).
 pub mod successor;
+// The point inputs of a drawing command as written: the points they
+// became, and coordinates written as expressions of parameters
+// (mitcad#1897).
+pub mod inputs;
+// Texts moved and copied with Move/Copy (mitcad#1911).
+pub mod text_move;
+// The same for a 3D sketch's drawing commands (mitcad#1912).
+pub mod spatial_inputs;
 
 /// A refusal or note of a sketch edit that names the sketch's ids
 /// (mitcad#1612, `docs/ui-conventions.md` "What a message says"): `said`

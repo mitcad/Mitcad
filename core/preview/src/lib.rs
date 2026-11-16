@@ -24,6 +24,8 @@ pub use overlay::{Overlay, OverlayKind, OverlayMesh};
 pub mod inspect;
 pub mod views;
 pub use inspect::{EntityKind, Highlight, Inspect, Section};
+// Line art as SVG (mitcad#1736).
+pub use args::Format;
 #[cfg(test)]
 mod inspect_tests;
 

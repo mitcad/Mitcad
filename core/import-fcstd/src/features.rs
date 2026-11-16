@@ -3505,7 +3505,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ));
         }
         Err(
-            "a coordinate system: MitCad has none (features that use it take fixed geometry)"
+            "a coordinate system: not made as a feature (a sketch on it or on one of its planes \
+             moves with its offset's expressions, other features that use it take fixed \
+             geometry)"
                 .to_owned(),
         )
     }

@@ -417,3 +417,8 @@ pub use document::{CONVERT_LABEL, ConvertedPart};
 // Sketches on cylindrical and conical faces: the face's development and
 // the map between the sketch and the face (mitcad#1768).
 pub use mitcad_model_base::developed;
+// Assembly paths: where a body slid or turned into place first runs into
+// others (mitcad#1737; the assembly_path query).
+pub mod assembly_path;
+#[cfg(test)]
+mod assembly_path_tests;

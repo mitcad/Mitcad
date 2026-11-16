@@ -36,8 +36,13 @@ closer to the part's side than the rounding is wide.
   hole whose centre lies under the blend), or where a vertex of B lies
   under the blend (an edge of B such as its seam ends on the part of B's
   boundary the blend covers and would have to be prolonged to the cut).
+- Nor for a rounding where B rises from N (their edge concave: a boss or
+  a lug standing on N, ChFi3d_RisesFromFace): OCCT's blend/simple S1 T1
+  T4 T7 U4 (a box's edge rounded past a cylinder standing out of its face)
+  lost the cylinder or came out invalid. A chamfer is still cut by such a
+  face (teeth standing on a flange's top).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 69467ba..3b60828 100644
+index 69467ba4..f90b0bd8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -51,8 +51,23 @@
@@ -64,7 +69,7 @@ index 69467ba..3b60828 100644
  #include <IntCurveSurface_IntersectionPoint.hxx>
  #include <gp_Pnt.hxx>
  #include <gp_Pnt2d.hxx>
-@@ -3864,6 +3879,940 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3864,6 +3879,967 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
  
  //=================================================================================================
  
@@ -782,6 +787,24 @@ index 69467ba..3b60828 100644
 +}
 +
 +//=======================================================================
++// function : ChFi3d_RisesFromFace
++// purpose  : The face beyond B rises from the contact's face N across E
++//            (the edge between them concave: a boss or a lug standing on
++//            N, not a hole or a cut-out of N). A rounding's contact that
++//            runs into such a face is left to OCCT's handling; a chamfer
++//            is still cut by it (teeth standing on a flange's top).
++//=======================================================================
++
++static bool ChFi3d_RisesFromFace(const occ::handle<ChFiDS_Spine>& Spine,
++                                 const TopoDS_Edge&               E,
++                                 const TopoDS_Face&               N,
++                                 const TopoDS_Face&               B)
++{
++  return occ::down_cast<ChFiDS_ChamfSpine>(Spine).IsNull()
++         && ChFi3d::DefineConnectType(E, N, B, Precision::Angular(), false) == ChFiDS_Concave;
++}
++
++//=======================================================================
 +// function : ChFi3d_FillKPartGaps
 +// purpose  : Pieces of an analytic blend split by the domains of its
 +//            faces: where the contact on one face leaves that face across
@@ -837,6 +860,11 @@ index 69467ba..3b60828 100644
 +          }
 +        }
 +        if (Fk.IsNull() || (!B.IsNull() && !B.IsSame(Fk)) || ChFi3d::IsTangentFaces(E, N, Fk))
++        {
++          ok = false;
++          break;
++        }
++        if (ChFi3d_RisesFromFace(Spine, E, N, Fk))
 +        {
 +          ok = false;
 +          break;
@@ -940,6 +968,10 @@ index 69467ba..3b60828 100644
 +      {
 +        continue;
 +      }
++      if (ChFi3d_RisesFromFace(Spine, TopoDS::Edge(CPa.Arc()), N, B))
++      {
++        continue;
++      }
 +      // The edges after k with no piece (the contact off N all along), up
 +      // to an edge whose first piece comes back into N from B.
 +      int m = k + 1;
@@ -1005,7 +1037,7 @@ index 69467ba..3b60828 100644
  void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure&      DStr  = myDS->ChangeDS();
-@@ -3908,11 +4857,21 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -3908,11 +4884,21 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
    double WEndPeriodic   = Spine->LastParameter(Spine->NbEdges());
    Spine->D1(WEndPeriodic, PEndPeriodic, TEndPeriodic);
  
@@ -1031,7 +1063,7 @@ index 69467ba..3b60828 100644
      ConexFaces(Spine, iedge, HS1, HS2);
  
      if (ChFi3d_KParticular(Spine, iedge, *HS1, *HS2) && !myOverlapStripes.Contains(Stripe)
-@@ -3928,17 +4887,56 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -3928,17 +4914,56 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
        It1->Initialize(HSon1);
        It2->Initialize(HSon2);
  
@@ -1046,8 +1078,7 @@ index 69467ba..3b60828 100644
        }
 -      else if (!SplitKPart(SD, LSD, Spine, iedge, HS1, It1, HS2, It2, intf, intl))
 +      else
-       {
--        LSD.Clear();
++      {
 +        if (!Simul)
 +        {
 +          aFull(iedge) = ChFi3d_CopyKPartData(DStr, SD);
@@ -1065,15 +1096,16 @@ index 69467ba..3b60828 100644
 +        {
 +          aState(iedge) = 2;
 +        }
-       }
--      else
++      }
 +      aIntf(iedge) = intf;
 +      aIntl(iedge) = intl;
 +      if (!Simul && LSD.Length() > 1)
-+      {
+       {
+-        LSD.Clear();
 +        // Gaps where a contact passes over a hole of its face.
 +        ChFi3d_FillKPartGaps(DStr, Spine, LSD, myEFMap, tolapp3d);
-+      }
+       }
+-      else
 +    }
 +  }
 +  if (!Simul)

@@ -4,6 +4,7 @@
 // and the marker's picture: a crossed circle, its upper right and lower left
 // quadrants in the inspection's color, the others and a ring around it in
 // the background's tone, the same size at every ratio in view pixels.
+#include "UnitTests.hpp"
 #include "view/CenterOfMass.hpp"
 #include "framework/Theme.hpp"
 
@@ -137,3 +138,4 @@ int centerOfMassTests() {
   imageTests();
   return failures;
 }
+MITCAD_UNIT_TEST(centerOfMassTests);

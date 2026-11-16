@@ -47,14 +47,28 @@ with the cylinder (unorientable).
   its rounding's end across the rod's seam).
 
 Nothing else changes: where the edge's curve continued leaves either
-surface, the surfaces are intersected as before.
+surface, the surfaces are intersected as before (mitcad#1883):
+
+- nor where a p-curve's end at P lies past its surface's parameter range
+  in a direction that is not periodic: the curve continued through a pole
+  of a surface of revolution (an ellipse's meridian on past the axis) lies
+  on the surface, its p-curve outside it (OCCT's blend/simple H3, invalid);
+- the ends on the opposite face are taken in one period only where that
+  face goes round the whole period (on a revolve of 270 degrees, a point
+  at the pole moved by a period left the face; H3 again);
+- with Transversal, a p-curve whose trimmed range is already the 3d
+  curve's (a circle's p-curve that is a circle, reversed as the circle is)
+  is kept as it is: made a B-spline it took another parametrization, its
+  points off the circle's at equal parameters, and the edge's tolerance
+  came out 1.5e-4 (OCCT's bug28828_16 allows 1e-4; now 8.7e-5). The same
+  on a periodic curve's prolongation from the last vertex.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index c891277..8069396 100644
+index 4299602d..bc14a062 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -645,6 +645,40 @@ static bool ChFi3d_CutCrossesSeamLine(const BRepAdaptor_Surface&       Bs,
+@@ -666,6 +666,40 @@ static bool ChFi3d_CutCrossesSeamLine(const BRepAdaptor_Surface&       Bs,
    return false;
  }
  
@@ -95,7 +109,7 @@ index c891277..8069396 100644
  //=================================================================================================
  
  static void ChFi3d_Recale(const BRepAdaptor_Surface& Bs,
-@@ -1335,6 +1369,12 @@ static void ChFi3d_CapAcrossFaceBeyond(TopOpeBRepDS_DataStructure&             D
+@@ -1356,6 +1390,12 @@ static void ChFi3d_CapAcrossFaceBeyond(TopOpeBRepDS_DataStructure&             D
  //            V to P (P within Tol of the curve, beyond V). C3d runs from V
  //            to P; PcOp and PcV are its curves on Fop (E oriented OonFop
  //            there) and on Fv.
@@ -108,7 +122,7 @@ index c891277..8069396 100644
  //=======================================================================
  
  static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
-@@ -1349,9 +1389,10 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
+@@ -1370,9 +1410,10 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
                                        occ::handle<Geom_Curve>&              C3d,
                                        occ::handle<Geom2d_Curve>&            PcOp,
                                        occ::handle<Geom2d_Curve>&            PcV,
@@ -121,7 +135,7 @@ index c891277..8069396 100644
    {
      return false;
    }
-@@ -1385,6 +1426,28 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
+@@ -1406,6 +1447,28 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
    {
      return false;
    }
@@ -150,10 +164,64 @@ index c891277..8069396 100644
    // The p-curves, defined at tP.
    double                    u1 = 0., u2 = 0.;
    occ::handle<Geom2d_Curve> pcOp =
-@@ -1422,6 +1485,18 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
-     ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcOp);
-     ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcV);
+@@ -1427,21 +1490,65 @@ static bool ChFi3d_ProlongTangentEdge(const TopoDS_Edge&                    E,
+       return false;
+     }
    }
++  if (Transversal)
++  {
++    // The p-curves' ends at P within their surfaces' parameters: a curve
++    // continued through a pole of a surface of revolution (an ellipse's
++    // meridian on past the axis) lies on the surface, its p-curve beyond the
++    // meridian's range.
++    for (int k = 0; k < 2; k++)
++    {
++      const occ::handle<Geom_Surface> S = BRep_Tool::Surface(k == 0 ? Fop : Fv);
++      const gp_Pnt2d                  uv = (k == 0 ? pcOp : pcV)->Value(tP);
++      double                          su1 = 0., su2 = 0., sv1 = 0., sv2 = 0.;
++      S->Bounds(su1, su2, sv1, sv2);
++      const double                    eps = Precision::PConfusion();
++      if ((!S->IsUPeriodic() && (uv.X() < su1 - eps || uv.X() > su2 + eps))
++          || (!S->IsVPeriodic() && (uv.Y() < sv1 - eps || uv.Y() > sv2 + eps)))
++      {
++        return false;
++      }
++    }
++  }
+   const double t1 = atLast ? tV : tP;
+   const double t2 = atLast ? tP : tV;
+   C3d             = new Geom_TrimmedCurve(C, t1, t2);
+   PcOp            = new Geom2d_TrimmedCurve(pcOp, t1, t2);
+   PcV             = new Geom2d_TrimmedCurve(pcV, t1, t2);
++  // A p-curve parametrized as the 3d curve: as a B-spline moved onto the 3d
++  // curve's range, unless (with Transversal, or on a periodic curve below)
++  // it already has that range (a circle's p-curve that is a circle, trimmed
++  // or reversed as the 3d circle is): a circle made a B-spline takes another
++  // parametrization, its points then off the 3d curve's at equal parameters
++  // (1.5e-4 over 0.14 rad of a circle of radius 10).
++  const auto asC3d = [&](occ::handle<Geom2d_Curve>& thePc, const bool theKeepSameRange) {
++    if (theKeepSameRange
++        && std::abs(thePc->FirstParameter() - C3d->FirstParameter()) <= Precision::PConfusion()
++        && std::abs(thePc->LastParameter() - C3d->LastParameter()) <= Precision::PConfusion())
++    {
++      return;
++    }
++    thePc = Geom2dConvert::CurveToBSplineCurve(thePc);
++    ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), thePc);
++  };
+   if (!atLast)
+   {
+     // From V to P: reversed, the p-curves parametrized as the 3d curve.
+     C3d->Reverse();
+     PcOp->Reverse();
+     PcV->Reverse();
+-    PcOp = Geom2dConvert::CurveToBSplineCurve(PcOp);
+-    PcV  = Geom2dConvert::CurveToBSplineCurve(PcV);
+-    ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcOp);
+-    ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcV);
++    asC3d(PcOp, Transversal);
++    asC3d(PcV, Transversal);
++  }
 +  else if (std::abs(C3d->FirstParameter() - t1) > Precision::PConfusion()
 +           || std::abs(C3d->LastParameter() - t2) > Precision::PConfusion())
 +  {
@@ -161,26 +229,33 @@ index c891277..8069396 100644
 +    // curve's first period: the p-curves parametrized as the 3d curve (a
 +    // circle's p-curve on a cone a period off, across the cone's seam,
 +    // otherwise).
-+    PcOp = Geom2dConvert::CurveToBSplineCurve(PcOp);
-+    PcV  = Geom2dConvert::CurveToBSplineCurve(PcV);
-+    ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcOp);
-+    ChFi3d_ReparamPcurv(C3d->FirstParameter(), C3d->LastParameter(), PcV);
-+  }
++    asC3d(PcOp, true);
++    asC3d(PcV, true);
+   }
    tolreached =
      std::max(BRep_Tool::Tolerance(E), ChFi3d_EvalTolReached(HSop, PcOp, HSv, PcV, C3d));
-   return true;
-@@ -4191,6 +4266,10 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -4390,6 +4497,20 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        aProj.LowerDistanceParameters(aU, aV);
        pop2.SetCoord(aU, aV);
      }
 +    // The prolongation's ends on a periodic opposite face in one period:
 +    // across the face's seam they lay a period apart, and the intersection's
 +    // p-curve ran the long way round.
-+    ChFi3d_Recale(Bop, pop1, pop2, true);
++    // Only on a face round its whole period: on a face on part of a periodic
++    // surface (a revolve of 270 degrees) the points stay in its range.
++    {
++      double fu1 = 0., fu2 = 0., fv1 = 0., fv2 = 0.;
++      BRepTools::UVBounds(Fzob, fu1, fu2, fv1, fv2);
++      if ((Bop.IsUPeriodic() && fu2 - fu1 >= Bop.UPeriod() - Precision::PConfusion())
++          || (Bop.IsVPeriodic() && fv2 - fv1 >= Bop.VPeriod() - Precision::PConfusion()))
++      {
++        ChFi3d_Recale(Bop, pop1, pop2, true);
++      }
++    }
      Hc   = BRep_Tool::CurveOnSurface(Arcprol, Fv, Ubid, Ubid);
      if (Hc.IsNull())
      {
-@@ -4249,7 +4328,23 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -4448,7 +4569,23 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
                                                                       zob2dop,
                                                                       zob2dv,
                                                                       tolreached);
@@ -205,7 +280,7 @@ index c891277..8069396 100644
          && !ChFi3d_ComputeCurves(HBop,
                                   HBs,
                                   Pardeb,
-@@ -4289,6 +4384,16 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -4488,6 +4625,16 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
            {
              par1                  = extCC.ParameterOnE1(i);
              par2                  = extCC.ParameterOnE2(i);
@@ -222,7 +297,7 @@ index c891277..8069396 100644
              gp_Pnt             P1 = extCC.PointOnE1(i);
              TopOpeBRepDS_Point tpoint(P1, 1.e-4);
              indpt      = DStr.AddPoint(tpoint);
-@@ -4311,10 +4416,18 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -4510,10 +4657,18 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        // other face, were put on Fv)
        Et = TopAbs::Reverse(TopAbs::Compose(OVtx, OArcprolv));
        c2d1 = new Geom2d_TrimmedCurve(zob2dv, Udeb, par2);
@@ -241,7 +316,7 @@ index c891277..8069396 100644
        InterFv = ChFi3d_FilCurveInDS(Icurv2, IShape, c2d2, Et);
        DStr.ChangeShapeInterferences(IShape).Append(InterFv);
  
-@@ -4343,10 +4456,24 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -4542,10 +4697,24 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        int Iop = DStr.AddShape(Fzob);
        Et      = TopAbs::Reverse(TopAbs::Compose(OVtx, OArcprolop));
        occ::handle<TopOpeBRepDS_SurfaceCurveInterference> Interfop;

@@ -1,0 +1,16 @@
+{
+  "format": "mitcad-library", "version": 1, "id": "test-profiles", "name": "Test profiles",
+  "description": "A synthetic BUILD profile with a slot on one side, of the joint and placement edit UI test (mitcad#1885).",
+  "library_version": "1.0.0", "license": "MIT", "authors": ["Mitcad UI test"], "units": "mm",
+  "categories": [{"id": "profiles", "name": "Profiles"}],
+  "components": [
+    {"id": "p-slot-test", "path": "profiles/p-slot-test.mitcad", "name": "Slot profile test", "category": "profiles",
+     "designation": "Slot profile test L={L}",
+     "build": {"role": "profile", "system": {"type": "I", "slot": 5, "grid": 20},
+       "length": {"parameter": "L", "min": "10 mm", "max": "3000 mm", "default": "500 mm", "stock": ["1000 mm"]},
+       "section": {"width": "20 mm", "height": "20 mm"},
+       "slot": {"depth": "5 mm", "opening": "5 mm"},
+       "frames": [{"name": "end_a", "kind": "end"}, {"name": "end_b", "kind": "end"},
+                  {"name": "slot_y+_1", "kind": "slot"}]}}
+  ]
+}

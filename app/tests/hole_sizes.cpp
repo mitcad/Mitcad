@@ -8,6 +8,7 @@
 // again; M24, which has no countersink, leaves none of M20's but an empty,
 // marked field; an untyped Depth is raised to fit a counterdrill, a typed
 // one is kept.
+#include "UnitTests.hpp"
 #include "commands/HoleSizes.hpp"
 
 #include <cmath>
@@ -275,3 +276,4 @@ int holeSizesTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(holeSizesTests);

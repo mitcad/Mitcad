@@ -411,6 +411,32 @@ color alone. The model carries the level as data (mitcad#1040): a
 (`notice.rs`), with the levels `error`, `warning` and `info`; success,
 hint and progress are the frontends' own.
 
+**In sight when it comes** (mitcad#1884): a new error or warning in a
+command panel higher than its page (a long panel in a low window) scrolls
+the page just far enough to show its box, and the button under it, whole,
+in the Docked and the Floating layout alike. The field that has the
+keyboard stays in view, so the text being typed never leaves the user's
+sight; what that leaves of the box out of view follows once the keyboard
+leaves the field. A hint, progress, or the same message again does not
+move the page. Nor does the page move while a mouse button is down: a
+click on another field of the panel moves the keyboard there on the press,
+and the page scrolls only after the release, so the click still lands on
+that field.
+
+**Busy without moving** (mitcad#1907, GitHub mitcad/Mitcad#361): a
+command panel's preview being computed is a small busy mark, a spinner the
+height of a line of text, just before OK and Cancel, never a message line:
+a line that comes and goes with each preview makes the panel grow and
+shrink while a handle is dragged, which draws the eye away from the
+model. The mark keeps its room whether it shows or not, so nothing moves;
+it shows only once the preview has taken about 300 ms, so quick previews
+do not flicker it, and when previews follow one another (a drag) it stays
+until the last has ended. Its tooltip and accessible name say what is
+being computed ("Computing preview…"). OK stays disabled meanwhile. The
+message shown before (a problem, a hint) stays until the result replaces
+it. The same in the Docked and the Floating layout, and on every
+platform.
+
 **What a text says** (mitcad#1327, mitcad#1741; called "What a message
 says" before it covered every text): the rules below hold for messages and
 for every other text a person sees.
@@ -481,11 +507,13 @@ edges, vertices, points).
   as the message and a last line `[placed: {…}]`. The application shows
   only the text before that line (`userText`, `app/framework/Json.hpp`)
   or a notice's `message`, never a model `error` string as it is.
-- **The raw `error` is the agents'.** MCP results, a command's `error`,
+- **The raw `error` is the agents'.** A command's `error`,
   `failed_features[].error`, the `timeline` and `feature` queries and the
   log keep the full detail with names, ids and coordinates, plus
-  `places`. Nothing that tells an agent which edge is lost: it moves to
-  the detail and the places.
+  `places`. MCP results lead with the short cause in `error` and keep
+  the full text in `error_detail` beside it (mitcad#1897, the command
+  reference's "Errors"). Nothing that tells an agent which edge is lost:
+  it moves to the detail and the places.
 - **"A message that says where" means places that say where.** A ticket
   (also an older one, as mitcad#1185-#1260) that asks for an error that
   names the edge or the point is done with places and an MCP detail,
@@ -529,7 +557,7 @@ edges, vertices, points).
 | **Information** | A neutral fact that needs no action. | "Done.", an option adjusted automatically to an allowed value, an import note, unmet inactive constraints. | none |
 | **Success** | Only where the user asked for a check and the answer is yes. | "Connected", "fits", "up to date" after Check for Updates. | ✓ |
 | **Hint** | The next step of a running command; not a severity. | "Pick a face", the mode banner. | none |
-| **Progress** | Work in progress; not a severity. | "Computing preview…" | none |
+| **Progress** | Work in progress; not a severity. | "Computing inspection…"; a panel's preview being computed is its busy mark, not a message | none |
 
 **States are not severities.** *Suppressed*, *rolled back*, *inactive*,
 *hidden*, *pending*, *driven* (a dimension) and *By formula* (an option)
@@ -546,7 +574,13 @@ only a failure. Command and query results list their warnings as
 map their outcomes onto the levels: what came in as asked is
 information, partial, fallback, skipped and not imported items are
 warnings (with a count), an item of which nothing could be built is an
-error; their own words stay in the report's rows. A broken annotation is
+error; their own words stay in the report's rows. The import report's
+rows each carry a status of their own (mitcad#1893,
+`core/import-base/src/report_status.rs`), drawn as the success check, the
+warning or the error badge with its meaning as the tooltip: an item
+skipped for a reason other than the file's own (suppressed, rolled back,
+without geometry) and a body missing or not valid are errors there, a
+body within 0.01 % of the file's volume matches it. A broken annotation is
 a warning; a sheet metal body's invalidation an error and its blockers
 warnings; a sketch that did not solve an error, its redundant
 constraints a warning, its unmet inactive constraints information.

@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: MIT
+# A BUILD part's joint and placement edited (mitcad#1885, GitHub
+# mitcad/Mitcad#354), on joint-placement-edit.json with the profile library
+# the runner makes: Upright:1 (O1) standing 500 long; Block:1 (O2), a 10 mm
+# cube, joined by Cap joint (F3) onto the upright's end B mount frame with
+# a frame override (its x turned, its origin shifted 30 up: the cube from
+# z = 530 to 540); Arm:1 (O3, C3, its body F4.b0) 200 long on the
+# upright's y+ side, 100 past the side's middle (from z = 340 to 360).
+#   1. Cap joint edited in Joint: the panel opens (its origin B on the
+#      mount frame, the override kept), Offset 20 mm moves the cube up 20
+#      and OK commits it with the override still in the definition.
+#   2. Placement of the arm: From Middle to End A with the Offset as
+#      loaded keeps it where it is, now 340 from end A, in one undo step.
+#   3. Placement again: Offset 50 mm from End A moves it there, in one
+#      undo step.
+# Run by tools/ui-joint-placement-edit-test.sh (Linux),
+# tools/ui-windows-joint-placement-edit-test.ps1 (Windows) and
+# tools/ui-macos-joint-placement-edit-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+expect-shown-body F2.b0 O2 1000 -5 -5 530 5 5 540
+capture-model-number arm '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${arm} 340
+
+# 1. The joint on the mount frame with its override opens in Joint.
+mark
+dblclick-logged '^Timeline Cap joint at '
+expect-log '^Editing F3 with Joint'
+expect-log '^Joint origin b keeps its frame override [(]mount frame F1:mount[(]end_b[)] in O1[)]$'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 -5 -5 530 5 5 540
+mark
+type-in '^Panel Joint input offset at ' '20 mm'
+wait-log '^Preview Joint: ok' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 -5 -5 550 5 5 560
+mark
+button '^OK$'
+wait-log '^Edited F3' 60
+wait-idle 30
+expect-shown-body F2.b0 O2 1000 -5 -5 550 5 5 560
+capture-model-number shift '{"query": "feature", "uid": "F3"}' def.b.frame_override.shift.2
+expect-near ${shift} 30
+
+# 2. Placement: From End A with the Offset as loaded keeps the arm in place.
+mark
+command build.placement
+wait-idle
+mark
+click-logged '^Panel Placement input part at '
+wait-log '^Pick places:' 20
+click-pick 'face F4[.]b0/'
+wait-log '^BUILD placement of C3: from middle, offset 100' 30
+wait-log '^Inspect Placement: C3 from middle, offset 100.* [(]kept in place[)]$' 30
+wait-idle
+mark
+qt-choice input_from 'End A'
+wait-log '^Inspect Placement: C3 from a, offset 100.* [(]kept in place[)]$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Placement of C3: from a, kept in place$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number arm '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${arm} 340
+capture-model-number offset '{"query": "build_parts"}' parts.1.offset
+expect-near ${offset} 340
+
+# 3. Placement again: Offset 50 mm from End A.
+mark
+command build.placement
+wait-idle
+mark
+click-logged '^Panel Placement input part at '
+wait-log '^Pick places:' 20
+click-pick 'face F4[.]b0/'
+wait-log '^BUILD placement of C3: from a, offset 340' 30
+wait-idle
+mark
+type-in '^Panel Placement input offset at ' '50 mm'
+wait-log '^Inspect Placement: C3 from a, offset 50 mm$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Placement of C3: from a, offset 50 mm$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number arm '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${arm} 50
+capture-model-number offset '{"query": "build_parts"}' parts.1.offset
+expect-near ${offset} 50
+expect-never 'TestDriver: FAIL'

@@ -186,6 +186,7 @@ fn sample() -> Drawing {
         scale: Some(0.5),
         style: None,
         label: None,
+        label_offset: None,
         subject: Some(Subject::Bodies {
             bodies: vec![mitcad_model_drawing::def::SubjectBody {
                 body: "F2.b0".parse().unwrap(),
@@ -217,6 +218,7 @@ fn sample() -> Drawing {
         scale: None,
         style: None,
         label: None,
+        label_offset: None,
         subject: None,
         breaks: Vec::new(),
         aligned: true,
@@ -242,6 +244,7 @@ fn sample() -> Drawing {
         scale: None,
         style: None,
         label: None,
+        label_offset: None,
         subject: None,
         breaks: Vec::new(),
         aligned: true,
@@ -265,6 +268,7 @@ fn sample() -> Drawing {
         scale: None,
         style: None,
         label: None,
+        label_offset: None,
         subject: None,
         breaks: Vec::new(),
         aligned: true,

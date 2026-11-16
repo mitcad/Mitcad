@@ -249,3 +249,79 @@ fn a_typed_offset_without_a_unit_is_millimetres() {
     assert_near_face(&parallel_faces(&doc, &end_a, &a)[0], 0.0, 100.0);
     all_ok(&doc);
 }
+
+/// The part's entry of `build_parts`.
+fn part_entry(doc: &Document<MockKernel>, answer: &Value) -> Value {
+    query(doc, json!({"query": "build_parts"}))["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["component"] == answer["component"])
+        .cloned()
+        .unwrap_or_else(|| panic!("no part {answer}"))
+}
+
+/// The BUILD Placement panel's edit (mitcad#1885): a part placed from the
+/// middle of a side, measured from end A instead without moving, then
+/// placed 100 from end A; each edit one undo step, and `build_parts` gives
+/// the offset from the part's reference throughout.
+#[test]
+fn a_side_placement_s_from_and_offset_are_edited() {
+    let mut doc = design();
+    let (t, slot) = upright(&mut doc);
+    let end_a = end_face(&doc, &t, "end_a");
+    // From the middle, 100 past it: the part reaches from z = 340 to 360.
+    let m100 = on_side(
+        &mut doc,
+        &t,
+        &slot,
+        json!({"offset": 100, "from": "middle"}),
+        json!({}),
+    );
+    let entry = part_entry(&doc, &m100);
+    assert_eq!(entry["from"], "middle", "{entry}");
+    near(&entry["offset"], 100.0);
+    assert_near_face(&parallel_faces(&doc, &end_a, &m100)[0], 0.0, 340.0);
+
+    // From end A: where it is, now 340 from end A.
+    let c = m100["component"].clone();
+    let answer = command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": c, "at": {"from": "a"}}),
+    )
+    .unwrap();
+    assert!(
+        answer["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "from"),
+        "{answer}"
+    );
+    let entry = part_entry(&doc, &m100);
+    assert_eq!(entry["from"], "a", "{entry}");
+    near(&entry["offset"], 340.0);
+    assert_near_face(&parallel_faces(&doc, &end_a, &m100)[0], 0.0, 340.0);
+
+    // Offset and From together: 100 from end A.
+    command(
+        &mut doc,
+        json!({"cmd": "build_edit", "component": c, "at": {"offset": "100 mm", "from": "a"}}),
+    )
+    .unwrap();
+    near(&part_entry(&doc, &m100)["offset"], 100.0);
+    assert_near_face(&parallel_faces(&doc, &end_a, &m100)[0], 0.0, 100.0);
+    all_ok(&doc);
+
+    // One undo step takes each edit back.
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    near(&part_entry(&doc, &m100)["offset"], 340.0);
+    assert_near_face(&parallel_faces(&doc, &end_a, &m100)[0], 0.0, 340.0);
+    command(&mut doc, json!({"cmd": "undo"})).unwrap();
+    let entry = part_entry(&doc, &m100);
+    assert_eq!(entry["from"], "middle", "{entry}");
+    near(&entry["offset"], 100.0);
+
+    // A part placed otherwise has no offset: the upright one.
+    assert!(part_entry(&doc, &t)["offset"].is_null());
+}

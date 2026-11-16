@@ -6,6 +6,7 @@
 // list in the settings, the design's own materials never in it; the
 // Replace Appearance question only for an appearance set by hand that the
 // new material does not offer (mitcad#1067).
+#include "UnitTests.hpp"
 #include "print/MaterialMenuChoices.hpp"
 
 #include <cstdio>
@@ -223,3 +224,4 @@ int materialMenuTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(materialMenuTests);

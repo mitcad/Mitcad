@@ -185,6 +185,176 @@ void add_assembly(const occ::handle<TDocStd_Document>& document, const std::vect
 
 namespace {
 
+// The solids of a shape, located within it as an explorer finds them.
+std::vector<TopoDS_Shape> solids_of(const TopoDS_Shape& shape) {
+  std::vector<TopoDS_Shape> solids;
+  for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) {
+    solids.push_back(it.Current());
+  }
+  return solids;
+}
+
+// Whether a body is one solid and nothing beside it, so that it stays
+// apart as a solid of a part that holds several (read_step splits a part
+// into its solids and leaves out anything else).
+bool one_solid(const Body& body) {
+  return solids_of(body.shape).size() == 1 && !TopExp_Explorer(body.shape, TopAbs_FACE, TopAbs_SOLID).More() &&
+         !TopExp_Explorer(body.shape, TopAbs_EDGE, TopAbs_FACE).More();
+}
+
+// Whether a body is written once as it is.
+bool unplaced(const Body& body) {
+  return body.placements.empty() || (body.placements.size() == 1 && body.placements.front().is_identity());
+}
+
+// Writes a component tree into a document (add_tree): each definition
+// reached from the design once, the instances' definitions before the
+// definition that places them.
+struct TreeWriter {
+  occ::handle<XCAFDoc_ShapeTool> shapes;
+  occ::handle<XCAFDoc_ColorTool> colors;
+  const StepTree* tree;
+  std::string top_name;
+  // Per definition: its label once made, and whether it is being made.
+  std::vector<TDF_Label> labels;
+  std::vector<bool> making;
+  std::vector<ItemName> names;
+
+  TreeWriter(const occ::handle<TDocStd_Document>& document, const StepTree& written, std::string name)
+      : shapes(XCAFDoc_DocumentTool::ShapeTool(document->Main())),
+        colors(XCAFDoc_DocumentTool::ColorTool(document->Main())), tree(&written), top_name(std::move(name)),
+        labels(written.definitions.size()), making(written.definitions.size(), false) {}
+
+  // A definition that holds bodies only, each once as it is: one body, or
+  // bodies that are each one solid.
+  static bool is_part(const StepTree::Definition& definition) {
+    if (definition.bodies.empty() || !definition.instances.empty() ||
+        !std::all_of(definition.bodies.begin(), definition.bodies.end(), unplaced)) {
+      return false;
+    }
+    return definition.bodies.size() == 1 ||
+           std::all_of(definition.bodies.begin(), definition.bodies.end(), one_solid);
+  }
+
+  // A part named after its definition: its one body's shape (a body of
+  // one solid keeps its own name on the solid), or a compound of its
+  // bodies' solids, each a sub-shape with its body's name and colour (the
+  // names are written to the solids after the transfer).
+  TDF_Label part(const StepTree::Definition& definition) {
+    if (definition.bodies.size() == 1) {
+      Body body = definition.bodies.front();
+      if (!body.name.empty() && one_solid(body)) {
+        names.push_back(ItemName{solids_of(body.shape).front(), body.name});
+      }
+      if (!definition.name.empty()) {
+        body.name = definition.name;
+      }
+      return add_body(shapes, colors, body);
+    }
+    BRep_Builder builder;
+    TopoDS_Compound compound;
+    builder.MakeCompound(compound);
+    for (const Body& body : definition.bodies) {
+      builder.Add(compound, body.shape);
+    }
+    const TDF_Label label = shapes->AddShape(compound, false);
+    if (!definition.name.empty()) {
+      TDataStd_Name::Set(label, extended(definition.name));
+    }
+    for (const Body& body : definition.bodies) {
+      const TopoDS_Shape solid = solids_of(body.shape).front();
+      const TDF_Label sub = shapes->AddSubShape(label, solid);
+      if (!sub.IsNull()) {
+        if (!body.name.empty()) {
+          TDataStd_Name::Set(sub, extended(body.name));
+        }
+        if (body.color) {
+          colors->SetColor(sub, Quantity_Color(body.color->r, body.color->g, body.color->b, Quantity_TOC_sRGB),
+                           XCAFDoc_ColorSurf);
+        }
+      }
+      if (!body.name.empty()) {
+        names.push_back(ItemName{solid, body.name});
+      }
+    }
+    return label;
+  }
+
+  // The label of definition `index`, made with the definitions below it
+  // the first time.
+  TDF_Label make(std::size_t index) {
+    if (index >= tree->definitions.size()) {
+      throw Error("cannot write the component tree: an instance places a component that is not written");
+    }
+    if (!labels[index].IsNull()) {
+      return labels[index];
+    }
+    if (making[index]) {
+      throw Error("cannot write the component tree: a component is placed inside itself");
+    }
+    making[index] = true;
+    const StepTree::Definition& definition = tree->definitions[index];
+    std::vector<TDF_Label> placed;
+    for (const StepTree::Instance& instance : definition.instances) {
+      placed.push_back(make(instance.definition));
+    }
+    TDF_Label label;
+    if (index != 0 && is_part(definition)) {
+      label = part(definition);
+    } else {
+      // An assembly: its instances, then a part per body at each of the
+      // body's placements.
+      label = shapes->NewShape();
+      const std::string& name = index == 0 ? top_name : definition.name;
+      if (!name.empty()) {
+        TDataStd_Name::Set(label, extended(name));
+      }
+      for (std::size_t i = 0; i < placed.size(); ++i) {
+        const Placement& placement = definition.instances[i].placement;
+        const TDF_Label instance = shapes->AddComponent(label, placed[i], location(placement));
+        if (!placement.name.empty()) {
+          TDataStd_Name::Set(instance, extended(placement.name));
+        }
+      }
+      const std::vector<Placement> once(1);
+      for (const Body& body : definition.bodies) {
+        const TDF_Label body_part = add_body(shapes, colors, body);
+        for (const Placement& placement : body.placements.empty() ? once : body.placements) {
+          const TDF_Label instance = shapes->AddComponent(label, body_part, location(placement));
+          if (!placement.name.empty()) {
+            TDataStd_Name::Set(instance, extended(placement.name));
+          }
+        }
+      }
+    }
+    making[index] = false;
+    labels[index] = label;
+    return label;
+  }
+};
+
+} // namespace
+
+std::vector<ItemName> add_tree(const occ::handle<TDocStd_Document>& document, const StepTree& tree,
+                               const std::string& name) {
+  if (tree.definitions.empty()) {
+    throw Error("cannot write the component tree: it has no design");
+  }
+  for (const StepTree::Definition& definition : tree.definitions) {
+    for (const Body& body : definition.bodies) {
+      if (body.shape.IsNull()) {
+        throw Error("body '" + body.name + "' has no shape");
+      }
+    }
+  }
+  TreeWriter writer(document, tree, name);
+  writer.make(0);
+  writer.shapes->UpdateAssemblies();
+  return std::move(writer.names);
+}
+
+namespace {
+
 std::optional<std::string> name_of(const TDF_Label& label) {
   occ::handle<TDataStd_Name> name;
   if (label.FindAttribute(TDataStd_Name::GetID(), name)) {

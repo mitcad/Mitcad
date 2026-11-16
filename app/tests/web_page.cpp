@@ -7,6 +7,7 @@
 // shared meshes, faces with materials of their own, an embedded texture,
 // placements in model units; and glTF files of their own (mitcad#1826):
 // nested nodes, metres, Y up, a .gltf file's buffer and image beside it.
+#include "UnitTests.hpp"
 #include "web/WebGlb.hpp"
 #include "web/WebPage.hpp"
 
@@ -560,3 +561,4 @@ int webPageTests() {
   ownTextureCoordinatesTests();
   return failures;
 }
+MITCAD_UNIT_TEST(webPageTests);

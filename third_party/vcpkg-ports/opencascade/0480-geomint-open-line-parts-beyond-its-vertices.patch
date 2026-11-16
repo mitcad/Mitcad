@@ -22,14 +22,21 @@ do not implement).
   part from the line's start to its first vertex and from its last vertex
   to its end are tested at a point inside them (one unit from the vertex on
   an unbounded side) as the parts between vertices are, and kept when in
-  both domains; parts that meet are joined, so that a line wholly in both
-  domains comes out as one part (the whole line, as with no vertices).
+  both domains, each as a part of its own. The parts are not joined where
+  they meet (mitcad#1879): a vertex between two parts may be where the line
+  crosses a periodic surface's seam, and the boolean operations need the
+  line split there. Joined, the parts between vertices that the line
+  constructor had always kept apart came out as one curve across a cone's
+  seam, and OCCT's own cases boolean/volumemaker C5 C6 E4 E6 F7 F8 G2 (a
+  cone and planes parallel to its axis, cut into cells by mkvolume) lost
+  cells. Lines whose outer parts lie outside a domain now get exactly the
+  parts they got without this patch.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx b/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx
 --- a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx
 +++ b/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.cxx
-@@ -373,6 +373,59 @@
+@@ -373,6 +373,43 @@ void GeomInt_LineConstructor::Perform(const occ::handle<IntPatch_Line>& L)
        }
      }
      //
@@ -37,8 +44,10 @@ diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.c
 +    {
 +      // An open line: its parts before its first vertex and after its last
 +      // one (e.g. vertices where it crosses a seam far away) are kept where
-+      // they lie in both domains, as the parts between its vertices are;
-+      // parts that meet are joined.
++      // they lie in both domains, as the parts between its vertices are,
++      // each as a part of its own: a vertex between two parts may be a
++      // crossing of a periodic surface's seam, where the line must stay
++      // split.
 +      double vmin = RealLast(), vmax = RealFirst();
 +      for (i = 1; i <= nbvtx; ++i)
 +      {
@@ -55,35 +64,17 @@ diff --git a/src/ModelingAlgorithms/TKGeomAlgo/GeomInt/GeomInt_LineConstructor.c
 +        return myDom1->Classify(gp_Pnt2d(u1, v1), Tol) != TopAbs_OUT
 +               && myDom2->Classify(gp_Pnt2d(u2, v2), Tol) != TopAbs_OUT;
 +      };
-+      NCollection_Sequence<double> aParts;
 +      if (vmin - lf > Precision::PConfusion()
 +          && inBoth(Precision::IsInfinite(lf) ? vmin - 1. : 0.5 * (lf + vmin)))
 +      {
-+        aParts.Append(lf);
-+        aParts.Append(vmin);
-+      }
-+      for (int k = 1; k <= seqp.Length(); k++)
-+      {
-+        aParts.Append(seqp(k));
++        seqp.Prepend(vmin);
++        seqp.Prepend(lf);
 +      }
 +      if (ll - vmax > Precision::PConfusion()
 +          && inBoth(Precision::IsInfinite(ll) ? vmax + 1. : 0.5 * (vmax + ll)))
 +      {
-+        aParts.Append(vmax);
-+        aParts.Append(ll);
-+      }
-+      seqp.Clear();
-+      for (int k = 1; k + 1 <= aParts.Length(); k += 2)
-+      {
-+        if (!seqp.IsEmpty() && std::abs(seqp.Last() - aParts(k)) <= Precision::PConfusion())
-+        {
-+          seqp.ChangeLast() = aParts(k + 1);
-+        }
-+        else
-+        {
-+          seqp.Append(aParts(k));
-+          seqp.Append(aParts(k + 1));
-+        }
++        seqp.Append(vmax);
++        seqp.Append(ll);
 +      }
 +    }
      if (!intrvtested)

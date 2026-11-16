@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: MIT
+# A fillet's short tangent chain is a remark, not a warning (mitcad#1914),
+# on the reported design of the private test files (MITCAD_MITCAD_REPORTED,
+# fillet-chain-note/; never committed): its component C2's Fillet12 (F28)
+# rounds two edges of body F20.b0, and its tangent chain stops where other
+# sharp edges meet, the edges that continue it left sharp.
+#   1. Accepted, the Timeline item marks nothing: no badge or ring (no
+#      "Timeline cell Fillet12" line), its tooltip says nothing of the
+#      chain, and the pointer over it paints no places.
+#   2. Edited again, the panel points the short chain out as information
+#      (plain text, not a warning box), and the pointer over the message
+#      paints the edges left sharp. Esc leaves the feature as it was.
+# Run by tools/ui-fillet-chain-remark-test.sh (Linux),
+# tools/ui-windows-fillet-chain-remark-test.ps1 (Windows) and
+# tools/ui-macos-fillet-chain-remark-test.sh (macOS).
+# The steps run from the start, also while the start-up open computes the
+# design in its own loop (12 s under check-all's load): the view shows only
+# after it, so its first line has the open's time, not the default 6 s
+# (mitcad#1933).
+expect-ever 'View area' 300
+wait-idle 600
+command view.fit
+wait-idle 60
+
+# The timeline shows the active component's features: C2 active.
+mark
+model-command '{"cmd":"activate_component","component":"C2"}'
+wait-idle 300
+wait-log '^Timeline Fillet12 at ' 60
+wait-idle 60
+
+# 1. Accepted: nothing on the Timeline item.
+mark
+hover-logged '^Timeline Fillet12 at '
+expect-timeline-hover F28
+expect-timeline-tooltip '(?s)^(?!.*tangent chain)(?!.*Warning).*Fillet12'
+screenshot '${MITCAD_TEST_WORK}/fillet-chain-remark-timeline.png'
+expect-no-log '^Notice hover highlighted: timeline: '
+mark
+timeline-leave
+wait-idle 30
+
+# 2. Edited again: the panel points the short chain out as information.
+mark
+dblclick-logged '^Timeline Fillet12 at '
+wait-log '^Editing F28 with Fillet' 60
+wait-log '^Preview Fillet: ok, remark: The fillet.s tangent chain stops where other sharp edges meet: ' 600
+wait-log '^Panel Fillet message: information: .*The fillet.s tangent chain stops where other sharp edges meet: ' 30
+expect-no-log '^Panel Fillet message box: warning: .*tangent chain'
+expect-no-log '^Preview Fillet: ok, warning: .*tangent chain'
+wait-log '^Panel Fillet message at ' 30
+wait-idle 60
+mark
+hover-logged '^Panel Fillet message at '
+wait-log '^Notice hover highlighted: panel: edge E[{].* of F20[.]b0.*[(][1-9][0-9]* drawn[)]$' 30
+screenshot '${MITCAD_TEST_WORK}/fillet-chain-remark-panel.png'
+mark
+leave-widget commandMessage
+wait-log '^Notice hover highlighted: none$' 30
+key Escape
+wait-log '^Command Fillet cancelled' 60
+wait-idle 60
+expect-never '^Timeline cell Fillet12: '
+expect-never 'Recompute failed|The document was read while a job computes it|TestDriver: FAIL'

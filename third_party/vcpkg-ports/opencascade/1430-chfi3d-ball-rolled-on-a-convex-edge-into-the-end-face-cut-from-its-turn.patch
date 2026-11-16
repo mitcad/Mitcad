@@ -52,10 +52,10 @@ Test: geometry/tests/test_fillet_end_edge_turn.cpp, on the case
 Upstream: new.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 453dfc45..599d6adb 100644
+index beba7d38..9525fb7e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -5309,6 +5309,8 @@ void ChFi3d_Builder::Reset()
+@@ -5372,6 +5372,8 @@ void ChFi3d_Builder::Reset()
    myRollFaces.Clear();
    myRollTangentStripes.Clear();
    myRollTangentFaces.Clear();
@@ -82,10 +82,10 @@ index 4f9e492b..375a53af 100644
  
  #endif // _ChFi3d_Builder_HeaderFile
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 62e31d12..07ba8dfd 100644
+index cfbf28d7..09f4f15e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -8532,6 +8532,92 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
+@@ -8545,6 +8545,92 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
    return ChFi3d_ConvexEdgeAt(E, Fin, Fbeyond, CP.ParameterOnArc());
  }
  
@@ -179,12 +179,12 @@ index 62e31d12..07ba8dfd 100644
  {
  // The screw motion of parameter s about Axis: rotation by s * Ang, then
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 3c1b6e5a..1545b3d1 100644
+index 2625b29f..852801d0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -603,6 +603,31 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
-                               const ChFiDS_Map&         EFMap,
-                               const ChFiDS_Map&         VFMap);
+@@ -605,6 +605,31 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
+                               const ChFiDS_Map&                VFMap,
+                               const occ::handle<ChFiDS_Spine>& Sp = occ::handle<ChFiDS_Spine>());
  
 +//! Edge E of face F holds the spine's end vertex Vend and is convex at its
 +//! parameter W between F and the face beyond (Fbeyond), which holds Vend
@@ -215,7 +215,7 @@ index 3c1b6e5a..1545b3d1 100644
  //! screw motion that maps its isolines of that parameter onto each other
  //! (a thread's flank, swept along a helix; a surface of revolution), by a
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 8aa4e57d..3163aa7d 100644
+index 8f358307..78b2c688 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -3572,6 +3572,25 @@ bool ChFi3d_Builder::StartSol(
@@ -614,7 +614,7 @@ index 8aa4e57d..3163aa7d 100644
  //=======================================================================
  // function : RoundingOverSlightCreases
  // purpose  : See the header.
-@@ -22844,6 +23226,73 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -22847,6 +23229,73 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        }
      }
    }
@@ -689,10 +689,10 @@ index 8aa4e57d..3163aa7d 100644
    {
      // Chamfers stopped where their edges turn, run on past the vertex.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index 90131633..ce7a44ec 100644
+index 48f961f0..f2335684 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-@@ -2844,6 +2844,19 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2853,6 +2853,19 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                                      myVEMap,
                                      myEFMap);
    };
@@ -712,12 +712,12 @@ index 90131633..ce7a44ec 100644
    if (reverse && intf)
    {
      narc1 = Lin->StartPointOnFirst().NbPointOnRst();
-@@ -2874,7 +2887,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2883,7 +2896,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                         || ChFi3d_ObstacleBeforeEnd(Data->VertexFirstOnS1(), F1, Spine->FirstVertex(),
                                                     Lin->StartPointOnFirst().ParameterOnGuide(),
                                                     Spine->FirstParameter(1), true, 10. * tolesp, myEFMap,
--                                                   myVFMap);
-+                                                   myVFMap)
+-                                                   myVFMap, Spine);
++                                                   myVFMap, Spine)
 +                       || (aRollEndEdgeAt[0]
 +                           && ChFi3d_RollsOnEndEdge(Data->VertexFirstOnS1(), F1, Spine->FirstVertex(),
 +                                                    Lin->StartPointOnFirst().ParameterOnGuide(),
@@ -726,12 +726,12 @@ index 90131633..ce7a44ec 100644
            }
          }
        }
-@@ -2909,7 +2927,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2918,7 +2936,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                         || ChFi3d_ObstacleBeforeEnd(Data->VertexFirstOnS2(), F2, Spine->FirstVertex(),
                                                     Lin->StartPointOnSecond().ParameterOnGuide(),
                                                     Spine->FirstParameter(1), true, 10. * tolesp, myEFMap,
--                                                   myVFMap);
-+                                                   myVFMap)
+-                                                   myVFMap, Spine);
++                                                   myVFMap, Spine)
 +                       || (aRollEndEdgeAt[0]
 +                           && ChFi3d_RollsOnEndEdge(Data->VertexFirstOnS2(), F2, Spine->FirstVertex(),
 +                                                    Lin->StartPointOnSecond().ParameterOnGuide(),
@@ -740,12 +740,12 @@ index 90131633..ce7a44ec 100644
            }
          }
        }
-@@ -3072,7 +3095,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -3081,7 +3104,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                       || ChFi3d_ObstacleBeforeEnd(Data->VertexLastOnS1(), F1, Spine->LastVertex(),
                                                   Lin->EndPointOnFirst().ParameterOnGuide(),
                                                   Spine->LastParameter(Spine->NbEdges()), false, 10. * tolesp,
--                                                 myEFMap, myVFMap);
-+                                                 myEFMap, myVFMap)
+-                                                 myEFMap, myVFMap, Spine);
++                                                 myEFMap, myVFMap, Spine)
 +                     || (aRollEndEdgeAt[1]
 +                         && ChFi3d_RollsOnEndEdge(Data->VertexLastOnS1(), F1, Spine->LastVertex(),
 +                                                  Lin->EndPointOnFirst().ParameterOnGuide(),
@@ -754,12 +754,12 @@ index 90131633..ce7a44ec 100644
          }
        }
        else
-@@ -3100,7 +3128,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -3109,7 +3137,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
                       || ChFi3d_ObstacleBeforeEnd(Data->VertexLastOnS2(), F2, Spine->LastVertex(),
                                                   Lin->EndPointOnSecond().ParameterOnGuide(),
                                                   Spine->LastParameter(Spine->NbEdges()), false, 10. * tolesp,
--                                                 myEFMap, myVFMap);
-+                                                 myEFMap, myVFMap)
+-                                                 myEFMap, myVFMap, Spine);
++                                                 myEFMap, myVFMap, Spine)
 +                     || (aRollEndEdgeAt[1]
 +                         && ChFi3d_RollsOnEndEdge(Data->VertexLastOnS2(), F2, Spine->LastVertex(),
 +                                                  Lin->EndPointOnSecond().ParameterOnGuide(),

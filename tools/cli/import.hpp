@@ -86,5 +86,8 @@ int import_rvt(const std::vector<std::string>& args);
 int import_solidcraft(const std::vector<std::string>& args);
 int import_dwg(const std::vector<std::string>& args);
 int import_3dm(const std::vector<std::string>& args);
+// The .serp import's test file (mitcad#1870): the reader's sample scene
+// around B-reps OCCT wrote; --case newer writes a newer format version.
+int serp_test_file(const std::vector<std::string>& args);
 
 } // namespace mitcad::cli

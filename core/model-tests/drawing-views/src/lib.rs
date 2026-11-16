@@ -23,3 +23,6 @@ mod line_style_tests;
 mod bolt_circle_tests;
 // A radius on a fillet seen from the side (mitcad#1694).
 mod fillet_radius_tests;
+// Dimensions to a curved face's outline and its extreme points, and a
+// section's label dragged (mitcad#1909).
+mod silhouette_tests;

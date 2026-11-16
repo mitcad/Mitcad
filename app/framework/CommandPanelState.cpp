@@ -7,6 +7,7 @@
 #include <QPushButton>
 #include <QTextDocumentFragment>
 
+#include "BusyMark.hpp"
 #include "CommandMessage.hpp"
 
 namespace mitcad {
@@ -28,6 +29,11 @@ QJsonObject CommandPanel::shownState() const {
   // The button beside the message while it shows (mitcad#1634).
   if (!m_messageActionText.isEmpty()) {
     shown.insert(QStringLiteral("message_action"), m_messageActionText);
+  }
+  // Work under way, such as a preview being computed (mitcad#1907), whether
+  // its busy mark shows yet or not; it is no longer the message.
+  if (m_busy->busy()) {
+    shown.insert(QStringLiteral("busy"), m_busy->toolTip());
   }
   return shown;
 }

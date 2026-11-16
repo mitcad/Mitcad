@@ -29,6 +29,8 @@ struct Ring {
   QtMessageHandler previous = nullptr;
   bool installed = false;
   std::atomic<LogSink> sink{nullptr};
+  // The session log's file (mitcad#1896), beside the debug log's.
+  std::atomic<LogSink> sessionSink{nullptr};
 };
 
 Ring& ring() {
@@ -145,6 +147,9 @@ void handle(QtMsgType type, const QMessageLogContext& context, const QString& me
   }
   // The file first: for a fatal message the default handler ends the
   // process.
+  if (const LogSink sessionSink = r.sessionSink.load()) {
+    sessionSink(type, line);
+  }
   if (const LogSink sink = r.sink.load()) {
     sink(type, line);
   }
@@ -218,6 +223,8 @@ QString formatLogLine(const LogLine& line) {
 }
 
 void setLogSink(LogSink sink) { ring().sink.store(sink); }
+
+void setSessionLogSink(LogSink sink) { ring().sessionSink.store(sink); }
 
 std::size_t logRingBytes() {
   Ring& r = ring();

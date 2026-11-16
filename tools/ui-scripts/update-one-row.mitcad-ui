@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# One update for the whole application (mitcad#1890), with the update
+# tests' fake offer (the step update-fake-offer 40: a newer release,
+# MitCad 999.0.0, offered without a request, "downloaded" in 40 s, then
+# neither verified nor installed; in any build the driver runs), on
+# first.mitcad (opened by the runner) and second.mitcad, 20 mm cubes in
+# MITCAD_TEST_WORK:
+#   1. Check for Updates offers the release; Install in the first design's
+#      window starts the download.
+#   2. The second design opens in a window of its own, whose update row
+#      shows the download's progress at once ("Update row: in 2 window(s)").
+#   3. The first design closes: the row stays in the second window, where
+#      the download goes on ("Update download: N%") and reaches
+#      "downloaded".
+#   4. Installed again, then Exit: the last window does not drop the
+#      download silently. MitCad says it is still downloading; Keep
+#      Downloading keeps the window open, and the download reaches
+#      "downloaded" there.
+# The runner checks the log's order: the progress after the first window
+# closed, and no cancelled download. Run by tools/ui-update-one-row-test.sh
+# (Linux), tools/ui-windows-update-one-row-test.ps1 (Windows) and
+# tools/ui-macos-update-one-row-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+update-fake-offer 40
+capture-document-window first
+
+# 1. The offer, and Install in the first design's window.
+mark
+command help.check_updates
+wait-log '^Update notice \(offer\): MitCad 999[.]0[.]0 is available' 20
+button '^Install$'
+wait-log '^Update download: the test.s fake offer of MitCad 999[.]0[.]0 in 40 s$' 10
+wait-log '^Update notice \(progress\): Downloading MitCad 999[.]0[.]0' 10
+
+# 2. The second design: its window's row shows the download at once.
+mark
+open-file '${MITCAD_TEST_WORK}/second.mitcad'
+wait-log '^Update row: in 2 window\(s\)$' 30
+wait-log '^Update notice \(progress\): Downloading MitCad 999[.]0[.]0' 10
+wait-idle 30
+expect-document-windows 2
+capture-document-window second
+
+# 3. The first design closed: the row and the download stay with the second.
+focus-document-window first
+mark
+command file.close
+expect-document-window-gone first
+expect-document-windows 1
+wait-log '^Update row: in 1 window\(s\)$' 20
+focus-document-window second
+mark
+wait-log '^Update download: [0-9]+%$' 30
+wait-log '^Update downloaded: MitCad 999[.]0[.]0, the test.s fake offer' 60
+wait-log '^Update notice \(message\): MitCad 999[.]0[.]0 is downloaded[.] A test.s fake update is not installed[.]' 10
+expect-no-log '^Update: cancelled'
+screenshot '${MITCAD_TEST_WORK}/update-one-row-downloaded.png'
+
+# 4. Exit during a download: MitCad asks; Keep Downloading keeps it open.
+mark
+command help.check_updates
+wait-log '^Update notice \(offer\): MitCad 999[.]0[.]0 is available' 20
+button '^Install$'
+wait-log '^Update download: the test.s fake offer of MitCad 999[.]0[.]0 in 40 s$' 10
+mark
+command file.exit
+wait-log '^Update question: MitCad 999[.]0[.]0 is still downloading$' 20
+focus-dialog '^MitCad$'
+screenshot-dialog '${MITCAD_TEST_WORK}/update-one-row-question.png'
+button '^Keep Downloading$'
+focus-main
+wait-log '^Update: the download goes on, MitCad stays open$' 10
+expect-document-windows 1
+wait-log '^Update downloaded: MitCad 999[.]0[.]0, the test.s fake offer' 60
+expect-no-log '^Update: the download stopped'
+expect-no-log '^Document windows closed'

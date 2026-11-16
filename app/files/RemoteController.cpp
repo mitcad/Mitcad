@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -31,7 +32,9 @@
 #include "CloudAddress.hpp"
 #include "RemoteDialogs.hpp"
 #include "RemoteTask.hpp"
+#include "SyncState.hpp"
 #include "VersionDialogs.hpp"
+#include "VersionQueue.hpp"
 #include "../framework/UiSizes.hpp"
 
 namespace mitcad {
@@ -188,9 +191,24 @@ RemoteController::RemoteController(QMainWindow& window, Host host, QObject* pare
       push();
     }
   });
+  // Work of the project's queue that is not this controller's (mitcad#1895):
+  // the indicator shows it while it runs, and reads the state after it.
+  connect(&VersionQueue::instance(), &VersionQueue::changed, this, [this](const QString& key) {
+    if (m_state.root.isEmpty() || key != VersionQueue::keyOf(m_state.root) || m_holding) {
+      return;
+    }
+    if (m_task == nullptr && VersionQueue::instance().running(m_state.root).isEmpty()) {
+      refreshStatus();
+    } else {
+      publishState();
+    }
+  });
 }
 
-RemoteController::~RemoteController() { delete m_task; }
+RemoteController::~RemoteController() {
+  m_holding = true; // no state read while it goes
+  delete m_task;
+}
 
 void RemoteController::registerCommands(CommandRegistry& registry) {
   const auto def = [](const char* id, const QString& name, const char* icon, const QString& tooltip,
@@ -229,6 +247,8 @@ void RemoteController::registerCommands(CommandRegistry& registry) {
 }
 
 void RemoteController::startUp() {
+  // UI tests: gaps of the UI thread logged (MITCAD_TEST_UI_STALL_MS).
+  watchStalls();
   m_bar = new QToolBar(tr("Remote"), &m_window);
   m_bar->setObjectName(QStringLiteral("remoteBar"));
   m_bar->setMovable(false);
@@ -281,8 +301,70 @@ ProjectIndicator::Remote RemoteController::indicatorState() const {
   if (m_task != nullptr && m_task->name() != QLatin1String("clone")) {
     remote.busy = m_task->name();
     remote.percent = m_task->progressPercent();
+    remote.queued = m_task->isWaiting();
+  } else if (!m_state.root.isEmpty()) {
+    // The project's versions sent by other work of its queue (a design's
+    // edit lock closed in the background, a Projects panel's push;
+    // mitcad#1895). Lock polls are no sending.
+    const QString running = VersionQueue::instance().running(m_state.root);
+    if (running == QLatin1String("sync") || running == QLatin1String("push")) {
+      remote.busy = running;
+    }
   }
   return remote;
+}
+
+SyncWords RemoteController::stateWords() const {
+  const ProjectIndicator::Remote remote = indicatorState();
+  SyncState state;
+  state.ahead = remote.ahead;
+  state.behind = remote.behind;
+  state.problem = remote.problem;
+  state.busy = remote.busy;
+  state.queued = remote.queued;
+  state.conflict = remote.conflict;
+  state.lastDone = remote.lastDone;
+  return syncWords(state);
+}
+
+std::optional<QString> RemoteController::versionAuthor(const QString& root) {
+  try {
+    const rust::Box<Project> repo = open_project(rustStr(root.toUtf8()));
+    return m_host.author(*repo);
+  } catch (const std::exception& e) {
+    qWarning().noquote() << QStringLiteral("Remote: %1").arg(errorText(e));
+    return std::nullopt;
+  }
+}
+
+void RemoteController::syncedInBackground(const QString& root, const QJsonObject& answer) {
+  const QString cls = errorClass(answer);
+  qInfo().noquote() << QStringLiteral("Sync: %1%2, %3 replayed, %4 (in the background)")
+                           .arg(answer.value(QStringLiteral("case")).toString(),
+                                cls.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(cls))
+                           .arg(answer.value(QStringLiteral("replayed")).toArray().size())
+                           .arg(answer.value(QStringLiteral("pushed")).toBool() ? QStringLiteral("sent")
+                                                                                 : QStringLiteral("nothing sent"));
+  const QJsonObject pushed = answer.value(QStringLiteral("push")).toObject();
+  if (pushed.value(QStringLiteral("pushed")).toBool()) {
+    emit versionsSent(root, pushed.value(QStringLiteral("branch")).toString(),
+                      pushed.value(QStringLiteral("head")).toString());
+  }
+  if (VersionQueue::keyOf(root) != VersionQueue::keyOf(m_host.projectRoot())) {
+    return; // another project's: its own window or the panel reads it
+  }
+  refreshStatus();
+  if (cls == QLatin1String("conflict")) {
+    m_state.conflict = true;
+    publishState();
+  } else if (passing(cls) && m_state.ahead > 0) {
+    scheduleRetry();
+  }
+  // The history moved, and the sync may have changed the open file: as
+  // after Sync.
+  if (cls.isEmpty()) {
+    m_host.whenIdle([this, answer] { afterSync(answer); });
+  }
 }
 
 QString RemoteController::statusText() const {
@@ -465,6 +547,24 @@ void RemoteController::publishState() {
     m_loggedState = m_state.root + QLatin1Char('|') + line;
     qInfo().noquote() << QStringLiteral("Remote status: %1").arg(line);
   }
+  // In words (mitcad#1895): logged as it changes; a failure, and the
+  // recovery from one, also in the status bar (a send that goes well is
+  // the indicator's, so Save's own message stays).
+  const SyncWords words = stateWords();
+  const QString loggedWords = m_state.root + QLatin1Char('|') + words.logged;
+  if (loggedWords != m_loggedWords) {
+    m_loggedWords = loggedWords;
+    qInfo().noquote() << QStringLiteral("Remote sync state: %1").arg(words.logged);
+    const bool indicatorBusy = !indicatorState().busy.isEmpty();
+    if (words.problem && m_host.status) {
+      m_host.status(words.text, true);
+    } else if (m_wordsProblem && !indicatorBusy && m_host.status) {
+      m_host.status(words.text, false);
+    }
+    if (!indicatorBusy) {
+      m_wordsProblem = words.problem;
+    }
+  }
   emit stateChanged();
 }
 
@@ -539,7 +639,7 @@ void RemoteController::runWaiting() {
   }
 }
 
-QJsonObject RemoteController::runModal(RemoteTask* task, const QString& label) {
+QJsonObject RemoteController::runModal(RemoteTask* task, const QString& label, int limitSeconds) {
   QProgressDialog dialog(label, tr("Cancel"), 0, 0, &m_window);
   dialog.setWindowTitle(tr("Remote Repository"));
   dialog.setWindowModality(Qt::WindowModal);
@@ -563,6 +663,20 @@ QJsonObject RemoteController::runModal(RemoteTask* task, const QString& label) {
   qInfo().noquote() << QStringLiteral("Remote task %1 started").arg(task->name());
   task->start();
   publishState();
+  QTimer limit;
+  if (limitSeconds > 0) {
+    // MitCad closes (mitcad#1895): what is not sent by then goes at the
+    // next start.
+    limit.setSingleShot(true);
+    connect(&limit, &QTimer::timeout, task, [task, limitSeconds] {
+      qInfo().noquote() << QStringLiteral("Remote task %1 stopped after %2 s: MitCad closes; the versions not sent "
+                                          "go at the next start")
+                               .arg(task->name())
+                               .arg(limitSeconds);
+      task->cancel();
+    });
+    limit.start(limitSeconds * 1000);
+  }
   waitDialogUntil([&] { return finished || pending == nullptr; });
   if (pending == nullptr) { m_task = nullptr; return {}; }
   disconnect(&dialog, nullptr, task, nullptr);
@@ -599,8 +713,25 @@ bool RemoteController::settle(const QString& why) {
   return m_task == nullptr;
 }
 
-void RemoteController::waitForBranch() {
-  if (m_task == nullptr || m_task->name() != QLatin1String("sync")) {
+void RemoteController::waitForBranch(const QString& root) {
+  const QString folder = root.isEmpty() ? m_host.projectRoot() : root;
+  const bool own = m_task != nullptr && m_task->name() == QLatin1String("sync") &&
+                   (root.isEmpty() || VersionQueue::keyOf(root) == VersionQueue::keyOf(m_state.root));
+  if (!own) {
+    // A sync of the project's queue that is not this controller's (a
+    // design's edit lock closed in the background, mitcad#1895).
+    if (folder.isEmpty() || VersionQueue::instance().running(folder) != QLatin1String("sync")) {
+      return;
+    }
+    QProgressDialog dialog(tr("Waiting for the sync to finish…"), QString(), 0, 0, &m_window);
+    dialog.setWindowTitle(tr("Sync"));
+    dialog.setWindowModality(Qt::WindowModal);
+    dialog.setCancelButton(nullptr);
+    prepareProgressDialog(&dialog);
+    dialog.setMinimumDuration(300);
+    qInfo().noquote() << QStringLiteral("Remote: waiting for the sync of %1 before saving").arg(folder);
+    waitDialogUntil([&folder] { return VersionQueue::instance().running(folder) != QLatin1String("sync"); });
+    dialog.reset();
     return;
   }
   QProgressDialog dialog(tr("Waiting for the sync to finish…"), tr("Stop the Sync"), 0, 0, &m_window);
@@ -628,9 +759,48 @@ void RemoteController::shutDown() {
   m_holding = true;
   m_checkTimer->stop();
   m_retryTimer->stop();
+  if (m_task != nullptr && (m_task->name() == QLatin1String("push") || m_task->name() == QLatin1String("sync"))) {
+    // Versions on their way (mitcad#1895): waited for briefly, saying so;
+    // what is not sent by then goes at the next start.
+    const int seconds = closeWaitSeconds();
+    QProgressDialog dialog(tr("Sending the project's versions before MitCad closes…\nWhat is not sent within %n "
+                              "second(s) is sent the next time the project opens.",
+                              nullptr, seconds),
+                           tr("Close &Now"), 0, 0, &m_window);
+    dialog.setWindowTitle(tr("Remote Repository"));
+    dialog.setWindowModality(Qt::WindowModal);
+    prepareProgressDialog(&dialog);
+    dialog.setMinimumDuration(300);
+    QObject waiting;
+    bool finished = false;
+    bool closeNow = false;
+    const QPointer<RemoteTask> pending = m_task;
+    // Its answer is only logged here: the window closes.
+    disconnect(m_task, &RemoteTask::finished, this, &RemoteController::taskFinished);
+    connect(m_task, &RemoteTask::finished, &waiting, [&finished] { finished = true; });
+    connect(&dialog, &QProgressDialog::canceled, &waiting, [&closeNow] { closeNow = true; });
+    QElapsedTimer clock;
+    clock.start();
+    qInfo().noquote() << QStringLiteral("Remote: MitCad closes: waiting up to %1 s for %2").arg(seconds).arg(m_task->name());
+    waitDialogUntil([&] { return finished || pending == nullptr || closeNow || clock.elapsed() >= seconds * 1000; });
+    dialog.reset();
+    if (finished && pending != nullptr) {
+      const QJsonObject answer = pending->answer();
+      const QString cls = errorClass(answer);
+      qInfo().noquote() << (cls.isEmpty() ? QStringLiteral("Remote task %1 done before closing").arg(pending->name())
+                                          : QStringLiteral("Remote task %1 failed (%2): %3")
+                                                .arg(pending->name(), cls, errorMessage(answer)));
+    }
+  }
   if (m_task != nullptr) {
     qInfo().noquote() << QStringLiteral("Remote task %1 stopped: MitCad closes").arg(m_task->name());
     delete m_task; // cancels and waits
+  }
+  // What waits is said, and goes at the next start.
+  const QJsonObject info = m_state.root.isEmpty() ? QJsonObject() : local(m_state.root, named("remote_info"));
+  const int ahead = info.value(QStringLiteral("ahead")).toInt(0);
+  if (ahead > 0) {
+    qInfo().noquote() << QStringLiteral("Remote: %1 version(s) not sent: they are sent at the next start").arg(ahead);
   }
 }
 
@@ -727,6 +897,10 @@ void RemoteController::startCheck(Mode mode) {
     const QString cls = errorClass(answer);
     if (!cls.isEmpty()) {
       logFailure(QStringLiteral("Remote check"), answer);
+      // Versions that wait are tried again later (mitcad#1895).
+      if (passing(cls) && m_state.ahead > 0 && m_sync.sendAtOnce) {
+        scheduleRetry();
+      }
       if (mode == Mode::Shown && m_interactive) {
         warn(&m_window, tr("Check for Newer Versions"), errorMessage(answer), errorDetail(answer));
       }
@@ -989,7 +1163,7 @@ void RemoteController::checkQuietly() {
   }
 }
 
-QJsonObject RemoteController::syncNow(const QString& label) {
+QJsonObject RemoteController::syncNow(const QString& label, int limitSeconds) {
   const QJsonObject nothing{{QStringLiteral("case"), QStringLiteral("nothing")}};
   refreshStatus();
   if (m_state.name.isEmpty() || m_state.ahead == 0) {
@@ -1028,7 +1202,7 @@ QJsonObject RemoteController::syncNow(const QString& label) {
                                     {QStringLiteral("author"), *author},
                                     {QStringLiteral("fetch"), true}},
                                    this);
-  const QJsonObject answer = runModal(task, label);
+  const QJsonObject answer = runModal(task, label, limitSeconds);
   const QString cls = errorClass(answer);
   qInfo().noquote() << QStringLiteral("Sync: %1%2, %3 replayed, %4")
                            .arg(answer.value(QStringLiteral("case")).toString(),

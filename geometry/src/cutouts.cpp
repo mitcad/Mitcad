@@ -42,6 +42,7 @@
 #include <Bnd_Box.hxx>
 #include <ChFi3d.hxx>
 #include <ElSLib.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomLib.hxx>
@@ -62,6 +63,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Face.hxx>
+#include <TopoDS_Iterator.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
@@ -299,6 +301,88 @@ bool on_surface(const std::vector<gp_Pnt>& points, const occ::handle<Geom_Surfac
 double distance(const TopoDS_Shape& a, const TopoDS_Shape& b) {
   BRepExtrema_DistShapeShape d(a, b);
   return d.IsDone() && d.NbSolution() > 0 ? d.Value() : Precision::Infinite();
+}
+
+// Whether a dressup of the selected edges `own` of `face`, reaching `reach`
+// from them along the face, reaches the face's far edges `rims` across the
+// face (mitcad#1926): a point of a rim within `reach` of the edges whose way
+// to the nearest of them runs over the face, the middle of the segment
+// between them inside the face (its foot on the face's surface; not on the
+// face's boundary, which a segment along an edge of the face follows), not
+// through the body or across a hole of the face; where a rim meets the
+// edges (the face ending in a point there), its points beside them. A
+// plate's top beside a wall 2 thick is no narrow face for a rounding of 3
+// at the wall's foot, where its edge with the wall's other side lies 2 from
+// that foot, across the wall.
+bool reached_across(const TopoDS_Face& face, const TopoDS_Shape& rims, const TopoDS_Shape& own, double reach,
+                    double tolerance) {
+  if (!within_distance(rims, own, reach + tolerance)) {
+    return false;
+  }
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face);
+  if (surface.IsNull()) {
+    return true;
+  }
+  // (Points all along the rims, and beside each rim's nearest point to the
+  // edges, within a tenth to a half of the reach along it.)
+  std::vector<gp_Pnt> points;
+  for (TopExp_Explorer ex(rims, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& rim = TopoDS::Edge(ex.Current());
+    if (BRep_Tool::Degenerated(rim)) {
+      continue;
+    }
+    const BRepAdaptor_Curve curve(rim);
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    for (int k = 0; k <= 32; ++k) {
+      points.push_back(curve.Value(first + (last - first) * k / 32.0));
+    }
+    BRepExtrema_DistShapeShape nearest(rim, own);
+    if (!nearest.IsDone()) {
+      continue;
+    }
+    for (int i = 1; i <= nearest.NbSolution(); ++i) {
+      points.push_back(nearest.PointOnShape1(i));
+      double t = first;
+      if (nearest.SupportTypeShape1(i) == BRepExtrema_IsOnEdge) {
+        nearest.ParOnEdgeS1(i, t);
+      } else if (nearest.PointOnShape1(i).Distance(curve.Value(last)) <
+                 nearest.PointOnShape1(i).Distance(curve.Value(first))) {
+        t = last;
+      }
+      for (const double part : {-0.5, -0.25, -0.1, 0.1, 0.25, 0.5}) {
+        const GCPnts_AbscissaPoint along(curve, part * reach, t);
+        if (along.IsDone() && along.Parameter() >= first && along.Parameter() <= last) {
+          points.push_back(curve.Value(along.Parameter()));
+        }
+      }
+    }
+  }
+  const BRepTopAdaptor_FClass2d inside(face, Precision::PConfusion());
+  for (const gp_Pnt& q : points) {
+    BRepExtrema_DistShapeShape to_own(BRepBuilderAPI_MakeVertex(q).Vertex(), own);
+    if (!to_own.IsDone() || to_own.NbSolution() == 0 || to_own.Value() > reach + tolerance) {
+      continue;
+    }
+    // (Where the rim meets the edges, the points beside them tell.)
+    if (to_own.Value() <= tolerance) {
+      continue;
+    }
+    for (int i = 1; i <= to_own.NbSolution(); ++i) {
+      const gp_Pnt middle(0.5 * (q.XYZ() + to_own.PointOnShape2(i).XYZ()));
+      GeomAPI_ProjectPointOnSurf foot(middle, surface);
+      if (!foot.IsDone() || foot.NbPoints() == 0) {
+        continue;
+      }
+      double u = 0.0;
+      double v = 0.0;
+      foot.LowerDistanceParameters(u, v);
+      if (inside.Perform(gp_Pnt2d(u, v)) == TopAbs_IN) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // The shape with the faces merged that lie on one of `surfaces` on both
@@ -833,6 +917,18 @@ bool touches_only_at(const TopoDS_Shape& region, const TopoDS_Shape& edges, cons
   return true;
 }
 
+// Whether `region` shares more than `tolerance` of volume (its cube) with
+// any of `regions`.
+bool overlaps_any(const TopoDS_Shape& region, const ShapeList& regions, double tolerance) {
+  const double least = tolerance * tolerance * tolerance;
+  for (const TopoDS_Shape& other : regions) {
+    if (absolute_volume_of(boolean<BRepAlgoAPI_Common>(region, other)) > least) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The face's surface continued past the face along itself (mitcad#1238):
 // a plane over the box, a cylinder or cone along its axis `reach` past
 // the face (a cone up to its apex), a sphere or torus whole, a surface of
@@ -1202,6 +1298,10 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
     TopExp::MapShapesAndUniqueAncestors(solid, TopAbs_VERTEX, TopAbs_EDGE, edges_at);
     TopExp::MapShapesAndUniqueAncestors(solid, TopAbs_VERTEX, TopAbs_FACE, faces_at);
     std::vector<std::pair<int, gp_Pnt>> ends;
+    // (The selected edge of each of `ends`, by index in `body`, and the
+    // vertex the chain ends at.)
+    std::vector<int> end_edges;
+    std::vector<TopoDS_Vertex> end_vertices;
     std::vector<int> end_faces;
     for (int e = 0; e < body.edge_count(); ++e) {
       if (owner[static_cast<std::size_t>(e)] < 0) {
@@ -1233,6 +1333,8 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
             continue;
           }
           ends.emplace_back(f, middle);
+          end_edges.push_back(e);
+          end_vertices.push_back(vertex);
           if (std::find(end_faces.begin(), end_faces.end(), f) == end_faces.end()) {
             end_faces.push_back(f);
           }
@@ -1320,6 +1422,72 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
           tips.insert(tips.end(), at.begin(), at.end());
         }
       }
+      // The rims a chain of the face's selected edges ends on (GitHub #353:
+      // a rounding of the edges round a side face, as large as the face is
+      // high and deep, its chains ending on the face's bottom and back
+      // edges): a far edge of the face that meets a chain's end, the face
+      // at that end being the face beyond the rim. The space past them is
+      // looked for last (`past_ends`), on the far side of those faces and on
+      // the face's side of the ending edges' other faces, the chains' other
+      // ends held as before; the regions touch the chains there only.
+      TopoDS_Compound end_rims;
+      builder.MakeCompound(end_rims);
+      bool any_end_rim = false;
+      std::vector<std::size_t> on_rim;
+      std::vector<gp_Pnt> end_tips;
+      if (single.IsNull()) {
+        for (TopExp_Explorer ex(face, TopAbs_EDGE); ex.More(); ex.Next()) {
+          const int rim = body.edge_index(ex.Current());
+          if (rim < 0 || selected.Contains(ex.Current()) || BRep_Tool::Degenerated(TopoDS::Edge(ex.Current()))) {
+            continue;
+          }
+          const std::vector<int> beyond = edge_faces.at(rim);
+          bool taken = false;
+          std::vector<std::size_t> ending;
+          for (std::size_t k = 0; k < ends.size(); ++k) {
+            const std::vector<int> along = edge_faces.at(end_edges[k]);
+            if (ends[k].first == n || std::find(beyond.begin(), beyond.end(), ends[k].first) == beyond.end() ||
+                std::find(along.begin(), along.end(), n) == along.end()) {
+              continue;
+            }
+            bool at_rim = false;
+            for (TopExp_Explorer vx(ex.Current(), TopAbs_VERTEX); vx.More() && !at_rim; vx.Next()) {
+              at_rim = vx.Current().IsSame(end_vertices[k]);
+            }
+            if (!at_rim) {
+              continue;
+            }
+            taken = true;
+            ending.push_back(k);
+          }
+          if (!taken) {
+            continue;
+          }
+          // (A far edge of the face for another of its selected edges, one
+          // that does not meet it, within the dressup's reach: not only an
+          // edge across the face at the chain's end.)
+          bool far_for_another = false;
+          for (TopExp_Explorer other(own, TopAbs_EDGE); other.More() && !far_for_another; other.Next()) {
+            bool meets = false;
+            for (TopExp_Explorer vx(other.Current(), TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
+              for (TopExp_Explorer wx(ex.Current(), TopAbs_VERTEX); wx.More() && !meets; wx.Next()) {
+                meets = vx.Current().IsSame(wx.Current());
+              }
+            }
+            far_for_another = !meets && distance(ex.Current(), other.Current()) < contact + tolerance;
+          }
+          if (taken && far_for_another) {
+            builder.Add(end_rims, ex.Current());
+            any_end_rim = true;
+            for (const std::size_t k : ending) {
+              if (std::find(on_rim.begin(), on_rim.end(), k) == on_rim.end()) {
+                on_rim.push_back(k);
+                end_tips.push_back(BRep_Tool::Pnt(end_vertices[k]));
+              }
+            }
+          }
+        }
+      }
       // How far the dressup reaches along this face (`reach`: by edge, a
       // two-distance or distance-and-angle chamfer's leg on it, mitcad#1819;
       // else `contact` on every face): a face narrower than the dressup's
@@ -1337,9 +1505,25 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
           }
         }
       }
-      if (!any_rim || !(reach_n > 0.0) || !within_distance(rims, own, reach_n + tolerance)) {
+      // (Across the face: not a far edge on the other side of a wall or a
+      // hole of the face, mitcad#1926.)
+      const bool narrow = any_rim && reach_n > 0.0 && reached_across(face, rims, own, reach_n, tolerance);
+      const bool ends_on_rims =
+          any_end_rim && reach_n > 0.0 && within_distance(end_rims, own, reach_n + tolerance);
+      if (!narrow && !ends_on_rims) {
         continue;
       }
+      // (The rims and their ends' points as the space past the ends' rims
+      // takes them.)
+      TopoDS_Compound all_rims;
+      builder.MakeCompound(all_rims);
+      for (const TopoDS_Compound* some : {&rims, &end_rims}) {
+        for (TopoDS_Iterator it(*some); it.More(); it.Next()) {
+          builder.Add(all_rims, it.Value());
+        }
+      }
+      std::vector<gp_Pnt> all_tips = tips;
+      all_tips.insert(all_tips.end(), end_tips.begin(), end_tips.end());
       // With `sectors`, the regions within the face's own part of the chain
       // (mitcad#1849), in a box as large as the largest looked in; a face
       // with no corner of the chain is left to the other tries.
@@ -1425,12 +1609,89 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
             clip = clip ? boolean<BRepAlgoAPI_Common>(*clip, *at_end) : *at_end;
           }
         }
+        // The tries: the regions unclipped, then clipped by the faces at
+        // every chain's ends; where neither finds one, clipped by the faces
+        // at each of the face's own selected edges' ends alone, near that
+        // edge (GitHub #353: two chains along one narrow face, the faces at
+        // their ends one plane held on opposite sides, so that the regions
+        // past the face's far edge, clipped by them all, are empty).
+        struct Try {
+          std::optional<TopoDS_Shape> clip;
+          TopoDS_Shape near_to;
+          bool by_edge;
+          bool past_ends;
+        };
+        std::vector<Try> tries;
+        if (narrow && (single.IsNull() || !clip)) {
+          tries.push_back({std::nullopt, own, false, false});
+        }
+        if (narrow && clip) {
+          tries.push_back({clip, own, false, false});
+        }
+        if (narrow && single.IsNull() && clip) {
+          for (TopExp_Explorer ex(own, TopAbs_EDGE); ex.More(); ex.Next()) {
+            const int e = body.edge_index(ex.Current());
+            std::optional<TopoDS_Shape> at_its_ends;
+            for (std::size_t k = 0; k < ends.size(); ++k) {
+              if (end_edges[k] != e || ends[k].first == n) {
+                continue;
+              }
+              if (const std::optional<TopoDS_Shape> at_end =
+                      side_holding(body.face(ends[k].first), ends[k].second, near, tolerance)) {
+                at_its_ends = at_its_ends ? boolean<BRepAlgoAPI_Common>(*at_its_ends, *at_end) : *at_end;
+              }
+            }
+            if (at_its_ends) {
+              tries.push_back({at_its_ends, ex.Current(), true, false});
+            }
+          }
+        }
+        // Last, past the rims the chains end on (`end_rims`): the far side
+        // of the face at each such end, on the face's side of the ending
+        // edge's other faces, together; on the edges' side of the faces at
+        // the other ends.
+        if (ends_on_rims && !protrusion) {
+          const gp_Pnt inside = point_and_normal(face).first;
+          std::optional<TopoDS_Shape> past;
+          for (const std::size_t k : on_rim) {
+            const gp_Pnt at = BRep_Tool::Pnt(end_vertices[k]);
+            const gp_Pnt beyond(2.0 * at.X() - ends[k].second.X(), 2.0 * at.Y() - ends[k].second.Y(),
+                                2.0 * at.Z() - ends[k].second.Z());
+            std::optional<TopoDS_Shape> part = side_holding(body.face(ends[k].first), beyond, near, tolerance);
+            for (const int f : edge_faces.at(end_edges[k])) {
+              if (!part || f == n) {
+                continue;
+              }
+              if (const std::optional<TopoDS_Shape> within = side_holding(body.face(f), inside, near, tolerance)) {
+                part = boolean<BRepAlgoAPI_Common>(*part, *within);
+              }
+            }
+            if (part) {
+              past = past ? boolean<BRepAlgoAPI_Fuse>(*past, *part) : *part;
+            }
+          }
+          for (std::size_t k = 0; k < ends.size() && past; ++k) {
+            if (ends[k].first == n || std::find(on_rim.begin(), on_rim.end(), k) != on_rim.end()) {
+              continue;
+            }
+            if (const std::optional<TopoDS_Shape> at_end =
+                    side_holding(body.face(ends[k].first), ends[k].second, near, tolerance)) {
+              past = boolean<BRepAlgoAPI_Common>(*past, *at_end);
+            }
+          }
+          if (past) {
+            tries.push_back({past, own, false, true});
+          }
+        }
         bool any = false;
-        for (const bool clipped : {false, true}) {
-          if (any || (clipped && !clip) || (!clipped && !single.IsNull() && clip)) {
+        bool any_together = false;
+        for (const Try& attempt : tries) {
+          if (attempt.by_edge ? any_together : any) {
             continue;
           }
-          const TopoDS_Shape region = clipped ? boolean<BRepAlgoAPI_Common>(*side, *clip) : *side;
+          const TopoDS_Compound& rims_here = attempt.past_ends ? all_rims : rims;
+          const std::vector<gp_Pnt>& tips_here = attempt.past_ends ? all_tips : tips;
+          const TopoDS_Shape region = attempt.clip ? boolean<BRepAlgoAPI_Common>(*side, *attempt.clip) : *side;
           const TopoDS_Shape candidates =
               protrusion ? boolean<BRepAlgoAPI_Common>(region, solid) : boolean<BRepAlgoAPI_Cut>(region, solid);
           for (TopExp_Explorer cx(candidates, TopAbs_SOLID); cx.More(); cx.Next()) {
@@ -1439,10 +1700,14 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
               // Past a far edge of the face, near the edges, not at them.
               // (At corners it may touch the other selected edges' ends.)
               const Proximity candidate(cx.Current());
-              if (!within_distance(candidate, Proximity(rims), tolerance) ||
-                  !within_distance(candidate, Proximity(own), contact + tolerance) ||
-                  !touches_only_at(cx.Current(), single.IsNull() ? TopoDS_Shape(edges) : single, tips,
+              if (!within_distance(candidate, Proximity(rims_here), tolerance) ||
+                  !within_distance(candidate, Proximity(attempt.near_to), contact + tolerance) ||
+                  !touches_only_at(cx.Current(), single.IsNull() ? TopoDS_Shape(edges) : single, tips_here,
                                    tolerance)) {
+                continue;
+              }
+              // (By edge: a region another edge's try found already.)
+              if (attempt.by_edge && overlaps_any(cx.Current(), protrusion ? removes : fills, tolerance)) {
                 continue;
               }
               if (!single.IsNull()) {
@@ -1474,11 +1739,12 @@ std::optional<Cutouts> fill_overflow(const Shape& body, const std::vector<int>& 
                 fills.Append(found);
                 builder.Add(recut, found);
                 if (concave) {
-                  add_overhang(body, n, found, rims, single.IsNull() ? TopoDS_Shape(edges) : single, tips, slab,
-                               near, tolerance, body_volume, trimmed_by, recut);
+                  add_overhang(body, n, found, rims_here, single.IsNull() ? TopoDS_Shape(edges) : single, tips_here,
+                               slab, near, tolerance, body_volume, trimmed_by, recut);
                 }
               }
               any = true;
+              any_together = any_together || !attempt.by_edge;
               // Its walls: the body's faces it meets.
               const Box bounds = grown(bounds_of(found), tolerance);
               const Proximity found_near(found);
@@ -1588,6 +1854,19 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
     NCollection_IndexedDataMap<TopoDS_Shape, ShapeList, TopTools_ShapeMapHasher> edges_at;
     TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_VERTEX, TopAbs_EDGE, edges_at);
     const EdgeFaces edge_faces(body);
+    // (The faces beside the edges: a rim with one of them, at a vertex of
+    // the edge, is a corner of a wall leaning along the chain, no far edge.)
+    std::vector<int> spine;
+    for (int e = 0; e < body.edge_count() && e < static_cast<int>(owner.size()); ++e) {
+      if (owner[static_cast<std::size_t>(e)] < 0) {
+        continue;
+      }
+      for (const int f : edge_faces.at(e)) {
+        if (std::find(spine.begin(), spine.end(), f) == spine.end()) {
+          spine.push_back(f);
+        }
+      }
+    }
     std::string first;
     std::string message;
     std::vector<ErrorPlace> places;
@@ -1611,11 +1890,26 @@ std::string overflow_failure(const Shape& body, const std::vector<int>& owner, d
           if (rim < 0 || selected.Contains(ex.Current()) || BRep_Tool::Degenerated(TopoDS::Edge(ex.Current()))) {
             continue;
           }
+          // (Not at the edge's own ends, but where the face ends in a point
+          // there, between the edge and the rim, as fill_overflow takes it:
+          // a wall whose top runs down to its foot at the chain's end,
+          // mitcad#1926.)
           bool meets = false;
           for (TopExp_Explorer vx(ex.Current(), TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
-            meets = ends.Contains(vx.Current());
+            meets = ends.Contains(vx.Current()) &&
+                    !ends_in_point(body.face(n), TopoDS::Edge(ex.Current()), TopoDS::Vertex(vx.Current()), selected);
           }
-          if (meets || distance(ex.Current(), body.edge(e)) >= along - tolerance) {
+          for (TopExp_Explorer vx(ex.Current(), TopAbs_VERTEX); vx.More() && !meets; vx.Next()) {
+            if (ends.Contains(vx.Current())) {
+              for (const int f : edge_faces.at(rim)) {
+                meets = meets || (f != n && std::find(spine.begin(), spine.end(), f) != spine.end());
+              }
+            }
+          }
+          // (Across the face, mitcad#1926.)
+          if (meets || distance(ex.Current(), body.edge(e)) >= along - tolerance ||
+              !reached_across(body.face(n), ex.Current(), body.edge(e), along - 2.0 * tolerance,
+                              tolerance)) {
             continue;
           }
           for (const int f : edge_faces.at(rim)) {

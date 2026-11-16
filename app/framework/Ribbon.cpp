@@ -1581,6 +1581,33 @@ void Ribbon::updatePinnedButtons(const QString& tab, const QString& group) {
   });
 }
 
+void Ribbon::reloadPins() {
+  m_pins = ToolbarPins::load([this](const QString& id) -> ToolbarPins::Command {
+    const CommandDef* def = m_registry.find(id);
+    if (def == nullptr || m_registry.action(def->id) == nullptr) {
+      return {};
+    }
+    return {def->id, def->tab, def->group};
+  });
+  // Every shown group, as its pins may have come or gone.
+  QList<QPair<QString, QString>> groups;
+  QStringList tabs;
+  for (auto page = m_groupsOfPage.cbegin(); page != m_groupsOfPage.cend(); ++page) {
+    for (const GroupInfo& info : page.value()) {
+      groups.append({info.tab, info.group});
+      if (!tabs.contains(info.tab)) {
+        tabs.append(info.tab);
+      }
+    }
+  }
+  for (const auto& [tab, group] : std::as_const(groups)) {
+    updatePinnedButtons(tab, group);
+  }
+  for (const QString& tab : std::as_const(tabs)) {
+    emit pinsChanged(tab);
+  }
+}
+
 void Ribbon::pin(const QString& tab, const QString& id) {
   const CommandDef* def = m_registry.find(id);
   if (def == nullptr || m_registry.action(def->id) == nullptr) {

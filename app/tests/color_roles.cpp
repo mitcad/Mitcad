@@ -6,6 +6,7 @@
 // status hues stay reserved: the domain palettes keep away from the error's
 // red and the warning's yellow; the AppKit chrome's shared tables (the
 // command inputs, the components) read the roles.
+#include "UnitTests.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -252,3 +253,4 @@ int colorRoleTests() {
   reservedHueTests();
   return failures;
 }
+MITCAD_UNIT_TEST(colorRoleTests);

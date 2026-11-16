@@ -110,11 +110,25 @@ OptionsQuery libraryOptionsQuery(const JsonRunner& run, const QString& url, cons
                                  const QString& rev, const QString& component,
                                  const std::function<QString()>& standard = {});
 // An inserted component's options: `configure` with `component` and
-// `parameters`; `parameters` are the component's expressions as they would
-// be (the values given to the query are merged over them as constants);
-// null leaves them out: the component's own, as the design keeps them.
+// `parameters`, the only field the model takes a component's values to try
+// in (mitcad#1929). `parameters` are the expressions bound here; the values
+// given to the query go into the same `parameters` as constants (a text
+// option's text quoted), an expression winning over a plain value of the
+// same option; null and no values leave the field out: the component's own,
+// as the design keeps them. A refusal of tried values is said in words,
+// without the query's name.
 OptionsQuery componentOptionsQuery(const JsonRunner& query, const QString& component,
                                    const std::function<QJsonValue()>& parameters);
+// The `parameters` of that query: `values` ({option: a text option's text,
+// a number option's constant expression or a number in mm or rad}) as
+// constant expressions by the options of the last answer (`options`; an
+// option not in it: a constant number as it is, any other text quoted),
+// with `expressions` ({option: expression}) over them.
+QJsonObject componentTrialParameters(const QList<PartOption>& options, const QJsonObject& values,
+                                     const QJsonValue& expressions);
+// The refusal of tried values in words: the model's reason without the
+// query's name (`configure: `).
+QString triedValuesRefused(const QString& message);
 // The command that keeps an inserted component's option expressions.
 QJsonObject setComponentParametersCommand(const QString& component, const QJsonObject& parameters);
 

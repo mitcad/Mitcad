@@ -30,6 +30,8 @@ pub(crate) use convert::convert;
 // The plane of a flange's profile sketch on the flange's wall (mitcad#1776).
 mod profile_plane;
 pub(crate) use profile_plane::{flange_wall_plane, wall_flange_key};
+// A flange on several connected edges with mitred corners (mitcad#1872).
+pub(crate) mod flange_edges;
 
 use super::*;
 use crate::features::sheet::SheetRulesDef;
@@ -69,6 +71,20 @@ pub(super) fn publish<K: Kernel>(
     rules: &SheetRulesDef<f64>,
     removed: Option<BodyUid>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
+    publish_placed(ctx, state, rules, removed, &|_| Vec::new())
+}
+
+/// [`publish`], a refusal of the kernel's sheet construction that names
+/// walls (two that meet) given the places `meeting` finds for them
+/// (mitcad#1877: a flange on several edges paints its walls as the input
+/// sheet has them, and their corner).
+pub(super) fn publish_placed<K: Kernel>(
+    ctx: &mut EvalContext<'_, K>,
+    state: SheetState,
+    rules: &SheetRulesDef<f64>,
+    removed: Option<BodyUid>,
+    meeting: &dyn Fn(&[SheetDomainRef]) -> Vec<crate::notice::NoticePlace>,
+) -> Result<FeatureOutput<K::Shape>, String> {
     let geometry = ctx
         .kernel
         .sheet_shape(
@@ -80,7 +96,18 @@ pub(super) fn publish<K: Kernel>(
             },
             &ctx.uid.to_string(),
         )
-        .map_err(|e| name_walls(ctx, &e.to_string()))?;
+        .map_err(|e| {
+            let raw = e.to_string();
+            let named = name_walls(ctx, &raw);
+            let places = meeting(&super::walls_named(&raw));
+            if places.is_empty() {
+                named
+            } else {
+                crate::notice::FeatureError::from_text(&named)
+                    .with_places(places)
+                    .text()
+            }
+        })?;
     // A folded feature has one connected sheet. Never silently keep only the
     // first piece when relief or an oversized corner disconnects material.
     if geometry.solids.len() != 1 {

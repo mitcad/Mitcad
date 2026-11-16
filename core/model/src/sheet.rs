@@ -290,6 +290,38 @@ pub(crate) fn refusal(state: &SheetState, name: &dyn Fn(FeatureUid) -> String) -
 /// timeline shows them: `SheetFlange3`, a further wall `SheetFlange3 (wall
 /// 2)`, a bend `SheetFlange1 (bend)`. `name` gives a feature's name.
 pub(crate) fn name_walls(message: &str, name: &dyn Fn(FeatureUid) -> String) -> String {
+    each_wall(message, &mut |panel, feature, slot| {
+        let feature_name = name(feature);
+        match (panel, slot) {
+            (true, 0) => feature_name,
+            (true, k) => format!("{feature_name} (wall {})", k + 1),
+            (false, 0) => format!("{feature_name} (bend)"),
+            (false, k) => format!("{feature_name} (bend {})", k + 1),
+        }
+    })
+}
+
+/// The walls a message names (`panel F6 slot 0`, `bend F4 slot 0`), in
+/// their order: the domains of a refusal of two walls that meet
+/// (mitcad#1877, their places).
+pub(crate) fn walls_named(message: &str) -> Vec<SheetDomainRef> {
+    let mut walls = Vec::new();
+    each_wall(message, &mut |panel, feature, slot| {
+        let slot = u32::try_from(slot).unwrap_or(u32::MAX);
+        walls.push(if panel {
+            SheetDomainRef::Panel(PanelId { feature, slot })
+        } else {
+            SheetDomainRef::Bend(BendId { feature, slot })
+        });
+        String::new()
+    });
+    walls
+}
+
+/// A message with each wall it names (`panel F6 slot 0`, `bend F4 slot
+/// 0`) replaced by what `wall` gives for it: whether a panel, its feature
+/// and its slot.
+fn each_wall(message: &str, wall: &mut dyn FnMut(bool, FeatureUid, u64) -> String) -> String {
     let digits = |text: &str| text.bytes().take_while(u8::is_ascii_digit).count();
     let mut named = String::new();
     let mut rest = message;
@@ -317,14 +349,7 @@ pub(crate) fn name_walls(message: &str, name: &dyn Fn(FeatureUid) -> String) -> 
             rest = after;
             continue;
         };
-        let feature_name = name(FeatureUid(feature));
-        let panel = key.starts_with("panel");
-        named.push_str(&match (panel, slot) {
-            (true, 0) => feature_name,
-            (true, k) => format!("{feature_name} (wall {})", k + 1),
-            (false, 0) => format!("{feature_name} (bend)"),
-            (false, k) => format!("{feature_name} (bend {})", k + 1),
-        });
+        named.push_str(&wall(key.starts_with("panel"), FeatureUid(feature), slot));
         rest = tail;
     }
 }

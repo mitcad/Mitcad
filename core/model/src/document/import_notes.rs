@@ -282,6 +282,25 @@ pub fn feature_notices_placed(
     notices
 }
 
+/// A feature's remarks as notices (mitcad#1914): information about it with
+/// their places, what its panel points out while it is open (a fillet's
+/// tangent chain that stops where other sharp edges meet, its edges left
+/// sharp). They do not count in its level ([`feature_level`]), so nothing
+/// marks the feature for them once it is accepted.
+pub fn remark_notices(
+    remarks: &[(String, Vec<crate::notice::NoticePlace>)],
+    uid: FeatureUid,
+) -> Vec<Notice> {
+    remarks
+        .iter()
+        .map(|(message, places)| {
+            Notice::info(message.as_str())
+                .with_target(uid)
+                .with_places(places.iter().cloned())
+        })
+        .collect()
+}
+
 /// A feature's level (mitcad#1040): `error` when it failed, `warning` when
 /// it built with warnings, `info` when it has only infos (mitcad#1106) or
 /// an import note; None for a feature with nothing to say.

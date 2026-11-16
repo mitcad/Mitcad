@@ -89,6 +89,11 @@ struct LiveServer::State {
     // The designs a chat agent made with document_new (mitcad#1266): it
     // may use them beside its own design.
     QList<QPointer<MainWindow>> made;
+    // The id of its tools/call that runs now (undefined while none does)
+    // and the window it runs in: its notifications/cancelled of that id
+    // cancels the window's model job (mitcad#1917).
+    QJsonValue running = QJsonValue(QJsonValue::Undefined);
+    QPointer<MainWindow> runningIn;
   };
 
   // A chat agent's designs: its own and those it made (mitcad#1266).
@@ -360,6 +365,7 @@ struct LiveServer::State {
       if (!client.chat.isEmpty() && !chatMayUse(client, target.data()))
         throw std::runtime_error("A chat agent can only access its own document and the documents it made");
       const QString document = target->mcpDocumentId();
+      client.runningIn = target;
       value = target->mcpTool(tool, arguments);
       if (!target) {
         client.document = document;
@@ -391,7 +397,44 @@ struct LiveServer::State {
     if (ChatGate* gate = chat.isEmpty() ? nullptr : chatGate(client)) {
       gate->toolFinished(chat, tool, error);
     }
+    client.running = QJsonValue(QJsonValue::Undefined);
+    client.runningIn.clear();
     finishTool(client, value, error);
+  }
+
+  // The client's notifications/cancelled of its tools/call that runs now
+  // (mitcad#1917), read while that call's model job computes, when the
+  // client's other messages wait for the call to end: the window's model
+  // job is cancelled, as the progress dialog's Cancel does (a kernel call
+  // that does not return is given up), and the call answers with its
+  // error, "the computation was canceled". Its other lines stay for later.
+  void takeCancellation(Client& client) {
+    if (!client.socket || client.running.isUndefined()) {
+      return;
+    }
+    // (Read here: the socket's readyRead is not emitted while the call runs
+    // inside it.)
+    if (client.input.size() <= kMaxFrameBytes &&
+        (client.socket->bytesAvailable() > 0 || client.socket->waitForReadyRead(0))) {
+      client.input += client.socket->read(kMaxFrameBytes + 1 - client.input.size());
+    }
+    qsizetype from = 0;
+    for (qsizetype newline = client.input.indexOf('\n'); newline >= 0;
+         newline = client.input.indexOf('\n', from)) {
+      const QJsonObject message = QJsonDocument::fromJson(client.input.mid(from, newline - from)).object();
+      if (message.value(QStringLiteral("method")).toString() != QStringLiteral("notifications/cancelled") ||
+          message.contains(QStringLiteral("id")) ||
+          message.value(QStringLiteral("params")).toObject().value(QStringLiteral("requestId")) != client.running) {
+        from = newline + 1;
+        continue;
+      }
+      client.input.remove(from, newline + 1 - from);
+      qInfo().noquote() << QStringLiteral("MCP: %1 cancelled its running call")
+                               .arg(client.displayName.isEmpty() ? QStringLiteral("a client") : client.displayName);
+      if (client.runningIn) {
+        client.runningIn->cancelModelJob();
+      }
+    }
   }
 
   // The user answered a chat call's card: run it or refuse it, then the
@@ -540,6 +583,18 @@ struct LiveServer::State {
           return;
         }
       }
+      client.running = QJsonDocument::fromJson(message).object().value(QStringLiteral("id"));
+      // Its cancellation is looked for while it runs (mitcad#1917): the
+      // call runs inside this socket's readyRead, which Qt does not emit
+      // again meanwhile.
+      QTimer cancellations;
+      cancellations.setInterval(20);
+      QObject::connect(&cancellations, &QTimer::timeout, owner, [this, weak = std::weak_ptr<Client>(shared)] {
+        if (const std::shared_ptr<Client> alive = weak.lock()) {
+          takeCancellation(*alive);
+        }
+      });
+      cancellations.start();
       runTool(client, tool, arguments);
     } catch (const std::exception& failure) {
       write(client, protocolError(-32603, QString::fromUtf8(failure.what())));

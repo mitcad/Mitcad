@@ -32,14 +32,24 @@ at the end failed.
 
 Nothing else changes: a contact that reaches an edge of a face holding the
 end vertex, a concave or tangent edge, or an edge within 10 tolesp of the
-spine's end, is handled as before.
+spine's end, is handled as before. Nor does a contact more than ten radii
+from the spine's point at its guide parameter (a fillet's spine,
+mitcad#1883): the first section beside a cone's apex the spine starts at
+put its contact on the cone's base edge round the far side, and the walk
+went on as if rolling on it and failed (OCCT's blend/simple H9; H8 and
+blend/buildevol D8 threw instead of their known faults). Nor does a
+chamfer's contact (mitcad#1901): a chamfer has no piece that rolls on an
+edge (ChFi3d_ChBuilder's PerformSurf on an arc is not implemented), so the
+stripe was left with no next piece (OCCT's chamfer/dist_angle_sequence B3
+B4 and equal_dist_sequence B3 failed; dist_dist_sequence B7 and
+equal_dist_sequence B5 B7 gave no result).
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 4c26d65..b37ee33 100644
+index 4c26d653..12e03057 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -7717,3 +7717,117 @@ bool ChFi3d_IsSmooth(const occ::handle<Geom_Curve>& C)
+@@ -7717,3 +7717,138 @@ bool ChFi3d_IsSmooth(const occ::handle<Geom_Curve>& C)
  
    return true;
  }
@@ -106,15 +116,16 @@ index 4c26d65..b37ee33 100644
 +//            surface towards the end.
 +//=======================================================================
 +
-+bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
-+                              const TopoDS_Face&        F,
-+                              const TopoDS_Vertex&      Vend,
-+                              const double              W,
-+                              const double              WEnd,
-+                              const bool                AtFirst,
-+                              const double              Tol,
-+                              const ChFiDS_Map&         EFMap,
-+                              const ChFiDS_Map&         VFMap)
++bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
++                              const TopoDS_Face&               F,
++                              const TopoDS_Vertex&             Vend,
++                              const double                     W,
++                              const double                     WEnd,
++                              const bool                       AtFirst,
++                              const double                     Tol,
++                              const ChFiDS_Map&                EFMap,
++                              const ChFiDS_Map&                VFMap,
++                              const occ::handle<ChFiDS_Spine>& Sp)
 +{
 +  if (!CP.IsOnArc() || CP.IsVertex() || F.IsNull() || Vend.IsNull() || !EFMap.Contains(CP.Arc())
 +      || !VFMap.Contains(Vend))
@@ -124,6 +135,26 @@ index 4c26d65..b37ee33 100644
 +  if ((AtFirst ? W - WEnd : WEnd - W) <= Tol)
 +  {
 +    return false;
++  }
++  // (A chamfer has no piece that rolls on an edge, ChFi3d_ChBuilder's
++  // PerformSurf on an arc is not implemented: its walk stops there as
++  // before; the chamfer sequences of OCCT's tests, dist_angle B3 B4,
++  // failed.)
++  if (!occ::down_cast<ChFiDS_ChamfSpine>(Sp).IsNull())
++  {
++    return false;
++  }
++  // (A contact far from the ball: a section at a pole of its face, a cone's
++  // apex the spine starts at, put the contact on an edge round the face's
++  // far side; the walk stops there as before.)
++  const occ::handle<ChFiDS_FilSpine> aFSp = occ::down_cast<ChFiDS_FilSpine>(Sp);
++  if (!aFSp.IsNull())
++  {
++    const double aR = aFSp->MaxRadFromSeqAndLaws();
++    if (aR > 0. && CP.Point().Distance(Sp->Value(W)) > 10. * aR)
++    {
++      return false;
++    }
 +  }
 +  const TopoDS_Edge& E = CP.Arc();
 +  if (TopExp::FirstVertex(E).IsSame(Vend) || TopExp::LastVertex(E).IsSame(Vend))
@@ -158,10 +189,10 @@ index 4c26d65..b37ee33 100644
 +  return ChFi3d_ConvexEdgeAt(E, Fin, Fbeyond, CP.ParameterOnArc());
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 7960340..85987f5 100644
+index 79603402..905c8e67 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -587,4 +587,19 @@ void ChFi3d_JoinAcrossNotches(TopOpeBRepDS_DataStructure&
+@@ -587,4 +587,21 @@ void ChFi3d_JoinAcrossNotches(TopOpeBRepDS_DataStructure&
  //! moved.
  bool ChFi3d_PCurveInFacePeriod(ChFiDS_FaceInterference& FI, const TopoDS_Face& F);
  
@@ -169,20 +200,22 @@ index 7960340..85987f5 100644
 +//! edge more than Tol before the spine's end WEnd (its first end if
 +//! AtFirst), a convex edge whose face beyond does not hold the end vertex
 +//! Vend: the ball rolls on that edge there (an obstacle, as in the middle
-+//! of the rounding); no face at the end lies beyond it.
-+bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
-+                              const TopoDS_Face&        F,
-+                              const TopoDS_Vertex&      Vend,
-+                              const double              W,
-+                              const double              WEnd,
-+                              const bool                AtFirst,
-+                              const double              Tol,
-+                              const ChFiDS_Map&         EFMap,
-+                              const ChFiDS_Map&         VFMap);
++//! of the rounding); no face at the end lies beyond it. With the fillet's
++//! spine Sp, only a contact within ten radii of the spine at W.
++bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
++                              const TopoDS_Face&               F,
++                              const TopoDS_Vertex&             Vend,
++                              const double                     W,
++                              const double                     WEnd,
++                              const bool                       AtFirst,
++                              const double                     Tol,
++                              const ChFiDS_Map&                EFMap,
++                              const ChFiDS_Map&                VFMap,
++                              const occ::handle<ChFiDS_Spine>& Sp = occ::handle<ChFiDS_Spine>());
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 26d16b7..8dc12f1 100644
+index 26d16b74..f3314f28 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -4178,6 +4178,35 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
@@ -210,7 +243,7 @@ index 26d16b7..8dc12f1 100644
 +      }
 +      const TopoDS_Face Fk = TopoDS::Face(DStr.Shape(theSD->Index(k)));
 +      if (ChFi3d_ObstacleBeforeEnd(theSD->Vertex(theFirst, k), Fk, Vend, W, WEnd, theFirst, 10. * tolesp,
-+                                   myEFMap, myVFMap))
++                                   myEFMap, myVFMap, Spine))
 +      {
 +        return true;
 +      }
@@ -248,7 +281,7 @@ index 26d16b7..8dc12f1 100644
            && (First <= Spine->FirstParameter(1) + 10. * tolesp
                || ObstacleAtSpineEnd(ref, true, obstacleon1 ? 2 : 1, Spine->FirstVertex())))
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index 494a134..a53b083 100644
+index 494a134d..c4430055 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -2317,7 +2317,11 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
@@ -260,7 +293,7 @@ index 494a134..a53b083 100644
 +                       || ChFi3d_ObstacleBeforeEnd(Data->VertexFirstOnS1(), F1, Spine->FirstVertex(),
 +                                                   Lin->StartPointOnFirst().ParameterOnGuide(),
 +                                                   Spine->FirstParameter(1), true, 10. * tolesp, myEFMap,
-+                                                   myVFMap);
++                                                   myVFMap, Spine);
            }
          }
        }
@@ -273,7 +306,7 @@ index 494a134..a53b083 100644
 +                       || ChFi3d_ObstacleBeforeEnd(Data->VertexFirstOnS2(), F2, Spine->FirstVertex(),
 +                                                   Lin->StartPointOnSecond().ParameterOnGuide(),
 +                                                   Spine->FirstParameter(1), true, 10. * tolesp, myEFMap,
-+                                                   myVFMap);
++                                                   myVFMap, Spine);
            }
          }
        }
@@ -286,7 +319,7 @@ index 494a134..a53b083 100644
 +                     || ChFi3d_ObstacleBeforeEnd(Data->VertexLastOnS1(), F1, Spine->LastVertex(),
 +                                                 Lin->EndPointOnFirst().ParameterOnGuide(),
 +                                                 Spine->LastParameter(Spine->NbEdges()), false, 10. * tolesp,
-+                                                 myEFMap, myVFMap);
++                                                 myEFMap, myVFMap, Spine);
          }
        }
        else
@@ -299,7 +332,7 @@ index 494a134..a53b083 100644
 +                     || ChFi3d_ObstacleBeforeEnd(Data->VertexLastOnS2(), F2, Spine->LastVertex(),
 +                                                 Lin->EndPointOnSecond().ParameterOnGuide(),
 +                                                 Spine->LastParameter(Spine->NbEdges()), false, 10. * tolesp,
-+                                                 myEFMap, myVFMap);
++                                                 myEFMap, myVFMap, Spine);
          }
        }
        else

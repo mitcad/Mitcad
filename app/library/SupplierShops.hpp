@@ -40,6 +40,9 @@ struct ShopSettings {
   // Keeps the region and those of the shops that sell in it; true when
   // the shops changed (the part grid's kept Supplier filter then goes).
   bool save() const;
+  // Neither kept (Preferences › Restore Defaults, mitcad#1887): the
+  // system's region again and no shops chosen.
+  static void reset();
   bool operator==(const ShopSettings& other) const { return region == other.region && shops == other.shops; }
   bool operator!=(const ShopSettings& other) const { return !(*this == other); }
 };

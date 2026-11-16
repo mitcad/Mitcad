@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# The Import Report's status on every row and its one-line verdict
+# (mitcad#1893), on the test part with a design (test_exchange
+# --write-ipt-design: a parameter, a sketch and an extrusion making the
+# 10 mm cube stored in the file), the application started with --open of
+# designed.ipt and the part imported with its history:
+#   - the verdict, with the OK symbol: everything came in, both features
+#     parametric, the body compared with the file's;
+#   - every row is OK (the body, Sketch1, Extrusion1), none a warning, an
+#     error or without a status; the Warnings section says there are none;
+#   - the filter: Errors shows none of the three rows, All rows all of them;
+#     Esc closes the report.
+# Run by tools/ui-import-report-status-test.sh (Linux),
+# tools/ui-windows-import-report-status-test.ps1 (Windows) and
+# tools/ui-macos-import-report-status-test.sh (macOS).
+wait-log '^Import report verdict: designed\.ipt: ok: Everything came in: all 2 features parametric, the body (matches the file|is valid)\.$' 180
+expect-ever '^Import report row: designed\.ipt: 1 .*: ok$'
+expect-ever '^Import report row: designed\.ipt: [0-9]+ Sketch1: ok$'
+expect-ever '^Import report row: designed\.ipt: [0-9]+ Extrusion1: ok$'
+expect-never '^Import report row: designed\.ipt: .*: (warning|error|none)$'
+expect-ever '^Import report warnings: designed\.ipt: 0$'
+focus-dialog '^Import Report$' 30
+
+# Errors only: none; then every row again.
+mark
+qt-choice importReportFilter 'Errors'
+wait-log '^Import report filter: designed\.ipt: 0 of 3 rows shown$' 10
+mark
+qt-choice importReportFilter 'All rows'
+wait-log '^Import report filter: designed\.ipt: 3 of 3 rows shown$' 10
+
+mark
+key Escape
+wait-idle 30
+expect-never 'TestDriver: FAIL'

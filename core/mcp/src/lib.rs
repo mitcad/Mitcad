@@ -34,6 +34,16 @@ pub mod chat;
 mod comments;
 pub use comments::{COMMENTS_URI, RESOLVE_REFUSED};
 
+// Commands' JSON Schemas on demand through model_reference, with the
+// server's restrictions (mitcad#1897).
+mod schemas;
+pub use schemas::{command_schema, schema_commands};
+// References between the entries of a model_command array (mitcad#1897):
+// "as" names an entry's result, {"ref": "<name>.<path>"} takes a value of
+// it in a later entry.
+mod array_refs;
+pub use array_refs::{check_refs, has_refs, resolve_entry};
+
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
@@ -62,12 +72,23 @@ const COMMANDS_REFERENCE: &str = include_str!("../../model-api/src/commands.md")
 pub const INSTRUCTIONS_CHARS: usize = 2000;
 
 /// The headless server's instructions (mitcad#1506): only what applies
-/// across tools, the most important first.
-const HEADLESS_INSTRUCTIONS: &str = "Local headless CAD documents: document_create or document_open gives a handle; use the explicit document handle on every call. Documents last until closed or the server exits; files are confined to the configured workspace. A design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones first with model_query {\"query\": \"comments\", \"status\": \"open\"}, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference (no arguments: its contents and every permitted name; then one section, query, command, feature or search). How to model well here: model_reference {\"guide\": \"index\"}. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\"). Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. A model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature; a query is one object. Each tool's description holds its own rules.";
+/// across tools, the most important first, in labelled lines (mitcad#1897).
+const HEADLESS_INSTRUCTIONS: &str = "Documents: local headless CAD documents. document_create or document_open gives a handle; use the explicit document handle on every call. Documents last until closed or the server exits; files are confined to the configured workspace.\n\
+Comments: a design can hold comments, notes pinned to features, faces, edges and points for an agent: read the open ones first with model_query {\"query\": \"comments\", \"status\": \"open\"}, and after the change each asks for, put {\"cmd\": \"address_comment\", \"id\": ..., \"resolution\": \"<what was done, briefly>\"} in the same model_command array as that change; resolving comments is left to the user.\n\
+Reference: model_reference gives commands, queries, feature types, their fields and commands' JSON Schemas (no arguments: its contents and every permitted name). How to model well here: model_reference {\"guide\": \"index\"}; unexpected results: {\"guide\": \"bug-reporting\"}.\n\
+Units: JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\").\n\
+Modeling: Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0.\n\
+Commands: a model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature; a query is one object. Each tool's description holds its own rules.";
 
 /// The live server's instructions (mitcad#1506): only what applies across
-/// tools, the most important first.
-const LIVE_INSTRUCTIONS: &str = "Control the documents open in the Mitcad application, alongside its user. document_list gives every handle and the active flag. Pass document to target a specific design; omitting it uses the active design (a chat agent's own, or the last one it made with document_new). Comments first: the user pins notes for you (\"make this hole an M6 thread\") to features, faces, edges and points; ui_state's comments.open counts the open ones. Read them before other work (mitcad://comments, or model_query {\"query\": \"comments\", \"status\": \"open\"}); after the change one asks for, address it in the same model_command array, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user. Look up commands, queries, feature types and their fields with model_reference (no arguments: its contents and every permitted name; then one section, query, command, feature or search). How to model well here: model_reference {\"guide\": \"index\"}. JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\"). Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0. A model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature. Each tool's description holds its own rules.";
+/// tools, the most important first, in labelled lines (mitcad#1897).
+const LIVE_INSTRUCTIONS: &str = "Control the documents open in the Mitcad application, alongside its user.\n\
+Documents: document_list gives every handle and the active flag. Pass document to target a specific design; omitting it uses the active design (a chat agent's own, or the last one it made with document_new).\n\
+Comments first: the user pins notes for you to features, faces, edges and points; ui_state's comments.open counts the open ones. Read them before other work (mitcad://comments, or model_query {\"query\": \"comments\", \"status\": \"open\"}); after the change one asks for, address it in the same model_command array, {\"cmd\": \"address_comment\", \"id\": \"C3\", \"resolution\": \"<what was done, briefly>\"}, so both undo together; resolving comments is left to the user.\n\
+Reference: model_reference gives commands, queries, feature types, their fields and commands' JSON Schemas (no arguments: its contents and every permitted name). How to model well here: model_reference {\"guide\": \"index\"}; unexpected results: {\"guide\": \"bug-reporting\"}.\n\
+Units: JSON numbers are millimeters and radians; write \"90 deg\" for degrees. They are millimeters also in a design in another length unit (the document query's units.length): convert the user's lengths, or write them as text, read in that unit (\"0.875\", \"0.875 in\").\n\
+Modeling: Place a part or a sketch on an existing face, construction plane, axis or point where there is one (a primitive's at, a sketch's plane), so that it follows the model; a fixed plane ({\"origin\", \"normal\"}) stays where it is written. Unless the user asks otherwise, make every sketch fully constrained and dimensioned: dimensions for the sizes that matter (named parameters where a value is used again) and constraints for the rest, tied to the origin or existing geometry, until the sketch query's dof is 0.\n\
+Commands: a model_command array runs in order as one undo step and stops at the first refusal (undoing the entries before it) or failed feature. Each tool's description holds its own rules.";
 
 /// The instructions `initialize` gives: one text per profile, so that a
 /// later discovery answer can give the same (mitcad#1506).
@@ -203,6 +224,7 @@ impl<B: Backend> Session<B> {
                 Ok(mut result) => {
                     if result.is_error {
                         explain_refusal(&name, &arguments, &mut result.value, &self.vocabulary);
+                        split_error(&mut result.value);
                     }
                     // A preview image as an image block (mitcad#1486).
                     if name == "model_render" && !result.is_error {
@@ -214,6 +236,7 @@ impl<B: Backend> Session<B> {
                 Err(message) => {
                     let mut value = json!({"error": message});
                     explain_refusal(&name, &arguments, &mut value, &self.vocabulary);
+                    split_error(&mut value);
                     success(&id, tool_content(value, true))
                 }
             }),
@@ -483,7 +506,10 @@ impl<B: Backend> Session<B> {
         }
         // The reference is the protocol's own, in both servers (mitcad#714).
         if name == "model_reference" {
-            let content = match reference::answer(arguments, &self.vocabulary) {
+            // A command's schema says the server's restrictions
+            // (mitcad#1897).
+            let live = matches!(self.profile, Profile::Live);
+            let content = match reference::answer_in(arguments, &self.vocabulary, live) {
                 Ok(answer) => tool_content(answer, false),
                 Err(message) => tool_error(message),
             };
@@ -681,6 +707,7 @@ impl LiveSession {
         } else {
             if is_error {
                 explain_refusal(&name, &arguments, &mut value, &self.session.vocabulary);
+                split_error(&mut value);
             }
             is_error
         };
@@ -761,8 +788,22 @@ pub fn command_outcome(value: &mut Value) -> bool {
         .collect();
     let is_error = !own.is_empty();
     if is_error {
-        let text = failed_feature_error(value, &own);
+        // The short cause first, the exact one beside it (mitcad#1897):
+        // each feature's `message` where it has one, its `error` in
+        // `error_detail`, and their places.
+        let detail = failed_feature_error(value, &own, false);
+        let text = failed_feature_error(value, &own, true);
+        let places: Vec<Value> = own
+            .iter()
+            .filter_map(|f| f["places"].as_array())
+            .flatten()
+            .cloned()
+            .collect();
         value["error"] = json!(text);
+        if detail != text {
+            value["error_detail"] = json!(detail);
+        }
+        add_places(value, places);
     }
     value["failed_features"] = failed;
     is_error
@@ -771,8 +812,9 @@ pub fn command_outcome(value: &mut Value) -> bool {
 /// The error text of a command whose added or edited features fail
 /// (mitcad#1481): the feature is applied and stays, as in the UI, so the
 /// text says so and how to remove it. An array's entry is named by its
-/// index.
-fn failed_feature_error(value: &Value, own: &[&Value]) -> String {
+/// index. With `short`, each feature's cause as a person reads it (its
+/// `message`, where it has one), else as agents read it (its `error`).
+fn failed_feature_error(value: &Value, own: &[&Value], short: bool) -> String {
     let added = value.pointer("/result/uid");
     let mut text = own
         .iter()
@@ -783,11 +825,14 @@ fn failed_feature_error(value: &Value, own: &[&Value]) -> String {
             } else {
                 "changed"
             };
+            let said = if short { f["message"].as_str() } else { None };
+            let cause = said
+                .or_else(|| f["error"].as_str())
+                .unwrap_or("unknown error");
             format!(
-                "{uid} ({}) was {how} but failed: {}. It stays in the timeline; edit it, or \
-                 remove it with undo or delete_feature",
+                "{uid} ({}) was {how} but failed: {cause}. It stays in the timeline; edit it, \
+                 or remove it with undo or delete_feature",
                 f["name"].as_str().unwrap_or(uid),
-                f["error"].as_str().unwrap_or("unknown error")
             )
         })
         .collect::<Vec<_>>()
@@ -832,25 +877,80 @@ fn error(id: Option<&Value>, code: i32, message: &str) -> Value {
 
 fn tool_error(message: String) -> Value {
     // A refusal with its places (mitcad#1612, the model's `FeatureError`
-    // as text): agents read its detail, with the names, ids and
-    // coordinates, and its places beside it, not the tail.
-    let (text, places) = agent_text(&message);
-    let mut value = json!({"error": text});
-    if !places.is_empty() {
-        value["places"] = Value::Array(places);
-    }
+    // as text): the short cause in `error`, the exact one in
+    // `error_detail`, and its places beside them, not the tail
+    // (mitcad#1897).
+    let mut value = json!({"error": message});
+    split_error(&mut value);
     tool_content(value, true)
 }
 
-/// The agents' text of a model text that may carry failures' tails
-/// (mitcad#1612, `PLACED_TAIL` in `core/model-base/src/notice.rs`): each
-/// tail's detail in place of the message it explains, and their places.
-/// Other text as it is. (The model's `FeatureError::agent_text`, for a crate
-/// that does not depend on the model.)
-fn agent_text(text: &str) -> (String, Vec<Value>) {
+// Errors in MCP results (mitcad#1897, the command reference's "Errors"):
+// the short cause a person reads first, the exact one beside it.
+
+/// A tool error's `error` that carries failures' tails (mitcad#1612,
+/// `PLACED_TAIL` in `core/model-base/src/notice.rs`) split in three: `error`
+/// becomes the short cause as a person reads it (the text without the
+/// tails), `error_detail` the same with each tail's detail, the names, ids
+/// and coordinates, in place of the message it explains (the text `error`
+/// held before, word for word; only where it differs), and the tails'
+/// places are added to `places`. An `error` without a tail is left as it
+/// is. The keys' order puts the short cause before its detail in the text.
+pub(crate) fn split_error(value: &mut Value) {
+    let Some(text) = value.get("error").and_then(Value::as_str) else {
+        return;
+    };
+    let parts = error_parts(text);
+    if !parts.tailed {
+        return;
+    }
+    value["error"] = json!(parts.message);
+    if parts.detail != parts.message {
+        value["error_detail"] = json!(parts.detail);
+    }
+    add_places(value, parts.places);
+}
+
+/// `places` added to a result's `places`, each once.
+fn add_places(value: &mut Value, places: Vec<Value>) {
+    if places.is_empty() {
+        return;
+    }
+    let mut all = value
+        .get("places")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for place in places {
+        if !all.contains(&place) {
+            all.push(place);
+        }
+    }
+    value["places"] = Value::Array(all);
+}
+
+/// A model text read into what a person reads and what agents read.
+struct ErrorParts {
+    /// The text without its tails.
+    message: String,
+    /// The text with each tail's detail in place of its message.
+    detail: String,
+    places: Vec<Value>,
+    /// It had a tail.
+    tailed: bool,
+}
+
+/// The parts of a model text that may carry failures' tails: the text
+/// before and after each tail is the person's (as the application's
+/// `userText`); each tail's detail in place of the message it explains is
+/// the agents' (the model's `FeatureError::agent_text`, for a crate that does
+/// not depend on the model); and their places. Other text as it is.
+fn error_parts(text: &str) -> ErrorParts {
     const TAIL: &str = "\n[placed: ";
-    let mut out = String::new();
+    let mut message = String::new();
+    let mut detail = String::new();
     let mut places = Vec::new();
+    let mut tailed = false;
     let mut rest = text;
     while let Some(at) = rest.find(TAIL) {
         let json = &rest[at + TAIL.len()..];
@@ -862,20 +962,22 @@ fn agent_text(text: &str) -> (String, Vec<Value>) {
         .filter(|(inner, used)| inner.is_object() && json[*used..].starts_with(']')) else {
             break;
         };
+        tailed = true;
         let before = &rest[..at];
-        let message = inner["message"].as_str().unwrap_or_default();
-        let detail = inner["detail"].as_str().unwrap_or_default();
-        match before.strip_suffix(message) {
-            _ if detail.is_empty() => out.push_str(before),
+        message.push_str(before);
+        let said = inner["message"].as_str().unwrap_or_default();
+        let exact = inner["detail"].as_str().unwrap_or_default();
+        match before.strip_suffix(said) {
+            _ if exact.is_empty() => detail.push_str(before),
             Some(head) => {
-                out.push_str(head);
-                out.push_str(detail);
+                detail.push_str(head);
+                detail.push_str(exact);
             }
             None => {
-                out.push_str(before);
-                out.push_str(" (");
-                out.push_str(detail);
-                out.push(')');
+                detail.push_str(before);
+                detail.push_str(" (");
+                detail.push_str(exact);
+                detail.push(')');
             }
         }
         if let Some(found) = inner["places"].as_array() {
@@ -883,8 +985,23 @@ fn agent_text(text: &str) -> (String, Vec<Value>) {
         }
         rest = &json[used + 1..];
     }
-    out.push_str(rest);
-    (out, places)
+    message.push_str(rest);
+    detail.push_str(rest);
+    ErrorParts {
+        message,
+        detail,
+        places,
+        tailed,
+    }
+}
+
+/// The agents' text of a model text that may carry failures' tails
+/// (mitcad#1612): each tail's detail in place of the message it explains,
+/// and their places ([`error_parts`]).
+#[cfg(test)]
+fn agent_text(text: &str) -> (String, Vec<Value>) {
+    let parts = error_parts(text);
+    (parts.detail, parts.places)
 }
 
 fn tool_content(value: Value, is_error: bool) -> Value {

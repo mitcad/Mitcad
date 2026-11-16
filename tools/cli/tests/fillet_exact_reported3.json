@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #353's third design (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): a cube of 10 (Extrude1 F2, Body1), Fillet1 (F3) of radius 4.999 on all its edges (ten edges and a face's four). Each face keeps a flat square 0.002 wide in its middle, as that radius leaves it: it is built at its size with no warning or information, the volume 1000 - 12 (10 - 2r) r^2 (1 - pi/4) - 8 r^3 (1 - pi/6) for r = 4.999."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 523.7558496, "faces": 26}}
+]

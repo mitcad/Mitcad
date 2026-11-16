@@ -6,6 +6,7 @@
 // square from the origin into the quadrant of the positive model axes and an
 // axis from the origin along its positive way past the planes; Centred, as
 // before.
+#include "UnitTests.hpp"
 #include "view/OriginPreference.hpp"
 
 #include <cmath>
@@ -144,3 +145,4 @@ int originPreferenceTests() {
   CHECK(mitcad::originDatumShape(degenerate, OriginStyle::Corner, 10.0).IsNull());
   return failures;
 }
+MITCAD_UNIT_TEST(originPreferenceTests);

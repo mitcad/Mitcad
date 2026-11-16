@@ -403,7 +403,36 @@ pub struct MockKernel {
     /// Conical faces by name, which `face_cone` gives (mitcad#1768: a
     /// sketch on a cone's side); other faces are not conical.
     pub face_cones: RefCell<BTreeMap<String, mitcad_model_base::kernel::ConeFace>>,
+    /// Remarks of the results of operations (mitcad#1914), as `notes`:
+    /// "fillet" -> what the panel points out and its places; `remarks`
+    /// gives them for shapes the operation made.
+    pub remarks: RemarksByOperation,
+    /// STEP files of the component tree (mitcad#1915): `write_step_tree`
+    /// writes a tree only when set (it records it in `written_trees`);
+    /// otherwise it is unsupported and the model writes the bodies with
+    /// `write_file`, as the tests written before it expect.
+    pub step_trees: Cell<bool>,
+    pub written_trees: RefCell<Vec<(String, Vec<WrittenDefinition>)>>,
+    /// Silhouettes of curved faces by name (mitcad#1909: dimensions to a
+    /// curved outline on a drawing's view): what `face_silhouettes` gives
+    /// for the face whatever the direction, on a shape that has the face;
+    /// `face_silhouettes` of another face is unsupported.
+    pub silhouettes: RefCell<BTreeMap<String, Vec<mitcad_model_base::kernel::Curve3>>>,
 }
+
+/// A definition of a tree `write_step_tree` wrote ([`MockKernel::step_trees`],
+/// mitcad#1915): its name, its bodies' names and placements, and its
+/// instances.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WrittenDefinition {
+    pub name: String,
+    pub bodies: Vec<(String, Vec<mitcad_model_base::exchange::BodyPlacement>)>,
+    pub instances: Vec<mitcad_model_base::exchange::ExportInstance>,
+}
+
+/// [`MockKernel::remarks`]: by operation, a remark and its places.
+pub type RemarksByOperation =
+    RefCell<BTreeMap<&'static str, (String, Vec<mitcad_model_base::notice::NoticePlace>)>>;
 
 /// A pocket of a body for [`MockKernel::cavities`] (mitcad#1818): the
 /// body's faces round it, its bounds, and whether it opens out of the body
@@ -3714,6 +3743,7 @@ impl Kernel for MockKernel {
             notes: self.notes.clone(),
             note_places: self.note_places.clone(),
             infos: self.infos.clone(),
+            remarks: self.remarks.clone(),
             curves: self.curves.clone(),
             named_curves: self.named_curves.clone(),
             face_boundaries: self.face_boundaries.clone(),
@@ -3762,6 +3792,7 @@ impl Kernel for MockKernel {
             cuts_by_bounds: self.cuts_by_bounds.clone(),
             box_edges: self.box_edges.clone(),
             cavities: self.cavities.clone(),
+            silhouettes: self.silhouettes.clone(),
             ..MockKernel::default()
         })
     }
@@ -6594,6 +6625,72 @@ impl Kernel for MockKernel {
             normal: plane.normal,
             reach,
             along,
+        })
+    }
+
+    // Remarks (mitcad#1914).
+
+    /// The remarks `remarks` holds for the operations that made the shape.
+    fn remarks(
+        &self,
+        shape: &MockShape,
+    ) -> Vec<(String, Vec<mitcad_model_base::notice::NoticePlace>)> {
+        self.remarks
+            .borrow()
+            .iter()
+            .filter(|(op, _)| shape.history.starts_with(&format!("{op}(")))
+            .map(|(_, remark)| remark.clone())
+            .collect()
+    }
+
+    // STEP export of the component tree (mitcad#1915).
+
+    fn write_step_tree(
+        &self,
+        path: &str,
+        tree: &mitcad_model_base::exchange::ExportTree<'_, MockShape>,
+        options: &ExportOptions,
+    ) -> Result<(), KernelError> {
+        if !self.step_trees.get() {
+            return Err(KernelError::Unsupported("STEP component trees"));
+        }
+        self.call("write")?;
+        self.write_units.borrow_mut().push(options.unit);
+        let definitions = tree
+            .definitions
+            .iter()
+            .map(|d| WrittenDefinition {
+                name: d.name.clone(),
+                bodies: d
+                    .bodies
+                    .iter()
+                    .map(|b| (b.name.to_owned(), b.placements.to_vec()))
+                    .collect(),
+                instances: d.instances.clone(),
+            })
+            .collect();
+        self.written_trees
+            .borrow_mut()
+            .push((path.to_owned(), definitions));
+        Ok(())
+    }
+
+    /// The face's `silhouettes` (mitcad#1909), whatever the direction, on
+    /// a shape that has the face; unsupported for a face without them.
+    fn face_silhouettes(
+        &self,
+        shape: &MockShape,
+        face: &FaceName,
+        _direction: [f64; 3],
+    ) -> Result<Vec<mitcad_model_base::kernel::Curve3>, KernelError> {
+        self.call("face_silhouettes")?;
+        let Some(curves) = self.silhouettes.borrow().get(&face.to_string()).cloned() else {
+            return Err(KernelError::Unsupported("face silhouettes"));
+        };
+        Ok(if shape.has_face(face) {
+            curves
+        } else {
+            Vec::new()
         })
     }
 }

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT
+[package]
+name = "mitcad-serp"
+description = "Reader of .serp files (versions 1 to 9): the zip of a JSON scene whose objects are binary B-reps or meshes, with their layers, colours and blocks, for the import of bodies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "mitcad_serp"
+
+[dependencies]
+# The container (versions 2 and later): stored and deflated members.
+mitcad-zip = { path = "../zip" }
+# The scene's JSON, read as values (an unknown member is left alone).
+serde_json = { workspace = true }

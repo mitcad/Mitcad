@@ -250,7 +250,19 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     // else its import note and its warnings, as one message.
     feature.level = text(f, "level");
     feature.error = modelMessage(text(f, "error"));
-    const QJsonArray notices = f.value(QStringLiteral("notices")).toArray();
+    // Not its remarks (mitcad#1914): what its panel points out while it is
+    // open, accepted with the feature, so they mark nothing: neither its
+    // message nor its places take them.
+    const QStringList remarks = f.value(QStringLiteral("remarks")).toVariant().toStringList();
+    QJsonArray notices;
+    for (const QJsonValue& value : f.value(QStringLiteral("notices")).toArray()) {
+      const QJsonObject notice = value.toObject();
+      if (notice.value(QStringLiteral("level")).toString() == QStringLiteral("info") &&
+          remarks.contains(notice.value(QStringLiteral("message")).toString())) {
+        continue;
+      }
+      notices.append(value);
+    }
     // The places its notices name, painted while the pointer is over it
     // (mitcad#1327), and a failure's error in plain words, as its notice
     // gives it (the model's `error` keeps the topological names).

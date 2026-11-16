@@ -489,7 +489,7 @@ pub fn reference(
 
 /// The face name of the wall along `curve` of `panel`:
 /// `F3:sheet_side0(F2:sheet_curve(c2[c1,c3]))`.
-fn wall_name(panel: PanelId, curve: &SheetCurveId) -> String {
+pub(crate) fn wall_name(panel: PanelId, curve: &SheetCurveId) -> String {
     let key = match curve {
         SheetCurveId::Sketch { sketch, segment } => format!("{sketch}:sheet_curve({segment})"),
         SheetCurveId::Generated { feature, slot } => format!("{feature}:sheet_curve({slot})"),

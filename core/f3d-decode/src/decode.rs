@@ -599,11 +599,17 @@ pub fn extrude_fields(seg: &Segment, o: &Object) -> Option<ExtrudeFields> {
         _ => 3,
     };
     // The start face's selection takes the place of the first byte
-    // (mitcad#641).
+    // (mitcad#641). The two bytes after it are 0 and 0 or 1, as the two
+    // bytes after an extrusion's first zero byte (a start on a
+    // construction plane has 0 and 0, mitcad#1904); the operation's code
+    // follows them.
     let start_ref = (skip == 3)
         .then(|| seg.ref_at(d, root.end))
         .flatten()
-        .filter(|r| d.get(r.end..r.end + 2) == Some(&[0, 1]));
+        .filter(|r| {
+            matches!(d.get(r.end..r.end + 2), Some([0, 0 | 1]))
+                && u32_at(d, r.end + 2).is_some_and(|c| (1..=4).contains(&c))
+        });
     let p = start_ref.as_ref().map_or(root.end + skip, |r| r.end + 2);
     let operation_code = u32_at(d, p)?;
     let extent_a = u32_at(d, p + 4)?;

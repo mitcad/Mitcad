@@ -688,6 +688,11 @@ public:
   // (setActivePickPriority), so a face of another component in front of an
   // origin plane is picked; otherwise the order by depth stays.
   void setPlanesByDepth(bool on) { m_planesByDepth = on; }
+  // While an input takes openings (InputDef::takesOpenings, mitcad#1927:
+  // Patch's edges): a surface body's free edge, which has no name, is
+  // picked as the opening it lies on (openingEdgeItem), ahead of the face
+  // beside it as any edge; elsewhere it cannot be picked.
+  void setOpeningEdges(bool on) { m_openingEdges = on; }
   // While an input puts sketches behind the bodies (InputDef::sketchesBehind,
   // mitcad#869: Measure's Faces, Edges and Vertices): a sketch's curves and
   // points come after the bodies' faces, edges and vertices under the cursor
@@ -770,10 +775,26 @@ public:
   // faint. In sight, the entity itself is drawn under its copy in the same
   // colour, which leaves it as it was; behind a face only the faint copy
   // shows. The copies are not pickable: picks and the hover stay as they
-  // were. Other sketches shown are drawn as before. Logs "Sketch through
+  // were. Other sketches shown are drawn as before (outside sketch mode,
+  // setSketchesThroughBodies draws them all through). Logs "Sketch through
   // the bodies: <sketch> <n> curve(s), <m> point(s), dimmed, curves
   // dashed" ("none") when it changes.
   void setSketchThrough(const QString& sketch);
+  // Every shown sketch through the bodies outside sketch mode (mitcad#1931,
+  // View › Sketches Through Bodies, a preference, on by default): while no
+  // sketch is edited (setSketchThrough empty), each shown sketch's curves
+  // and points get the edited sketch's faint copies, and each shown
+  // profile a faint copy of its fill (half its own opacity, blended in
+  // place as the curves' copies are, its boundary left to the curves),
+  // in the same layer; a profile has none while an input takes profiles
+  // (setProfilesFirst draws the regions through the bodies itself). In
+  // sketch mode only the edited sketch is drawn through, as before. Off:
+  // no copies outside sketch mode. Not pickable; logs "Sketches through
+  // the bodies: <sketch> <n> curve(s), <m> point(s), <k> profile(s)
+  // [<regions>]; ... dimmed, curves dashed, profiles faint" ("none",
+  // "off", "the edited sketch only") when it changes.
+  void setSketchesThroughBodies(bool on);
+  bool sketchesThroughBodies() const { return m_sketchesThroughBodies; }
   void setDatums(const std::vector<DatumDisplay>& datums);
   // The shapes the shown sketch profiles, sketch entities and datums are
   // drawn from, for UI tests (mitcad#1586): the view's own, built on the
@@ -1496,6 +1517,17 @@ private:
                           const SketchEntityLook& look) const;
   // Logs "Sketch through the bodies: ..." when it changed (for UI tests).
   void logSketchThrough();
+  // Whether a shown entity of this sketch gets its faint copy: the edited
+  // sketch's in sketch mode, every sketch's outside it while
+  // setSketchesThroughBodies is on (mitcad#1931).
+  bool sketchDrawnThrough(const QString& sketch) const;
+  // A shown profile's faint copy through the bodies (mitcad#1931): made,
+  // restyled or taken away as the settings say; all of them, those of
+  // profiles no longer shown taken away.
+  void updateProfileThrough(const ProfileKey& key, const occ::handle<AIS_Shape>& profile);
+  void updateProfilesThrough();
+  // Logs "Sketches through the bodies: ..." when it changed (for UI tests).
+  void logSketchesThrough();
   // Recolours the sketch entities shown after the background turned dark
   // or light.
   void restyleSketchEntities();
@@ -1627,6 +1659,7 @@ private:
   bool m_planesBehind = false;       // setPlanesBehind()
   bool m_planesByDepth = false;      // setPlanesByDepth()
   bool m_sketchesBehind = false;     // setSketchesBehind()
+  bool m_openingEdges = false;       // setOpeningEdges()
   QString m_sketchKept;              // its sketch that keeps its place
   bool m_profilesFirst = false;      // setProfilesFirst()
   std::set<const AIS_InteractiveObject*> m_inactiveObjects;
@@ -1650,6 +1683,12 @@ private:
   QString m_throughSketch;
   std::map<const AIS_InteractiveObject*, occ::handle<AIS_Shape>> m_sketchEntityThrough;
   QString m_loggedSketchThrough = QStringLiteral("none");
+  // Every shown sketch through the bodies outside sketch mode (mitcad#1931,
+  // setSketchesThroughBodies), the faint copies of the shown profiles' fills
+  // by profile, and the log line last written.
+  bool m_sketchesThroughBodies = true;
+  std::map<ProfileKey, occ::handle<AIS_Shape>> m_profileThrough;
+  QString m_loggedSketchesThrough;
   // The halos as last logged ("Sketch halos:").
   QString m_loggedSketchHalos;
   // The sketch layers' order and the sketch highlights as last logged

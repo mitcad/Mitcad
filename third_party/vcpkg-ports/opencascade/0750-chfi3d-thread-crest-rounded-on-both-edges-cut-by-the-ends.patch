@@ -57,7 +57,7 @@ kept OCCT from that blend:
   projection landed a turn away, and the pair went undetected).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 0c5245f..880d5e8 100644
+index b30d669b..3c9e18b0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -374,22 +374,22 @@ static bool contactBeyond(const TopOpeBRepDS_DataStructure&   DStr,
@@ -197,7 +197,7 @@ index 0c5245f..880d5e8 100644
      // them, joined (before their contacts, run on to the ends of their
      // faces, are taken for one below); stripes under such a ball dropped.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 6c5162d..3f1818c 100644
+index 6c5162d6..3f1818c4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -1011,6 +1011,14 @@ private:
@@ -216,7 +216,7 @@ index 6c5162d..3f1818c 100644
    //! cannot be made one (their recomputation overflowing F failed): A is
    //! computed again on the faces of its edge, and B rolls on A's contact
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index b0da246..1641937 100644
+index c8e0eb83..179c0952 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -70,9 +70,13 @@
@@ -307,7 +307,7 @@ index b0da246..1641937 100644
      for (int icont = 3; icont >= 1 && !goodext; icont--)
      {
        occ::handle<Geom_BoundedCurve> anExtCurve = aBase;
-@@ -8109,3 +8166,413 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
+@@ -8122,3 +8179,413 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
    }
    return ChFi3d_ConvexEdgeAt(E, Fin, Fbeyond, CP.ParameterOnArc());
  }
@@ -722,12 +722,12 @@ index b0da246..1641937 100644
 +  HS.Load(aExt, u0, u1, v0, v1, HS.Trsf());
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 85987f5..d914501 100644
+index 905c8e67..82cdf32a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -602,4 +602,17 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint& CP,
-                               const ChFiDS_Map&         EFMap,
-                               const ChFiDS_Map&         VFMap);
+@@ -604,4 +604,17 @@ bool ChFi3d_ObstacleBeforeEnd(const ChFiDS_CommonPoint&        CP,
+                               const ChFiDS_Map&                VFMap,
+                               const occ::handle<ChFiDS_Spine>& Sp = occ::handle<ChFiDS_Spine>());
  
 +//! B-spline surface S continued past both ends of one parameter by the
 +//! screw motion that maps its isolines of that parameter onto each other
@@ -744,7 +744,7 @@ index 85987f5..d914501 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 0668fd5..ffe8a2f 100644
+index 1dc74381..03223f4e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -1021,6 +1021,9 @@ void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
@@ -802,7 +802,7 @@ index 0668fd5..ffe8a2f 100644
        {
          Pk[k] = uv[k];
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index a53b083..e4340f2 100644
+index c4430055..fadf9d19 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -192,6 +192,78 @@ static bool IsVois(const TopoDS_Edge&                                      E,

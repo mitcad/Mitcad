@@ -86,7 +86,7 @@ impl BendMetrics {
         }
         Ok(value)
     }
-    fn offset(&self, position: SheetPosition) -> Result<f64, String> {
+    pub(super) fn offset(&self, position: SheetPosition) -> Result<f64, String> {
         Ok(match position {
             SheetPosition::Inside => -self.setback(self.outer, "outer")?,
             SheetPosition::Outside => -self.setback(self.inner, "inner")?,
@@ -134,7 +134,7 @@ pub(super) fn port_frame(state: &SheetState, reference: &BoundaryRef) -> Result<
     })
 }
 
-fn free(state: &SheetState, reference: &BoundaryRef) -> Result<(), String> {
+pub(super) fn free(state: &SheetState, reference: &BoundaryRef) -> Result<(), String> {
     let edge = boundary(state, reference)?;
     if state.joins.iter().any(|p| {
         [&p.first, &p.second].iter().any(|s| {
@@ -332,7 +332,7 @@ fn number_stretches(
 }
 
 /// The axial interval a port side covers, lower end first.
-fn coverage(s: &ShapePortSide) -> [f64; 2] {
+pub(super) fn coverage(s: &ShapePortSide) -> [f64; 2] {
     let a = s.axial.offset + s.axial.scale * s.span.first;
     let b = s.axial.offset + s.axial.scale * s.span.last;
     [a.min(b), a.max(b)]
@@ -1127,7 +1127,7 @@ fn wall_region(
 /// generated curve 13), or the boundary itself where the cut removes
 /// nothing (`at_edge`).
 #[allow(clippy::too_many_arguments)]
-fn cut_back<K: Kernel>(
+pub(super) fn cut_back<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     state: &mut SheetState,
     thickness: f64,
@@ -1139,13 +1139,14 @@ fn cut_back<K: Kernel>(
     at_edge: bool,
     beyond: Option<f64>,
     what: &str,
+    slot: u32,
 ) -> Result<CurvePieceRef, String> {
     let panel = reference.panel;
     let (min, max) = extent(chart(state, panel)?, frame.to_operation)?;
     let far = beyond.unwrap_or_else(|| max[0] + margin(min, max));
     let mut tools = vec![rectangle(
         ctx.uid,
-        10,
+        slot,
         [tangent, start],
         [far, frame.width - end],
     )?];
@@ -1173,7 +1174,7 @@ fn cut_back<K: Kernel>(
         let above = upper.fold(0.0, f64::max);
         tools[0] = rectangle(
             ctx.uid,
-            10,
+            slot,
             [tangent, start - below],
             [far, frame.width - end + above],
         )?;
@@ -1186,11 +1187,12 @@ fn cut_back<K: Kernel>(
     }
     // (Across a bend, the cut's line has a piece on each domain.)
     Ok(
-        match edges_of(chart(state, panel)?).find(|e| e.piece.curve == generated(ctx.uid, 13).curve)
+        match edges_of(chart(state, panel)?)
+            .find(|e| e.piece.curve == generated(ctx.uid, slot + 3).curve)
         {
             Some(e) => e.piece.clone(),
             None if at_edge => boundary(state, reference)?.piece.clone(),
-            None => generated(ctx.uid, 13),
+            None => generated(ctx.uid, slot + 3),
         },
     )
 }
@@ -1204,7 +1206,7 @@ fn cut_back<K: Kernel>(
 /// beside the bend's end (a sliver the cut would leave) reaches past the
 /// end. Zero at an end whose outline runs square, narrows, or turns before
 /// the line (an arc, a joined boundary, a side parallel to the boundary).
-fn outline_overreach(
+pub(super) fn outline_overreach(
     state: &SheetState,
     reference: &BoundaryRef,
     frame: &PortFrame,
@@ -1286,6 +1288,15 @@ pub(crate) fn flange<K: Kernel>(
     d: &SheetFlangeDef<f64>,
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
+    // Several edges, or a corner gap to an existing flange's wall: the
+    // mitred walls of mitcad#1872.
+    if !d.boundaries.is_empty()
+        || d.corner_gap.is_some()
+        || d.miter.is_some()
+        || !d.corner_miters.is_empty()
+    {
+        return super::flange_edges::flange_edges(d, ctx);
+    }
     let (mut state, rules) = read(ctx, d.body)?;
     free(&state, &d.boundary)?;
     let frame = port_frame(&state, &d.boundary)?;
@@ -1388,6 +1399,7 @@ pub(crate) fn flange<K: Kernel>(
         d.position == SheetPosition::Edge,
         None,
         "the flange's trim",
+        10,
     )?;
     // The new boundary's axial interval: a whole end where the panel's side
     // crosses the setback line, an offset end where the cut ends.
@@ -2924,6 +2936,7 @@ fn double_bend<K: Kernel>(
             // panels, a relief notch away.)
             Some(1e-4),
             "the double bend's cut",
+            10,
         )?
     };
     // The jog: the first bend from the fixed boundary towards the other

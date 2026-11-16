@@ -84,10 +84,11 @@ fn a_fallback_stands_in_for_its_items_with_their_reasons() {
     assert_eq!(sketch["level"], "info", "{sketch}");
     assert_eq!(
         sketch["import"],
-        format!(
+        // In plain words, as the report's `note_message` (mitcad#1893).
+        crate::report_status::plain_words(&format!(
             "Partly imported: {}",
             report.items[0].note.as_deref().unwrap()
-        ),
+        )),
         "{text}"
     );
 }

@@ -10,3 +10,6 @@
 *.xlsx binary
 *.png binary
 *.ttf binary
+
+# A settings file as written on Windows (app/tests/settings_transfer.cpp)
+*.mitcad-settings -text

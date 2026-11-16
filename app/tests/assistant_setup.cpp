@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "UnitTests.hpp"
 #include "mcp/AssistantSetup.hpp"
 
 #include <cstdio>
@@ -478,3 +479,4 @@ int assistantSetupTests() {
 #endif
   return failures;
 }
+MITCAD_UNIT_TEST(assistantSetupTests);

@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::components::{digest, followed_link};
+use super::copy::CopySource;
 use super::library_parts::LinkUpdate;
 use super::{DocState, Document, ModelError, invalid};
 use crate::assembly::ExternalLink;
@@ -123,11 +124,11 @@ impl<K: Kernel> Document<K> {
         let base = self.link_base(base);
         let only = |c: ComponentUid| component.is_none_or(|uid| uid == c);
         let mut messages = Vec::new();
-        let sources = self.options_file_updates(base.as_deref(), &only, &mut messages);
+        let sources = self.options_file_updates(base.as_deref(), &only, &mut messages)?;
         let updates = self.file_link_updates(base.as_deref(), &only, &mut messages)?;
         let updated: Vec<ComponentUid> = sources
             .iter()
-            .map(|s| s.0)
+            .map(|s| s.component)
             .chain(updates.iter().map(|u| u.0))
             .collect();
         if updated.is_empty() {
@@ -178,7 +179,9 @@ impl<K: Kernel> Document<K> {
     /// `update_links` and `update_link`): each component's new bodies and
     /// mount frames with the file's digest, and a line per file that
     /// changed or could not be read or taken. Only a file in the design's
-    /// project is read (mitcad#929).
+    /// project is read (mitcad#929). A link made before mitcad#1921
+    /// (`ExternalLink::looks` false) is read once even when its file is
+    /// unchanged, so that its bodies take their materials (mitcad#1923).
     pub(super) fn file_link_updates(
         &self,
         base: Option<&Path>,
@@ -218,7 +221,10 @@ impl<K: Kernel> Document<K> {
                 }
             };
             let new_digest = digest(&text);
-            if new_digest == link.digest {
+            // Unchanged: read only for the materials of a link made before
+            // them (mitcad#1923); a link shown by its envelope has none.
+            let once = new_digest == link.digest;
+            if once && (link.looks || link.envelope.is_some()) {
                 continue;
             }
             let parts = match crate::file::load_state_at(&text, &resolved) {
@@ -227,15 +233,25 @@ impl<K: Kernel> Document<K> {
                 Ok((source, _)) => match link.envelope {
                     Some(detail) => self
                         .design_envelope(&source, &link.path, Some(detail))
-                        .map(|(bodies, mounts, _)| (bodies, mounts)),
-                    None => self.design_parts(&source, &link.path),
+                        .map(|(bodies, mounts, _)| (bodies, mounts, Vec::new())),
+                    // With the materials and appearances the design gives
+                    // its bodies (mitcad#1921).
+                    None => self.design_parts_looked(
+                        &source,
+                        &link.path,
+                        &CopySource::Document(resolved.parent()),
+                    ),
                 },
                 Err(e) => Err(invalid(e.to_string())),
             };
             match parts {
-                Ok((bodies, mounts)) => {
-                    messages.push(format!("{name} is updated from {}", link.path));
-                    updates.push((component, link, new_digest, bodies, mounts));
+                Ok((bodies, mounts, looks)) => {
+                    if !once {
+                        messages.push(format!("{name} is updated from {}", link.path));
+                    } else if super::linked_looks::gives_any(&looks) {
+                        messages.push(format!("{name} takes the materials of {}", link.path));
+                    }
+                    updates.push((component, link, new_digest, bodies, mounts, looks));
                 }
                 // Cancelled (P7): the document stays as it was.
                 Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
@@ -250,16 +266,19 @@ impl<K: Kernel> Document<K> {
 
 /// Puts linked designs read again into a state (`update_links`,
 /// `update_link`): each component's base feature takes the new bodies, its
-/// mount frames follow the file (mitcad#525) and its link the new digest.
+/// mount frames follow the file (mitcad#525) and its link the new digest;
+/// its bodies took the file's materials (mitcad#1921, mitcad#1923).
 pub(super) fn apply_link_updates(
     state: &mut DocState,
     updates: Vec<LinkUpdate>,
 ) -> Result<(), ModelError> {
-    for (component, link, digest, bodies, mounts) in updates {
+    for (component, link, digest, mut bodies, mounts, looks) in updates {
         super::mounts::update_linked_mounts(state, component, &mounts)?;
         let position = state.require(link.feature)?;
         let mut entry = (*state.features[position]).clone();
         if let FeatureDef::Base(base) = &mut entry.def {
+            // Materials and appearances follow the file (mitcad#1921).
+            state.give_linked_looks(link.feature, &base.bodies, &mut bodies, &looks);
             base.bodies = bodies;
         }
         state.features[position] = Arc::new(entry);
@@ -269,6 +288,9 @@ pub(super) fn apply_link_updates(
             .and_then(|c| c.link.as_mut())
         {
             l.digest = digest;
+            if l.envelope.is_none() {
+                l.looks = true;
+            }
         }
     }
     Ok(())

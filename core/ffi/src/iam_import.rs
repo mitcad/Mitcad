@@ -12,6 +12,16 @@
 //!   same way (each sub-assembly file once).
 //! - The placements are the file's (cm become mm); hidden occurrences are
 //!   hidden, grounded ones grounded; suppressed occurrences are left out.
+//! - A placement that mirrors or scales is a copy (mitcad#1903): a
+//!   component of its own at the parent's origin with the part's bodies
+//!   mapped by it, or a sub-assembly's occurrences copied so, with a
+//!   warning.
+//! - A part that comes in without bodies says why (mitcad#1913): its file
+//!   holds none, or its result lists bodies the import did not find. An
+//!   assembly converted from another format keeps the conversion's
+//!   translation report (`mitcad_ipt::translation`); what it says of such
+//!   a part (that no bodies were read from the source file) is in the
+//!   report and in the warnings, one per thing said.
 //! - Referenced files are found where the assembly saved them, else
 //!   relative to the assembly as they were when it was saved, else by the
 //!   saved path's tail under the assembly's folders, else by name in the
@@ -123,6 +133,29 @@ fn file_name(path: &Path) -> String {
         .to_owned()
 }
 
+/// The file name of a saved path (either separator).
+fn saved_name(saved: &str) -> &str {
+    saved.rsplit(['\\', '/']).next().unwrap_or(saved)
+}
+
+/// The translation reports the top assembly and its sub-assemblies keep
+/// (mitcad#1913): of the conversion that made them from another format.
+fn translation_reports(
+    top: &mitcad_ipt::IptFile,
+    files: &[File],
+) -> Vec<mitcad_ipt::translation::Report> {
+    let mut out: Vec<_> = mitcad_ipt::translation::read(top).into_iter().collect();
+    out.extend(
+        files
+            .iter()
+            .filter(|f| f.assembly)
+            .filter_map(|f| f.path.as_deref())
+            .filter_map(|p| mitcad_ipt::IptFile::open(p).ok())
+            .filter_map(|f| mitcad_ipt::translation::read(&f)),
+    );
+    out
+}
+
 /// A path without `.` and `..` (taken away lexically, without following
 /// links, so that a Windows path keeps its form).
 fn normalized(path: &Path) -> PathBuf {
@@ -187,7 +220,23 @@ struct File {
     part: Option<Value>,
     /// The bodies' bounding box in the component (mm).
     bounds: Option<Option<([f64; 3], [f64; 3])>>,
+    /// A part's bodies (in the part), kept for the copies that mirror or
+    /// scale it (mitcad#1903).
+    shapes: Option<Vec<PartBody>>,
+    /// The part imported for a copy before its component was made: taken
+    /// by the component, so that the part is imported once.
+    pending: Option<(Document, Value)>,
 }
+
+/// A body of a part file, for copies.
+#[derive(Clone)]
+struct PartBody {
+    name: String,
+    shape: PartShape,
+    visible: bool,
+}
+
+type PartShape = <OcctKernel as Kernel>::Shape;
 
 /// One import run.
 struct Import<'a> {
@@ -253,7 +302,14 @@ impl Import<'_> {
 
     /// Places the occurrences of the assembly at `path` in `parent`
     /// (`prefix`: the occurrence path's names, for the report).
-    fn place(&mut self, path: &Path, parent: ComponentUid, prefix: &str, depth: usize) {
+    fn place(
+        &mut self,
+        path: &Path,
+        parent: ComponentUid,
+        prefix: &str,
+        depth: usize,
+        outer: Option<Transform>,
+    ) {
         if depth > MAX_DEPTH {
             self.warnings.push(format!(
                 "{}: sub-assemblies nested too deeply",
@@ -286,7 +342,7 @@ impl Import<'_> {
             .extend(assembly.warnings.iter().map(|w| format!("{name}: {w}")));
         self.stack.push(path.to_path_buf());
         for occurrence in &assembly.occurrences {
-            self.occurrence(path, &assembly, occurrence, parent, prefix, depth);
+            self.occurrence(path, &assembly, occurrence, parent, prefix, depth, outer);
         }
         self.stack.pop();
     }
@@ -339,6 +395,10 @@ impl Import<'_> {
         }
     }
 
+    /// Places one occurrence in `parent`. `outer`: the placement of the
+    /// assembly being placed when it mirrors or scales (its occurrences are
+    /// copies then, mitcad#1903).
+    #[allow(clippy::too_many_arguments)]
     fn occurrence(
         &mut self,
         assembly_path: &Path,
@@ -347,6 +407,7 @@ impl Import<'_> {
         parent: ComponentUid,
         prefix: &str,
         depth: usize,
+        outer: Option<Transform>,
     ) {
         let reference = o.reference.and_then(|id| assembly.reference(id));
         let name = format!("{prefix}{}", o.name(reference));
@@ -376,26 +437,43 @@ impl Import<'_> {
                 ]
             })
             .collect();
-        let transform = match from_rows(&rows) {
+        // A placement that mirrors or scales comes in as a copy of the
+        // bodies where the file has them, as other imports copy the blocks
+        // they insert so (mitcad#1903).
+        let local = match from_rows(&rows) {
             Ok(t) => t,
-            Err(e) => {
-                self.count("not_rigid");
-                self.warnings
-                    .push(format!("{name}: {e}; placed at the origin"));
-                Transform::IDENTITY
+            Err(e) => match affine(&rows) {
+                Some(t) => t,
+                None => {
+                    self.count("not_rigid");
+                    self.warnings
+                        .push(format!("{name}: {e}; placed at the origin"));
+                    Transform::IDENTITY
+                }
+            },
+        };
+        let transform = outer.map_or(local, |m| m.after(&local));
+        let copied = !mitcad_model::assembly::is_rigid(&transform);
+        if copied && !mitcad_model::assembly::is_rigid(&local) {
+            self.warnings.push(format!(
+                "{name}: the placement mirrors or scales it; a copy is placed where the file has it"
+            ));
+        }
+        let index = self.file(assembly_path, assembly, reference, o);
+        let made = if copied {
+            self.copy(index, parent, &transform, &name, depth)
+        } else {
+            match self.files[index].component {
+                Some(component) => self
+                    .doc
+                    .0
+                    .add_occurrence(component, parent, transform)
+                    .map(|o| (component, o))
+                    .map_err(|e| e.to_string()),
+                None => self.make(index, parent, transform, &name, depth),
             }
         };
-        let index = self.file(assembly_path, assembly, reference, o);
-        let made = match self.files[index].component {
-            Some(component) => self
-                .doc
-                .0
-                .add_occurrence(component, parent, transform)
-                .map(|o| (component, o))
-                .map_err(|e| e.to_string()),
-            None => self.make(index, parent, transform, &name, depth),
-        };
-        let (component, occurrence) = match made {
+        let (_, occurrence) = match made {
             Ok(made) => made,
             Err(e) => {
                 self.count("not_placed");
@@ -405,6 +483,9 @@ impl Import<'_> {
         };
         self.files[index].occurrences += 1;
         self.count("placed");
+        if copied {
+            self.count("copied");
+        }
         if self.files[index].found == Found::Missing {
             self.count("of_missing_files");
         }
@@ -415,13 +496,22 @@ impl Import<'_> {
             self.count("hidden");
             let _ = self.doc.0.set_occurrence_visible(occurrence, false);
         }
-        let checks = self.check(index, component, occurrence, o, &name);
+        // The checks compare the placement in the file's assembly: the
+        // occurrence's, or the file's own where it is copied or placed in
+        // a copy.
+        let placed = if copied || outer.is_some() {
+            Some(local)
+        } else {
+            self.doc.0.placement(occurrence)
+        };
+        let checks = self.check(index, placed, o, &name);
         self.list.push(json!({
             "name": name,
             "file": index,
             "occurrence": occurrence.to_string(),
             "grounded": o.grounded(),
             "hidden": o.hidden(),
+            "copied": copied,
             "checks": checks,
         }));
     }
@@ -435,11 +525,7 @@ impl Import<'_> {
         name: &str,
         depth: usize,
     ) -> Result<(ComponentUid, mitcad_model::OccurrenceUid), String> {
-        let stem = {
-            let f = &self.files[index];
-            let saved = f.saved.rsplit(['\\', '/']).next().unwrap_or(&f.saved);
-            saved.rsplit_once('.').map_or(saved, |(s, _)| s).to_owned()
-        };
+        let stem = self.stem(index);
         let (path, assembly) = (self.files[index].path.clone(), self.files[index].assembly);
         let made = match (&path, assembly) {
             (Some(path), true) => {
@@ -454,10 +540,10 @@ impl Import<'_> {
                     .map_err(|e| e.to_string())?;
                 self.files[index].component = Some(made.0);
                 self.files[index].status = "imported".to_owned();
-                self.place(path, made.0, &format!("{name}/"), depth + 1);
+                self.place(path, made.0, &format!("{name}/"), depth + 1, None);
                 made
             }
-            (Some(path), false) => match self.part(path) {
+            (Some(path), false) => match self.import_once(index, path) {
                 Ok((part, summary)) => {
                     // A replayed design is copied; stored bodies (a part
                     // without a history, a replay that failed) are shared.
@@ -497,6 +583,141 @@ impl Import<'_> {
             }
         };
         Ok(made)
+    }
+
+    /// The file's stem, for its components' names.
+    fn stem(&self, index: usize) -> String {
+        let f = &self.files[index];
+        let saved = f.saved.rsplit(['\\', '/']).next().unwrap_or(&f.saved);
+        saved.rsplit_once('.').map_or(saved, |(s, _)| s).to_owned()
+    }
+
+    /// Imports part file `index` once: the part imported first for a copy
+    /// is taken from there; a part that failed is not tried again.
+    fn import_once(&mut self, index: usize, path: &Path) -> Result<(Document, Value), String> {
+        if let Some(imported) = self.files[index].pending.take() {
+            return Ok(imported);
+        }
+        if let Some(e) = self.files[index].status.strip_prefix("failed: ") {
+            return Err(e.to_owned());
+        }
+        let (part, summary) = self.part(path)?;
+        self.files[index].shapes = Some(part_bodies(&part));
+        Ok((part, summary))
+    }
+
+    /// The bodies of part file `index` (in the part), imported once.
+    fn part_shapes(&mut self, index: usize, path: &Path) -> Result<Vec<PartBody>, String> {
+        if let Some(shapes) = &self.files[index].shapes {
+            return Ok(shapes.clone());
+        }
+        let (part, summary) = self.import_once(index, path)?;
+        let shapes = part_bodies(&part);
+        self.files[index].shapes = Some(shapes.clone());
+        self.files[index].part = Some(summary.clone());
+        self.files[index].status = "imported".to_owned();
+        self.files[index].pending = Some((part, summary));
+        Ok(shapes)
+    }
+
+    /// An occurrence placed by a transform that mirrors or scales
+    /// (mitcad#1903): a component of its own at the parent's origin, with a
+    /// part's bodies mapped by the transform, or a sub-assembly's
+    /// occurrences placed in it the same way. A file that is missing or
+    /// failed is an empty component, as [`Import::make`] makes it.
+    fn copy(
+        &mut self,
+        index: usize,
+        parent: ComponentUid,
+        transform: &Transform,
+        name: &str,
+        depth: usize,
+    ) -> Result<(ComponentUid, OccurrenceUid), String> {
+        let stem = self.stem(index);
+        let (path, assembly) = (self.files[index].path.clone(), self.files[index].assembly);
+        let empty = |import: &mut Self| {
+            import
+                .doc
+                .0
+                .add_component(Some(&stem), parent, Transform::IDENTITY)
+                .map_err(|e| e.to_string())
+        };
+        match (&path, assembly) {
+            (Some(path), true) => {
+                if self.stack.iter().any(|p| p == path) {
+                    self.files[index].status = "a cycle: the assembly contains itself".to_owned();
+                    return Err(format!("{name}: the assembly contains itself"));
+                }
+                let made = empty(self)?;
+                if self.files[index].status.is_empty() {
+                    self.files[index].status = "imported".to_owned();
+                }
+                self.place(
+                    path,
+                    made.0,
+                    &format!("{name}/"),
+                    depth + 1,
+                    Some(*transform),
+                );
+                Ok(made)
+            }
+            (Some(path), false) => {
+                let shapes = match self.part_shapes(index, path) {
+                    Ok(shapes) => shapes,
+                    Err(e) => {
+                        self.files[index].status = format!("failed: {e}");
+                        return empty(self);
+                    }
+                };
+                let mut bodies = Vec::new();
+                let mut visible = Vec::new();
+                for body in shapes {
+                    let shape = OcctKernel
+                        .transform_shape(&body.shape, transform, None)
+                        .map_err(|e| format!("{name}: {e}"))?;
+                    bodies.push(mitcad_model::ImportBody {
+                        name: Some(body.name),
+                        color: None,
+                        shape,
+                    });
+                    visible.push(body.visible);
+                }
+                let made = empty(self)?;
+                if bodies.is_empty() {
+                    return Ok(made);
+                }
+                let added = self
+                    .doc
+                    .0
+                    .add_base_features(
+                        &format!("Import {stem}"),
+                        vec![mitcad_model::BaseInput {
+                            source: Some(stem.clone()),
+                            component: Some(made.0),
+                            ..mitcad_model::BaseInput::new(bodies)
+                        }],
+                    )
+                    .map_err(|e| e.to_string())?;
+                let material = self.files[index]
+                    .part
+                    .as_ref()
+                    .and_then(|p| p["material"].as_str())
+                    .and_then(crate::ipt_import::mitcad_material);
+                for (body, visible) in added.iter().flat_map(|f| &f.bodies).zip(visible) {
+                    if let Some(id) = material {
+                        let _ = self.doc.0.set_body_material(body.uid, Some(id));
+                    }
+                    if !visible {
+                        let _ = self.doc.0.set_body_visible(body.uid, false);
+                    }
+                }
+                Ok(made)
+            }
+            (None, _) => {
+                self.files[index].status = "missing".to_owned();
+                empty(self)
+            }
+        }
     }
 
     /// A part's stored bodies (imported into `part`) as one base feature of
@@ -646,6 +867,9 @@ impl Import<'_> {
             "warnings": report["warnings"].as_array().map_or(0, Vec::len),
             "units": report["units"],
             "material": report["material"],
+            // Why it has no bodies, if so: "none" in the file, or listed
+            // bodies "not found" (mitcad#1913).
+            "geometry": report["geometry"],
             "seconds": seconds,
         });
         self.trace_part(path, Some((outcome, seconds)));
@@ -714,6 +938,8 @@ impl Import<'_> {
             occurrences: 0,
             part: None,
             bounds: None,
+            shapes: None,
+            pending: None,
         });
         self.by_key.insert(key, self.files.len() - 1);
         self.files.len() - 1
@@ -855,17 +1081,16 @@ impl Import<'_> {
     /// the document against the transform the file displays it with, and
     /// for a part the bodies' box against the stored range box (and, as
     /// information only, the placed box centre against the stored one,
-    /// which the file does not always keep up to date).
+    /// which the file does not always keep up to date). `placed`: the
+    /// placement in the file's assembly (a copy's mirrors or scales).
     fn check(
         &mut self,
         index: usize,
-        component: ComponentUid,
-        occurrence: OccurrenceUid,
+        placed: Option<Transform>,
         o: &Occurrence,
         name: &str,
     ) -> Value {
         let mut out = json!({});
-        let placed = self.doc.0.placement(occurrence);
         if let (Some(displayed), Some(placed)) = (o.displayed, placed) {
             let difference = (0..3)
                 .map(|r| {
@@ -887,7 +1112,11 @@ impl Import<'_> {
             return out;
         }
         if self.files[index].bounds.is_none() {
-            let bounds = self.bounds(component);
+            // The part's component, else (only copies of it) its bodies.
+            let bounds = match self.files[index].component {
+                Some(component) => self.bounds(component),
+                None => self.shape_bounds(index),
+            };
             self.files[index].bounds = Some(bounds);
         }
         let Some(Some((min, max))) = self.files[index].bounds else {
@@ -925,7 +1154,10 @@ impl Import<'_> {
             out["box_slack"] = json!(slack);
             out["range"] = json!([stored_min, stored_max]);
             out["range_bodies"] = json!(o.range_bodies);
-            out["bodies"] = json!(self.doc.0.component_bodies(component).len());
+            out["bodies"] = json!(match self.files[index].component {
+                Some(component) => self.doc.0.component_bodies(component).len(),
+                None => self.files[index].shapes.as_ref().map_or(0, Vec::len),
+            });
             out["bounds"] = json!([min, max]);
             out["box_difference"] = json!(difference);
             out["box_tolerance"] = json!(tolerance);
@@ -973,6 +1205,51 @@ impl Import<'_> {
         }
         out
     }
+
+    /// The bounding box of a part file's shown bodies in the part (mm),
+    /// from the bodies kept for its copies.
+    fn shape_bounds(&self, index: usize) -> Option<([f64; 3], [f64; 3])> {
+        let mut out: Option<([f64; 3], [f64; 3])> = None;
+        for body in self.files[index].shapes.iter().flatten() {
+            if !body.visible {
+                continue;
+            }
+            let Ok(Some(b)) = OcctKernel.bounding_box(&body.shape) else {
+                continue;
+            };
+            out = Some(match out {
+                None => (b.min, b.max),
+                Some((min, max)) => (
+                    std::array::from_fn(|k| min[k].min(b.min[k])),
+                    std::array::from_fn(|k| max[k].max(b.max[k])),
+                ),
+            });
+        }
+        out
+    }
+}
+
+/// The affine map of three rows (a placement read from the file, mm) that
+/// may mirror or scale; None for one that is not finite or flattens space.
+fn affine(rows: &[Vec<f64>]) -> Option<Transform> {
+    let t = Transform {
+        linear: std::array::from_fn(|r| std::array::from_fn(|c| rows[r][c])),
+        translation: std::array::from_fn(|r| rows[r][3]),
+    };
+    (t.is_finite() && t.determinant().abs() > 1e-9).then_some(t)
+}
+
+/// A part document's bodies, for copies.
+fn part_bodies(part: &Document) -> Vec<PartBody> {
+    part.0
+        .bodies()
+        .into_iter()
+        .map(|b| PartBody {
+            name: b.name.clone(),
+            shape: b.shape.clone(),
+            visible: part.0.body_attributes(b.uid).visible,
+        })
+        .collect()
 }
 
 impl Document {
@@ -1027,10 +1304,10 @@ impl Document {
             .iter()
             .filter(|f| !f.assembly && f.path.is_some())
             .count();
-        import.place(&top, ComponentUid::ROOT, "", 0);
+        import.place(&top, ComponentUid::ROOT, "", 0, None);
         let Import {
             files,
-            warnings,
+            mut warnings,
             counts,
             boxes,
             centers,
@@ -1052,9 +1329,64 @@ impl Document {
                 .as_ref()
                 .is_some_and(|p| p["outcome"].as_str() == Some(outcome))
         };
-        let file_values: Vec<Value> = files
+        // The parts that came in without geometry (mitcad#1913), with what
+        // the assemblies' translation reports say of them.
+        let reports = translation_reports(&file, &files);
+        let geometry = |f: &File| {
+            f.part
+                .as_ref()
+                .and_then(|p| p["geometry"].as_str().map(str::to_owned))
+        };
+        let said: Vec<Option<(Option<String>, String)>> = files
             .iter()
             .map(|f| {
+                if f.assembly || geometry(f).as_deref() != Some("none") {
+                    return None;
+                }
+                let name = f
+                    .path
+                    .as_deref()
+                    .map_or_else(|| saved_name(&f.saved).to_owned(), file_name);
+                reports.iter().find_map(|r| {
+                    let c = r.component(&name)?;
+                    let text: Vec<&str> = c.messages.iter().map(|m| m.text.as_str()).collect();
+                    (!text.is_empty()).then(|| (r.source_extension(), text.join(" ")))
+                })
+            })
+            .collect();
+        let without_geometry = parts(&|f| geometry(f).as_deref() == Some("none"));
+        let not_found = parts(&|f| geometry(f).as_deref() == Some("not found"));
+        let reported = said.iter().flatten().count();
+        // One warning per thing a report says, and one for the rest.
+        let mut by_saying: BTreeMap<(Option<String>, String), usize> = BTreeMap::new();
+        for s in said.iter().flatten() {
+            *by_saying.entry(s.clone()).or_default() += 1;
+        }
+        for ((source, text), n) in by_saying {
+            warnings.push(match source {
+                Some(source) => format!(
+                    "parts without geometry: {n}: the translation report the assembly keeps, of its conversion from a {source} file, says of each: {text}"
+                ),
+                None => format!(
+                    "parts without geometry: {n}: the translation report the assembly keeps says of each: {text}"
+                ),
+            });
+        }
+        if without_geometry > reported {
+            warnings.push(format!(
+                "parts without geometry: {}: their files hold no bodies (no B-rep record holds any, their results list none and they have no mesh features)",
+                without_geometry - reported
+            ));
+        }
+        if not_found > 0 {
+            warnings.push(format!(
+                "parts that list bodies the import did not find in them: {not_found}"
+            ));
+        }
+        let file_values: Vec<Value> = files
+            .iter()
+            .zip(&said)
+            .map(|(f, said)| {
                 json!({
                     "saved": f.saved,
                     "path": f.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
@@ -1064,6 +1396,9 @@ impl Document {
                     "identity": f.identity,
                     "occurrences": f.occurrences,
                     "part": f.part,
+                    // What an assembly's translation report says of a part
+                    // without geometry (mitcad#1913).
+                    "translation": said.as_ref().map(|(_, text)| text),
                     "component": f.component.map(|c| c.to_string()),
                 })
             })
@@ -1108,6 +1443,12 @@ impl Document {
                 // How the imported parts came in (mitcad#507).
                 "replayed": parts(&|f| came_in(f, "replayed")),
                 "as_bodies": parts(&|f| came_in(f, "bodies")),
+                // Without geometry in the file, of them as a translation
+                // report says, and with listed bodies not found
+                // (mitcad#1913).
+                "without_geometry": without_geometry,
+                "without_geometry_reported": reported,
+                "bodies_not_found": not_found,
             },
             "history": options.history,
             "assemblies": files.iter().filter(|f| f.assembly).count(),
@@ -1245,6 +1586,14 @@ fn summary(report: &Value) -> String {
         .map(|(k, v)| format!("{v} {k}"))
         .collect();
     text += &format!("  files found: {}\n", resolution.join(", "));
+    // Parts without geometry (mitcad#1913).
+    let (none, not_found) = (n(&p["without_geometry"]), n(&p["bodies_not_found"]));
+    if none + not_found > 0 {
+        text += &format!(
+            "  parts without geometry: {none} ({} as a translation report says); parts that list bodies not found: {not_found}\n",
+            n(&p["without_geometry_reported"])
+        );
+    }
     if report["history"] == true {
         text += &format!(
             "  parts with their design history: {} replayed, {} as their stored bodies\n",
@@ -1311,8 +1660,17 @@ fn summary(report: &Value) -> String {
                 ),
                 _ => String::new(),
             };
+            // Why it has no bodies (mitcad#1913).
+            let geometry = match (part["geometry"].as_str(), f["translation"].as_str()) {
+                (Some("none"), Some(said)) => {
+                    format!("; no geometry: the translation report says: {said}")
+                }
+                (Some("none"), None) => "; no geometry in the file".to_owned(),
+                (Some("not found"), _) => "; the bodies it lists were not found".to_owned(),
+                _ => String::new(),
+            };
             format!(
-                ": {} bodies ({} valid, {} not built){}{}",
+                ": {} bodies ({} valid, {} not built){}{}{}",
                 n(&part["bodies"]),
                 n(&part["valid"]),
                 n(&part["not_built"]),
@@ -1321,7 +1679,8 @@ fn summary(report: &Value) -> String {
                 } else {
                     format!("; features {}", counts.join(", "))
                 },
-                outcome
+                outcome,
+                geometry
             )
         } else {
             String::new()

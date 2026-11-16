@@ -4,6 +4,7 @@
 // and that the positions the view gets run on without a step across a jump,
 // with moves queued before the jump, when the system refuses to move the
 // cursor, and with the move the jump itself posts (macOS).
+#include "UnitTests.hpp"
 #include <cstdio>
 #include <initializer_list>
 
@@ -187,3 +188,4 @@ int orbitWrapTests() {
   resetTests();
   return failures;
 }
+MITCAD_UNIT_TEST(orbitWrapTests);

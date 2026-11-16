@@ -630,15 +630,32 @@ fn occurrence_table(
     let bound = 16 * n + 64;
     let mut left: HashSet<u32> = documents.keys().copied().collect();
     let mut heads: Vec<(usize, u32, u32, u32)> = Vec::new();
-    let mut at = end + 14;
-    while at + 16 <= data.len() && !left.is_empty() {
-        let v = |k: usize| u32_at(data, at + 4 * k).unwrap_or(0);
-        let (file, key, sequence, instance) = (v(0), v(1), v(2), v(3));
-        if ids.contains_key(&file)
+    let head = |at: usize, left: &HashSet<u32>| -> Option<(u32, u32, u32)> {
+        let v = |k: usize| u32_at(data, at + 4 * k);
+        let (file, key, sequence, instance) = (v(0)?, v(1)?, v(2)?, v(3)?);
+        (ids.contains_key(&file)
             && left.contains(&key)
             && (1..=bound).contains(&sequence)
-            && (1..=bound).contains(&instance)
-        {
+            && (1..=bound).contains(&instance))
+        .then_some((file, key, instance))
+    };
+    let mut at = end + 14;
+    while at + 16 <= data.len() && !left.is_empty() {
+        if let Some(mut found) = head(at, &left) {
+            // A zero byte before a head reads as a head too, its numbers
+            // 256 times the head's (with a file list of 256 files or more
+            // and as many occurrences): the head a byte later is the one
+            // (mitcad#1903).
+            while data[at] == 0 {
+                match head(at + 1, &left) {
+                    Some(later) => {
+                        at += 1;
+                        found = later;
+                    }
+                    None => break,
+                }
+            }
+            let (file, key, instance) = found;
             heads.push((at, file, key, instance));
             left.remove(&key);
             at += 16;
@@ -831,5 +848,62 @@ mod tests {
                 0xe1, 0x81, 0x0f, 0xe6, 0xd0, 0x11, 0xb3, 0x49, 0x07, 0x7e, 0xc3, 0x93, 0, 0, 0, 6
             ]
         );
+    }
+
+    /// mitcad#1903: with 256 files or more and as many occurrences, the
+    /// zero byte before an occurrence table head reads as a head of its
+    /// own (file 256, key 512, ...): the head a byte later is taken.
+    #[test]
+    fn a_head_is_not_read_a_byte_early() {
+        let reference = |id: u32| Reference {
+            id,
+            path: format!(r"C:\Project\part{id}.ipt"),
+            library: String::new(),
+            member: String::new(),
+            variant: None,
+        };
+        let references: Vec<Reference> = (1..=300).map(reference).collect();
+        let documents: HashMap<u32, [u8; 16]> =
+            (1..=600).map(|k| (k, [(k % 251) as u8 + 1; 16])).collect();
+        // The list's end, six bytes, the count and a u32 (end + 14), five
+        // zero bytes, then file 1's head for key 2 (sequence 2, instance 2)
+        // and file 3's for key 4.
+        let mut data = vec![0u8; 19];
+        for v in [1u32, 2, 2, 2, 0, 3, 4, 3, 1, 0] {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let table = occurrence_table(&data, 0, &references, &documents);
+        assert_eq!(table[&2].reference, 1);
+        assert_eq!(table[&2].instance, 2);
+        assert_eq!(table[&4].reference, 3);
+        assert!(!table.contains_key(&512), "a head read a byte early");
+    }
+
+    /// Placements that mirror or scale are read as stored (mitcad#1903):
+    /// the import copies their bodies.
+    #[test]
+    fn reads_placements_that_mirror_or_scale() {
+        let (_, a) = read_test(&testassembly::mirrored_assembly());
+        assert!(a.warnings.is_empty(), "{:?}", a.warnings);
+        let determinants: Vec<f64> = a
+            .occurrences
+            .iter()
+            .map(|o| {
+                let m = o.transform.expect("a placement");
+                m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+            })
+            .collect();
+        assert_eq!(determinants, [1.0, -1.0, 8.0, -1.0]);
+        let files: Vec<Option<u32>> = a.occurrences.iter().map(|o| o.reference).collect();
+        assert_eq!(files, [Some(2), Some(2), Some(2), Some(3)]);
+        // The display transforms are taken but the one that scales.
+        let displayed: Vec<bool> = a
+            .occurrences
+            .iter()
+            .map(|o| o.displayed.is_some())
+            .collect();
+        assert_eq!(displayed, [true, true, false, true]);
     }
 }

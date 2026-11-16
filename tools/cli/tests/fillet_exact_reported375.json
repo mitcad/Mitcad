@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #375 (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): GitHub #353's first block, Fillet1 (F15) of 5 mm on the four edges beside its side faces, then Chamfer1 (F16) of 5 mm on the back's bottom edge. The fillet used to be built 0.1 % smaller, leaving slivers of the side faces, which the chamfer left untrimmed in the corner. Now the fillet takes the side faces away at its size and the chamfer cuts the bent half round cleanly: 7 faces, none under 0.01 mm2, no notes, the volume 496.4056 (the rounded block's 250 pi - 500/3 less the chamfer's part of it, integrated)."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"feature": "Chamfer1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F16"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 496.4056097, "faces": 7, "min_face_area": 0.01}}
+]

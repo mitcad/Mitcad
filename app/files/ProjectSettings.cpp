@@ -705,6 +705,8 @@ void ProjectSettingsDialog::shareFinished(RemoteTask* done, const QString& url, 
     connect(task, &RemoteTask::finished, this,
             [this, task, url, author] { shareFinished(task, url, author, QJsonObject()); });
     qInfo().noquote() << QStringLiteral("Project Settings: share to %1").arg(url);
+    // After the project's other server work (mitcad#1895).
+    task->setProject(m_root);
     task->start();
     return;
   }

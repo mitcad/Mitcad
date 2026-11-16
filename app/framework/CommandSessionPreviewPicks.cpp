@@ -16,6 +16,7 @@
 #include <QString>
 
 #include "CommandSession.hpp"
+#include "OpeningEdges.hpp"
 #include "mitcad/geometry/item_origin.hpp"
 
 namespace mitcad {
@@ -93,6 +94,11 @@ std::optional<SelectionItem> CommandSession::referable(const SelectionItem& item
   const std::shared_ptr<geometry::Shape> before = m_host.bodyShape(item.owner);
   if (!before) {
     return std::nullopt;
+  }
+  // An opening picked by a free edge (mitcad#1927) is the body's own, named
+  // by its faces: the body has it where the loop is there.
+  if (isOpeningEdge(item)) {
+    return openingEdges(*before, openingOf(item)).empty() ? std::nullopt : std::optional<SelectionItem>(item);
   }
   // The preview's shape only for a body it changes: elsewhere the name is
   // the body's own, and whether the body has it is enough, with no

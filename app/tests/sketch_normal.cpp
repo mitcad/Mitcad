@@ -5,6 +5,7 @@
 // component, 90° off the profiles the view showed. Extrude's arrow takes
 // the normal through the occurrence's `world` placement of the
 // `components` query, nested and oblique ones too (a synthetic design).
+#include "UnitTests.hpp"
 #include "commands/SketchNormal.hpp"
 
 #include <cmath>
@@ -129,3 +130,4 @@ int sketchNormalTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(sketchNormalTests);

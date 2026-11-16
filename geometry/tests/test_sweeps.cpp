@@ -16,9 +16,12 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepGProp.hxx>
 #include <BRepLib.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -1365,24 +1368,25 @@ void test_ribs() {
   CHECK_NEAR(volume(*braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 30 * 4 + slivers);
   // From the tall cylinder's top edge (mitcad#1857, GitHub #345): the line
   // (30, 60) - (70, 30). Continued, its start rises over the top face, and
-  // only the wall below the edge closes it off: the start fills from its tip
-  // (x = 30) up to the curved face, below the line along the tangent
-  // (-0.8, 0.6) through the edge, nothing above the top face, and no note.
-  // At t across the thickness the wall is w = 10 - sqrt(100 - t^2) from the
-  // tip: the start fills 50 w - 3/8 w^2 (from the base's top at z = 10 up
-  // to z = 60 - 3/4 of the way to the wall), the end 20 w - 3/8 w^2 under
-  // its continuation; with the trapezoid 40 * 35 * 4.
+  // only the wall below the top face's level closes it off: the start fills
+  // from its tip (x = 30) up to the curved face and up to the top face's
+  // level, z = 60 (mitcad#1888: not only below the line along the tangent
+  // (-0.8, 0.6) through the edge, which left a step at the rim), nothing
+  // above the top face, and no note. At t across the thickness the wall is
+  // w = 10 - sqrt(100 - t^2) from the tip: the start fills 50 w (from the
+  // base's top at z = 10 up to z = 60), the end 20 w - 3/8 w^2 under its
+  // continuation; with the trapezoid 40 * 35 * 4.
   RibSpec rim = down;
   rim.chains = {{{"c1", line3(gp_Pnt(30, 20, 60), gp_Pnt(70, 20, 30))}}};
   const double w1 = 40 - 2 * std::sqrt(96.0) - 100 * std::asin(0.2);                    // integral of w
   const double w2 = 800 - 16.0 / 3 - 20 * (2 * std::sqrt(96.0) + 100 * std::asin(0.2)); // of w^2
   const ShapePtr from_rim = rib(rim);
-  CHECK_NEAR(volume(*from_rim), 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  CHECK_NEAR(volume(*from_rim), 40.0 * 35 * 4 + 70 * w1 - 0.375 * w2);
   CHECK(from_rim->notes().empty());
   CHECK(near(bounding_box(*from_rim).max.Z(), 60, 1e-6));
   const BooleanResult rim_braced = boolean(BooleanOp::Join, {bosses.get()}, *from_rim);
   CHECK(rim_braced.pieces.size() == 1);
-  CHECK_NEAR(volume(*rim_braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  CHECK_NEAR(volume(*rim_braced.pieces.at(0).shape), 40000 + 7000 * kPi + 40.0 * 35 * 4 + 70 * w1 - 0.375 * w2);
   // Without Extend Ends the start leaves the gap: 50 w less, with the end's.
   rim.extend_ends = false;
   CHECK_NEAR(volume(*rib(rim)), 40.0 * 35 * 4);
@@ -1391,21 +1395,21 @@ void test_ribs() {
   rim.extend_ends = true;
   rim.chains = {{{"c1", line3(gp_Pnt(70, 20, 30), gp_Pnt(30, 20, 60))}}};
   const ShapePtr reversed = rib(rim);
-  CHECK_NEAR(volume(*reversed), 40.0 * 35 * 4 + 70 * w1 - 0.75 * w2);
+  CHECK_NEAR(volume(*reversed), 40.0 * 35 * 4 + 70 * w1 - 0.375 * w2);
   CHECK(reversed->notes().empty());
   // End Offset +1 moves the faces the ends stop at 1 further along their
   // tangents (0.8 across, 0.6 up or down), the partly closed off end's as
   // the other's, but not the line where the bodies stop closing it off
   // (mitcad#1865). The end at the top edge fills 0.8 further into the wall
-  // below the top face, from the base's top moved up to z = 10.6, and
-  // nothing over the top face (no lip up to 0.6 high inside the wall): at t
-  // across the thickness 49.4 w - 3/8 w^2 + 0.8 * 49.4. The other end runs
-  // W = 0.8 + w to the moved wall, from the base's top moved down to
-  // z = 9.4: 20.6 W - 3/8 W^2. With no note.
+  // below the top face, from the base's top moved up to z = 10.6 up to the
+  // top face's level where it is, z = 60, and nothing over the top face (no
+  // lip up to 0.6 high inside the wall): at t across the thickness
+  // 49.4 (w + 0.8). The other end runs W = 0.8 + w to the moved wall, from
+  // the base's top moved down to z = 9.4: 20.6 W - 3/8 W^2. With no note.
   rim.end_offset = 1.0;
   const ShapePtr sunk = rib(rim);
   const double sunk_volume =
-      40.0 * 35 * 4 + 69.4 * w1 - 0.75 * w2 + 4 * (0.8 * 49.4 + 20.6 * 0.8 - 0.375 * 0.8 * 0.8);
+      40.0 * 35 * 4 + 69.4 * w1 - 0.375 * w2 + 4 * (0.8 * 49.4 + 20.6 * 0.8 - 0.375 * 0.8 * 0.8);
   CHECK_NEAR(volume(*sunk), sunk_volume);
   CHECK(sunk->notes().empty());
   CHECK(near(bounding_box(*sunk).max.Z(), 60, 1e-6));
@@ -1507,6 +1511,82 @@ void test_rib_outlines() {
     const BooleanResult joined = boolean(BooleanOp::Join, {body.get()}, *ribbed);
     CHECK(joined.pieces.size() == 1);
   }
+}
+
+// Extend Ends from a boss's top rim (mitcad#1888, GitHub #360), as on the
+// reported design: a boss of radius 15 with a hole of 10 about (-20, 0),
+// 30 high, one of radius 10 with a hole of 5 about (20, 0), 25 high, and a
+// plate 10 thick between them. A rib 10 thick on the plane y = 0 from the
+// higher boss's top rim, (-5, 0, 30), to the lower one's, (10, 0, 25), up
+// to the next faces, at right angles to the line, flipped towards the
+// plate. Continued, its start rises over the top face, and only the wall
+// below the top face's level closes it off: it fills up to the wall and up
+// to that level, with no step between the line along the tangent through
+// the rim and the top face. Its top lies in the top face, which takes it
+// in when joined: one face at z = 30, the ring and the strip between the
+// rim and the rib's tip, 125 pi + 150 - 5 sqrt(200) - 225 asin(1/3).
+void test_rib_rim_cap() {
+  Region high = circle(1, -20, 0, 15);
+  high.loops.push_back(circle(2, -20, 0, 10).loops.front());
+  Region low = circle(3, 20, 0, 10);
+  low.loops.push_back(circle(4, 20, 0, 5).loops.front());
+  const ShapePtr tall = extrude("F2", {high}, 0, 30);
+  const ShapePtr short_boss = extrude("F3", {low}, 0, 25);
+  const ShapePtr plate = extrude("F4", {rectangle(5, -12, -8, 26.5, 16)}, 0, 10);
+  const ShapePtr based = boolean(BooleanOp::Join, {tall.get()}, *plate).pieces.at(0).shape;
+  const BooleanResult both = boolean(BooleanOp::Join, {based.get()}, *short_boss);
+  CHECK(both.pieces.size() == 1);
+  const ShapePtr bosses = both.pieces.at(0).shape;
+  RibSpec spec;
+  spec.feature = "F6";
+  spec.frame.origin = gp_Pnt(0, 0, 0);
+  spec.frame.x_axis = gp_Dir(1, 0, 0);
+  spec.frame.y_axis = gp_Dir(0, 0, 1);
+  spec.chains = {{{"c1", line3(gp_Pnt(-5, 0, 30), gp_Pnt(10, 0, 25))}}};
+  spec.thickness = 10;
+  spec.bodies = {bosses};
+  spec.flip = true;
+  spec.extend_ends = true;
+  const ShapePtr ribbed = rib(spec);
+  CHECK(ribbed->notes().empty());
+  CHECK(near(bounding_box(*ribbed).max.Z(), 30, 1e-6));
+  const BooleanResult joined = boolean(BooleanOp::Join, {bosses.get()}, *ribbed);
+  CHECK(joined.pieces.size() == 1);
+  if (joined.pieces.size() != 1) {
+    return;
+  }
+  const TopoDS_Shape& body = joined.pieces.at(0).shape->occt();
+  CHECK(BRepCheck_Analyzer(body).IsValid());
+  // Between the rim and the tip, just under the top face's level and above
+  // the line along the tangent through the rim (at y = +-4 the wall is at
+  // x = -5.543 and that line at z = 29.952 for x = -5.4): material; just
+  // over the level: none.
+  for (const double y : {-4.0, 4.0}) {
+    BRepClass3d_SolidClassifier inside(body, gp_Pnt(-5.4, y, 29.97), 1e-7);
+    CHECK(inside.State() == TopAbs_IN);
+    BRepClass3d_SolidClassifier over(body, gp_Pnt(-5.4, y, 30.03), 1e-7);
+    CHECK(over.State() == TopAbs_OUT);
+  }
+  // One face at z = 30, with no small faces at the rim.
+  const double top_area = 125 * kPi + 150 - 5 * std::sqrt(200.0) - 225 * std::asin(1.0 / 3);
+  int tops = 0;
+  for (TopExp_Explorer f(body, TopAbs_FACE); f.More(); f.Next()) {
+    Bnd_Box box;
+    BRepBndLib::Add(f.Current(), box);
+    double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+    box.Get(x0, y0, z0, x1, y1, z1);
+    GProp_GProps skin;
+    BRepGProp::SurfaceProperties(f.Current(), skin);
+    if (z0 > 29.9 && z1 < 30.1) {
+      ++tops;
+      CHECK_NEAR_TOL(skin.Mass(), top_area, 1e-4);
+    }
+    // Near the rib's start every face is a large one.
+    if (x1 > -6.5 && x0 < -4.5 && z1 > 29.5) {
+      CHECK(skin.Mass() > 10.0);
+    }
+  }
+  CHECK(tops == 1);
 }
 
 // A B-spline as a path curve.
@@ -2461,6 +2541,7 @@ void sweeps_tests_2() {
   guarded("helix slivers within the bodies' faces", test_helix_slivers_within_the_bodies_faces);
   guarded("ribs", test_ribs);
   guarded("rib outlines", test_rib_outlines);
+  guarded("rib rim cap", test_rib_rim_cap);
 }
 
 void sweeps_tests_3() {

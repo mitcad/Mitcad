@@ -67,7 +67,6 @@ foreach(test core.cargo_build core.cargo_build_release)
   mitcad_macos_cargo_build(${test})
 endforeach()
 include("${REPO}/cmake/MacUiTests.cmake")
-include("${REPO}/cmake/TimberUiTests.cmake")
 # Match the application's final registration pass, after every UI module.
 mitcad_macos_headless_tests()
 "#,

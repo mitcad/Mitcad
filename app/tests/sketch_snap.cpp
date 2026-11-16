@@ -9,6 +9,7 @@
 // automatically (mitcad#1024): a quadrant's coincident and centre
 // alignment, the horizontal, vertical and tangent candidates, and the
 // reason a refused (redundant) candidate is skipped with.
+#include "UnitTests.hpp"
 #include "sketch/SketchSnap.hpp"
 
 #include <algorithm>
@@ -577,3 +578,4 @@ int sketchSnapTests() {
   autoConstraintTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchSnapTests);

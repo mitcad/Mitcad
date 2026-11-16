@@ -62,7 +62,14 @@ ShapePtr draft(const std::string& feature, const Shape& body, const DraftSpec& s
 
 // Moves the faces along their normals by `distance` (positive out of the
 // material); neighbouring faces extend or shorten along their own surfaces.
-// The faces keep their names.
+// The faces keep their names. Where a moved face continues smoothly into a
+// face that stays (a piece of a split face beside the other pieces, or a
+// face tangent to it) and the neighbours cannot follow, the seam becomes a
+// step (mitcad#1928): the faces it runs into smoothly are offset with it,
+// and only the region at the moved faces, cut off at the seams along their
+// normals, is removed from the body or added to it. The step's faces are
+// <feature>:step(<moved face>) ("#k" for several); where the step cannot
+// be made the offset fails saying so.
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
                       const std::vector<std::string>& faces, double distance);
 

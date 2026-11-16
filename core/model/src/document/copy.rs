@@ -62,7 +62,7 @@ impl CopySource<'_> {
     /// Each image of the set (the base colour and the other maps,
     /// mitcad#313) that is a file: an absolute path from another design,
     /// embedded from a library.
-    fn texture(&self, texture: &mut Texture) -> Result<(), ModelError> {
+    pub(super) fn texture(&self, texture: &mut Texture) -> Result<(), ModelError> {
         for slot in texture.slots_mut() {
             if slot.data.is_none() {
                 self.image(slot.path, slot.data)?;
@@ -564,14 +564,31 @@ impl DocState {
             // Older/imported designs may keep an unknown appearance id.
             // Keep it unresolved instead of binding to a target definition.
             if let Some(appearance) = source.appearances.iter().find(|a| a.id == id) {
-                let mut copy = appearance.clone();
+                // One brought from the same source before (by a link or an
+                // earlier copy, mitcad#1921): equal but for its id and a
+                // numbered name. It is found again, not copied a second time.
+                let mut resolved = appearance.clone();
+                if let Some(texture) = resolved.texture.as_mut() {
+                    origin.texture(texture)?;
+                }
+                let same = |a: &appearance::Appearance| {
+                    let mut other = resolved.clone();
+                    other.id = a.id.clone();
+                    other.name = a.name.clone();
+                    *a == other && super::linked_looks::numbered_from(&a.name, &resolved.name)
+                };
+                if let Some(found) = self.appearances.iter().find(|a| same(a)) {
+                    ids.remove(&new_id);
+                    mapped.insert(id.to_owned(), found.id.clone());
+                    continue;
+                }
+                let mut copy = resolved;
                 copy.id = new_id.clone();
                 copy.name = std::iter::once(copy.name.clone())
                     .chain((1..).map(|n| format!("{} ({n})", appearance.name)))
                     .find(|name| names.insert(name.clone()))
                     .expect("an unused appearance name exists");
                 if let Some(texture) = copy.texture.as_mut() {
-                    origin.texture(texture)?;
                     appearance::share_images(texture, &mut images);
                 }
                 self.appearances.push(copy);

@@ -180,6 +180,7 @@ search: type the start of a command's name and press Enter.
   - [SolidCraft import](#solidcraft-import)
   - [DWG import](#dwg-import)
   - [.3dm import](#3dm-import)
+  - [.serp import](#serp-import)
 - [Outputs](#outputs)
   - [3D printing](#3d-printing)
   - [USDZ for AR and 3D viewers](#usdz-for-ar-and-3d-viewers)
@@ -193,6 +194,7 @@ search: type the start of a command's name and press Enter.
   - [Updates](#updates)
   - [Feedback and error reports](#feedback-and-error-reports)
   - [Debug log](#debug-log)
+  - [Troubleshooting](#troubleshooting)
 - [Command line](#command-line)
 - [Terms](#terms)
 <!-- end of contents -->
@@ -742,7 +744,15 @@ any window size. The parts of the Floating layout are:
   zoom).
 
   Only the boxes belong to the Browser. Its scroll bar is at the left,
-  beside the rows. The change applies at once.
+  beside the rows. The change applies at once. Rows is the default on
+  Windows and Linux, Card on macOS.
+- **The Browser's width.** With **Rows**, the Browser widens to show the
+  longest name in sight in full, and narrows again. It grows up to
+  **Rows at most** (Preferences › Display, beside Browser background, a percentage of the
+  view's width, by default a third). A longer name is cut short. With
+  **Card**, drag the card's right edge to make it wider or narrower;
+  MitCad keeps the width for the next start. A name that is cut short
+  shows in full in its tooltip.
 - **The Browser's height** follows its rows. The Browser grows as
   folders open, down to the Timeline, and only then scrolls. It shrinks
   as folders close.
@@ -1125,8 +1135,21 @@ the roll axis does nothing. Lock horizon belongs to the 3D mouse alone;
 the mouse's **Constrained orbit (Z stays up)** does not change it.
 
 In sketch mode the 3D mouse only pans and zooms, in the direction of its
-Navigation mode. The first button fits everything and the second button
-goes to the home view.
+Navigation mode, until you free its rotation with **Lock Rotation**
+(below). The first button fits everything and the second button goes to
+the home view.
+
+**Lock Rotation** locks and frees the 3D mouse's rotation at any time.
+Give it a button of the device on the 3D Mouse tab (or find it with the
+command search); the status bar says whether the rotation is now locked
+or unlocked. Outside a sketch it turns **Lock rotation** on the tab on
+or off. In a sketch the rotation is always locked at first, so that the
+sketch stays seen straight on; Lock Rotation frees it for that sketch,
+and you can orbit around it while you keep editing. The next sketch
+starts locked again. On Windows and macOS, a SpaceMouse Pro or
+SpaceMouse Pro Wireless gets its own rotation lock key set to Lock
+Rotation when it is first connected; for other devices, and on Linux,
+choose the button on the tab.
 
 The **3D Mouse** tab of Tools › Preferences › Navigation has the
 settings:
@@ -1138,10 +1161,23 @@ settings:
   turns its direction around from what the Navigation mode does.
 - **Lock rotation** and **Lock translation** stop all turning or all
   panning and zooming. **Dominant axis only** uses only the axis that
-  you push the most. **Lock horizon** keeps Z upright. These work in
-  every Navigation mode.
+  you push the most, and keeps using it until you let go of the 3D
+  mouse, so that a 3D mouse that reports part of a push on other axes
+  does not switch between axes during one motion; to move along another
+  axis, let the cap come back to rest first. **Lock horizon** keeps Z
+  upright. These work in every Navigation mode.
+- **Ignore weaker axes** stops an axis that you move only a little from
+  moving the view while you move another axis more: an axis moved less
+  than the set share of the most moved axis does nothing. Some 3D mice
+  report part of a push along one axis on the other axes too, so that
+  every motion moves the view several ways at once. At the default, 50 %,
+  you can still move two axes on purpose, for example pan diagonally.
+  If your 3D mouse still moves the view along other axes, raise the
+  share, or turn on **Dominant axis only**. **Off** uses every axis as
+  the device reports it.
 - The button table sets the command of each button: Fit, Home, a
-  standard view, Look At, Orthographic or Perspective, or None.
+  standard view, Look At, Orthographic, Perspective or Lock Rotation, or
+  None.
 
 The tab also shows whether MitCad found a 3D mouse. MitCad needs no
 driver from the device's maker:
@@ -1325,6 +1361,14 @@ parameter change, Undo or Redo leaves the design as it was.
 
 A command's panel stays open, and OK tries again. While the progress
 dialog shows, the window takes no other input.
+
+A fillet, chamfer, shell, offset, thicken, sweep, pipe, coil, loft or
+Delete Face that the geometry kernel cannot finish stops too: Cancel
+gives it up at once. Without Cancel, MitCad gives such a feature up
+after 5 minutes. The feature then fails with "the geometry kernel did
+not finish within 300 s", and the features after it are computed. Try
+another size or fewer edges or faces. The environment variable
+`MITCAD_KERNEL_TIME_LIMIT` sets another time in seconds (0: no limit).
 
 ## Commands and shortcuts
 
@@ -2403,8 +2447,9 @@ The rib then fills up to a curved or slanted face with no gap. So you
 don't have to draw the line into the material, which is awkward against
 a thin wall. If the faces stop only part of an end, for example when the
 line starts on the top edge of a boss and its continuation passes over
-the top, the rib fills the part the faces stop, up to the wall, and
-nothing above or beside the body. If an end meets no face, it stays where
+the top, the rib fills the part the faces stop, up to the wall and up to
+the level of the top face, so that it meets the top face along the edge
+with no step, and nothing above or beside the body. If an end meets no face, it stays where
 it is drawn, and the rib shows a warning. Point to the warning to see
 that end in the view.
 
@@ -2955,8 +3000,14 @@ with All Edges has only one set. Chamfer has the same option.
 
 A rounding or bevel as large as the face beside it takes that face away:
 a chamfer of 2 mm on the inner top edges of a wall that is 2 mm thick
-and 2 mm high meets the outer wall and the floor at one edge each. If
-the geometry kernel cannot make such a fillet or chamfer at its size,
+and 2 mm high meets the outer wall and the floor at one edge each. A
+fillet as large as the side face below its edge is high, so that it ends
+on that face's lower edge, is made the same way as one wider than the
+face (below). A fillet or chamfer that ends against a wall standing
+out beside its edge (a band in a bore, flush with the top, the rim's
+chamfer ending at the band's end) ends on that wall's plane, the wall
+growing out to meet it. Only if the geometry kernel cannot make such a fillet or
+chamfer at its size that way either,
 MitCad makes it 0.1 % smaller and removes the narrow strip that this
 leaves; a strip along a long chain of edges (more than 16 faces beside
 it) stays, a thousandth of the size wide. The panel and the feature's
@@ -3717,6 +3768,12 @@ The Sketch tab has three groups:
 - Constraints: the constraint buttons (refer to
   [Constraints](#constraints))
 
+A text (or a QR code) moves after you make it: select it as an object
+of Move/Copy, drag it when it is selected (its anchor point snaps to
+points and curves; hold Shift or Alt to drag freely), or type its
+Position X and Y in Edit Text. A text in a frame moves with its frame.
+A text on a path follows its curve: move the curve instead.
+
 The sketch palette is on the right of the view. It shows the degrees of
 freedom, the options, your most used sketch tools and the constraint
 buttons. The options are construction, signed distances, snap to grid,
@@ -3789,10 +3846,23 @@ constraint symbols at about a third of their strength. Projected and
 construction geometry show through the same way. What is in sight looks
 as before. Thus you can turn the view and still see what you drew on
 the other side of a body, for example on a plane through the middle of
-a solid. You select the dimmed items as before. Other sketches
-that the view shows stay hidden behind the bodies. Hide Above Sketch
-still cuts the bodies on the side the sketch faces; from the other side
-the sketch shows through the bodies that are left.
+a solid. You select the dimmed items as before. While you edit a sketch,
+other sketches that the view shows stay hidden behind the bodies. Hide
+Above Sketch still cuts the bodies on the side the sketch faces; from
+the other side the sketch shows through the bodies that are left.
+
+When no sketch is open, every sketch that the view shows is drawn
+through the bodies the same way, and its profiles show as a faint fill.
+Thus you can see a profile that lies partly inside a body. In Extrude
+and the other commands that take profiles, click the profile where the
+body hides it: the command takes the profile, not the face in front of
+it, and the body stays shown. You can also hold the mouse button down
+on the place and choose the profile from the list. To draw the sketches
+as before, turn off **View › Sketches Through Bodies**; MitCad
+remembers the setting. To turn the eyes of all sketches on or off at
+once, right-click the top row of the Browser or a component and choose
+**Show All Sketches** or **Hide All Sketches** (also in the command
+search). One undo step undoes it.
 
 The sketch's X and Y axes run across the view through the sketch's
 origin. The origin has a ring. The sketch always shows its origin and
@@ -6067,8 +6137,11 @@ error and a warning also have their icon and their word.
 | Information | A fact that needs nothing from you. A note of an import, a done export. | Plain text; a blue "i" badge on the timeline. |
 | Success | The answer to a check that you asked for, such as "up to date". | A green check mark. |
 
-A hint (the next step of a command) and progress ("Computing preview…")
-are plain text. States such as suppressed, rolled back or hidden are no
+A hint (the next step of a command) and progress ("Computing
+inspection…") are plain text. While a command's preview is computed for
+longer than a moment, a small spinner turns just before OK and Cancel
+(its tooltip: "Computing preview…"); it takes no room of its own, so the
+panel keeps its size while you drag a handle. States such as suppressed, rolled back or hidden are no
 level: MitCad draws them faint or struck through.
 
 An error or a warning in a command's panel stays in its box until you
@@ -9001,6 +9074,16 @@ moves or the side gets longer. When you delete one of the profiles
 around it, the profile stays where it is. It is then bound to the nearer
 end of the side.
 
+The new profile also snaps in line with the other profiles of the
+frame: a post beside the profile you click, a member above or below it,
+one crossing it or one on another member. Near such a profile's line,
+its center lines up with that profile's center. Near one of its faces,
+its face comes flush with that face. The preview marks these snaps with
+the profile's name, such as "in line with Profile 3" or "flush with
+Profile 3". The click fills **Offset** and **From** as elsewhere: the
+nearer end and the distance from it. Type an offset to place it
+elsewhere.
+
 The profile stays bound to that place. When the profile it is on becomes
 longer, one flush with end B stays flush with end B. One on the middle
 stays on the middle. When you type an offset, MitCad moves the profile
@@ -10392,6 +10475,33 @@ put the sketch on another plane yourself, the flange warns that the
 sketch no longer lies on its wall; the wall still follows the sketch's
 outline. **Remove Profile** makes the wall a rectangle again.
 
+A flange can go on **several edges** at once. Select more edges in the
+**Edge** row: edges whose ends meet, at a corner of a face or across the
+side of a bend between two faces, such as the sides of a vertical and an
+inclined face. Each edge gets a wall of the same Length, Angle and
+Position, and where two walls meet, their ends are mitered with a gap.
+**Miter** sets how: *Bisect* cuts both walls on the line that halves the
+corner. *Earlier Edge Runs Past* lets the wall of the edge you selected
+first run on over the end of the other, which ends short of it; *Later
+Edge Runs Past* does the same the other way round. **Own Corner Gap**
+with **Corner Gap** sets the gap; without it the gap is the sheet's
+thickness. A gap of 0 is allowed where the walls meet at an angle; walls
+that lie in one plane need a gap. The walls are cut square to their
+faces, as a laser cuts them, so where two walls meet at an angle the
+corner stays open by up to the thickness. The bends end where they clear
+the corner, and the face is cut back beside them. Change the edges, the
+Length or the Angle later and the miters follow; the flat pattern keeps
+the gaps. With several edges the Hem, Corner, Width and Profile rows are
+hidden. To give one corner a miter of its own, click **Add Corner** under
+**Corners**, click the corner in the view (the short edge where the two
+side faces meet, or a vertex there) and choose its **Miter**; editing the
+flange shows its corners again. A flange's free end that meets an
+existing flange of the sheet, also across a bend, ends the corner gap
+short of that flange's wall; the existing flange is never cut. When a
+corner cannot be made (the walls would still meet, or the gap leaves no
+room), the message says so; point at the message and the walls that meet
+there and the corner light up in the view.
+
 **Bend** makes one bend between two edges. With the Bend Type *Double
 Bend*, it makes two opposite bends of the angle with a straight between
 them. A double bend joins parallel faces of two sheets.
@@ -11072,6 +11182,27 @@ keys to your `~/.ssh/known_hosts`.
   can set that to off, with Preferences › Cloud as the default. Offline,
   versions wait, and the indicator shows them (`Offline, ↑2 waiting`).
   MitCad sends them when it can reach the repository again.
+- MitCad never waits for the server while you work. Save, Save to
+  Project, New Folder and New Design record the version on this computer
+  at once. Sending it, checking for newer versions and the edit locks go
+  on in the background, one after another for each project, while you
+  save other designs, open them and edit. The indicator's tooltip and the
+  project's row in the Projects panel say what happens in words:
+  `Sending to the project's server…`, `Up to date, last sync 14:02`, or
+  `Offline: changes are kept and sent later`. A failure also shows in the
+  status bar with the reason. MitCad tries again later and never loses a
+  version that it recorded.
+- When you open another design, MitCad sends the versions of the design
+  that you leave and releases its edit lock in the background. If those
+  versions need your choice (a sync conflict) or the server cannot be
+  reached, MitCad keeps that edit lock and says so in the status bar.
+  When MitCad already knows that the sync needs your choice, or may need
+  it because the server has newer versions beside the versions to send,
+  it waits for that sync and asks first, as when you close a design.
+  **Resolve Sync** then keeps the design open.
+- When you close MitCad while versions are on their way, MitCad waits up
+  to 10 seconds and says so (**Close Now** stops the wait). What it did
+  not send then goes the next time the project opens.
 - MitCad checks the repository for newer versions when a design opens,
   every 10 minutes and at the first change after the design opened.
   Project Settings sets how often, or never. The indicator shows newer
@@ -11178,8 +11309,10 @@ default) and how often MitCad reads the remote (5 s to 10 min, 10 s by
 default). While live updates are connected, MitCad reads the remote
 every 2 minutes, because live updates tell of every change at once.
 
-**When you open a design.** If the lock is free, the design opens with
-the lock, and the indicator says `Editing`. If the remote has a newer
+**When you open a design.** While MitCad asks the remote for the lock,
+the indicator says `Checking the lock…`, and you can already edit: a
+slow server does not hold the window up. If the lock is free, the design
+opens with the lock, and the indicator says `Editing`. If the remote has a newer
 version of the design, MitCad takes that version first, as Sync does. If
 someone else edits the design, it opens read-only with "part.mitcad is
 being edited by Alex (since 13:40, last active 2 min ago)". Select
@@ -11755,6 +11888,7 @@ file's history.
 | SolidCraft (`.sc`, `.solidcraft`) | Open, Import (every file format version) | None | Features, sketches, parameters, components and joints. Sheet metal |
 | DWG (`.dwg`, R13 to R2018) | Open, Import. 3D solids become bodies, 3D faces and meshes become mesh bodies, blocks become components with their occurrences | A drawing (R2000) | None. A drawing keeps no history |
 | `.3dm` (format versions 5 to 8) | Open, Import. Polysurfaces, surfaces and extrusions become bodies, meshes become mesh bodies, blocks become components with their occurrences | None | SubD objects as editable Forms. Otherwise none: a `.3dm` model keeps no history |
+| `.serp` (format versions 1 to 9) | Open, Import. Solids and surfaces become bodies, meshes become mesh bodies, layers become folders, blocks become components with their occurrences | None | None: a `.serp` file keeps no history MitCad reads |
 | STEP (`.step`, `.stp`) | Bodies. An assembly: its parts become components, each placed by an occurrence per instance | Bodies (AP214 or AP242). Components as an assembly | None |
 | IGES (`.iges`, `.igs`) | Bodies | Bodies | None |
 | BRep (`.brep`, `.brp`) | Bodies | Bodies | None |
@@ -11800,6 +11934,10 @@ Each format is imported in its own way:
   [glTF for the web and 3D viewers](#gltf-for-the-web-and-3d-viewers).
   When the design already has content, MitCad asks **Where to Import**,
   as for STEP. Insert Mesh takes glTF files too, as Import does.
+- `.serp` files are imported as bodies, their layers as folders and
+  their blocks as components ([.serp import](#serp-import)). When the
+  design already has content, MitCad asks **Where to Import**, as for
+  STEP.
 - DXF is imported into a new sketch on a plane that you select (Insert
   DXF). In sketch mode, MitCad imports it into the sketch that you
   edit. Block references are expanded: an array insert gives its
@@ -11859,6 +11997,33 @@ Design files open as new designs:
   blocks ([DWG import](#dwg-import)).
 - `.3dm` models open as new designs of their polysurfaces,
   meshes and blocks ([.3dm import](#3dm-import)).
+
+To build an assembly from `.ipt` parts, `.iam` assemblies, `.f3d`
+designs or FreeCAD documents, import them into the open design as
+components. You can select several files in the Import file dialog.
+When the design already has content, or when you select more than one
+file, MitCad asks **Where to Import**:
+
+- **Into This Design** (the default) makes each file a component of the
+  active component. Each part keeps its history, its material and the
+  file's name, and an `.iam` assembly keeps its structure as a
+  subassembly. The first file goes to the origin and each next file
+  beside the ones before, so that they do not overlap. One progress
+  dialog shows all the files, and one Undo takes the whole import back.
+  The import report of each file follows.
+- When the design is saved in a project with versions, the box
+  **Linked: saved in the project as a design of its own** saves each
+  imported part as a MitCad design next to the open design and links
+  it. Several assemblies can then share the part, and changes to it come
+  in with Update Link. Clear the box to insert copies that you edit
+  here. The saved files stay in the project when you undo the import.
+- **A New Design** opens each file as a new design in a tab of its own,
+  as before.
+
+An `.ipt`, `.iam`, `.f3d` or FreeCAD file that you drop on the 3D view
+of a design with content comes in as a component without a question:
+the first one at the point of the face under the pointer, the others
+beside it.
 
 There are other ways to open or import a file:
 
@@ -12236,6 +12401,37 @@ names the body. An
 extrusion that cuts or joins all bodies does not change mesh bodies.
 You can still move, copy, pattern, mirror, measure, section and export
 mesh bodies.
+
+#### The import report
+
+A CAD file that comes in with its history or its parts (`.f3d`, FreeCAD,
+`.ipt`, `.iam`, IFC, `.rvt`, SolidCraft, `.dwg`, `.3dm`) ends with the
+**Import Report**. Its first line is the verdict, with its symbol:
+*Everything came in: all 11 features parametric, the body matches the
+file.*, *Came in with 2 warnings.* or *1 feature could not be imported.*
+
+Every row of its table starts with a symbol; hold the pointer over it to
+read what it means:
+
+- a green check: the row came in as it should: parametric, a valid body, a
+  body that matches the file's, or an item the file itself leaves out
+  (suppressed, rolled back, without geometry);
+- a yellow warning: it came in, but check it: partly parametric, as a
+  fixed body because its history could not be replayed, a result that
+  differs from the file's, a body that differs from the file's;
+- a red error: it did not come in: an item that could not be imported, a
+  body that is missing or not valid, a file that was not found.
+
+A body counts as the file's when its volume is within 0.01 % of the
+file's and its bounding box within 0.01 mm; the note then says by how
+much it differs, *matches the file's body (volume +0.0002 %)*. Click
+**Status** in the table's header to put the errors and warnings first,
+or **#** to go back to the report's order, and pick what **Show** lists:
+**All rows**, **Warnings and errors** or **Errors**. The notes say what an
+item's outcome means for you (*edges found from the file's fillet
+history*, *2 curves snapped onto the face's edges*); the import's own
+details stay in its log. **Warnings** lists the import's warnings, each
+with its symbol, or says *No warnings.*
 
 ### .f3d import
 
@@ -12839,6 +13035,38 @@ The import report:
 - Names every kind not imported, with the count and why
 - Lists the components with their occurrences
 - Makes sure that every body built and is valid
+
+### .serp import
+
+A `.serp` file (format versions 1 to 9) is the native file of an
+open-source NURBS modeler. Use File › Open or Import. Into a design
+that already has content, MitCad asks **Where to Import**, as for STEP.
+The file keeps the shapes, not how they were made. Thus everything is
+imported as bodies:
+
+- Solids and surfaces become bodies, as exact as the file keeps them.
+- Meshes become mesh bodies.
+- A body takes its object's name and color, or its layer's color.
+- When the bodies lie on more than one layer, each body goes into a
+  folder of the Bodies folder named after its layer, with its parent
+  layers (`Parts::Bolts`).
+- Hidden objects, and objects on hidden layers, come in hidden.
+- Each block becomes a component, named as the block. An occurrence
+  places it for every placed block. The file does not keep where a
+  block is placed, so MitCad finds it by comparing the shapes. A placed
+  block that was scaled, mirrored or changed after it was placed comes
+  in as a body where the file has it, and a warning says so.
+- The file's units become the design's units when the design has no
+  features yet: millimeters, centimeters, meters, inches or feet. Bodies
+  in other units are converted to millimeters.
+
+Curves, points, text, dimensions, hatches, pictures, point clouds, scan
+paths, layouts and history records are not imported. One warning counts
+them by kind. An object that cannot be read is left out with a warning
+that names it, and the rest of the file comes in. A file made by a newer
+version of its program than MitCad knows is refused, and the message
+says so: save it again from that program as `.3dm` or STEP, which MitCad
+also opens.
 
 ## Outputs
 
@@ -14095,7 +14323,7 @@ guide that explains its settings.
 |---|---|---|
 | **General** | The **Language** of the interface. The *Import tolerance* of imported files. **Autosave**: on or off, 1 to 60 minutes, the folder with Open Folder. **Default units for new designs**: mm, cm, m, in or ft (mm by default). **Ask to activate the component of a picked face**. **Show the version in the view** (on by default). **Show used sketches under their features** (off by default; see [Browser](#browser)). | [Import](#import), [Saving and recovery](#saving-and-recovery), [Units](#units), [Components](#components), [The window](#the-window), [Layouts](#layouts) |
 | **Navigation** | The mouse scheme for orbit, pan and zoom | [View and navigation](#view-and-navigation) |
-| **Display** | **Camera**, **Orientation cube**, **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Show the menu bar** (Windows and Linux), **Browser background**, **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
+| **Display** | **Camera**, **Orientation cube**, **Focal length** (perspective and **Anaglyph 3D**), **Interface size**, **Text size**, **Icon size**, **Font**, **Anaglyph 3D** (**Stereo depth**, **Convergence**), **Selection color**, **Selected line width**, **Layout**, **Show the menu bar** (Windows and Linux), **Browser background** (with **Rows at most**), **Ghost inactive components**, **Pick the active component first**, **Small circles**, **Origin planes** | [The window](#the-window), [View and navigation](#view-and-navigation), [Selection](#selection), [Layouts](#layouts), [Components](#components) |
 | **Cache** | The cache of computed results: on or off, the size, the folder, **Clear**, the memory limit | [Cache of computed results](#cache-of-computed-results) |
 | **Cloud** | The git program, the default author, the defaults of projects, live updates, the broker, **Known brokers** | [Sharing a project](#sharing-a-project), [Live updates](#live-updates) |
 | **Updates** | The automatic check for updates: on or off. Pre-releases: offered or not | [Updates](#updates) |
@@ -14106,6 +14334,21 @@ guide that explains its settings.
 | **Fonts** | The folders of font files that the font chooser of Edit Text lists | [Text, fonts and QR codes](#text-fonts-and-qr-codes) |
 | **Sketch** | **Scale the sketch to its first dimension**: on or off. **Click adds to the selection in sketches**: on or off (off by default). **Esc leaves an unchanged sketch**: on or off (off by default; see Finish Sketch in [Shortcuts](#shortcuts)). **Show profiles when a sketch opens**: on or off (on by default; see [Sketch mode](#sketch-mode)) | [Dimensions](#dimensions), [Selection in sketch mode](#selection-in-sketch-mode) |
 | **Assembly** | **When the picks are in another component than the active one**: Ask (the default), Use the component that holds both, or Keep the active component | [Joints and constraints](#joints-and-constraints) |
+
+**Taking your settings to another computer.** **Export Settings…**, beside
+Restore Defaults, saves your settings to a `.mitcad-settings` file. Choose
+the groups to save: Preferences, Navigation and 3D mouse, Keyboard
+shortcuts, the pins of the navigation bar, the toolbar and the quick-access
+group, the toolbar's and panels' layout, and the library sources. Recent
+files and the folders and programs of this computer are left out unless
+you check them. The file is plain text and the same on every platform.
+On the other computer, **Import Settings…** reads the file and shows what
+it holds: who wrote it and when, and its groups. The groups you check
+replace that computer's settings of the same groups; the others stay. A
+folder or program of the file that the computer does not have is listed,
+skipped and not written. The settings apply at once; the language, the
+sizes, the font and the layout take effect when MitCad starts again. A
+file from a newer MitCad is refused: update MitCad first.
 
 
 **Layout.** The **Layout** setting of the Display page selects how the
@@ -14243,7 +14486,18 @@ When a newer version is out, a bar shows under the toolbar. It has
 **Release Notes**, **Install**, **Skip This Version** and **Later**.
 Install downloads the update and verifies its signature. Then it closes
 MitCad, installs the update and starts MitCad again. Before MitCad
-closes, it asks to save changes.
+closes, it asks to save changes in every open design.
+
+The update belongs to MitCad, not to one design. Every design's window
+shows the same bar: a design you open later shows the download's
+progress at once, and Skip This Version, Later or Cancel in any window
+acts for all of them. Closing a design, also the one where you chose
+Install, keeps the download going while another design stays open. If
+you quit MitCad or close its last window while the update downloads,
+MitCad says that it is still downloading: **Keep Downloading** keeps
+MitCad open, and the update installs once it is downloaded; **Stop and
+Close** stops the download and closes MitCad. An update that is already
+downloaded and verified installs once MitCad has quit.
 
 Install works for the Windows installation and for a Linux AppImage in
 a folder of your own. Windows can ask to permit the installer. The
@@ -14332,6 +14586,8 @@ MitCad. The report has:
 - **Include the design**, if you tick it (off by default; offered while
   a design is open). MitCad then makes a zip for the report, so that the
   developers can open your design as you see it.
+- **Include the logs of this session and the last one**, if you tick it
+  (off by default). See [Troubleshooting](#troubleshooting).
 
 **Preview** shows everything that the report contains, section by
 section. There you can edit any part, untick what must not be sent,
@@ -14451,6 +14707,47 @@ Logs stay on your computer. A report (Help › Send Feedback, an error
 report) offers the latest log and the newest lines kept in memory. Both
 are left out unless you tick them. A ticked log file is not sent, but
 its place is shown. Drag it into the issue form.
+
+### Troubleshooting
+
+When MitCad stops responding or quits, its logs tell afterwards what it
+was doing. You need not turn anything on for them.
+
+**Session logs.** Every time MitCad runs, it writes its log to a file of
+its own in the log folder, whether or not the debug log is on. **Help ›
+Open Log Folder** opens the folder. It is `logs` in MitCad's local data
+folder: on Windows `%LOCALAPPDATA%\Mitcad\Mitcad\logs`, on Linux
+`~/.local/share/Mitcad/Mitcad/logs`, on macOS
+`~/Library/Application Support/Mitcad/Mitcad/logs`. The files are named
+by the session's start, `session-YYYYMMDD-HHMMSS-<process>.log`. Each
+line is written to the file at once, so the file holds everything up to
+a hang or a crash, also when you end MitCad from the task manager. The
+folder keeps the last 10 sessions, at most 50 MB; older ones are deleted.
+A session longer than 20 MB continues in `<name>-2.log`. When MitCad
+quits normally, the last line is `--- The session ended`.
+
+**When MitCad stops responding.** After 5 seconds without a response,
+the log gets the line "UI not responding for 5 s", with the last command
+you used. When MitCad responds again, the log says how long it took. So
+the log shows a hang even when you ended MitCad during it.
+
+**When MitCad ended unexpectedly.** The next start says so: "MitCad
+ended unexpectedly the last time it ran". **Open Log Folder** opens the
+folder with that session's log. After a crash, MitCad offers its error
+report instead (see [Feedback and error reports](#feedback-and-error-reports)),
+which has **Open Log Folder** too. On Windows a crash also leaves a
+crash dump, `crash-<time>-<process>.dmp`, in the log folder, for the
+developers' debugger; the newest 5 are kept. On Linux and macOS the
+error report holds the crash's stack, and the system keeps its own crash
+reports.
+
+**Send the logs.** In **Help › Send Feedback**, tick **Include the logs
+of this session and the last one**. The preview shows the files in the
+section **Session logs**; untick it to leave them out. With the design
+included, they go into the design's zip. Otherwise **Send** copies them
+into a folder of `reports` and opens it: drag them into the issue form.
+A log holds file paths, design names and the names of features, bodies
+and sketch entities, but no passwords or tokens. The logs are not masked.
 
 ## Command line
 

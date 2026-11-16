@@ -5,6 +5,7 @@
 // uiIconSize and uiRoomSize at a run's sizes; the application font that
 // applyTextAndIconSize gives. The application font and the run's sizes are
 // put back afterwards.
+#include "UnitTests.hpp"
 #include "framework/UiSizes.hpp"
 
 #include <cmath>
@@ -181,3 +182,4 @@ int uiSizesTests() {
   applyTests();
   return failures;
 }
+MITCAD_UNIT_TEST(uiSizesTests);

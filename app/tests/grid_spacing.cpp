@@ -5,6 +5,7 @@
 // 1, 2, 5, 10, 20, ... in; ft: the inch series up to 10 in, then 1, 2, 5,
 // 10, ... ft), the major lines, and Grid Settings' fixed spacing converted
 // from mm to the unit and back.
+#include "UnitTests.hpp"
 #include "view/GridSpacing.hpp"
 
 #include <algorithm>
@@ -158,3 +159,4 @@ int gridSpacingTests() {
   conversionTests();
   return failures;
 }
+MITCAD_UNIT_TEST(gridSpacingTests);

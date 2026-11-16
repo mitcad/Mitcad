@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: MIT
+# mitcad#1895: a Cloud project whose server is slow never holds the window
+# up. The runner (tools/ui-slow-remote-test.sh, the Windows
+# tools/ui-windows-slow-remote-test.ps1, the macOS
+# tools/ui-macos-slow-remote-test.sh) made the Cloud project Shop
+# (${MITCAD_TEST_SHOP}) of the projects folder with plate.mitcad recorded,
+# its server a local bare repository behind an ssh that waits a few seconds
+# per connection (tools/ui-scripts/slow-ssh.sh), edit locks on, and opened
+# the loose design gear.mitcad; the UI thread's stalls are logged
+# (MITCAD_TEST_UI_STALL_MS), which the runner reads. All designs are
+# synthetic.
+wait-idle
+expect-ever '^UI stall watch: gaps over ' 30
+expect-ever '^Projects tree: Shop \(cloud' 60
+
+# 1. Save to Project's New Folder: the folder is a version at once, and it
+# is sent in the background while the steps go on.
+mark
+command file.save_to_project
+focus-dialog '^Save to Project$' 30
+wait-log '^Project picker Save to Project: 1 projects: test/shop \(cloud\)$' 30
+wait-log '^Project picker row test/shop at ' 10
+dialog-click-logged '^Project picker row test/shop at '
+wait-log '^Project picker selected test/shop$' 10
+wait-log '^Project picker New Folder: enabled$' 10
+button '^New Folder$'
+wait-log '^Project picker: naming a new folder in test/shop: New Folder$' 10
+type Parts
+key Return
+wait-log '^Projects panel: create_folder recorded as ' 2
+wait-log '^Project picker: New Folder test/shop/Parts$' 2
+wait-log '^Projects panel: sending the versions of ' 2
+wait-log '^Project picker selected test/shop/Parts/$' 10
+expect-no-log '^Projects panel: sent the versions of '
+
+# 2. Save in the new folder: saved and recorded at once; the version, the
+# design's edit lock and the folder's version go to the server in the
+# background, one after another in the project's queue, while the window
+# takes a change.
+wait-log '^Project picker target test/shop/Parts/gear\.mitcad: free$' 10
+button '^Save$'
+wait-log '^Project picker Save to Project: chose ${MITCAD_TEST_SHOP:re}/Parts/gear\.mitcad$' 10
+focus-main
+wait-log '^Save to Project: ${MITCAD_TEST_SHOP:re}/Parts/gear\.mitcad saved in ' 5
+wait-log '^Version recorded: gear\.mitcad ' 5
+wait-log '^Edit lock state: taking, gear\.mitcad$' 5
+wait-log '^Project indicator: Shop, cloud, .*checking the lock' 5
+model-command '{"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [30, 0], "length": 8, "width": 8, "height": 8, "operation": "new_body"}}'
+wait-idle
+wait-log '^Projects panel: sent the versions of ' 120
+wait-log '^Edit lock taken: gear\.mitcad' 120
+wait-log '^Remote status: synced' 120
+
+# 3. Save again: recorded at once, sent in the background, the state in
+# words: sending (or waiting for the lock's work), then up to date.
+mark
+command file.save
+wait-log '^Version recorded: gear\.mitcad \S+ v2: ' 5
+wait-log '^Remote sync state: (sending|waiting)' 30
+wait-log '^Remote push: sent 1 version\(s\) to origin/main$' 120
+wait-log '^Remote sync state: up to date, last sync ' 60
+expect-never 'TestDriver: FAIL'

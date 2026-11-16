@@ -10,7 +10,7 @@
 use std::time::Instant;
 
 use mitcad_mcp::ToolResult;
-use mitcad_model::preview::{Background, RenderArgs};
+use mitcad_model::preview::{Background, Format, RenderArgs};
 use serde_json::{Value, json};
 
 use super::{CadBackend, boolean, path_text, require_extension, save_bytes, string};
@@ -57,6 +57,10 @@ impl CadBackend {
         }
         if arguments.get("views").is_some() {
             fast_only.push("views");
+        }
+        // Line art (mitcad#1736).
+        if args.format == Format::Svg {
+            fast_only.push("format svg");
         }
         if !fast_only.is_empty() {
             return Err(format!(

@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MIT
+# Sketches through the bodies outside sketch mode (mitcad#1931, GitHub
+# mitcad/Mitcad#355) on sketches-through-bodies.json: a block (F1.b0) and
+# Sketch1 (F2) on the XZ plane through it, a rectangle whose profile lies
+# mostly inside the block. Seen from the front, the block's front face
+# hides the profile but for a strip at its top.
+#   1. Sketch1 finished and shown: its curves, points and its profile are
+#      drawn through the block (View › Sketches Through Bodies is on by
+#      default); the log names the profile's region.
+#   2. Extrude: a click on the profile where the block hides it picks the
+#      profile, not the face in front; Join (the automatic operation cuts)
+#      takes the block as its body and OK adds the Join.
+#   3. Show All Sketches in the root's menu shows Sketch1 again (Extrude
+#      used it, so it was hidden), one undo step.
+#   4. Sketches Through Bodies off: no copies, the preference saved; on
+#      again, the copies are back.
+#   5. Hide All Sketches in the root's menu hides Sketch1; Undo takes the
+#      one step back; the command search's Hide All Sketches hides it again.
+# Run by tools/ui-sketches-through-bodies-test.sh (Linux),
+# tools/ui-windows-sketches-through-bodies-test.ps1 (Windows) and
+# tools/ui-macos-sketches-through-bodies-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.front
+command view.fit
+expect-model-bodies 1 32000
+wait-idle
+
+# 1. Through the block by default.
+wait-log '^Sketches shown: F2$'
+wait-log '^Sketches through the bodies: F2 4 curve\(s\), [0-9]+ point\(s\), 1 profile\(s\) \[r\{c1\[c4,c2\],c2\[c1,c3\],c3\[c2,c4\],c4\[c3,c1\]\}\]; dimmed, curves dashed, profiles faint$'
+expect-never '^Sketches through the bodies: off$'
+screenshot '${MITCAD_TEST_WORK}/sketches-through-bodies.png'
+
+# 2. Extrude takes the profile where the block hides it, and joins it.
+mark
+command solid.extrude
+expect-log '^Command Extrude started'
+wait-log '^View profiles first: on$'
+wait-idle
+mark
+button '.*' clear_profiles
+wait-log '^Extrude Profiles: nothing$'
+wait-log '^Pick profile F2/' 20
+mark
+click-pick 'profile F2/'
+wait-log '^Extrude Profiles: 1 profile \[profile r\{.*\} of F2\]'
+expect-log '^Pick priority: profile F2/.* before a nearer face$'
+# The automatic operation cuts (the tool goes into the block from the
+# profile, mitcad#289); Join is chosen in the panel, with the block as its
+# body.
+expect-ever '^Extrude Local bodies: 1 body \[body F1\.b0\]' 30
+wait-idle
+mark
+click-logged '^Panel Extrude input operation at '
+key Home Down Return
+wait-log '^Extrude: Operation = Join'
+wait-log '^Preview Extrude: ok' 30
+wait-idle
+expect-never 'Preview Extrude: failed'
+mark
+button '^OK$'
+wait-log '^Added extrude \(Join\)' 30
+wait-log '^View profiles first: off$'
+wait-idle
+
+# 3. Show All Sketches from the root's menu: Sketch1, which Extrude1 uses,
+# shown again.
+mark
+context-menu-logged '^Browser Root at ' 'Show All Sketches'
+wait-log '^All sketches Root: shown \(1\)$'
+wait-log '^Sketches shown: F2$'
+wait-log '^Sketches through the bodies: F2 4 curve\(s\), [0-9]+ point\(s\), 1 profile\(s\) '
+wait-idle
+
+# 4. Sketches Through Bodies off, then on again.
+mark
+command view.sketches_through
+wait-log '^View sketches through bodies: off$'
+wait-log '^Sketches through the bodies: off$'
+expect-setting view/sketchesThroughBodies false
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketches-through-bodies-off.png'
+mark
+command view.sketches_through
+wait-log '^View sketches through bodies: on$'
+wait-log '^Sketches through the bodies: F2 4 curve\(s\), [0-9]+ point\(s\), 1 profile\(s\) '
+expect-setting view/sketchesThroughBodies true
+wait-idle
+
+# 5. Hide All Sketches from the root's menu, one undo step; then from the
+# command search.
+mark
+context-menu-logged '^Browser Root at ' 'Hide All Sketches'
+wait-log '^All sketches Root: hidden \(1\)$'
+wait-log '^Sketches shown: none$'
+wait-log '^Sketches through the bodies: none$'
+wait-idle
+mark
+command edit.undo
+wait-log '^Sketches shown: F2$'
+wait-idle
+mark
+command view.hide_all_sketches
+wait-log '^All sketches Root: hidden \(1\)$'
+wait-log '^Sketches shown: none$'
+wait-idle
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

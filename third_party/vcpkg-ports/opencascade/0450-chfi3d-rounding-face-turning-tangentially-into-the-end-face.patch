@@ -33,6 +33,7 @@ run less than four times as fast up to there, it is kept to that end
 holds. Past that the sections get singular and no surface approximates
 them; such ends fail at the corner as before.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
+index 889ece57..b93c739c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -204,6 +204,49 @@ static bool IsObst(const ChFiDS_CommonPoint& CP, const TopoDS_Vertex& Vref, cons
@@ -85,8 +86,8 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
  //=================================================================================================
  
  static void CompParam(const Geom2dAdaptor_Curve&       Carc,
-@@ -386,6 +429,85 @@ static void UpdateLine(occ::handle<BRepBlend_Line>& Line, const bool isfirst)
-   }
+@@ -431,6 +474,85 @@ static bool ChFi3d_RunsIntoSingularSection(const occ::handle<BRepBlend_Line>& Li
+   return false;
  }
  
 +//=======================================================================
@@ -171,18 +172,19 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
  //=======================================================================
  // function : ChFi3d_CutSingularExtension
  // purpose  : Past an end of its spine a rolling ball's walk follows the
-@@ -397,7 +519,9 @@ static void UpdateLine(occ::handle<BRepBlend_Line>& Line, const bool isfirst)
- //            blend to be cut by the faces at the end: past the spine, the
+@@ -443,7 +565,10 @@ static bool ChFi3d_RunsIntoSingularSection(const occ::handle<BRepBlend_Line>& Li
  //            line is ended before the point where the contacts run twice
  //            as fast along the guide as at the spine's end (or reach a
--//            tangency point).
-+//            tangency point). Where the walk ended there because a contact
+ //            tangency point), where it runs on into a section near the
+-//            singular one (ChFi3d_RunsIntoSingularSection).
++//            singular one (ChFi3d_RunsIntoSingularSection). Where the walk
++//            ended there because a contact
 +//            reached its edge, the blend's end, the line is kept up to it
 +//            while its sections are regular (ChFi3d_RegularUpToArc).
  //=======================================================================
  
  static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
-@@ -409,11 +533,6 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+@@ -455,11 +580,6 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
    }
    const double SpF = Spine->FirstParameter(1);
    const double SpL = Spine->LastParameter(Spine->NbEdges());
@@ -194,7 +196,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
    // The end of the line: past the spine's end, from where the contacts run
    // twice as fast as at the end of the spine (the guide's plane has turned
    // 60 degrees from the ball's).
-@@ -423,12 +542,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+@@ -469,12 +589,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
    {
      i0 = i;
    }
@@ -209,9 +211,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
 -      if (Speed(Lin->Point(i)) > 2. * v0)
 +      if (ChFi3d_ContactSpeed(Lin->Point(i)) > 2. * v0)
        {
-         if (i - 1 >= i0)
-         {
-@@ -446,12 +566,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+         if (i - 1 >= i0
+             && (ChFi3d_KeepsWellPastEnd(Lin, i0, i - 1)
+@@ -494,12 +615,13 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
    {
      i0 = i;
    }
@@ -226,9 +228,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
 -      if (Speed(Lin->Point(i)) > 2. * v0)
 +      if (ChFi3d_ContactSpeed(Lin->Point(i)) > 2. * v0)
        {
-         if (i + 1 <= i0)
-         {
-@@ -2151,6 +2272,27 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+         if (i + 1 <= i0
+             && (ChFi3d_KeepsWellPastEnd(Lin, i0, i + 1)
+@@ -2201,6 +2323,27 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
    int narc1, narc2;
  
    bool backwContinueFailed = false; // eap
@@ -256,7 +258,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
    if (reverse && intf)
    {
      narc1 = Lin->StartPointOnFirst().NbPointOnRst();
-@@ -2179,6 +2321,10 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2229,6 +2372,10 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
            }
          }
        }
@@ -267,7 +269,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
      }
      if (narc2 != 0)
      {
-@@ -2204,6 +2350,22 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2254,6 +2401,22 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
            }
          }
        }
@@ -290,7 +292,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
      }
      bool oncontinue = !noproldeb && (narc1 != 0 || narc2 != 0);
      if (debobst1 || debobst2)
-@@ -2259,6 +2421,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2309,6 +2472,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
              // 	      }
              // 	    }
            }
@@ -303,7 +305,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
          }
        }
        if (!debarc2)
-@@ -2289,6 +2457,11 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2339,6 +2508,11 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
              //               }
              //             }
            }
@@ -315,7 +317,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
          }
        }
        if (backwContinueFailed)
-@@ -2306,6 +2479,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2356,6 +2530,7 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
    }
    bool forwContinueFailed = false;
    //  modified by eap Fri Feb  8 11:44:11 2002 ___END___
@@ -323,7 +325,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
    if (Forward && intl)
    {
      Target = SpLast;
-@@ -2328,6 +2502,10 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2378,6 +2553,10 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
            finobst1 = IsObst(Data->VertexLastOnS1(), Spine->LastVertex(), myVEMap);
          }
        }
@@ -334,7 +336,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
      }
      if (narc2 != 0)
      {
-@@ -2346,6 +2524,22 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2396,6 +2575,22 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
            finobst2 = IsObst(Data->VertexLastOnS2(), Spine->LastVertex(), myVEMap);
          }
        }
@@ -357,7 +359,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
      }
      bool oncontinue = !noprolfin && (narc1 != 0 || narc2 != 0);
      if (finobst1 || finobst2)
-@@ -2396,6 +2590,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2446,6 +2641,12 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
              // 				Spine->LastVertex(),myVEMap);
              // 	    }
            }
@@ -370,7 +372,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/M
          }
        }
        if (!finarc2)
-@@ -2421,6 +2621,11 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2471,6 +2672,11 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
              // 				Spine->LastVertex(),myVEMap);
              // 	    }
            }

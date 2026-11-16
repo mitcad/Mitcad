@@ -3,6 +3,7 @@
 // component read from an error message (alone, after a command's words, a
 // name with spaces, a path in a folder), what is no such refusal, and the
 // file a link's path names from the design's folder.
+#include "UnitTests.hpp"
 #include "files/LinkedFiles.hpp"
 
 #include <cstdio>
@@ -67,3 +68,4 @@ int linkedFilesTests() {
   pathTests();
   return failures;
 }
+MITCAD_UNIT_TEST(linkedFilesTests);

@@ -8,8 +8,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use super::components::{design_digest, file_label};
+use super::components::{LookedParts, design_digest, file_label};
 use super::copy::CopySource;
+use super::linked_looks::SourceLook;
 use super::mounts::{Inserted, SourceMount};
 use super::{DocState, Document, ModelError, invalid};
 use crate::assembly::ExternalLink;
@@ -72,13 +73,15 @@ pub struct PartsListRow {
 }
 
 /// New bodies of a linked component: the component, its link, the new
-/// digest, the bodies and the mount frames (mitcad#525).
+/// digest, the bodies, the mount frames (mitcad#525) and what the design
+/// gives each body (mitcad#1921; none for an envelope).
 pub(super) type LinkUpdate = (
     ComponentUid,
     ExternalLink,
     String,
     Vec<BaseBody>,
     Vec<SourceMount>,
+    Vec<SourceLook>,
 );
 
 /// A library component's design in a row: the row applied to a copy of
@@ -151,19 +154,39 @@ impl<K: Kernel> Document<K> {
     }
 
     /// The bodies of a configured library component, named after its
-    /// designation when it has one body, and its mount frames
-    /// (mitcad#525).
+    /// designation when it has one body, its mount frames (mitcad#525),
+    /// and what it gives each body (mitcad#1921: its material and
+    /// appearance, the images of its own appearances read from the
+    /// library at the commit `source` was read at, `request`'s library).
     fn library_bodies(
         &self,
         configured: &Configured,
         designation: &str,
-        path: &str,
-    ) -> Result<(Vec<BaseBody>, Vec<SourceMount>), ModelError> {
-        let (mut bodies, mounts) = self.design_parts(&configured.state, path)?;
+        source: &LibrarySource,
+        request: &LibraryRequest,
+    ) -> Result<LookedParts, ModelError> {
+        let texture_request = LibraryRequest {
+            rev: source.rev.clone(),
+            ..request.clone()
+        };
+        let resolver = self.link_resolver();
+        let (mut bodies, mounts, looks) = match &resolver {
+            Some(resolver) => {
+                let origin = CopySource::Library {
+                    resolver: &**resolver,
+                    request: &texture_request,
+                };
+                self.design_parts_looked(&configured.state, &source.path, &origin)?
+            }
+            None => {
+                let (bodies, mounts) = self.design_parts(&configured.state, &source.path)?;
+                (bodies, mounts, Vec::new())
+            }
+        };
         if bodies.len() == 1 && !designation.is_empty() {
             bodies[0].name = Some(designation.to_owned());
         }
-        Ok((bodies, mounts))
+        Ok((bodies, mounts, looks))
     }
 
     /// Inserts a library's component (Insert Component from a library):
@@ -232,8 +255,11 @@ impl<K: Kernel> Document<K> {
         // Its mount frames (mitcad#525): a linked part's are joint origins
         // of its own where the design has them; a copy has the design's.
         let (bodies, mounts) = if options.link {
-            let (bodies, mounts) = self.library_bodies(&configured, &designation, &source.path)?;
-            (Some(bodies), mounts)
+            // With the materials and appearances the design gives its
+            // bodies (mitcad#1921).
+            let (bodies, mounts, looks) =
+                self.library_bodies(&configured, &designation, &source, &texture_request)?;
+            (Some((bodies, looks)), mounts)
         } else if options.mount.is_some() {
             (None, self.design_mounts(&configured.state)?)
         } else {
@@ -258,13 +284,14 @@ impl<K: Kernel> Document<K> {
             let made = state.assembly.create(Some(&name), None);
             let occurrence = state.assembly.place(made, parent, transform);
             let frames = match bodies {
-                Some(bodies) => {
+                Some((bodies, looks)) => {
                     let base = BaseDef {
                         source: Some(format!("{} {}", source.library, file_label(&source.path))),
                         ..BaseDef::new(bodies)
                     };
                     let single = base.bodies.len() == 1;
                     let added = state.add_feature_in(&FeatureDef::Base(base), None, made)?;
+                    state.give_new_link_looks(added.uid, &looks)?;
                     if single && !designation.is_empty() {
                         let mut taken = state.body_names.values().cloned().collect();
                         let name = crate::exchange::unique_name(&designation, &mut taken);
@@ -280,6 +307,10 @@ impl<K: Kernel> Document<K> {
                         feature: added.uid,
                         envelope: None,
                         frames: Vec::new(),
+                        // Its bodies took what the design gives them
+                        // (mitcad#1921).
+                        looks: true,
+                        given: Vec::new(),
                     });
                     frames
                 }
@@ -379,7 +410,8 @@ impl<K: Kernel> Document<K> {
                 &designation,
                 &old.standard,
             );
-            let (bodies, mounts) = self.library_bodies(&configured, &designation, &source.path)?;
+            let (bodies, mounts, looks) =
+                self.library_bodies(&configured, &designation, &source, &request)?;
             let digest = part_digest(&source, configured.row.as_ref());
             let rename = !old.designation.is_empty()
                 && component.name == old.designation
@@ -411,6 +443,7 @@ impl<K: Kernel> Document<K> {
                 rename,
                 text,
                 mounts,
+                looks,
             ));
         }
         let label = match planned.as_slice() {
@@ -422,12 +455,14 @@ impl<K: Kernel> Document<K> {
         };
         let lines: Vec<String> = planned.iter().map(|p| p.6.clone()).collect();
         self.apply(|state| {
-            for (uid, link, reference, bodies, digest, rename, _, mounts) in planned {
+            for (uid, link, reference, mut bodies, digest, rename, _, mounts, looks) in planned {
                 // Its mount frames follow the version and row (mitcad#525).
                 super::mounts::update_linked_mounts(state, uid, &mounts)?;
                 let position = state.require(link.feature)?;
                 let mut entry = (*state.features[position]).clone();
                 if let FeatureDef::Base(base) = &mut entry.def {
+                    // Materials and appearances follow the source (mitcad#1921).
+                    state.give_linked_looks(link.feature, &base.bodies, &mut bodies, &looks);
                     base.bodies = bodies;
                     base.source = Some(format!(
                         "{} {}",
@@ -452,6 +487,8 @@ impl<K: Kernel> Document<K> {
                 if let Some(l) = component.link.as_mut() {
                     l.digest = digest;
                     l.path = reference.path.clone();
+                    // Its bodies took the source's materials (mitcad#1921).
+                    l.looks = true;
                 }
                 component.library = Some(reference);
             }
@@ -507,17 +544,28 @@ impl<K: Kernel> Document<K> {
                 }
             };
             let digest = part_digest(&source, configured.row.as_ref());
-            if digest == link.digest {
+            // Unchanged: read only for the materials of a link made before
+            // them (mitcad#1923); a link shown by its envelope has none.
+            let once = digest == link.digest;
+            if once && (link.looks || link.envelope.is_some()) {
                 continue;
             }
-            match self.library_bodies(&configured, &library.designation, &source.path) {
-                Ok((bodies, mounts)) => {
-                    messages.push(format!(
-                        "{name} is updated from {} {}",
-                        library.library,
-                        library.version_text()
-                    ));
-                    updates.push((uid, link, digest, bodies, mounts));
+            match self.library_bodies(&configured, &library.designation, &source, &request) {
+                Ok((bodies, mounts, looks)) => {
+                    if !once {
+                        messages.push(format!(
+                            "{name} is updated from {} {}",
+                            library.library,
+                            library.version_text()
+                        ));
+                    } else if super::linked_looks::gives_any(&looks) {
+                        messages.push(format!(
+                            "{name} takes the materials of {} {}",
+                            library.library,
+                            library.version_text()
+                        ));
+                    }
+                    updates.push((uid, link, digest, bodies, mounts, looks));
                 }
                 Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
                 Err(e) => messages.push(format!(

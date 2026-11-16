@@ -5,6 +5,7 @@
 // its name and written once by its digest, a file relative to the
 // design's folder, a missing file with its reason, while the other images
 // stay found.
+#include "UnitTests.hpp"
 #include "framework/Appearances.hpp"
 
 #include <cstdio>
@@ -180,3 +181,4 @@ int textureMapsTests() {
   packedMapsTests();
   return failures;
 }
+MITCAD_UNIT_TEST(textureMapsTests);

@@ -1,4 +1,4 @@
-# Meshing: 1070, 1080, 1081
+# Meshing: 1070, 1080, 1081, 1082
 
 Patches to the triangulation BRepMesh takes a plane's base triangulation
 from with its Delabella algorithms, and to the check of a face's wires
@@ -16,6 +16,10 @@ before it is triangulated. Back to the [port's README](../README.md).
 - **1081** skips, in the healer's search for crossing segments of a
   face's wires, the pairs of wires whose boxes are apart: the same
   crossings, a tenth of the time on a plate with many holes (mitcad#884).
+- **1082** takes, at Delabella's start, a cocircular point beyond any edge
+  of the contour, not only beyond the two at the point added last: a
+  rectangular plane, whose corners 53-bit rounding could order so, is
+  triangulated instead of failing (mitcad#1919).
 
 ## 1070: Delabella on nearly cocircular points
 
@@ -118,6 +122,40 @@ least its gap, so the searches left out would have been rejected at the
 root anyway: the crossings found are the same. The plate's check took
 0.1 s instead of 1.0 s.
 
+## 1082: a rectangle's corners at Delabella's start
+
+### 1082-brepmesh-delabella-cocircular-start-beyond-any-contour-edge
+
+Delabella sorts its points by their lifted z = x² + y² (BRepMesh scales
+each coordinate into -0.5 to 0.5, so that z is the square of the distance
+from the middle of the points' box) and, while the points so far are
+cocircular, grows their contour, expecting each next point beyond one of
+the two edges at the point added last. A rectangular plane's four boundary
+points are cocircular round the middle (an axis-aligned rectangle stays one
+when scaled), so their z's are equal but for their rounding, and the
+rounding orders them. With 64-bit `long double` (GCC and Clang on x86-64)
+the order is that of the exact values, in which the third corner is never
+opposite the fourth; with 53 bits (MSVC, ARM) it can be, the fourth corner
+then lies beyond the contour's first edge, and 1070's guard ended the
+triangulation as failed ("a cocircular point on neither side"). The plane
+was left without a triangulation, and MitCad's checked planes made it
+again by the default insertion: `cli.perf_holes_mesh` reported five planes
+redone on Windows (the five square notch walls between holes centred on
+the notch's sides), and of the 10 mm cube `mitcad-cli mesh-compare` meshes
+first, all six. Of a sweep of 9,415 squares and as many rectangles, 287
+squares and 91 rectangles failed with 53 bits, none with 64.
+
+- A cocircular point the two edges at the last point do not take is added
+  on the edge a -> b of the contour it lies beyond (the orientation sign of
+  a, the point and b equal to the contour's), found by walking the
+  contour; the contour goes on from it as from a point added at the last
+  point (tail a, head b, the face (b, a, point) in the contour's
+  orientation). The contour of cocircular points is convex, so the point
+  lies beyond exactly one edge; when it does not, the guard ends the
+  triangulation as before.
+- Only the points the old start refused reach the walk: every
+  triangulation Delabella made before is the same.
+
 ## Reports and tests
 
 - 1070: mitcad#846 and `test_nearly_cocircular_planes` in
@@ -139,3 +177,16 @@ root anyway: the crossings found are the same. The plate's check took
   and after, the triangulations compared (every triangle's nodes and
   every node's coordinates), and Delabella's triangulation of their nodes
   compared triangle by triangle.
+- 1082: mitcad#1919. `test_rectangular_planes` in
+  `geometry/io/tests/test_io.cpp`: a 10 mm cube, a 5 mm cube placed as
+  `perf_holes`' notch walls and four rectangles of the sweep that failed,
+  meshed by both of the view's Delabella tiers, every plane triangulated,
+  its triangles covering its boundary, and none made again;
+  `cli.perf_holes_mesh` expects no plane of the design redone. Without the
+  patch the test fails where `long double` has 53 bits (MSVC, ARM) and
+  passes with 64 (GCC and Clang on x86-64). The patch's own validation
+  (not committed): Delabella alone on the sweep's squares and rectangles
+  with their box corners as BRepMesh gives them, with 64- and 53-bit
+  `long double` (`-mlong-double-64`), each triangulation 10 triangles
+  covering the box; and on every subset of at least four of twelve exactly
+  cocircular points with a box, the same results before and after.

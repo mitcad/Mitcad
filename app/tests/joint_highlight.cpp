@@ -4,6 +4,7 @@
 // the occurrence that places the joint's component), the joined
 // occurrences, the log lines and the selection card's text, from entries
 // shaped as the `joints` query gives them.
+#include "UnitTests.hpp"
 #include "framework/JointHighlight.hpp"
 
 #include <cstdio>
@@ -232,3 +233,4 @@ int jointHighlightTests() {
   constraintTests();
   return failures;
 }
+MITCAD_UNIT_TEST(jointHighlightTests);

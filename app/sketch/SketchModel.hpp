@@ -378,10 +378,32 @@ std::optional<V2> pickedPlace(const QString& id);
 // Where a pick of `model` is: a point's place, or a placePick's; none for
 // anything else.
 std::optional<V2> pickPlace(const SketchModel& model, const QString& id);
-// The middle of points and curves of `model` (mitcad#1563): the center of
-// the box round their points, a circle's whole round included, as the
-// model's Rotate turns about without a pivot; none without any.
+// The middle of points, curves and texts of `model` (mitcad#1563): the
+// center of the box round their points, a circle's whole round included,
+// a text by its anchor or its frame's corners (mitcad#1911), as the model's
+// Rotate turns about without a pivot; none without any.
 std::optional<V2> middleOf(const SketchModel& model, const QStringList& entities);
+// Move/Copy's objects (mitcad#1911): the points and curves for the model's
+// `entities`, the texts (QR codes too) for its `texts`.
+struct MoveObjects {
+  QStringList entities;
+  QStringList texts;
+};
+MoveObjects moveObjects(const SketchModel& model, const QStringList& objects);
+// The first of `objects` that is a text on a path, which follows its curve
+// and does not move by itself (mitcad#1911); empty without one.
+QString textOnPath(const SketchModel& model, const QStringList& objects);
+// Where a text's anchor is (mitcad#1911): a text's `at`, the corner of a
+// text in a frame; none for a text on a path or anything else. A drag of
+// the text moves it, Move/Copy's log lines show it.
+std::optional<V2> textAnchor(const SketchModel& model, const QString& id);
+// A text's Position as Edit Text and Edit QR Code show it (mitcad#1911):
+// its `at`, for a text without a frame or a path only.
+std::optional<V2> freeTextPosition(const TextData& text);
+// The Position those panels send back as the model's `at` (mitcad#1911):
+// the typed place (mm) when it is finite and not the text's own `at`, for a
+// text without a frame or a path; none otherwise.
+std::optional<V2> changedTextPosition(const TextData& text, double x, double y);
 
 // The sketch point of a 3D frame point and back.
 V2 toSketch(const geometry::Frame& frame, const gp_Pnt& point);

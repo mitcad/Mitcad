@@ -119,6 +119,9 @@ qt_add_executable(mitcad
   framework/RibbonFit.hpp
   framework/Selection.cpp
   framework/Selection.hpp
+  # Openings picked by their free edges (mitcad#1927).
+  framework/OpeningEdges.cpp
+  framework/OpeningEdges.hpp
   framework/ShortcutDialog.cpp
   framework/ShortcutDialog.hpp
   framework/Dialogs.cpp
@@ -196,6 +199,8 @@ qt_add_executable(mitcad
   # The View menu, display settings and dialogs (U5).
   view/ViewController.cpp
   view/ViewController.hpp
+  # Preferences › Restore Defaults (mitcad#1887).
+  view/PreferencesRestore.cpp
   view/ViewNavigation.hpp
   # The File menu: import and export (U6).
   files/FileDialogs.cpp
@@ -808,8 +813,6 @@ if(BUILD_TESTING)
   qt_add_resources(test_app test_icons PREFIX / FILES ${MITCAD_ICONS})
   # 3D Print's slicers and file names (mitcad#13).
   target_sources(test_app PRIVATE files/Print3d.cpp files/Print3d.hpp)
-  # Save As Mesh's bodies and file names (mitcad#734).
-  target_sources(test_app PRIVATE tests/save_as_mesh.cpp files/SaveAsMesh.cpp files/SaveAsMesh.hpp)
   target_sources(test_app PRIVATE framework/Dialogs.cpp framework/Dialogs.hpp)
   # The AppImage's desktop file and icons in the user's data folder.
   target_sources(test_app PRIVATE framework/DesktopEntry.cpp framework/DesktopEntry.hpp)
@@ -827,106 +830,18 @@ if(BUILD_TESTING)
   target_sources(test_app PRIVATE report/ReportText.cpp report/ReportText.hpp)
   # The addresses of Cloud projects (mitcad#89): composed and read back.
   target_sources(test_app PRIVATE files/CloudAddress.cpp files/CloudAddress.hpp)
-  # Atomic autosave generations through normal recovery (mitcad#110).
-  target_sources(test_app PRIVATE tests/autosave.cpp files/AutosaveFiles.cpp files/Recovery.cpp framework/Dialogs.cpp)
   # The timeline search's words and filters (mitcad#179): plain Qt Core.
   target_sources(test_app PRIVATE browser/TimelineSearch.cpp browser/TimelineSearch.hpp)
-  # The command panel's message within narrow panels (mitcad#198): plain Qt
-  # Widgets.
-  target_sources(test_app PRIVATE tests/command_message.cpp framework/CommandMessage.cpp framework/CommandMessage.hpp)
-  # Explicit move destinations and cancellation (mitcad#201): modal Qt Widgets.
-  target_sources(test_app PRIVATE tests/move_to_component.cpp framework/MoveToComponentDialog.cpp)
-  # Persistent assembly-cut exclusions and preview-fed checklist (mitcad#200).
-  target_sources(test_app PRIVATE tests/cut_targets.cpp framework/CutTargetsPanel.cpp framework/CutTargetsPanel.hpp)
   # The sketch's auto constraints while drawing (mitcad#189): plain Qt Core
   # and plane geometry.
   target_sources(test_app PRIVATE sketch/AutoConstraint.cpp sketch/AutoConstraint.hpp sketch/SketchGeometry.cpp)
   # Selection inputs' entries: a click toggles one per region (mitcad#199):
   # plain Qt Core.
   target_sources(test_app PRIVATE framework/Selection.cpp framework/Selection.hpp framework/CommandItemText.cpp)
-  # The visible-text guard's identifiers, rich text and allow-list
-  # (mitcad#1741), and the selection card's words for sketch items.
-  target_sources(test_app PRIVATE tests/visible_text.cpp framework/VisibleTextGuard.cpp
-                                  framework/VisibleTextGuard.hpp)
-  # Solid-mode profile groups share the actual selection and an independent hover.
-  target_sources(test_app PRIVATE tests/autoselect.cpp framework/AutoselectPanel.cpp framework/AutoselectPanel.hpp)
   # When a navigation of the view ends (mitcad#214): plain C++.
   target_sources(test_app PRIVATE view/ViewNavigation.hpp)
   # Where an orthographic render's camera stands (mitcad#215): plain C++.
   target_sources(test_app PRIVATE render/RenderCamera.hpp)
-  # Event filters on the 3D view when the main window closes (mitcad#226):
-  # plain Qt Widgets.
-  target_sources(test_app PRIVATE tests/event_filter_guard.cpp framework/EventFilterGuard.hpp)
-  # Move to... on an occurrence: the parent picker and cancellation
-  # (mitcad#219): modal Qt Widgets.
-  target_sources(test_app PRIVATE tests/move_occurrence.cpp framework/MoveOccurrenceDialog.cpp)
-  # Sketch selection filters' three states, Shift and edge sight (mitcad#217):
-  # plain Qt Core.
-  target_sources(test_app PRIVATE tests/selection_scope.cpp framework/SelectionScope.cpp
-                 framework/SelectionScope.hpp)
-  # The icons' colour roles on both themes and the disabled rule (mitcad#230).
-  target_sources(test_app PRIVATE tests/icon_colours.cpp)
-  # A feature preview's bodies in placed, linked and hidden components
-  # (mitcad#266): plain Qt Core.
-  target_sources(test_app PRIVATE tests/preview_bodies.cpp framework/PreviewBodies.cpp framework/PreviewBodies.hpp)
-  # The debug log's files: rotation, the folder's limits, the header, the
-  # command line (mitcad#269): plain Qt Core and the log ring.
-  target_sources(test_app PRIVATE tests/debug_log.cpp framework/DebugLog.cpp framework/DebugLog.hpp
-                 mcp/LogRing.cpp mcp/LogRing.hpp)
-  # The wait cursor: nested guards, the progress dialog's release, the
-  # log lines, the idle recovery (mitcad#268): plain Qt Widgets.
-  target_sources(test_app PRIVATE tests/wait_cursor.cpp framework/WaitCursor.cpp framework/WaitCursor.hpp)
-  # The sketch snapper's body vertices and edge midpoints (mitcad#258): the
-  # sketch model's data with OCCT's geometry types.
-  target_sources(test_app PRIVATE tests/sketch_snap.cpp sketch/SketchSnap.cpp sketch/BodyGeometry.cpp)
-  # The maps of a texture set and their files for the renderer (mitcad#314):
-  # plain Qt Gui.
-  target_sources(test_app PRIVATE tests/texture_maps.cpp framework/Appearances.cpp framework/Appearances.hpp)
-  # The rendered view's meshes face out of their solids however the
-  # triangulations wind (mitcad#319): OCCT's shapes and meshing.
-  target_sources(test_app PRIVATE tests/render_mesh.cpp render/RenderMesh.cpp render/RenderMesh.hpp)
-  target_link_libraries(test_app PRIVATE TKMesh)
-  # The folders for designs, which live MCP agents save to and open from (mitcad#402):
-  # plain Qt Core and Widgets.
-  target_sources(test_app PRIVATE tests/agent_folders.cpp mcp/AgentFolders.cpp mcp/AgentFolders.hpp)
-  # The file dialogs' folders per group (mitcad#498): plain Qt Core.
-  target_sources(test_app PRIVATE tests/dialog_folders.cpp framework/DialogFolders.cpp framework/DialogFolders.hpp)
-  # An .iam assembly's import choice, progress lines and parts' outcomes
-  # (mitcad#507): plain Qt Core.
-  target_sources(test_app PRIVATE tests/iam_import.cpp files/IamImport.cpp files/IamImport.hpp)
-  # A renamed command's former id and saved shortcut (mitcad#503): the
-  # registry with the command definitions it keeps.
-  target_sources(test_app PRIVATE tests/command_alias.cpp framework/CommandRegistry.cpp framework/Command.cpp)
-  # The parameter table's numbers on a shared decimal axis (mitcad#566):
-  # the number split, the column layout and the delegate's placement; plain
-  # Qt Core and Widgets.
-  target_sources(test_app PRIVATE tests/decimal_align.cpp browser/DecimalAlign.cpp browser/DecimalAlign.hpp
-                 browser/DecimalAlignDelegate.cpp browser/DecimalAlignDelegate.hpp)
-  # A scroll area as tall as its contents and a dialog sized to them within
-  # the screen (mitcad#631): plain Qt Widgets.
-  target_sources(test_app PRIVATE tests/fit_to_screen.cpp framework/FitToScreen.cpp framework/FitToScreen.hpp)
-  # The configurations' JSON as the application reads and sends it
-  # (mitcad#807): plain Qt Core.
-  target_sources(test_app PRIVATE tests/configurations_data.cpp browser/ConfigurationsData.cpp
-                 browser/ConfigurationsData.hpp)
-  # What Extrude's and Revolve's Profiles take with a click (mitcad#868):
-  # plain Qt Core.
-  target_sources(test_app PRIVATE tests/profile_picks.cpp commands/ProfilePicks.cpp commands/ProfilePicks.hpp)
-  # The live MCP endpoint's limits against a hostile local client
-  # (mitcad#935): refusal echoes, the log ring's bytes, the connection
-  # slots and the token's comparison; plain Qt Core and the log ring.
-  target_sources(test_app PRIVATE tests/mcp_endpoint_limits.cpp mcp/EndpointLimits.cpp mcp/EndpointLimits.hpp)
-  # A sketch's normal in turned, nested and oblique occurrences (mitcad#958):
-  # Qt Core and OCCT's math.
-  target_sources(test_app PRIVATE tests/sketch_normal.cpp commands/SketchNormal.cpp commands/SketchNormal.hpp)
-  # The Hole panel's fields that follow a screw size (mitcad#980): Qt Core
-  # and the command state, with a model of the size tables.
-  target_sources(test_app PRIVATE tests/hole_sizes.cpp commands/HoleSizes.cpp commands/HoleSizes.hpp)
-  # A scroll area's own children changing places rebuild no native
-  # presenter, a widget added or removed or reordered elsewhere does
-  # (mitcad#986): plain Qt Widgets.
-  target_sources(test_app PRIVATE tests/native_structure.cpp platform/NativeStructure.cpp
-                 platform/NativeStructure.hpp)
   target_link_libraries(test_app PRIVATE mitcad_geometry)
   target_include_directories(test_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_app PRIVATE Qt6::Widgets Qt6::Svg mitcad_warnings)
@@ -1333,20 +1248,11 @@ endif()
 # its catalogues, built from app/translations and copied beside mitcad
 # (cmake/Translations.cmake, before the bundle, which carries them).
 target_sources(mitcad PRIVATE framework/Language.cpp framework/Language.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/language.cpp framework/Language.cpp framework/Language.hpp)
-endif()
 # The model's messages in the interface language (mitcad#1284): matched to
 # their templates (ModelMessageTemplates.cpp, generated from core/ by
 # tools/translations) and translated in the context ModelMessage.
 target_sources(mitcad PRIVATE framework/ModelMessages.cpp framework/ModelMessages.hpp
                framework/ModelMessageTemplates.cpp)
-if(BUILD_TESTING)
-  # The matching, the values, the English fallback, and the catalogues: every
-  # template translated in Finnish and in the pseudo-language.
-  target_sources(test_app PRIVATE tests/model_messages.cpp framework/ModelMessages.cpp framework/ModelMessages.hpp
-                 framework/ModelMessageTemplates.cpp)
-endif()
 include("${PROJECT_SOURCE_DIR}/cmake/Translations.cmake")
 
 # Insert › Component from Web (mitcad#1579, GitHub mitcad/Mitcad#191,
@@ -1376,18 +1282,9 @@ target_sources(mitcad PRIVATE
   webbrowser/ComponentBrowserHost.hpp
   webbrowser/ComponentWebFiles.cpp
   webbrowser/ComponentWebFiles.hpp
-  webbrowser/MainWindowComponentWeb.cpp)
-if(BUILD_TESTING)
-  # The part-number rule, the format filter, the sites and the temporary
-  # folders; the installed component, its interface, the manifest's offer:
-  # plain Qt Core.
-  target_sources(test_app PRIVATE tests/component_web_files.cpp webbrowser/ComponentWebFiles.cpp
-                 webbrowser/ComponentWebFiles.hpp files/FileFormats.cpp files/FileFormats.hpp
-                 tests/browser_component.cpp webbrowser/BrowserComponent.cpp webbrowser/BrowserComponent.hpp)
-  # The browser's keys (mitcad#1840): AltGr's characters typed, Control's
-  # shortcuts not, Option's characters on macOS not system keys.
-  target_sources(test_app PRIVATE tests/browser_keys.cpp webbrowser/BrowserKeys.cpp webbrowser/BrowserKeys.hpp)
-endif()
+  webbrowser/MainWindowComponentWeb.cpp
+  webbrowser/BrowserDiagnostics.cpp
+  webbrowser/BrowserDiagnostics.hpp)
 # The first use with a local manifest (mitcad#1579): a package and a manifest
 # signed by mitcad-release with a test key, checked, verified, unpacked and
 # installed through the bridge; a tampered package and another interface
@@ -1443,14 +1340,6 @@ target_sources(mitcad PRIVATE
   materials/TextureSource.hpp
   materials/TextureUse.cpp
   materials/TextureUse.hpp)
-if(BUILD_TESTING)
-  # The folder source's map detection, scan, thumbnails and fetch, the
-  # registry, the cache's folders and Use's command: plain Qt Gui.
-  target_sources(test_app PRIVATE tests/texture_sources.cpp
-                 materials/FolderTextureSource.cpp materials/FolderTextureSource.hpp
-                 materials/TextureSource.cpp materials/TextureSource.hpp
-                 materials/TextureUse.cpp materials/TextureUse.hpp)
-endif()
 # Poly Haven as an online texture source (mitcad#313, app/materials): the
 # requests of the texture sources on the internet (Qt Network; files of a
 # folder for UI tests) and the source. The unit tests give it a fake
@@ -1460,12 +1349,6 @@ target_sources(mitcad PRIVATE
   materials/PolyHavenTextureSource.hpp
   materials/TextureFetcher.cpp
   materials/TextureFetcher.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/polyhaven_source.cpp
-                 materials/PolyHavenTextureSource.cpp materials/PolyHavenTextureSource.hpp
-                 materials/TextureFetcher.cpp materials/TextureFetcher.hpp)
-  target_link_libraries(test_app PRIVATE Qt6::Network)
-endif()
 # The BUILD tab: frames of slot profiles with their connectors, panels and
 # linear parts, the cut list and the parts list (mitcad#375, app/COMMANDS.md
 # "BUILD"); QPdfWriter of Qt Gui writes the lists' PDFs.
@@ -1493,16 +1376,6 @@ target_sources(mitcad PRIVATE
   library/PartSuppliers.hpp
   library/UsedParts.cpp
   library/UsedParts.hpp)
-if(BUILD_TESTING)
-  # The order with stars, the stars' settings, the used parts read from a
-  # model's answer, the groups' tree and the Supplier filter (mitcad#949):
-  # plain Qt Core and the command context's interface.
-  target_sources(test_app PRIVATE tests/part_picker_data.cpp
-                 library/PartFavourites.cpp library/PartFavourites.hpp
-                 library/PartGroups.cpp library/PartGroups.hpp
-                 library/PartSuppliers.cpp library/PartSuppliers.hpp
-                 library/UsedParts.cpp library/UsedParts.hpp)
-endif()
 # The part picker (mitcad#418, app/library): the library's parts as a grid
 # of pictures with favourites and the design's parts, a floating window for
 # the part-choosing commands and Insert from Library's results.
@@ -1519,9 +1392,6 @@ target_sources(mitcad PRIVATE
   library/OptionChooser.hpp
   library/PartOptions.cpp
   library/PartOptions.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/part_options.cpp library/PartOptions.cpp library/PartOptions.hpp)
-endif()
 # The suppliers' articles of a library part's row as a table behind a
 # button (mitcad#979): Insert from Library, Library Components and Edit Options….
 target_sources(mitcad PRIVATE
@@ -1561,12 +1431,6 @@ if(MITCAD_WEB_VIEWER_FILES)
   endforeach()
   qt_add_resources(mitcad web_viewer PREFIX /web-viewer FILES ${MITCAD_WEB_VIEWER_FILES})
 endif()
-if(BUILD_TESTING)
-  # The page's HTML from fixture files of the viewer, and the glb's nodes
-  # with the tree: Qt Core and Gui and the renderer's plain types.
-  target_sources(test_app PRIVATE tests/web_page.cpp
-                 web/WebGlb.cpp web/WebGlb.hpp web/WebPage.hpp web/WebPageHtml.cpp)
-endif()
 # A project's web viewer (mitcad#423, app/web): File > Project > Web Viewer
 # and Update Web Viewer, the Save that updates a design's page, the web/
 # folder's index and designs.json (the pages: web/WebPage.hpp).
@@ -1574,10 +1438,6 @@ target_sources(mitcad PRIVATE
   web/MainWindowWeb.cpp
   web/ProjectWeb.cpp
   web/ProjectWeb.hpp)
-if(BUILD_TESTING)
-  # The designs' slugs, designs.json and the index: plain Qt Core.
-  target_sources(test_app PRIVATE tests/project_web.cpp web/ProjectWeb.cpp web/ProjectWeb.hpp)
-endif()
 # The orientation cube and its Home button in glass of their own
 # (mitcad#430).
 target_sources(mitcad PRIVATE
@@ -1597,10 +1457,6 @@ target_sources(mitcad PRIVATE
   files/DrawingSettings.cpp
   files/DrawingSettings.hpp
   files/MainWindowDrawing.cpp)
-if(BUILD_TESTING)
-  # The settings and the command they make: plain Qt Core.
-  target_sources(test_app PRIVATE tests/drawing_settings.cpp files/DrawingSettings.cpp files/DrawingSettings.hpp)
-endif()
 # Drawings kept in the design (mitcad#707, app/COMMANDS.md "Drawings"): a
 # drawing opened over the 3D view, its sheet painted from the model's
 # drawing query, its tools as declarative definitions, the main window's
@@ -1615,16 +1471,6 @@ target_sources(mitcad PRIVATE
   drawings/DrawingWorkspace.cpp
   drawings/DrawingWorkspace.hpp
   drawings/MainWindowDrawings.cpp)
-if(BUILD_TESTING)
-  # The tools' definitions and the commands they make: plain Qt Core.
-  target_sources(test_app PRIVATE tests/drawing_tools.cpp drawings/DrawingTools.cpp drawings/DrawingTools.hpp
-                                  drawings/DrawingTemplates.cpp drawings/DrawingTemplates.hpp)
-  # The sheet's zoom kept through the model's answers (mitcad#751) and its
-  # picture kept while the pointer moves (mitcad#759): plain Qt Widgets on
-  # the offscreen platform.
-  target_sources(test_app PRIVATE tests/drawing_sheet_view.cpp drawings/DrawingSheetView.cpp
-                                  drawings/DrawingSheetView.hpp)
-endif()
 # Drawing templates of the user's own (mitcad#1625): the title block editor
 # on the sheet and a sheet's custom size in Create Drawing and Sheet….
 target_sources(mitcad PRIVATE
@@ -1632,19 +1478,6 @@ target_sources(mitcad PRIVATE
   drawings/SheetSizeRows.hpp
   drawings/TitleBlockEditor.cpp
   drawings/TitleBlockEditor.hpp)
-if(BUILD_TESTING)
-  # The editor's lines, fields and images, their snaps, moves and deletes
-  # and the block it gives back: plain Qt Core (the sheet's view paints
-  # it).
-  target_sources(test_app PRIVATE tests/title_block_editor.cpp drawings/TitleBlockEditor.cpp
-                                  drawings/TitleBlockEditor.hpp)
-endif()
-if(BUILD_TESTING)
-  # The view's context menu (mitcad#494): which commands a selection
-  # completes (first) and which need further picks (More), from the command
-  # definitions.
-  target_sources(test_app PRIVATE tests/context_menu.cpp framework/Command.cpp framework/Command.hpp)
-endif()
 # Sketch text from font files: Preferences' Fonts page and the font
 # chooser of Edit Text (mitcad#473).
 target_sources(mitcad PRIVATE
@@ -1653,26 +1486,13 @@ target_sources(mitcad PRIVATE
 # The sketch's origin and its x and y axes as picks for constraints and
 # dimensions (mitcad#500).
 target_sources(mitcad PRIVATE sketch/SketchAxes.cpp)
-if(BUILD_TESTING)
-  # Their picks on the sketch model's data: plain Qt Core and the sketch
-  # geometry.
-  target_sources(test_app PRIVATE tests/sketch_axes.cpp sketch/SketchAxes.cpp)
-endif()
 # The text a pick inside a letter or its counter stands for (mitcad#1369):
 # Edit Text and Edit QR Code from a text's region.
 target_sources(mitcad PRIVATE sketch/SketchTextPicks.cpp)
-if(BUILD_TESTING)
-  # On the sketch model's data: plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch_text_picks.cpp sketch/SketchTextPicks.cpp)
-endif()
 # Sketch Move/Copy (mitcad#1563): Point to Point's points picked with the
 # sketch's snaps while the panel runs, Translate's handle, and the places
 # they name and the objects' middle.
 target_sources(mitcad PRIVATE sketch/SketchPlaces.cpp sketch/SketchCommandPicks.cpp)
-if(BUILD_TESTING)
-  # The places on the sketch model's data: plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch_places.cpp sketch/SketchPlaces.cpp)
-endif()
 # Chains of sketch curves: Offset's Chain Selection and a double-click on a
 # curve, its closed loop or open chain (mitcad#1541).
 target_sources(mitcad PRIVATE
@@ -1686,10 +1506,6 @@ target_sources(mitcad PRIVATE
   commands/MountCommands.hpp
   library/MountFrames.cpp
   library/MountFrames.hpp)
-if(BUILD_TESTING)
-  # The frames of a manifest's block and their texts: plain Qt Core.
-  target_sources(test_app PRIVATE tests/mount_frames.cpp library/MountFrames.cpp library/MountFrames.hpp)
-endif()
 # A timber frame's openings (mitcad#519, app/COMMANDS.md "Timber"): their
 # rows, text form and checks, and the Openings window that edits them
 # beside Wall's, Floor / Roof's and Timber Frame's panels.
@@ -1698,22 +1514,12 @@ target_sources(mitcad PRIVATE
   build/OpeningsWindow.hpp
   build/TimberOpenings.cpp
   build/TimberOpenings.hpp)
-if(BUILD_TESTING)
-  # Text to rows and back, the model's openings, the rows' checks: plain Qt
-  # Core.
-  target_sources(test_app PRIVATE tests/timber_openings.cpp build/TimberOpenings.cpp build/TimberOpenings.hpp)
-endif()
 # The joint highlight (mitcad#523): a selected joint's sides, frames and
 # occurrences in the view, from the `joints` query.
 target_sources(mitcad PRIVATE
   MainWindowJointHighlight.cpp
   framework/JointHighlight.cpp
   framework/JointHighlight.hpp)
-if(BUILD_TESTING)
-  # What each side shows, its log lines and the card's text: plain Qt Core.
-  target_sources(test_app PRIVATE tests/joint_highlight.cpp framework/JointHighlight.cpp
-                 framework/JointHighlight.hpp)
-endif()
 # Move Face (mitcad#531): its summary line ("MoveFace1: 2 faces of Body1,
 # translate (...) mm"), for the panel, the log and the selection card.
 target_sources(mitcad PRIVATE
@@ -1724,19 +1530,11 @@ target_sources(mitcad PRIVATE
 # Fillet's or Chamfer's picked edges as lines, from `feature_inputs`.
 target_sources(mitcad PRIVATE
   MainWindowFeatureInputs.cpp)
-if(BUILD_TESTING)
-  # Its motions in words: plain Qt Core.
-  target_sources(test_app PRIVATE tests/move_face_text.cpp commands/MoveFaceText.cpp commands/MoveFaceText.hpp)
-endif()
 # The Projects panel's rows (mitcad#529): compact marks for their state, a
 # name elided in the middle.
 target_sources(mitcad PRIVATE
   projects/ProjectRowText.cpp
   projects/ProjectRowText.hpp)
-if(BUILD_TESTING)
-  # The marks and the elision: plain Qt Core and Gui.
-  target_sources(test_app PRIVATE tests/project_rows.cpp projects/ProjectRowText.cpp projects/ProjectRowText.hpp)
-endif()
 # File > Open from Project (mitcad#530): the projects browsed as folders,
 # their designs searched by name.
 target_sources(mitcad PRIVATE
@@ -1744,31 +1542,15 @@ target_sources(mitcad PRIVATE
   projects/ProjectBrowser.hpp
   projects/ProjectBrowserData.cpp
   projects/ProjectBrowserData.hpp)
-if(BUILD_TESTING)
-  # A place's contents and the search over a fixture project tree: plain Qt
-  # Core (the marks' words from ProjectRowText).
-  target_sources(test_app PRIVATE tests/project_browser.cpp projects/ProjectBrowserData.cpp
-                 projects/ProjectBrowserData.hpp)
-endif()
 # The view's fit of a design's first bodies, once per design (mitcad#467;
 # not again after every body was hidden and one shown).
 target_sources(mitcad PRIVATE view/FirstBodiesFit.hpp)
-if(BUILD_TESTING)
-  # The decision: plain C++.
-  target_sources(test_app PRIVATE tests/first_bodies_fit.cpp view/FirstBodiesFit.hpp)
-endif()
 # Section Analysis off the UI thread (mitcad#438): the section worker's
 # rounds, and the window's clips, view and measurement through them.
 target_sources(mitcad PRIVATE
   MainWindowSection.cpp
   framework/SectionWorker.cpp
   framework/SectionWorker.hpp)
-if(BUILD_TESTING)
-  # Rounds superseded, waiting, stopped, off the UI thread: plain Qt Core
-  # and the geometry's cancel.
-  target_sources(test_app PRIVATE tests/section_worker.cpp framework/SectionWorker.cpp
-                 framework/SectionWorker.hpp)
-endif()
 # Section Analysis and Hide Above Sketch over a feature preview
 # (mitcad#943): a preview's bodies clipped by the view's clip, the caps of
 # a cut body.
@@ -1804,33 +1586,16 @@ endif()
 target_sources(mitcad PRIVATE
   commands/ChamferHandles.cpp
   commands/ChamferHandles.hpp)
-if(BUILD_TESTING)
-  # Convex, concave, obtuse and placed edges, the measured face: plain OCCT
-  # math; an L bracket's edges read from its solid (mitcad#571).
-  target_sources(test_app PRIVATE tests/chamfer_handles.cpp commands/ChamferHandles.cpp
-                 commands/ChamferHandles.hpp)
-endif()
 # The patterns' Direction Type and Distance Type (mitcad#545): the panels'
 # choices as the definitions' `symmetric` and `distance_type`, the length
 # row's label, the options in the log.
 target_sources(mitcad PRIVATE
   commands/PatternOptions.cpp
   commands/PatternOptions.hpp)
-if(BUILD_TESTING)
-  # The mapping and the words, and the Pattern Type a preselection picks
-  # (mitcad#1290) on a command state.
-  target_sources(test_app PRIVATE tests/pattern_options.cpp commands/PatternOptions.cpp
-                 commands/PatternOptions.hpp framework/Command.cpp framework/Command.hpp)
-endif()
 
 # The sketches a command shows for its time (mitcad#546): an edited
 # feature's, as if their light bulbs were on, until its panel closes.
 target_sources(mitcad PRIVATE view/CommandSketches.hpp)
-if(BUILD_TESTING)
-  # Which sketches, which only for the command, what each goes back to:
-  # plain Qt Core.
-  target_sources(test_app PRIVATE tests/command_sketches.cpp view/CommandSketches.hpp)
-endif()
 
 # Change Parameters while a sketch or a feature is being created or edited
 # (mitcad#564): SKETCH > MODIFY's entry, the parameter table's commands
@@ -1841,12 +1606,6 @@ target_sources(mitcad PRIVATE
   framework/CommandSessionParameters.cpp
   framework/ParameterEdits.cpp
   framework/ParameterEdits.hpp)
-if(BUILD_TESTING)
-  # What the table leaves to an open panel, which of its changes the panel
-  # follows, a rename in the panel's expressions: plain Qt Core.
-  target_sources(test_app PRIVATE tests/parameter_edits.cpp framework/ParameterEdits.cpp
-                 framework/ParameterEdits.hpp)
-endif()
 
 # Expression fields' parameter suggestions while typing, the fx browser,
 # name = value and Add User Parameter (mitcad#567, mitcad#568): feature
@@ -1856,20 +1615,10 @@ target_sources(mitcad PRIVATE
   framework/ParameterSuggest.hpp
   framework/ParameterField.cpp
   framework/ParameterField.hpp)
-if(BUILD_TESTING)
-  # The name at the caret, matching, insertion, refused choices, new names;
-  # the list's keys on a plain field: Qt Widgets on the offscreen platform.
-  target_sources(test_app PRIVATE tests/parameter_suggest.cpp
-                 framework/ParameterSuggest.cpp framework/ParameterSuggest.hpp
-                 framework/ParameterField.cpp framework/ParameterField.hpp)
-endif()
 
 # Immutable edit-operation policy and manual override of delayed replies
 # (mitcad#575): plain Qt Core, shared with the command session.
 target_sources(mitcad PRIVATE framework/AutoOperationPolicy.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/auto_operation_policy.cpp framework/AutoOperationPolicy.hpp)
-endif()
 
 # Auto-update of the library sources (mitcad#576, app/COMMANDS.md "Component
 # libraries"): the sources' settings (plain Qt Core) and the background fetch
@@ -1878,10 +1627,6 @@ target_sources(mitcad PRIVATE
   files/LibraryAutoUpdate.cpp
   files/LibraryAutoUpdate.hpp
   files/LibrarySettings.cpp)
-if(BUILD_TESTING)
-  # The settings' round trip, with and without the key: plain Qt Core.
-  target_sources(test_app PRIVATE tests/library_settings.cpp files/LibrarySettings.cpp files/Libraries.hpp)
-endif()
 
 # The selection card's Create row (mitcad#619, app/COMMANDS.md "What the
 # framework does"): up to four CREATE commands that fit the selection,
@@ -1890,30 +1635,6 @@ target_sources(mitcad PRIVATE
   framework/SelectionCreate.cpp
   framework/SelectionCreate.hpp
   MainWindowSelectionCreate.cpp)
-if(BUILD_TESTING)
-  # Kinds of selection to the buttons, the commands' first inputs, the
-  # row's buttons changed in place: Qt Widgets on the offscreen platform.
-  target_sources(test_app PRIVATE tests/selection_create.cpp framework/SelectionCreate.cpp
-                 framework/SelectionCreate.hpp framework/Command.cpp framework/Command.hpp)
-endif()
-
-# Updates (mitcad#603): the private download folder on every platform, the
-# Windows updater's command line and its SHA-256 check of the installer:
-# plain Qt Core and plain C++.
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/update_installer.cpp update/UpdateInstaller.cpp update/UpdateInstaller.hpp
-                 update/UpdaterChecks.hpp)
-  # The start-up check's comparison of the OCCT build stamp (mitcad#1454):
-  # plain C++.
-  target_sources(test_app PRIVATE update/BuildStamp.hpp)
-  if(WIN32)
-    # processHasAdministratorRights (mitcad#921).
-    target_link_libraries(test_app PRIVATE advapi32)
-  endif()
-  # The update notice's text and buttons for a release with or without a
-  # download for this platform (mitcad#1390): plain Qt Core.
-  target_sources(test_app PRIVATE tests/update_offer.cpp update/UpdateOffer.cpp update/UpdateOffer.hpp)
-endif()
 
 # The updates' test hooks (mitcad#921, docs/updates.md#the-test-hooks): the
 # update source read as a release (MITCAD_UPDATE_TEST_HOOKS 0) and as a
@@ -1947,21 +1668,11 @@ target_sources(mitcad PRIVATE
   commands/PrintAnalysis.hpp
   view/PrintOverlay.cpp
   view/PrintOverlay.hpp)
-if(BUILD_TESTING)
-  # Settings, definition, queries, log line, words and overlay data: plain
-  # Qt Core and Gui.
-  target_sources(test_app PRIVATE tests/print_analysis.cpp commands/PrintAnalysis.cpp
-                 commands/PrintAnalysis.hpp)
-endif()
 
 target_sources(mitcad PRIVATE framework/TestDriverManipulators.cpp)
 target_sources(mitcad PRIVATE framework/TestDriverChrome.cpp)
 target_sources(mitcad PRIVATE framework/MacToolButtonStyle.cpp framework/MacToolButtonStyle.hpp
                framework/TestDriverMacControls.cpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/mac_tool_buttons.cpp framework/MacToolButtonStyle.cpp
-                 framework/MacToolButtonStyle.hpp)
-endif()
 target_sources(mitcad PRIVATE framework/TestDriverDialogs.cpp platform/MacDialogs.hpp)
 
 
@@ -1973,11 +1684,6 @@ target_sources(mitcad PRIVATE
   commands/MeasureHistory.hpp
   commands/MeasureHistoryView.cpp
   commands/MeasureHistoryView.hpp)
-if(BUILD_TESTING)
-  # Rows added, extended and updated, gone, cleared, copied: plain Qt Core.
-  target_sources(test_app PRIVATE tests/measure_history.cpp commands/MeasureHistory.cpp
-                 commands/MeasureHistory.hpp)
-endif()
 
 # Print settings and materials (mitcad#640, mitcad#654, mitcad#655;
 # app/COMMANDS.md "Materials and print settings"): the key table's
@@ -2021,14 +1727,6 @@ target_sources(mitcad PRIVATE
   print/SlicerImport.hpp
   print/SlicerPresetsDialog.cpp
   print/SlicerPresetsDialog.hpp)
-if(BUILD_TESTING)
-  # The import's line and report (plain Qt Core); the key table's layout
-  # and values, and the settings form's rows (Qt Widgets).
-  target_sources(test_app PRIVATE tests/print_import_summary.cpp tests/print_settings_form.cpp
-                 print/PrintImportSummary.cpp print/PrintImportSummary.hpp print/PrintKeys.cpp
-                 print/PrintKeys.hpp print/SettingField.cpp print/SettingField.hpp print/SettingsForm.cpp
-                 print/SettingsForm.hpp)
-endif()
 
 # Purge volumes on filament changes (mitcad#705): 3D Print's table of the
 # filament slots.
@@ -2066,11 +1764,6 @@ target_sources(mitcad PRIVATE
   commands/PlaceGeometry.hpp
   commands/PlaceInputs.cpp
   commands/PlaceInputs.hpp)
-if(BUILD_TESTING)
-  # Snapping, the two nearest edges and the point at two distances: OCCT's
-  # geometry types.
-  target_sources(test_app PRIVATE tests/place_geometry.cpp commands/PlaceGeometry.cpp commands/PlaceGeometry.hpp)
-endif()
 
 # Measurement objects (mitcad#649, app/COMMANDS.md "Measurement objects"):
 # Keep in the Measure panel, the browser's Measurements, the dimensions
@@ -2093,13 +1786,6 @@ target_sources(mitcad PRIVATE
   view/AnnotationDialogs.hpp
   view/AnnotationsWindow.cpp
   view/AnnotationsWindow.hpp)
-if(BUILD_TESTING)
-  # The query's entries to dimensions, their layout through a projection and
-  # at a picture's scale, painting, the values in words, a render camera's
-  # projection: plain Qt Gui and OCCT's points.
-  target_sources(test_app PRIVATE tests/measurement_drawing.cpp view/MeasurementDrawing.cpp
-                 view/MeasurementDrawing.hpp)
-endif()
 # The annotations' technical lettering (mitcad#902, an ISO 3098 type B style
 # font in third_party/fonts/iso-lettering, LGPL-3.0 with the font exception):
 # a file of its own beside the executables, loaded at run time
@@ -2124,28 +1810,15 @@ else()
   message(STATUS "No annotation lettering (${MITCAD_LETTERING}): the annotations take the UI's font")
 endif()
 
-# Opaque, correctly placed rename editors on transparent trees (mitcad#685).
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/tree_item_delegate.cpp framework/TreeItemDelegate.hpp)
-endif()
-
 # Navigation settings and actual camera input (mitcad#688).
 target_sources(mitcad PRIVATE framework/TestDriverNavigation.cpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/navigation_preferences.cpp)
-endif()
 
 # Text-based formula assistance and the shared larger editor (mitcad#668).
 target_sources(mitcad PRIVATE framework/FormulaEditor.cpp framework/FormulaEditor.hpp
                  framework/TestDriverFormula.cpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/formula_editor.cpp framework/FormulaEditor.cpp
-                 framework/FormulaEditor.hpp)
-endif()
 
 # Isolated assistant setup plans, quoting and atomic configuration writes.
 if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/assistant_setup.cpp mcp/AssistantSetup.cpp)
   add_executable(test_assistant_client tests/assistant_client.cpp)
   target_link_libraries(test_assistant_client PRIVATE Qt6::Core mitcad_warnings)
   mitcad_utf8_code_page(test_assistant_client)
@@ -2173,11 +1846,6 @@ target_sources(mitcad PRIVATE
   view/ImageReferenceView.cpp
   view/ImageReferences.cpp
   view/ImageReferences.hpp)
-if(BUILD_TESTING)
-  # The query's entries, points on an image and on its plane, the log
-  # line and the calibration's distance: plain Qt Core.
-  target_sources(test_app PRIVATE tests/image_references.cpp view/ImageReferences.cpp view/ImageReferences.hpp)
-endif()
 
 # HEIF images of image references: view/ImageFile.* decodes an image
 # reference's file, the formats other than HEIF through Qt, HEIF through
@@ -2208,19 +1876,6 @@ endif()
 target_sources(mitcad PRIVATE ${mitcad_heif_sources})
 if(mitcad_heif_platform_libraries)
   target_link_libraries(mitcad PRIVATE ${mitcad_heif_platform_libraries})
-endif()
-if(BUILD_TESTING)
-  # The formats told apart, HEIF images decoded upright through a decoder
-  # of the test's own and through the platform's, embedded as PNG, the
-  # message without a decoder, and the run-time libheif with a library
-  # that is not there (on every platform): tests/heif_image.cpp.
-  target_sources(test_app PRIVATE tests/heif_image.cpp ${mitcad_heif_sources})
-  if(WIN32 OR APPLE)
-    target_sources(test_app PRIVATE view/HeifLibrary.cpp view/HeifLibrary.hpp)
-  endif()
-  if(mitcad_heif_platform_libraries)
-    target_link_libraries(test_app PRIVATE ${mitcad_heif_platform_libraries})
-  endif()
 endif()
 if(MITCAD_HEIF)
   find_package(libheif CONFIG REQUIRED)
@@ -2278,24 +1933,6 @@ target_sources(mitcad PRIVATE
   configurations/RuleCanvas.hpp
   configurations/RulesPage.cpp
   configurations/RulesPage.hpp)
-if(BUILD_TESTING)
-  # The expression <-> block round trip, the edits, and the page on a design
-  # of the test's own: Qt Widgets on the offscreen platform.
-  target_sources(test_app PRIVATE tests/rule_blocks.cpp
-                 configurations/RuleBlocks.cpp configurations/RuleBlocks.hpp
-                 configurations/RuleCanvas.cpp configurations/RuleCanvas.hpp
-                 configurations/RulesPage.cpp configurations/RulesPage.hpp
-                 framework/FormulaEditor.cpp framework/FormulaEditor.hpp
-                 framework/ParameterField.cpp framework/ParameterField.hpp
-                 framework/ParameterSuggest.cpp framework/ParameterSuggest.hpp)
-endif()
-
-# The document snapshot's feature lookup by uid (mitcad#833): read() from a
-# model's answers, the command context's interface.
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/document_snapshot.cpp browser/DocumentSnapshot.cpp
-                 browser/DocumentSnapshot.hpp)
-endif()
 
 # Tables of a design (mitcad#667, docs/table-lookups.md): the Tables tab of
 # Change Parameters.
@@ -2339,15 +1976,6 @@ elseif(APPLE)
 else()
   target_sources(mitcad PRIVATE platform/unix/SpaceMouseSpnav.cpp)
 endif()
-if(BUILD_TESTING)
-  # The reports' parsing, the mapping to the camera and the controller with
-  # a backend of the test's own (plain Qt Core and Gui), and the camera's step on
-  # an OCCT camera as OcctViewer applies it (Graphic3d_Camera: TKService), and
-  # a motion's pacing and timing from given frame times (mitcad#1023).
-  target_sources(test_app PRIVATE tests/space_mouse.cpp view/SpaceMouseCamera.hpp view/SpaceMouseController.cpp
-                 view/SpaceMouseController.hpp view/SpaceMouseTiming.hpp)
-  target_link_libraries(test_app PRIVATE TKService)
-endif()
 # The AI chat panel (mitcad#947, docs/ai-chat.md): the user's own agent
 # through its own interface (agent/ChatAgent.hpp; Claude Code, Codex), the
 # Qt panel, its approvals enforced by the live server (mcp/ChatGate.hpp),
@@ -2386,14 +2014,6 @@ if(APPLE AND MITCAD_MACOS_NATIVE_UI)
   set_source_files_properties(platform/macos/NativeChatCard.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
 endif()
 if(BUILD_TESTING)
-  # The history files (keys, the end read, moves, clearing) and the chat's
-  # settings: plain Qt Core.
-  target_sources(test_app PRIVATE tests/chat_history.cpp agent/ChatHistoryStore.cpp agent/ChatHistoryStore.hpp
-                 agent/ChatSettings.cpp agent/ChatSettings.hpp)
-  # Check again's decisions after the agent's check (mitcad#1155).
-  target_sources(test_app PRIVATE tests/chat_account_check.cpp agent/AccountCheck.hpp)
-  # Sign in Again's commands, scripts and terminals per platform (mitcad#1585).
-  target_sources(test_app PRIVATE agent/SignInCommands.hpp)
   # The chat's UI tests' scripted agent (tools/ui-chat-test.py): Claude
   # Code's stream-json (as `claude`), Codex's app server (as `codex`) or the
   # Agent Client Protocol (as `acp-test-agent`, mitcad#1198) on stdin and
@@ -2432,10 +2052,6 @@ endif()
 # aspect (mitcad#959): OcctViewer::setCamera restores named views and Home
 # at any aspect; the unit tests use OCCT's cameras (TKService).
 target_sources(mitcad PRIVATE view/CameraHeight.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/camera_height.cpp view/CameraHeight.hpp)
-  target_link_libraries(test_app PRIVATE TKService)
-endif()
 # Create Sketch and the Construct commands ask whether to activate the
 # component of a picked face, plane or edge (mitcad#960, app/COMMANDS.md
 # "Activating the picked component"): the decision and the question, and
@@ -2444,60 +2060,26 @@ target_sources(mitcad PRIVATE
   browser/ActivateQuestion.cpp
   browser/ActivateQuestion.hpp
   MainWindowActivate.cpp)
-if(BUILD_TESTING)
-  # When it asks and with what names, and the message box: Qt Widgets on
-  # the offscreen platform.
-  target_sources(test_app PRIVATE tests/activate_question.cpp browser/ActivateQuestion.cpp
-                 browser/ActivateQuestion.hpp)
-endif()
 # A feature that changes the picked body (Fillet, Chamfer, Shell, ...) on
 # another component's body activates that component without a question
 # (mitcad#1634, app/COMMANDS.md "Activating the picked component"): the
 # command table and the decisions, plain Qt Core.
 target_sources(mitcad PRIVATE browser/ActivateOnPick.cpp browser/ActivateOnPick.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/activate_on_pick.cpp browser/ActivateOnPick.cpp browser/ActivateOnPick.hpp)
-endif()
 # A feature's build state on the timeline and the selection card
 # (mitcad#961): the cell's fill, its status ring inside the selection's and
 # the status badge that stays in every state; plain Qt Gui.
 target_sources(mitcad PRIVATE browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/feature_status.cpp browser/FeatureStatus.cpp browser/FeatureStatus.hpp)
-endif()
 # The notices' levels and their one presentation per level (mitcad#1040,
 # docs/ui-conventions.md "Messages and severity"): word, icon, color role,
 # highlight box fill and lifetime, shared by Qt and AppKit; plain Qt Gui.
 target_sources(mitcad PRIVATE framework/NoticeLevel.cpp framework/NoticeLevel.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/notice_level.cpp framework/NoticeLevel.cpp framework/NoticeLevel.hpp)
-endif()
-# The color roles (mitcad#1041, docs/ui-conventions.md "Colors"): the role
-# table's contrast in both appearances and its reserved status hues; the
-# table is Theme.cpp's, already in test_app.
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/color_roles.cpp)
-endif()
 # The sketch points' markers and the overlay's highlights with the markers over
 # them (mitcad#946): plain Qt Gui, painted into images in the test.
 target_sources(mitcad PRIVATE sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/sketch_point_markers.cpp sketch/PointMarkers.cpp sketch/PointMarkers.hpp)
-endif()
 # Commands pinned to the toolbar (mitcad#1001, app/COMMANDS.md "Pinned
 # commands"): the user's pins per tab, kept in the settings; the Ribbon
 # shows each as a button in its own group (mitcad#1084).
 target_sources(mitcad PRIVATE framework/ToolbarPins.cpp framework/ToolbarPins.hpp)
-if(BUILD_TESTING)
-  # Pin, reorder, unpin, each pin's group and the settings read back
-  # (also an earlier version's per-tab lists): plain Qt Core.
-  target_sources(test_app PRIVATE tests/toolbar_pins.cpp framework/ToolbarPins.cpp framework/ToolbarPins.hpp)
-endif()
-# How a ribbon page's groups fit a narrow window (mitcad#1111, mitcad#1357):
-# the rule the Qt ribbon and the AppKit ribbon share; plain C++.
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/ribbon_fit.cpp framework/RibbonFit.cpp framework/RibbonFit.hpp)
-endif()
 # Dogbone in the SOLID tab's MODIFY group (mitcad#1011): relief cuts at a
 # body's inside corners.
 target_sources(mitcad PRIVATE commands/DogboneCommands.cpp)
@@ -2508,9 +2090,6 @@ target_sources(mitcad PRIVATE commands/MortiseTenonCommands.cpp)
 # its own over the picture, visible on the selected tile; plain Qt Gui,
 # painted into images in the test.
 target_sources(mitcad PRIVATE library/PartStar.cpp library/PartStar.hpp)
-if(BUILD_TESTING)
-  target_sources(test_app PRIVATE tests/part_star.cpp library/PartStar.cpp library/PartStar.hpp)
-endif()
 # The browser's hover (mitcad#1022, app/COMMANDS.md "Browser"): a body's,
 # component's or occurrence's row under the pointer highlights its bodies
 # in the view, drawn again from their presentations (OcctViewer).
@@ -2520,21 +2099,10 @@ target_sources(mitcad PRIVATE MainWindowBrowserHover.cpp)
 # chosen from the Sketch tab's pins and the tools' starts counted in the
 # settings.
 target_sources(mitcad PRIVATE sketch/PaletteCreateTools.cpp sketch/PaletteCreateTools.hpp)
-if(BUILD_TESTING)
-  # Defaults, counts, pins first, the ribbon's order, at most 14: plain Qt Core.
-  target_sources(test_app PRIVATE tests/palette_create_tools.cpp sketch/PaletteCreateTools.cpp
-                 sketch/PaletteCreateTools.hpp)
-endif()
 # Remembered values of command panels (mitcad#1028, app/COMMANDS.md
 # "Remembered values"): a new Fillet or Chamfer starts with the sizes of
 # the last OK, kept in the local settings.
 target_sources(mitcad PRIVATE framework/RememberedValues.cpp framework/RememberedValues.hpp)
-if(BUILD_TESTING)
-  # Kept on a new feature's OK only, read back, a value that does not
-  # evaluate falling back: plain Qt Core.
-  target_sources(test_app PRIVATE tests/remembered_values.cpp framework/RememberedValues.cpp
-                 framework/RememberedValues.hpp)
-endif()
 # The Configuration panel (mitcad#1020, app/COMMANDS.md "The left column"):
 # the Configuration bar in a left panel of its own between Projects and the
 # browser, a Floating card or a Docked dock.
@@ -2546,14 +2114,6 @@ target_sources(mitcad PRIVATE browser/MainWindowConfigurationPanel.cpp)
 # and More…; a pick assigns as the Materials window's Assign does.
 target_sources(mitcad PRIVATE browser/BrowserMaterialMenu.cpp print/MaterialMenuChoices.cpp
                print/MaterialMenuChoices.hpp)
-if(BUILD_TESTING)
-  # The design's and the recent rows, the check mark, the recent list's
-  # order and length, read back from the settings, and when Replace
-  # Appearance asks (mitcad#1067); the Appearance tool's recent appearances
-  # (mitcad#1685): plain Qt Core.
-  target_sources(test_app PRIVATE tests/material_menu.cpp print/MaterialMenuChoices.cpp
-                 print/MaterialMenuChoices.hpp)
-endif()
 # The Make tab (mitcad#1049, app/COMMANDS.md "The Make tab"): the Annotate
 # group's panels, Assign Material…, Export Face as DXF…, the selected
 # body's card with its material and print settings, and the Browser's
@@ -2566,12 +2126,6 @@ target_sources(mitcad PRIVATE MainWindowMake.cpp print/MakeBodyCard.cpp print/Ma
 # only manage the libraries.
 target_sources(mitcad PRIVATE commands/MaterialCommands.cpp commands/MaterialBinding.cpp
                commands/MaterialBinding.hpp browser/LibraryPicker.cpp browser/LibraryPicker.hpp)
-if(BUILD_TESTING)
-  # The options, the rows of a binding and their expression, the targets'
-  # summary: plain Qt Core.
-  target_sources(test_app PRIVATE tests/material_tool.cpp commands/MaterialBinding.cpp
-                 commands/MaterialBinding.hpp browser/OptionMapping.cpp)
-endif()
 
 # The left column (mitcad#1020): Projects, Configuration and Browser share
 # its height (framework/ColumnShare.hpp, also FloatingLayout's); in the
@@ -2600,12 +2154,6 @@ if(APPLE AND MITCAD_MACOS_NATIVE_UI)
   target_sources(mitcad PRIVATE platform/macos/NativeMessageBand.hpp platform/macos/NativeMessageBand.mm)
   set_source_files_properties(platform/macos/NativeMessageBand.mm PROPERTIES COMPILE_OPTIONS -fobjc-arc)
 endif()
-if(BUILD_TESTING)
-  # The lifetimes by level, an error that stays until it is closed or the
-  # next command starts, a hint that does not push a problem away, the
-  # stub of the latest message and the history newest first: plain Qt Core.
-  target_sources(test_app PRIVATE tests/message_log.cpp framework/MessageLog.cpp framework/MessageLog.hpp)
-endif()
 
 # Convert Mesh's panel in the SOLID tab's MODIFY group (mitcad#1082): a mesh
 # body made a faceted or an analytic solid.
@@ -2624,25 +2172,12 @@ target_sources(mitcad PRIVATE
   printing/PrintPanel.hpp
   printing/MainWindowPaperPrint.cpp)
 target_link_libraries(mitcad PRIVATE Qt6::PrintSupport)
-if(BUILD_TESTING)
-  # Printing to PDF files through QPrinter: a two-sheet drawing's pages at
-  # their sizes, a 1:1 sketch's tiles and a line's length on them, fit to
-  # page on one page; plain Qt Widgets, Svg and PrintSupport.
-  target_sources(test_app PRIVATE tests/paper_print.cpp printing/PaperPrint.cpp printing/PaperPrint.hpp
-                 printing/SketchPicture.cpp printing/SketchPicture.hpp)
-  target_link_libraries(test_app PRIVATE Qt6::PrintSupport)
-endif()
 
 # The Center of Mass marker (mitcad#1094, app/COMMANDS.md "Center of
 # Mass"): Center of Mass in the Inspect group, the browser's row under
 # Origin, and the marker drawn in the view at the design's center of mass.
 target_sources(mitcad PRIVATE MainWindowCenterOfMass.cpp view/CenterOfMass.cpp view/CenterOfMass.hpp
                view/CenterOfMassView.cpp)
-if(BUILD_TESTING)
-  # The row's state and tooltip from the query's answer, the log line, and
-  # the marker's picture on a light and a dark background: plain Qt Gui.
-  target_sources(test_app PRIVATE tests/center_of_mass.cpp view/CenterOfMass.cpp view/CenterOfMass.hpp)
-endif()
 
 # The quick-access group (mitcad#1090, app/COMMANDS.md "The quick-access
 # group"): the commands the user chose from the File, Edit, View and Tools
@@ -2651,24 +2186,12 @@ endif()
 target_sources(mitcad PRIVATE framework/QuickAccess.cpp framework/QuickAccess.hpp
                framework/QuickAccessGroup.cpp framework/QuickAccessGroup.hpp
                files/FileCommands.cpp files/FileCommands.hpp)
-if(BUILD_TESTING)
-  # The File commands in the registry with their keys, the group's choice
-  # read from and written to the settings, its order and tooltips: Qt Core,
-  # Gui and Widgets (the registry's actions).
-  target_sources(test_app PRIVATE tests/quick_access.cpp framework/QuickAccess.cpp framework/QuickAccess.hpp
-                 files/FileCommands.cpp files/FileCommands.hpp)
-endif()
 
 # Send to Slicer's Printer and Process picker (mitcad#1108, app/COMMANDS.md
 # "Send to Slicer"): the printers grouped by vendor and the processes by
 # their printer, short names and the source of each row, in the panel's
 # searchable picker (browser/LibraryPicker).
 target_sources(mitcad PRIVATE print/ProfilePickerRows.cpp print/ProfilePickerRows.hpp)
-if(BUILD_TESTING)
-  # The groups, the short names and the sources: plain Qt Core.
-  target_sources(test_app PRIVATE tests/profile_picker_rows.cpp print/ProfilePickerRows.cpp
-                 print/ProfilePickerRows.hpp)
-endif()
 
 # Comments for AI agents (mitcad#1119, app/COMMANDS.md "Comments"): Add
 # Comment, the numbered pins over the view, the Comments panel and the
@@ -2676,63 +2199,20 @@ endif()
 target_sources(mitcad PRIVATE MainWindowComments.cpp view/Comments.cpp view/Comments.hpp
                view/CommentPinOverlay.cpp view/CommentPinOverlay.hpp view/CommentsWindow.cpp
                view/CommentsWindow.hpp)
-if(BUILD_TESTING)
-  # The query's comments, the pins' looks, the panel's filter, the log
-  # lines, the targets of picks and the pin's picture: plain Qt Gui.
-  target_sources(test_app PRIVATE tests/comments.cpp view/Comments.cpp view/Comments.hpp)
-endif()
 
 # Send to Slicer's material rows (mitcad#1141, app/COMMANDS.md "Send to
 # Slicer"): a row per filament, each a searchable material picker with the
 # FDM plastics first, grouped by where the materials live.
 target_sources(mitcad PRIVATE print/SlicerMaterialRows.cpp print/SlicerMaterialRows.hpp)
-if(BUILD_TESTING)
-  # The picker's order and headings, the bodies' groups and the rows'
-  # texts: plain Qt Core.
-  target_sources(test_app PRIVATE tests/slicer_material_rows.cpp print/SlicerMaterialRows.cpp
-                 print/SlicerMaterialRows.hpp)
-endif()
-
-# The browser rows' item data roles (mitcad#1143): a BrowserPanel built from
-# a snapshot, each row's name colour and light bulb as its delegate gives
-# them (a transparent body, a body inside a hidden occurrence).
-if(BUILD_TESTING)
-  # Qt Widgets on the offscreen platform; the panel's own sources and the
-  # ones it calls that test_app has not had (the chrome style, the card it
-  # sits in, the panels' row style, the UI tests' sync, the bound icon).
-  target_sources(test_app PRIVATE tests/browser_roles.cpp browser/BrowserPanel.cpp browser/BrowserPanel.hpp
-                 framework/ChromeStyle.cpp framework/ChromeStyle.hpp framework/GlassCard.cpp
-                 framework/GlassCard.hpp framework/WindowStyle.cpp framework/WindowStyle.hpp
-                 framework/TestSync.cpp framework/TestSync.hpp browser/Bindings.cpp browser/Bindings.hpp)
-  if(WIN32)
-    # WindowStyle's frame and TestSync's sync key, as in the app.
-    target_sources(test_app PRIVATE platform/windows/WindowsFrame.cpp platform/windows/WindowsTestSync.cpp)
-    target_link_libraries(test_app PRIVATE dwmapi)
-  endif()
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    # The X keyboard mapping in framework/TestSync.cpp.
-    target_link_libraries(test_app PRIVATE X11::xcb)
-  endif()
-endif()
 
 # Save Component as Design's guard (mitcad#1148): the file chosen is not the
 # open design's own or a linked component's, however its path is spelled.
 target_sources(mitcad PRIVATE files/SaveComponentTarget.cpp files/SaveComponentTarget.hpp)
-if(BUILD_TESTING)
-  # A `..` path, a symbolic link, a name that differs in case: plain Qt Core.
-  target_sources(test_app PRIVATE tests/save_component_target.cpp files/SaveComponentTarget.cpp
-                 files/SaveComponentTarget.hpp)
-endif()
 
 # Lengths in the design's unit (mitcad#1165, app/COMMANDS.md "Length
 # defaults in the design's unit"): commands' length defaults as a sensible
 # value of the unit, the Browser's sheet-rules row and Measure's values.
 target_sources(mitcad PRIVATE framework/LengthUnits.cpp framework/LengthUnits.hpp)
-if(BUILD_TESTING)
-  # The conversion and the nice values of mm, cm, m, in and ft, the texts
-  # Measure shows: plain Qt Core. BrowserPanel.cpp in test_app calls it.
-  target_sources(test_app PRIVATE tests/length_units.cpp framework/LengthUnits.cpp framework/LengthUnits.hpp)
-endif()
 
 # Multiple documents in one process, presented as windows or document tabs
 # (mitcad#1172). Each MainWindow retains its own DocumentSession.
@@ -2744,30 +2224,6 @@ endif()
 
 # Insert another open document through the shared saved-design insertion workflow (mitcad#1172).
 target_sources(mitcad PRIVATE files/MainWindowOpenDesign.cpp)
-# LaunchServices file opens must reach the same process and retained document
-# owners after native application-delegate forwarding (mitcad#1172).
-if(APPLE AND BUILD_TESTING)
-  # This subdirectory precedes MacUiTests.cmake on a fresh configure.
-  option(MITCAD_MACOS_UI_TESTS "macOS: register the UI test app.ui-macos (opens the app's window briefly)" ON)
-  find_program(BASH_EXECUTABLE bash)
-endif()
-if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
-  # The CLI sibling is added later; TARGET_FILE resolves at generation time.
-  add_test(NAME app.ui-macos-document-open
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-document-open-test.sh"
-            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
-            "${CMAKE_BINARY_DIR}/ui-macos-document-open" qt)
-  set_tests_properties(app.ui-macos-document-open PROPERTIES
-    TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
-  if(MITCAD_MACOS_NATIVE_UI)
-    add_test(NAME app.ui-macos-native-document-open
-      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-document-open-test.sh"
-              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>"
-              "${CMAKE_BINARY_DIR}/ui-macos-native-document-open" native)
-    set_tests_properties(app.ui-macos-native-document-open PROPERTIES
-      TIMEOUT 300 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
-  endif()
-endif()
 
 # Add Print Value… on the Make tab's body card (mitcad#1178, app/COMMANDS.md
 # "The selected body's card"): the settings a body can take as its own,
@@ -2775,20 +2231,10 @@ endif()
 # picker.
 target_sources(mitcad PRIVATE print/PrintValueChoices.cpp print/PrintValueChoices.hpp print/PrintValuePicker.cpp
                print/PrintValuePicker.hpp)
-if(BUILD_TESTING)
-  # The choices, their headings and the search: plain Qt Core.
-  target_sources(test_app PRIVATE tests/print_value_choices.cpp print/PrintValueChoices.cpp
-                 print/PrintValueChoices.hpp)
-endif()
 
 # ui_screenshot's encoded-image budget (mitcad#1188): max_bytes, the
 # bounded downscaling and the encodings.
 target_sources(mitcad PRIVATE mcp/ScreenshotBudget.cpp mcp/ScreenshotBudget.hpp)
-if(BUILD_TESTING)
-  # Synthetic images below and over a budget, PNG and JPEG, the bounded
-  # attempts: plain Qt Gui.
-  target_sources(test_app PRIVATE tests/screenshot_budget.cpp mcp/ScreenshotBudget.cpp mcp/ScreenshotBudget.hpp)
-endif()
 
 # Materials' mechanical, thermal and printing values in the design's units,
 # the bundled material dataset's browser (mitcad#1213): the Materials
@@ -2799,30 +2245,16 @@ target_sources(mitcad PRIVATE print/MaterialProperties.cpp print/MaterialPropert
 # "Layout grid"): the automatic spacing's metric and inch series, the major
 # lines, Grid Settings' fixed spacing converted to and from mm.
 target_sources(mitcad PRIVATE view/GridSpacing.cpp view/GridSpacing.hpp)
-if(BUILD_TESTING)
-  # The series per unit and the conversion both ways: plain Qt Core.
-  target_sources(test_app PRIVATE tests/grid_spacing.cpp view/GridSpacing.cpp view/GridSpacing.hpp)
-endif()
 
 # The arrow keys turn the 3D view by Preferences › Navigation's step while
 # it has the keyboard (mitcad#1211, app/COMMANDS.md "Arrow keys"): the
 # camera's turn about the mouse orbit's centre.
 target_sources(mitcad PRIVATE view/CameraTurn.hpp)
-if(BUILD_TESTING)
-  # The axis, the angle, the centre and the zoom on OCCT's cameras.
-  target_sources(test_app PRIVATE tests/camera_turn.cpp view/CameraTurn.hpp)
-  target_link_libraries(test_app PRIVATE TKService)
-endif()
 
 # Up and Down and the mouse wheel step a value field's number (mitcad#1254,
 # app/COMMANDS.md "Stepping a value"): the command panel's value fields and
 # the sketch's value fields, through framework/ParameterField.cpp.
 target_sources(mitcad PRIVATE framework/ValueStep.cpp framework/ValueStep.hpp)
-if(BUILD_TESTING)
-  # The step in the unit shown, the modifiers, the minimum, the texts left
-  # alone: plain Qt Core. ParameterField.cpp in test_app calls it.
-  target_sources(test_app PRIVATE tests/value_step.cpp framework/ValueStep.cpp framework/ValueStep.hpp)
-endif()
 
 # The Start tab (mitcad#1258, GitHub mitcad/Mitcad#125, app/COMMANDS.md "The
 # Start tab"): the ribbon's START tab shows the Start page over the 3D view:
@@ -2830,21 +2262,11 @@ endif()
 # pins and search, the resources, Show start page at launch.
 target_sources(mitcad PRIVATE MainWindowStart.cpp files/RecentDesigns.cpp files/RecentDesigns.hpp
                files/StartPage.cpp files/StartPage.hpp)
-if(BUILD_TESTING)
-  # The list, its times, pins and filters, a missing file, the previews'
-  # places: plain Qt Core.
-  target_sources(test_app PRIVATE tests/recent_designs.cpp files/RecentDesigns.cpp files/RecentDesigns.hpp)
-endif()
 
 # ui_command's listing of the commands an agent may run and the nearest ids
 # to an unknown one (mitcad#1269, docs/mcp.md): the command registry as
 # live MCP shows it.
 target_sources(mitcad PRIVATE mcp/UiCommandList.cpp mcp/UiCommandList.hpp)
-if(BUILD_TESTING)
-  # The words, the nearest ids, the refusals of dialogs: plain Qt Core and
-  # the registry (in test_app for command_alias.cpp).
-  target_sources(test_app PRIVATE tests/ui_command_list.cpp mcp/UiCommandList.cpp mcp/UiCommandList.hpp)
-endif()
 
 # Envelope's panel in the SOLID tab's CREATE menu (mitcad#1276): a light
 # outer skin of a component, an occurrence or bodies.
@@ -2854,61 +2276,23 @@ target_sources(mitcad PRIVATE commands/EnvelopeCommands.cpp)
 # mitcad/Mitcad#139): the cursor jumps to the opposite edge, which the view
 # does not see (OcctViewer::wrapOrbitCursor).
 target_sources(mitcad PRIVATE view/OrbitWrap.hpp)
-if(BUILD_TESTING)
-  # Where it jumps, the positions the view gets, queued moves, a refused
-  # jump, the jump's own move: plain Qt Core.
-  target_sources(test_app PRIVATE tests/orbit_wrap.cpp view/OrbitWrap.hpp)
-endif()
 
 # The Start page's project browser (mitcad#1301, app/COMMANDS.md "The Start
 # tab"): Recent, Pinned and the projects on the left, a project's breadcrumb,
 # folders and design cards on the right, one search over every project and
 # the recent list, the row and folder remembered.
 target_sources(mitcad PRIVATE files/StartBrowser.cpp files/StartBrowser.hpp)
-if(BUILD_TESTING)
-  # The rows remembered, a project's cards, the search over the projects and
-  # the recent list, the logs' lines: plain Qt Core (ProjectBrowserData and
-  # RecentDesigns are in test_app).
-  target_sources(test_app PRIVATE tests/start_browser.cpp files/StartBrowser.cpp files/StartBrowser.hpp)
-endif()
-# The Start tab on macOS (tools/ui-macos-start-page-test.sh: the shared
-# scripts of tools/ui-start-page-test.sh), the Qt frontend and AppKit's.
-if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
-  # The CLI sibling is added later; TARGET_FILE resolves at generation time.
-  add_test(NAME app.ui-macos-start-page
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-start-page-test.sh"
-            "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-start-page" qt)
-  set_tests_properties(app.ui-macos-start-page PROPERTIES
-    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
-  if(MITCAD_MACOS_NATIVE_UI)
-    add_test(NAME app.ui-macos-native-start-page
-      COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-start-page-test.sh"
-              "$<TARGET_FILE:mitcad>" "$<TARGET_FILE:mitcad-cli>" "${CMAKE_BINARY_DIR}/ui-macos-native-start-page" native)
-    set_tests_properties(app.ui-macos-native-start-page PROPERTIES
-      TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop LABELS app.ui-macos-native-full)
-  endif()
-endif()
 
 # The places of the model's notices (mitcad#1327, docs/ui-conventions.md
 # "Messages and severity"): painted in the view while the pointer is over a
 # notice (the command panel's message, a Timeline item, a Browser row, the
 # message band, the Docked status line).
 target_sources(mitcad PRIVATE framework/NoticePlaces.cpp framework/NoticePlaces.hpp MainWindowNoticeHover.cpp)
-if(BUILD_TESTING)
-  # Their places and plain messages read from notices: plain Qt Core (the
-  # document snapshot's too).
-  target_sources(test_app PRIVATE tests/notice_places.cpp framework/NoticePlaces.cpp framework/NoticePlaces.hpp)
-endif()
 
 # Preferences › Display › Always show corners in drawings and its dot size
 # (mitcad#1338, app/COMMANDS.md "Drawings"): every corner of an open
 # drawing's views as a dot on the screen.
 target_sources(mitcad PRIVATE drawings/DrawingPreferences.cpp drawings/DrawingPreferences.hpp)
-if(BUILD_TESTING)
-  # Its load and save: plain Qt Core.
-  target_sources(test_app PRIVATE tests/drawing_preferences.cpp drawings/DrawingPreferences.cpp
-                                  drawings/DrawingPreferences.hpp)
-endif()
 
 # Preferences › Display › Small circles (mitcad#879, app/COMMANDS.md
 # "Small circles"): the view's small circles meshed by their size
@@ -2922,12 +2306,6 @@ target_sources(mitcad PRIVATE view/SmallCirclesPreference.cpp view/SmallCirclesP
 # computation"): the application's notify() logs the ModelBusy and drops
 # the event instead of ending the application.
 target_sources(mitcad PRIVATE framework/Application.cpp framework/Application.hpp framework/ModelBusy.hpp)
-if(BUILD_TESTING)
-  # A filter's ModelBusy dropped and logged, a close kept open: plain Qt
-  # Widgets (test_app runs as the application's own class).
-  target_sources(test_app PRIVATE tests/busy_input.cpp framework/Application.cpp framework/Application.hpp
-                                  framework/ModelBusy.hpp)
-endif()
 
 # The layout and pictures of the Preferences pages whose list takes the
 # page's height, for the UI tests (mitcad#1394).
@@ -2938,11 +2316,6 @@ target_sources(mitcad PRIVATE framework/PreferencesPageLayout.hpp)
 # tangent or normal by the drag, placed by the cursor and the typed radius
 # and sweep.
 target_sources(mitcad PRIVATE sketch/LineArcs.cpp sketch/LineArcs.hpp)
-if(BUILD_TESTING)
-  # The choice and the arcs: plain plane geometry.
-  target_sources(test_app PRIVATE tests/line_arcs.cpp sketch/LineArcs.cpp sketch/LineArcs.hpp
-                                  sketch/SketchGeometry.cpp)
-endif()
 
 # Linked designs while their holder is open (mitcad#1416, app/COMMANDS.md
 # "Linked designs"): Open Linked Design, Update Link and Update All Links,
@@ -2951,31 +2324,17 @@ endif()
 # is saved in another tab.
 target_sources(mitcad PRIVATE files/MainWindowLinks.cpp files/LinkedFiles.cpp files/LinkedFiles.hpp
                               files/LinkWatcher.cpp files/LinkWatcher.hpp)
-if(BUILD_TESTING)
-  # The refusal read from an error and the linked file's path: plain Qt Core.
-  target_sources(test_app PRIVATE tests/linked_files.cpp files/LinkedFiles.cpp files/LinkedFiles.hpp)
-endif()
 
 # Ctrl (Cmd on macOS) held alone hides a feature command's preview while its
 # inputs are picked, and its release shows it again (mitcad#1421,
 # app/COMMANDS.md "Holding Ctrl hides the preview").
 target_sources(mitcad PRIVATE framework/CommandSessionHold.cpp framework/PreviewHold.cpp framework/PreviewHold.hpp)
-if(BUILD_TESTING)
-  # When a held Ctrl hides and shows it, from synthetic events: plain Qt
-  # Widgets.
-  target_sources(test_app PRIVATE tests/preview_hold.cpp framework/PreviewHold.cpp framework/PreviewHold.hpp)
-endif()
 
 # The step a dragged arrow handle rounds its value to (mitcad#1431,
 # app/COMMANDS.md "withManipulator"): the zoom's step, or a finer one from
 # the size of the geometry the handle works on; Place's click rounds by the
 # same rule.
 target_sources(mitcad PRIVATE framework/HandleStep.cpp framework/HandleStep.hpp)
-if(BUILD_TESTING)
-  # The step with a finer and a coarser scale, without one, from the value,
-  # the floor; the sizes of OCCT shapes.
-  target_sources(test_app PRIVATE tests/handle_step.cpp framework/HandleStep.cpp framework/HandleStep.hpp)
-endif()
 
 # The Docked layout's docks hidden from their close button or the window's
 # menu of its panels and shown again from the View menu (mitcad#1455): the
@@ -2998,11 +2357,6 @@ target_sources(mitcad PRIVATE framework/CommandSessionPreviewPicks.cpp)
 # 100 to 200 %, Qt's scale factor set before the application object at the
 # next start; the test step expect-interface-size (TestDriverChrome.cpp).
 target_sources(mitcad PRIVATE framework/InterfaceSize.cpp framework/InterfaceSize.hpp)
-if(BUILD_TESTING)
-  # The kept choice, the factor over the user's own QT_SCALE_FACTOR and
-  # what a started process inherits: plain Qt Core.
-  target_sources(test_app PRIVATE tests/interface_size.cpp framework/InterfaceSize.cpp framework/InterfaceSize.hpp)
-endif()
 
 # Preferences › Display › Text size, Icon size and Font (mitcad#1556, GitHub
 # mitcad/Mitcad#207, app/COMMANDS.md "Text size, Icon size and Font"): the
@@ -3010,22 +2364,10 @@ endif()
 # sizes through uiIconSize, at the next start; the test step
 # expect-text-icon-size (TestDriverChrome.cpp).
 target_sources(mitcad PRIVATE framework/UiSizes.cpp framework/UiSizes.hpp)
-if(BUILD_TESTING)
-  # The kept sizes and family, their fallbacks, uiIconSize and the
-  # application font they give.
-  target_sources(test_app PRIVATE tests/ui_sizes.cpp framework/UiSizes.cpp framework/UiSizes.hpp)
-endif()
 # Icon size for the icons Qt's style sizes (mitcad#1561): the application's
 # style inside IconSizeStyle, a proxy that multiplies the style's icon pixel
 # metrics; WindowStyle's own style and the macOS ones derive from it.
 target_sources(mitcad PRIVATE framework/IconSizeStyle.cpp framework/IconSizeStyle.hpp)
-if(BUILD_TESTING)
-  # The metrics it scales (once, not again through the base style's own
-  # queries), the style keys through it and the application's style it
-  # sets (also used by WindowStyle and MacToolButtonStyle in test_app).
-  target_sources(test_app PRIVATE tests/icon_size_style.cpp framework/IconSizeStyle.cpp
-                 framework/IconSizeStyle.hpp)
-endif()
 # 3D sketches (mitcad#1524, app/COMMANDS.md "3D sketches"): Create
 # Sketch's 2D or 3D choice, the 3D sketch's editing context (its frame,
 # points, curves, references and badges in the view, the 3D Sketch
@@ -3038,11 +2380,6 @@ target_sources(mitcad PRIVATE
   sketch/Sketch3dModel.hpp
   sketch/Sketch3dPalette.cpp
   sketch/Sketch3dPalette.hpp)
-if(BUILD_TESTING)
-  # The sketch3d query read and worded (status, details, sources,
-  # descriptions, the log line): plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch3d_model.cpp sketch/Sketch3dModel.cpp sketch/Sketch3dModel.hpp)
-endif()
 # The 3D sketch's drawing tools (mitcad#1525, app/COMMANDS.md "3D sketch
 # drawing tools"): placement on the temporary planes, axes and normal,
 # snaps, typed values, arcs and splines, committed as sketch3d commands.
@@ -3054,11 +2391,6 @@ target_sources(mitcad PRIVATE
 # The plane-bound drawing tools (mitcad#1550): circles, the ellipse,
 # rectangles, polygons and the text on the active XY, YZ or ZX plane.
 target_sources(mitcad PRIVATE sketch/Sketch3dShapes.cpp)
-if(BUILD_TESTING)
-  # Placement, snap priority, typed values, arc geometry and the commands
-  # the tools send: plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch3d_draw.cpp sketch/Sketch3dDraw.cpp sketch/Sketch3dDraw.hpp)
-endif()
 # Editing a 3D sketch (mitcad#1526, app/COMMANDS.md "3D sketch editing"):
 # relations and dimensions from the selection and their palette list,
 # Fix, Unfix, Detach, Attach and Replace Reference, dragging points,
@@ -3067,11 +2399,6 @@ target_sources(mitcad PRIVATE
   sketch/Sketch3dEdit.cpp
   sketch/Sketch3dEdit.hpp
   sketch/Sketch3dEditing.cpp)
-if(BUILD_TESTING)
-  # The commands an edit sends, what a delete takes, drag goals, tangent
-  # handles, the B-spline samples and the palette's words: plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch3d_edit.cpp sketch/Sketch3dEdit.cpp sketch/Sketch3dEdit.hpp)
-endif()
 # A 3D sketch's Fillet (mitcad#1548, app/COMMANDS.md "3D sketch Fillet"):
 # corners picked by their point or two lines, a typed or dragged radius
 # previewed, each corner one sketch3d.fillet.
@@ -3079,54 +2406,29 @@ target_sources(mitcad PRIVATE
   sketch/Sketch3dFillet.cpp
   sketch/Sketch3dFillet.hpp
   sketch/Sketch3dFilletTool.cpp)
-if(BUILD_TESTING)
-  # Corners, the arc of a radius and its fit, the dragged radius and the
-  # command: plain Qt Core.
-  target_sources(test_app PRIVATE tests/sketch3d_fillet.cpp sketch/Sketch3dFillet.cpp sketch/Sketch3dFillet.hpp)
-endif()
 # Pipe and Sweep along 3D sketches (mitcad#1527, app/COMMANDS.md "Pipe and
 # Sweep along 3D sketches"): the typed path, the kept direction, path
 # pieces, a whole-sketch pick's route and the panel's route listing.
 target_sources(mitcad PRIVATE
   commands/SpatialPaths.cpp
   commands/SpatialPaths.hpp)
-if(BUILD_TESTING)
-  # Read from the model's JSON answers: plain Qt Core.
-  target_sources(test_app PRIVATE tests/spatial_paths.cpp commands/SpatialPaths.cpp commands/SpatialPaths.hpp)
-endif()
 
 # A sketch edit refused for conflicting constraints (mitcad#1566,
 # app/COMMANDS.md "Conflicting constraints"): the message shown without the
 # model's ids line, the constraints and dimensions that block the change
 # painted in the view while it shows.
 target_sources(mitcad PRIVATE sketch/SketchConflict.cpp sketch/SketchConflict.hpp)
-if(BUILD_TESTING)
-  # The message and the blocking items read from the model's text: plain
-  # Qt Core.
-  target_sources(test_app PRIVATE tests/sketch_conflict.cpp sketch/SketchConflict.cpp sketch/SketchConflict.hpp)
-endif()
 
 # Commands pinned to the navigation bar (mitcad#1589, app/COMMANDS.md
 # "Pinned to the navigation bar"): the user's pins for every workspace, kept
 # in the settings, Edit Parameters by default; the navigation bar shows each
 # after a separator at its end.
 target_sources(mitcad PRIVATE framework/NavigationBarPins.cpp framework/NavigationBarPins.hpp)
-if(BUILD_TESTING)
-  # The default, pin, reorder, unpin and the settings read back: plain Qt
-  # Core.
-  target_sources(test_app PRIVATE tests/navigation_bar_pins.cpp framework/NavigationBarPins.cpp
-                 framework/NavigationBarPins.hpp)
-endif()
 
 # Where the sketch overlay's constraint symbols go (mitcad#1594): a row of
 # symbols moves clear of the dimensions' texts, the rows before it and the
 # curves, so that a symbol never covers a curve and takes its clicks.
 target_sources(mitcad PRIVATE sketch/GlyphRows.cpp sketch/GlyphRows.hpp)
-if(BUILD_TESTING)
-  # Two close parallel lines, a line through a row, a text over it: plain
-  # Qt Core.
-  target_sources(test_app PRIVATE tests/sketch_glyph_rows.cpp sketch/GlyphRows.cpp sketch/GlyphRows.hpp)
-endif()
 
 # The hidden menu bar and Enter's repeat (mitcad#1620, app/COMMANDS.md "The
 # hidden menu bar", "Enter repeats the last command"): Preferences › Display
@@ -3134,51 +2436,25 @@ endif()
 # bar for its menus; the widgets that take Enter themselves.
 target_sources(mitcad PRIVATE framework/MenuBarReveal.cpp framework/MenuBarReveal.hpp framework/EnterRepeat.cpp
                framework/EnterRepeat.hpp)
-if(BUILD_TESTING)
-  # The setting, a watched bar's height, the menus' names and the focus:
-  # Qt Core, Gui and Widgets.
-  target_sources(test_app PRIVATE tests/menu_bar.cpp framework/MenuBarReveal.cpp framework/MenuBarReveal.hpp
-                 framework/EnterRepeat.cpp framework/EnterRepeat.hpp)
-endif()
 
 # The BUILD lists' tables as CSV and as an aligned plain-text table, with
 # CRLF line ends (mitcad#1641, app/COMMANDS.md "BUILD"): Copy as Text and
 # Save as Text… beside the CSV and PDF buttons.
 target_sources(mitcad PRIVATE build/ListTables.cpp build/ListTables.hpp)
-if(BUILD_TESTING)
-  # CSV's row ends, the text table's columns and alignment: plain Qt Core.
-  target_sources(test_app PRIVATE tests/list_tables.cpp build/ListTables.cpp build/ListTables.hpp)
-endif()
 
 # The project picker's New Folder (mitcad#1649, app/COMMANDS.md "Project
 # picker"): a folder made in the chosen project, named in place.
 target_sources(mitcad PRIVATE projects/PickerNewFolder.cpp projects/PickerNewFolder.hpp)
-if(BUILD_TESTING)
-  # The name proposed, the name typed, why the button waits: plain Qt Core.
-  target_sources(test_app PRIVATE tests/picker_new_folder.cpp projects/PickerNewFolder.cpp
-                 projects/PickerNewFolder.hpp)
-endif()
 
 # The Start page's rounded backdrop (mitcad#1439, app/COMMANDS.md "The Start
 # tab"): inset from the view's edges with the floating cards' radius, the
 # view's background around it.
 target_sources(mitcad PRIVATE files/StartBackdrop.cpp files/StartBackdrop.hpp)
-if(BUILD_TESTING)
-  # Its rectangle and margins, its colour in the middle and not at the
-  # corners, the view's gradient around it: plain Qt Gui, painted into
-  # images.
-  target_sources(test_app PRIVATE tests/start_backdrop.cpp files/StartBackdrop.cpp files/StartBackdrop.hpp)
-endif()
 
 # The command search's ranking (mitcad#1681, framework/CommandSearchRank):
 # a sketch tool that matches best outside a sketch brings a row saying how
 # to open one, and no weaker match is selected.
 target_sources(mitcad PRIVATE framework/CommandSearchRank.cpp framework/CommandSearchRank.hpp)
-if(BUILD_TESTING)
-  # The list's order, its hint and the row selected: plain Qt Core.
-  target_sources(test_app PRIVATE tests/command_search.cpp framework/CommandSearchRank.cpp
-                 framework/CommandSearchRank.hpp)
-endif()
 
 # Sketch mode's list of the sketch's points, curves, constraints and
 # dimensions in creation order, in the timeline's place (mitcad#1492).
@@ -3190,11 +2466,6 @@ target_sources(mitcad PRIVATE
 # (mitcad#1809) look a few degrees off the isometric view, so that
 # the origin planes' edges do not lie on top of each other.
 target_sources(mitcad PRIVATE view/DefaultView.hpp)
-if(BUILD_TESTING)
-  # The planes' projected edges apart, View › Isometric exact: OCCT's camera.
-  target_sources(test_app PRIVATE tests/default_view.cpp view/DefaultView.hpp)
-  target_link_libraries(test_app PRIVATE TKService)
-endif()
 
 # The 3D view's pick list (mitcad#1703, app/COMMANDS.md "Selection"): a
 # press held still lists everything under the pointer, nearest first.
@@ -3206,21 +2477,6 @@ target_sources(mitcad PRIVATE view/PickList.cpp view/PickList.hpp view/PickListV
 # cascaded (WindowManager::createWindow); the test steps expect-window-place
 # and expect-window-on-screen (TestDriverWindowFit.cpp).
 target_sources(mitcad PRIVATE framework/WindowPlace.cpp framework/WindowPlace.hpp)
-if(BUILD_TESTING)
-  # A kept frame fitted to the screens (a removed monitor, half
-  # off-screen, larger than the screen, the title bar above the top), the
-  # cascade, and the place in the settings: plain Qt Core and Gui.
-  target_sources(test_app PRIVATE tests/window_place.cpp framework/WindowPlace.cpp framework/WindowPlace.hpp)
-endif()
-# The same through the shared input scripts on macOS (Linux:
-# tools/ui-window-place-test.sh, Windows: app.ui-windows-window-place).
-if(APPLE AND BUILD_TESTING AND MITCAD_MACOS_UI_TESTS AND BASH_EXECUTABLE)
-  add_test(NAME app.ui-macos-window-place
-    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/ui-macos-window-place-test.sh"
-            "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-macos-window-place")
-  set_tests_properties(app.ui-macos-window-place PROPERTIES
-    TIMEOUT 600 SKIP_RETURN_CODE 77 RESOURCE_LOCK macos_desktop)
-endif()
 
 # CAM (mitcad#1013, app/COMMANDS.md "The CNC group"): the Make tab's CNC
 # group (New Setup, the operations' panels, Generate, Simulate, Post
@@ -3235,11 +2491,6 @@ target_sources(mitcad PRIVATE
   cam/CamToolpaths.hpp
   cam/MainWindowCam.cpp
   view/CamToolpathOverlay.cpp)
-if(BUILD_TESTING)
-  # The work frame, the moves' styles, arcs, segments, the playback's
-  # places and the log lines: plain Qt Core.
-  target_sources(test_app PRIVATE tests/cam_toolpaths.cpp cam/CamToolpaths.cpp cam/CamToolpaths.hpp)
-endif()
 # Simulate's stock (mitcad#1013, phase 3): the height grid of cam_simulate
 # as a surface shaded by the material left, and its overlay in the view.
 target_sources(mitcad PRIVATE
@@ -3247,21 +2498,12 @@ target_sources(mitcad PRIVATE
   cam/CamStock.hpp
   cam/MainWindowCamStock.cpp
   view/CamStockOverlay.cpp)
-if(BUILD_TESTING)
-  # The runs, the surface, the shades, the snapshots' places and the log
-  # lines: plain Qt Core.
-  target_sources(test_app PRIVATE tests/cam_stock.cpp cam/CamStock.cpp cam/CamStock.hpp)
-endif()
 # Live MCP's input tools (mitcad#1735, docs/mcp.md "Clicks, keys and
 # dialogs"): ui_click and ui_type post mouse and key events to the window,
 # ui_dialog opens a window ui_command refuses for viewing, reads it and
 # closes it; only in a run started with --mcp-folder.
 target_sources(mitcad PRIVATE MainWindowMcpInput.cpp mcp/DialogWatch.cpp mcp/DialogWatch.hpp
                mcp/UiKeys.cpp mcp/UiKeys.hpp)
-if(BUILD_TESTING)
-  # Key names and Unicode text as key presses: plain Qt Gui.
-  target_sources(test_app PRIVATE tests/ui_keys.cpp mcp/UiKeys.cpp mcp/UiKeys.hpp)
-endif()
 # Preferences › Display › Origin planes and the resize handles of
 # construction planes and axes (mitcad#1748, GitHub mitcad/Mitcad#273 and
 # #279, app/COMMANDS.md "Origin planes and the size of construction
@@ -3270,12 +2512,6 @@ endif()
 # handles set the size the model keeps with it (set_datum_display_size).
 target_sources(mitcad PRIVATE view/OriginPreference.cpp view/OriginPreference.hpp view/DatumHandles.cpp
                               view/DatumHandles.hpp MainWindowOrigin.cpp)
-if(BUILD_TESTING)
-  # The settings' load and save, and the shapes each style draws: Qt Core
-  # and OCCT's shape building.
-  target_sources(test_app PRIVATE tests/origin_preference.cpp view/OriginPreference.cpp view/OriginPreference.hpp)
-  target_link_libraries(test_app PRIVATE TKTopAlgo TKBRep)
-endif()
 # Show Dimensions of a sketch's row (mitcad#1772, GitHub mitcad/Mitcad#306,
 # app/COMMANDS.md "Show Dimensions outside sketch mode"): a shown sketch's
 # dimensions drawn over the view outside sketch mode, as sketch mode draws
@@ -3287,11 +2523,6 @@ target_sources(mitcad PRIVATE sketch/ShownDimensions.cpp sketch/ShownDimensions.
 # the view.
 target_sources(mitcad PRIVATE commands/FormCommands.cpp commands/FormCage.cpp commands/FormCage.hpp
                               view/FormCageOverlay.cpp view/FormCageOverlay.hpp MainWindowForm.cpp)
-if(BUILD_TESTING)
-  # The cage read, the picks, the edits' commands and refusals, the lines
-  # drawn: plain Qt Core.
-  target_sources(test_app PRIVATE tests/form_cage.cpp commands/FormCage.cpp commands/FormCage.hpp)
-endif()
 # The orbit's center (mitcad#1791, GitHub mitcad/Mitcad#300,
 # app/COMMANDS.md "The orbit's center"): Preferences › Navigation's Orbit
 # center (Model or Cursor) and a fixed center set from the view's context
@@ -3303,21 +2534,10 @@ target_sources(mitcad PRIVATE view/OrbitCenterView.cpp framework/TestDriverOrbit
 # in, and the selection's and the hover's line widths, scaled by the
 # device pixel ratio.
 target_sources(mitcad PRIVATE view/SelectionLook.cpp view/SelectionLook.hpp)
-if(BUILD_TESTING)
-  # The settings' load and save and the widths: Qt Core and Gui (the
-  # selection role's colour, framework/Theme.cpp, is in test_app already).
-  target_sources(test_app PRIVATE tests/selection_look.cpp view/SelectionLook.cpp view/SelectionLook.hpp)
-endif()
 # The Properties window (mitcad#1816, app/COMMANDS.md "Physical
 # Properties"): several bodies as a summary and a table with equal bodies
 # merged, one body's values in three groups, even units and Copy's text.
 target_sources(mitcad PRIVATE commands/PropertiesReport.cpp commands/PropertiesReport.hpp)
-if(BUILD_TESTING)
-  # Names, materials, merged rows, the summary, units and the copied text:
-  # plain Qt Core (framework/LengthUnits.cpp is in test_app already).
-  target_sources(test_app PRIVATE tests/properties_report.cpp commands/PropertiesReport.cpp
-                 commands/PropertiesReport.hpp)
-endif()
 # Fill Cavity in the SOLID tab's MODIFY group (mitcad#1818): a closed pocket
 # of a body filled up to a plane.
 target_sources(mitcad PRIVATE commands/FillCavityCommands.cpp)
@@ -3327,12 +2547,6 @@ target_sources(mitcad PRIVATE commands/FillCavityCommands.cpp)
 # the face by the model's map, and the pointer met with the face through
 # the `sketch_surface` query's rays.
 target_sources(mitcad PRIVATE sketch/SketchSurface.cpp sketch/SketchSurface.hpp)
-if(BUILD_TESTING)
-  # The map, the normals, the polylines and the profile laid onto the face,
-  # and the angle of a click: Qt Core and OCCT's shape building and meshing.
-  target_sources(test_app PRIVATE tests/sketch_surface.cpp sketch/SketchSurface.cpp sketch/SketchSurface.hpp)
-  target_link_libraries(test_app PRIVATE TKMesh TKTopAlgo TKBRep)
-endif()
 # The Docked layout's Command panel's width (mitcad#1825, GitHub
 # mitcad/Mitcad#336, app/COMMANDS.md "The Command panel's width"): at least
 # 300 px times the larger of Text size and Icon size, dragged wider by its
@@ -3342,28 +2556,60 @@ target_sources(mitcad PRIVATE framework/CommandDockWidth.cpp framework/CommandDo
 # the Browser's Delete and Delete Component share the build_remove command
 # list, which leaves a fastener to its connector when both go.
 target_sources(mitcad PRIVATE browser/BuildMembers.cpp browser/BuildMembers.hpp)
-if(BUILD_TESTING)
-  # The adders read from build_parts and the command list: plain Qt Core.
-  target_sources(test_app PRIVATE tests/build_members.cpp browser/BuildMembers.cpp browser/BuildMembers.hpp)
-endif()
 # Joint, As-Built Joint, Rigid Group and Assembly Constraint on picks under
 # another component than the active one (mitcad#1856, app/COMMANDS.md "The
 # component that holds the picks"): the question that offers the component
 # holding every pick, its preference, and the main window's side.
 target_sources(mitcad PRIVATE browser/JointHolderQuestion.cpp browser/JointHolderQuestion.hpp
                MainWindowJointHolder.cpp)
-if(BUILD_TESTING)
-  # Its texts, its buttons and check box, and the preference: Qt Widgets on
-  # the offscreen platform.
-  target_sources(test_app PRIVATE tests/joint_holder_question.cpp browser/JointHolderQuestion.cpp
-                 browser/JointHolderQuestion.hpp)
-endif()
 # Edit Parameters sorted by a column (mitcad#1866, GitHub mitcad/Mitcad#338):
 # the rows' keys (numbers in the common unit of their kind, texts in
 # natural order, boxes on or off) and their order within a group.
 target_sources(mitcad PRIVATE browser/ParameterSort.cpp browser/ParameterSort.hpp)
+# Preferences › Export Settings and Import Settings (mitcad#1889, GitHub
+# mitcad/Mitcad#357, app/COMMANDS.md "Exporting and importing settings"):
+# the groups of settings in a `.mitcad-settings` file, and the dialogs,
+# the question and the import applied as Preferences applies a change.
+target_sources(mitcad PRIVATE framework/SettingsTransfer.cpp framework/SettingsTransfer.hpp
+               view/PreferencesTransfer.cpp)
+
+# One update for the whole application (mitcad#1890): the update's row,
+# which every main window's bar shows; a window that closes takes only its
+# own bar along.
+target_sources(mitcad PRIVATE update/UpdateRow.cpp update/UpdateRow.hpp)
+
+# Version work off the UI thread (mitcad#1895, app/COMMANDS.md "Remote
+# repositories"): one queue per project folder for the tasks that reach its
+# server, local version commands run aside, the sync state in words.
+target_sources(mitcad PRIVATE files/VersionQueue.cpp files/VersionQueue.hpp files/SyncState.cpp
+               files/SyncState.hpp)
+
+# Every session's log on disk with its rotation, the hang marker and the
+# crash dumps beside the logs (mitcad#1896).
+target_sources(mitcad PRIVATE
+  framework/HangWatchdog.cpp
+  framework/HangWatchdog.hpp
+  framework/SessionLog.cpp
+  framework/SessionLog.hpp)
+
+# The busy mark beside a command panel's OK and Cancel while its preview
+# computes (mitcad#1907, GitHub mitcad/Mitcad#361), in place of a message
+# line that resized the panel.
+target_sources(mitcad PRIVATE framework/BusyMark.cpp framework/BusyMark.hpp)
+
+# The unit Number of a parameter without a unit (mitcad#1920, GitHub
+# mitcad/Mitcad#378): Add User Parameter's Unit lists and the parameters
+# table's Unit column.
+target_sources(mitcad PRIVATE framework/ParameterUnits.cpp framework/ParameterUnits.hpp)
+
+# app.unit's test files (mitcad#1925): each tests/<file>.cpp registers its
+# entry point (tests/UnitTests.hpp) and its sources in tests/unit/<file>.cmake,
+# included here, after every variable they may use, in sorted order: a new
+# test file edits no shared list.
 if(BUILD_TESTING)
-  # The keys and the order: plain Qt Core (framework/ParameterSuggest.cpp
-  # is in test_app already).
-  target_sources(test_app PRIVATE tests/parameter_sort.cpp browser/ParameterSort.cpp browser/ParameterSort.hpp)
+  file(GLOB mitcad_unit_test_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*.cmake")
+  list(SORT mitcad_unit_test_files)
+  foreach(mitcad_unit_test_file IN LISTS mitcad_unit_test_files)
+    include("${mitcad_unit_test_file}")
+  endforeach()
 endif()

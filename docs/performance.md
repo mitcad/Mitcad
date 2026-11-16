@@ -411,7 +411,8 @@ triangulation where Delabella left the quarter disc undrawn, leaves the
 sliver undrawn as the default does instead of the 11.8 mm² patch, and
 keeps Delabella's where it is right, also where the default had none.
 `MeshReport::planes_redone` counts the planes made again
-(`MITCAD_MESH_TRACE=1`: "planes redone N"); `mitcad-cli mesh-compare --b
+(`MITCAD_MESH_TRACE=1`: "planes redone N", and a line for each plane with
+why: Delabella left none, failed, or its area is off); `mitcad-cli mesh-compare --b
 checked` repeats the trial against the switched tier.
 
 mitcad#846 put the final tier's planes back to the default insertion

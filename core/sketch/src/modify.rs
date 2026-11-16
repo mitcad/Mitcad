@@ -100,7 +100,7 @@ impl Map2 {
 
     /// The angle a turning map turns by (mitcad#1563), counter-clockwise;
     /// None for a translation or a mirror.
-    fn turn(&self) -> Option<f64> {
+    pub(crate) fn turn(&self) -> Option<f64> {
         let identity = (self.m[0][0] - 1.0).abs() <= 1e-12
             && self.m[0][1].abs() <= 1e-12
             && self.m[1][0].abs() <= 1e-12
@@ -779,6 +779,12 @@ impl SketchEdit<'_> {
     /// their points, a circle's whole round included. Rotate turns about
     /// it when no pivot is given.
     pub fn middle_of(&self, entities: &[Ref]) -> Result<P2, String> {
+        self.middle_with(entities, &[])
+    }
+
+    /// The middle of entities and further places (mitcad#1911: the anchors
+    /// of moved texts), as [`SketchEdit::middle_of`] counts them.
+    pub(crate) fn middle_with(&self, entities: &[Ref], places: &[P2]) -> Result<P2, String> {
         let mut low = [f64::INFINITY; 2];
         let mut high = [f64::NEG_INFINITY; 2];
         let mut include = |p: P2| {
@@ -794,6 +800,9 @@ impl SketchEdit<'_> {
         }
         for p in self.points_of(entities)? {
             include(self.at(p)?);
+        }
+        for p in places {
+            include(*p);
         }
         if !(low[0].is_finite() && high[0].is_finite()) {
             return Err("\"entities\" is empty".to_owned());

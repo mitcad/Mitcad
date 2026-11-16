@@ -4,6 +4,7 @@
 // choice is disabled, the file names proposed (owner 26.10.2026: a body's,
 // a component's, the design's; a file per body named by each body, unique)
 // and the model's `export` command.
+#include "UnitTests.hpp"
 #include "files/SaveAsMesh.hpp"
 
 #include <cmath>
@@ -184,3 +185,4 @@ int saveAsMeshTests() {
   CHECK(meshItemsName({{Kind::Body, QStringLiteral("F4.b0"), QString()}}, names, components, design) == design);
   return failures;
 }
+MITCAD_UNIT_TEST(saveAsMeshTests);

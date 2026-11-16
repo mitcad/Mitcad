@@ -11,6 +11,7 @@ use std::str::FromStr;
 
 use super::bodies::faces_named;
 use super::copy::CopySource;
+use super::linked_looks::SourceLook;
 use super::{Added, BodyAttributes, ComponentCopy, DocState, Document, ModelError, invalid};
 use crate::assembly::{ExternalLink, Occurrence, is_rigid};
 use crate::exchange::ImportBody;
@@ -292,15 +293,21 @@ impl<K: Kernel> Document<K> {
     /// coordinates; an occurrence inside a flexible one where it is for
     /// that one (mitcad#1793).
     pub fn path_transform(&self, path: &[OccurrenceUid]) -> Transform {
-        let flexed = &self.result.joints.flexed;
         let mut t = Transform::IDENTITY;
         for (k, o) in path.iter().enumerate() {
-            let placed = crate::joints::flexed_step(flexed, &path[..k], *o)
-                .or_else(|| self.placement(*o))
-                .unwrap_or(Transform::IDENTITY);
-            t = t.after(&placed);
+            t = t.after(&self.occurrence_step(&path[..k], *o));
         }
         t
+    }
+
+    /// The placement of occurrence `o` in its parent component where the
+    /// occurrences `above` place that parent: as a flexed joint moves it
+    /// there, else its own (each step of [`Document::path_transform`];
+    /// the STEP export's instances, mitcad#1915).
+    pub(crate) fn occurrence_step(&self, above: &[OccurrenceUid], o: OccurrenceUid) -> Transform {
+        crate::joints::flexed_step(&self.result.joints.flexed, above, o)
+            .or_else(|| self.placement(o))
+            .unwrap_or(Transform::IDENTITY)
     }
 
     /// The bodies at the marker of a component.
@@ -1370,8 +1377,11 @@ impl<K: Kernel> Document<K> {
         // Its mount frames (mitcad#525): a linked part's are joint origins
         // of its own where the design has them; a copy has the design's.
         let (bodies, mounts) = if options.link {
-            let (bodies, mounts) = self.design_parts(&source, path)?;
-            (Some(bodies), mounts)
+            // With the materials and appearances the design gives its
+            // bodies (mitcad#1921).
+            let origin = CopySource::Document(resolved.parent());
+            let (bodies, mounts, looks) = self.design_parts_looked(&source, path, &origin)?;
+            (Some((bodies, looks)), mounts)
         } else if options.mount.is_some() {
             (None, self.design_mounts(&source)?)
         } else {
@@ -1397,12 +1407,13 @@ impl<K: Kernel> Document<K> {
             state.assembly.set_policy(made, source.assembly.root_policy);
             let occurrence = state.assembly.place(made, parent, transform);
             let frames = match bodies {
-                Some(bodies) => {
+                Some((bodies, looks)) => {
                     let base = BaseDef {
                         source: Some(file_label(path)),
                         ..BaseDef::new(bodies)
                     };
                     let added = state.add_feature_in(&FeatureDef::Base(base), None, made)?;
+                    state.give_new_link_looks(added.uid, &looks)?;
                     let frames = super::mounts::add_linked_mounts(state, made, &mounts)?;
                     state.assembly.component_mut(made).expect("made").link = Some(ExternalLink {
                         path: recorded_link_path(path, &resolved, options.base.as_deref()),
@@ -1410,6 +1421,10 @@ impl<K: Kernel> Document<K> {
                         feature: added.uid,
                         envelope: None,
                         frames: Vec::new(),
+                        // Its bodies took what the design gives them
+                        // (mitcad#1921).
+                        looks: true,
+                        given: Vec::new(),
                     });
                     frames
                 }
@@ -1542,6 +1557,19 @@ impl<K: Kernel> Document<K> {
         Ok((self.base_bodies(&bodies)?, mounts))
     }
 
+    /// [`Document::design_parts`] with what the design gives each body
+    /// (mitcad#1921: its material and appearance there, one per body, the
+    /// images of its own appearances read through `origin`).
+    pub(super) fn design_parts_looked(
+        &self,
+        source: &DocState,
+        path: &str,
+        origin: &CopySource<'_>,
+    ) -> Result<LookedParts, ModelError> {
+        let ((bodies, mounts), looks) = self.design_shapes_looked(source, path, Some(origin))?;
+        Ok((self.base_bodies(&bodies)?, mounts, looks))
+    }
+
     /// The visible bodies of another design as shapes placed in its
     /// coordinates, and its mount frames (mitcad#525).
     pub(super) fn design_shapes(
@@ -1549,6 +1577,18 @@ impl<K: Kernel> Document<K> {
         source: &DocState,
         path: &str,
     ) -> Result<DesignShapes<K::Shape>, ModelError> {
+        self.design_shapes_looked(source, path, None)
+            .map(|(shapes, _)| shapes)
+    }
+
+    /// [`Document::design_shapes`], with what the design gives each body
+    /// when `origin` is given (mitcad#1921), else none.
+    pub(super) fn design_shapes_looked(
+        &self,
+        source: &DocState,
+        path: &str,
+        origin: Option<&CopySource<'_>>,
+    ) -> Result<(DesignShapes<K::Shape>, Vec<SourceLook>), ModelError> {
         let kernel = &self.kernel;
         // A cancel (P7) stops this too.
         let monitor = self.monitor.as_ref();
@@ -1572,6 +1612,7 @@ impl<K: Kernel> Document<K> {
                 .collect::<Vec<_>>()
         };
         let mut bodies = Vec::new();
+        let mut looks = Vec::new();
         for instance in a.instances(&placement, &owned) {
             let shown = source
                 .body_attributes
@@ -1595,11 +1636,14 @@ impl<K: Kernel> Document<K> {
                 color: None,
                 shape,
             });
+            if let Some(origin) = origin {
+                looks.push(super::linked_looks::source_look(source, &instance, origin));
+            }
         }
         if bodies.is_empty() {
             return Err(invalid(format!("{path} has no bodies to show")));
         }
-        Ok((bodies, mounts))
+        Ok(((bodies, mounts), looks))
     }
 
     /// The design of a file to insert and the name its component takes
@@ -1633,7 +1677,10 @@ impl<K: Kernel> Document<K> {
     pub fn update_links(&mut self, base: Option<&Path>) -> Result<Vec<String>, ModelError> {
         let mut messages = Vec::new();
         let mut updates = self.library_link_updates(&mut messages)?;
-        let sources = self.options_file_updates(base, &|_| true, &mut messages);
+        let mut sources = self.options_file_updates(base, &|_| true, &mut messages)?;
+        // Library parts with options linked before their materials came
+        // with them take them once (mitcad#1923).
+        sources.extend(self.options_library_look_updates(&mut messages)?);
         updates.extend(self.file_link_updates(base, &|_| true, &mut messages)?);
         // Part of opening the file: no undo step, but a new revision. The
         // new state is computed before it is taken.
@@ -1856,3 +1903,11 @@ fn is_default_body_name(name: &str) -> bool {
 /// The visible bodies of another design as shapes in its coordinates, and its
 /// mount frames (`design_shapes`, mitcad#525).
 type DesignShapes<S> = (Vec<ImportBody<S>>, Vec<super::mounts::SourceMount>);
+
+/// A linked design's bodies as base-feature bodies, its mount frames and
+/// what it gives each body (`design_parts_looked`, mitcad#1921).
+pub(super) type LookedParts = (
+    Vec<crate::features::BaseBody>,
+    Vec<super::mounts::SourceMount>,
+    Vec<SourceLook>,
+);

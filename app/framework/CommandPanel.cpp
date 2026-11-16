@@ -36,6 +36,7 @@
 #include <QPoint>
 #include <QPointer>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSignalBlocker>
@@ -47,6 +48,7 @@
 #include <QVBoxLayout>
 #include <QtLogging>
 
+#include "BusyMark.hpp"
 #include "ChromeStyle.hpp"
 #include "CommandMessage.hpp"
 #include "CutTargetsPanel.hpp"
@@ -312,7 +314,10 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "Semi-Sharp"),
     QT_TRANSLATE_NOOP("Choice", "Picked Plane"),
     // commands/FilletCommands.cpp: Press Pull's Continue and Taper Type (mitcad#1850).
-    QT_TRANSLATE_NOOP("Choice", "Along the Walls (Face Turns)"), QT_TRANSLATE_NOOP("Choice", "Draft")};
+    QT_TRANSLATE_NOOP("Choice", "Along the Walls (Face Turns)"), QT_TRANSLATE_NOOP("Choice", "Draft"),
+    // commands/SheetCommands.cpp: a flange on several edges' Miter (mitcad#1872).
+    QT_TRANSLATE_NOOP("Choice", "Bisect"), QT_TRANSLATE_NOOP("Choice", "Earlier Edge Runs Past"),
+    QT_TRANSLATE_NOOP("Choice", "Later Edge Runs Past")};
 
 // Colours of the selection inputs in order, unless an input sets its own
 // (the role table's, shared with the AppKit panel).
@@ -827,6 +832,14 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
   });
   // Its moves move what it logs (mitcad#528), as the rows' do.
   m_messageAction->installEventFilter(this);
+  // A new problem's message held back to keep the field typed in in view
+  // (revealMessage, mitcad#1884): shown whole once that field lets the
+  // keyboard go (to another field, the view, another window).
+  connect(qApp, &QApplication::focusChanged, this, [this](QWidget* old, QWidget*) {
+    if (m_revealMessage && old != nullptr && isAncestorOf(old)) {
+      TestSync::singleShot(0, this, [this] { revealMessage(); });
+    }
+  });
 
   auto* buttons = new QDialogButtonBox;
   m_buttonBox = buttons;
@@ -867,7 +880,37 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
     buttons->addButton(m_ok, QDialogButtonBox::AcceptRole);
     buttons->addButton(cancel, QDialogButtonBox::RejectRole);
   }
-  layout->addWidget(buttons);
+  // The busy mark just before OK and Cancel (mitcad#1907, GitHub
+  // mitcad/Mitcad#361): a preview being computed shows there, in room the
+  // row keeps whether it shows or not, instead of on a message line that
+  // made the panel grow and shrink with each preview. The row goes with OK
+  // and Cancel where a page lays them out itself (takeButtons).
+  auto* buttonRow = new QWidget(this);
+  buttonRow->setObjectName(QStringLiteral("commandButtons"));
+  auto* buttonRowBox = new QHBoxLayout(buttonRow);
+  buttonRowBox->setContentsMargins(0, 0, 0, 0);
+  m_busy = new BusyMark(buttonRow);
+  m_busy->setObjectName(QStringLiteral("commandBusy"));
+  // OK and Cancel at the row's end as before, the mark right before them.
+  buttons->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+  buttonRowBox->addStretch(1);
+  buttonRowBox->addWidget(m_busy, 0, Qt::AlignVCenter);
+  buttonRowBox->addWidget(buttons, 0);
+  connect(m_busy, &BusyMark::shownChanged, this, [this](bool shown, qint64 ms) {
+    if (shown) {
+      qDebug().noquote() << QStringLiteral("Panel %1 busy mark shown after %2 ms: %3, %4")
+                                .arg(m_def.name)
+                                .arg(ms)
+                                .arg(m_busy->toolTip(), busySize());
+    } else {
+      qDebug().noquote() << QStringLiteral("Panel %1 busy mark hidden after %2 ms, %3")
+                                .arg(m_def.name)
+                                .arg(ms)
+                                .arg(busySize());
+    }
+  });
+  m_buttonBox = buttonRow;
+  layout->addWidget(buttonRow);
   layout->addStretch();
 
   applyControlStyles();
@@ -1693,12 +1736,27 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
       if (mark != row.shownMark) {
         row.shownMark = mark;
         row.mark->setVisible(!mark.isEmpty());
+        // The field's trailing buttons placed again for the mark shown or
+        // hidden now (mitcad#1924): the line edit lays them out when it is
+        // resized, and a mark shown without that sat under the fx button,
+        // whose browser then took the click meant for the mark. The panel's
+        // own relayouts (a message line that came and went with each
+        // preview, until mitcad#1907) used to hide this.
+        QResizeEvent relayout(row.edit->size(), row.edit->size());
+        QCoreApplication::sendEvent(row.edit, &relayout);
         if (!mark.isEmpty()) {
           row.mark->setIcon(themeIcon(mark.icon));
           row.mark->setText(mark.action.isEmpty() ? mark.tooltip : mark.action);
           row.mark->setToolTip(mark.action.isEmpty() ? mark.tooltip
                                                      : tr("%1\nClick: %2").arg(mark.tooltip, mark.action));
         }
+        // The field's buttons laid out again: showing the mark alone left it
+        // under the fx button where it was laid out while hidden, until the
+        // field was resized (on Windows a click on the mark opened the
+        // parameter browser once the panel stopped resizing then, mitcad#1884).
+        // QLineEdit lays out its side buttons on a resize.
+        QResizeEvent resized(row.edit->size(), row.edit->size());
+        QCoreApplication::sendEvent(row.edit, &resized);
       }
     }
     // Its own parameter is not offered to it (mitcad#567), but as kept as a
@@ -2036,6 +2094,9 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
   }
   m_messageText = message;
   m_messageLevel = level;
+  // A new error or warning is brought into the page's view once laid out
+  // (revealMessage, from the fit timer below, mitcad#1884); a hint is not.
+  m_revealMessage = boxed;
   // The model's messages in the interface language (mitcad#1284), before
   // the box's markup goes round it: in the box the whole text matched no
   // template and an error stayed English after the translated word
@@ -2060,6 +2121,12 @@ void CommandPanel::setMessage(const QString& message, NoticeLevel level) {
   if (boxed) {
     qDebug().noquote() << QStringLiteral("Panel %1 message box: %2: %3")
                               .arg(m_def.name, noticeLevelName(level), message);
+  } else if (level == NoticeLevel::Information && !message.isEmpty()) {
+    // Information as plain text (mitcad#1914: what the panel points out
+    // while it is open, such as a short tangent chain), for UI tests.
+    QString logged = message;
+    logged.replace(QLatin1Char('\n'), QStringLiteral(" | "));
+    qDebug().noquote() << QStringLiteral("Panel %1 message: information: %2").arg(m_def.name, logged);
   }
   scheduleLogFit();
 }
@@ -2086,7 +2153,10 @@ void CommandPanel::scheduleLogFit() {
     m_fitTimer = new QTimer(this);
     m_fitTimer->setSingleShot(true);
     m_fitTimer->setInterval(50);
-    connect(m_fitTimer, &QTimer::timeout, this, &CommandPanel::logFit);
+    connect(m_fitTimer, &QTimer::timeout, this, [this] {
+      revealMessage();
+      logFit();
+    });
     TestSync::watch(m_fitTimer);
   }
   m_fitTimer->start();
@@ -2132,6 +2202,94 @@ void CommandPanel::logFit() const {
   }
 }
 
+void CommandPanel::revealMessage() {
+  // A panel higher than its page (mitcad#1884: Flange with a Corners row in
+  // a Docked window of 1280 x 800) showed a new refusal under its rows,
+  // below the page's view: unseen unless the user scrolled, and its places
+  // painted only once the pointer could reach it. The page now scrolls just
+  // far enough to show the box (and the button under it) whole, in every
+  // layout (the Docked dock and the Floating card both put the panel in a
+  // scroll area). The message comes with the preview's result, once the
+  // typing paused; the field that has the keyboard stays in view all the
+  // same, so the text being typed and its caret never leave the user's
+  // sight. What that leaves out of view follows when the keyboard leaves
+  // the field (the focus change connected in the constructor).
+  if (!m_revealMessage || !isVisible()) {
+    return; // while hidden, kept for showEvent
+  }
+  // Not while a mouse button is down: a press on another field of the panel
+  // (its Start's select button) moves the keyboard there, and a scroll
+  // before the release took the button away from under the pointer, so the
+  // click did nothing (the field before it stayed active). The page scrolls
+  // once the button is let go.
+  if (QApplication::mouseButtons() != Qt::NoButton) {
+    TestSync::singleShot(50, this, [this] { revealMessage(); });
+    return;
+  }
+  auto* area = parentWidget() != nullptr ? qobject_cast<QScrollArea*>(parentWidget()->parentWidget()) : nullptr;
+  if (area == nullptr || area->widget() != this || m_message->isHidden()) {
+    m_revealMessage = false;
+    return;
+  }
+  settleLayout();
+  QScrollBar* bar = area->verticalScrollBar();
+  const int view = area->viewport()->height();
+  if (view <= 0) {
+    return;
+  }
+  // In the panel's coordinates; the page shows [value, value + view).
+  QRect wanted(m_message->mapTo(this, QPoint(0, 0)), m_message->size());
+  if (m_messageAction->isVisibleTo(this)) {
+    wanted |= QRect(m_messageAction->mapTo(this, QPoint(0, 0)), m_messageAction->size());
+  }
+  constexpr int kRoom = 6; // a little of the panel round it
+  const int was = bar->value();
+  int value = was;
+  if (wanted.bottom() + 1 + kRoom > value + view) {
+    value = wanted.bottom() + 1 + kRoom - view;
+  }
+  if (wanted.top() - kRoom < value) {
+    value = wanted.top() - kRoom; // higher than the page: from its first line
+  }
+  bool held = false;
+  const QWidget* focused = QApplication::focusWidget();
+  if (focused != nullptr && focused != m_message && isAncestorOf(focused) && focused->isVisible()) {
+    const QRect field(focused->mapTo(this, QPoint(0, 0)), focused->size());
+    // A field in sight now; one scrolled away is not being watched.
+    if (field.bottom() >= was && field.top() < was + view) {
+      if (value > was) {
+        const int most = std::max(was, field.top());
+        if (value > most) {
+          value = most;
+          held = true;
+        }
+      } else if (value < was) {
+        const int least = std::min(was, field.bottom() + 1 - view);
+        if (value < least) {
+          value = least;
+          held = true;
+        }
+      }
+    }
+  }
+  value = std::clamp(value, bar->minimum(), bar->maximum());
+  if (value != was) {
+    bar->setValue(value); // MainWindow logs the places again
+  }
+  const bool whole = wanted.top() >= value && wanted.bottom() < value + view;
+  m_revealMessage = held && !whole;
+  QString shown = QStringLiteral("in view");
+  if (m_revealMessage) {
+    shown = QStringLiteral("partly in view, the field typed in kept in view");
+  } else if (!whole) {
+    shown = QStringLiteral("in view from its first line");
+  }
+  qDebug().noquote() << QStringLiteral("Panel %1 message revealed: %2, scrolled %3 of %4")
+                            .arg(m_def.name, shown)
+                            .arg(bar->value())
+                            .arg(bar->maximum());
+}
+
 void CommandPanel::setResult(const QString& text) {
   Inspection result;
   result.text = text;
@@ -2159,6 +2317,28 @@ void CommandPanel::setInspection(const Inspection& result) {
 }
 
 void CommandPanel::setOkEnabled(bool enabled) { m_ok->setEnabled(enabled || m_def.closeOnly); }
+
+void CommandPanel::setBusy(const QString& text) {
+  const bool wasBusy = m_busy->busy();
+  const qint64 ms = m_busy->busyMs();
+  const bool wasShown = m_busy->shown();
+  m_busy->setBusy(text);
+  // For the UI tests (mitcad#1907): when work starts and when it ended
+  // before the mark showed, with the panel's size, which the mark leaves
+  // as it was (its own lines: the connection in the constructor).
+  if (!wasBusy && !text.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 busy: %2, %3").arg(m_def.name, text, busySize());
+  } else if (wasBusy && text.isEmpty() && !wasShown) {
+    qDebug().noquote() << QStringLiteral("Panel %1 busy ended after %2 ms, mark not shown, %3")
+                              .arg(m_def.name)
+                              .arg(ms)
+                              .arg(busySize());
+  }
+}
+
+QString CommandPanel::busySize() const {
+  return QStringLiteral("panel %1x%2, needs %3").arg(width()).arg(height()).arg(sizeHint().height());
+}
 
 QWidget* CommandPanel::takeButtons() {
   QWidget* buttons = m_buttonBox;
@@ -2265,6 +2445,9 @@ void CommandPanel::showEvent(QShowEvent* event) {
     widget->installEventFilter(this);
   }
   scheduleMovedCheck();
+  if (m_revealMessage) {
+    scheduleLogFit(); // a problem shown while hidden, in view once laid out (mitcad#1884)
+  }
 }
 
 QPoint CommandPanel::placeOf(const QWidget* widget) {

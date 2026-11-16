@@ -4,6 +4,7 @@
 // with a list of values), the rows of an option from a binding read back,
 // the expression the rows give, the table kept in a command's state, and
 // the summary of what the picked targets have.
+#include "UnitTests.hpp"
 #include "commands/MaterialBinding.hpp"
 
 #include <cstdio>
@@ -161,3 +162,4 @@ int materialToolTests() {
   summaryTests();
   return failures;
 }
+MITCAD_UNIT_TEST(materialToolTests);

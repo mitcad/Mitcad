@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+# Edit Options of an inserted library part (mitcad#1929, GitHub #373), on
+# edit-options-component.json: a synthetic plate with the options Color
+# (Black, White) and Width (20 mm ... 200 mm, step 10 mm), inserted as Plate
+# in its row Standard (White, 60 mm: 100 x 60 x 10 = 60000 mm3).
+#   1. Edit Options... from Plate:1's menu shows the component's options.
+#   2. Width 40 in its expression field: the preview takes it (the model's
+#      `configure` with the tried values in `parameters`, Color's text
+#      quoted), nothing refused.
+#   3. OK: one set_component_parameters, the plate 100 x 40 x 10 =
+#      40000 mm3 in one undo step; Undo restores it.
+# Run by tools/ui-edit-options-component-test.sh (Linux),
+# tools/ui-windows-edit-options-component-test.ps1 (Windows) and
+# tools/ui-macos-edit-options-component-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-model-bodies 1 60000
+capture-undo-depth start
+
+# 1. The dialog from the component's row.
+mark
+context-menu-logged '^Browser Root/Plate:1 at ' 'Edit Options…'
+focus-dialog '^Edit Options - Plate$'
+wait-log '^Edit Options opened for Plate$'
+expect-log '^Edit Options options: Color = White, Width = 60 mm'
+expect-no-log 'option refused|no options'
+
+# 2. Width changed: the preview takes it, in words if refused.
+mark
+focus-widget optionExpression1
+key ctrl+a
+type '40'
+# Leaving the field confirms it.
+focus-widget optionExpression0
+wait-log '^Edit Options option Width chosen: 40 mm$'
+wait-log '^Edit Options options: Color = White, Width = 40 mm'
+expect-no-log 'option refused|^Options of C\d+ refused'
+expect-model-bodies 1 60000
+expect-undo-depth ${start} 0
+
+# 3. OK: the component's options kept in one undo step.
+mark
+button '^OK$'
+wait-log '^Edit Options accepted: Color = .White., Width = 40 mm$'
+wait-log '^Edit Options of Plate: Color = .White., Width = 40 mm$'
+focus-main
+wait-idle
+expect-model-bodies 1 40000
+expect-undo-depth ${start} 1
+command edit.undo
+wait-idle
+expect-model-bodies 1 60000
+expect-undo-depth ${start} 0

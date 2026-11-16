@@ -2,6 +2,7 @@
 // The Projects panel's rows (mitcad#529): a design's and a project's state
 // as compact marks with the full words for the tooltip and the log's words
 // as before, and a long name elided in the middle, its start and end kept.
+#include "UnitTests.hpp"
 #include "projects/ProjectRowText.hpp"
 
 #include <cstdio>
@@ -143,11 +144,14 @@ void elisionTests() {
   // width.
   const QString elided = elideMiddle(name, metrics, whole / 3);
   CHECK(elided != name);
-  CHECK(elided.contains(QChar(0x2026)));
-  CHECK(!elided.startsWith(QChar(0x2026)) && !elided.endsWith(QChar(0x2026)));
-  const qsizetype cut = elided.indexOf(QChar(0x2026));
+  // Qt writes the ellipsis character, or three dots where the font lacks
+  // its glyph (the default font of the Windows test run).
+  const QString mark = elided.contains(QChar(0x2026)) ? QString(QChar(0x2026)) : QStringLiteral("...");
+  CHECK(elided.contains(mark));
+  CHECK(!elided.startsWith(mark) && !elided.endsWith(mark));
+  const qsizetype cut = elided.indexOf(mark);
   CHECK(cut > 0 && name.startsWith(elided.left(cut)));
-  CHECK(name.endsWith(elided.mid(cut + 1)));
+  CHECK(name.endsWith(elided.mid(cut + mark.size())));
   CHECK(metrics.horizontalAdvance(elided) <= whole / 3);
   // A short name fits as it is.
   CHECK(elideMiddle(QStringLiteral("plate"), metrics, whole / 3) == QStringLiteral("plate"));
@@ -164,3 +168,4 @@ int projectRowTests() {
   elisionTests();
   return failures;
 }
+MITCAD_UNIT_TEST(projectRowTests);

@@ -203,6 +203,48 @@ fn a_patch_fills_an_opening_found_by_its_faces() {
 }
 
 #[test]
+fn a_stitched_patch_closes_the_body_it_fills() {
+    // mitcad#1927: a face taken out of a solid leaves an opening; the patch
+    // of it, stitched, makes the body whole again and no new body.
+    let (mut doc, sketch, a, _) = two_rectangles();
+    add(&mut doc, patch_of(sketch, &[&a]));
+    let face = format!("F2:patch({a})");
+    doc.kernel().stitch_closes.set(true);
+    let patch = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0",
+               "opening": {"faces": [face]}, "stitch": true}}),
+    );
+    ok(&doc, patch);
+    let uids: Vec<BodyUid> = doc.bodies().iter().map(|b| b.uid).collect();
+    assert_eq!(uids, [body("F2.b0")]);
+    assert_eq!(kind(&doc, body("F2.b0")), BodyKind::Solid);
+    assert_eq!(
+        specs(&doc, "patch_loop"),
+        ["patch_loop(F3: opening 0, g0, 0 points)"]
+    );
+    assert_eq!(specs(&doc, "stitch"), ["stitch(2 bodies, 0.01)"]);
+    // Written back with its stitch; without it the patch is a body of its own.
+    let entry = doc.features().find(|f| f.uid == patch).unwrap();
+    let named = entry
+        .def
+        .map_params(&mut |_, id: &crate::ParamId| Ok::<_, ()>(doc.parameters().name(*id)))
+        .unwrap();
+    let written = serde_json::to_value(&named).unwrap();
+    assert_eq!(written["boundary"]["stitch"], true);
+    let (mut doc, sketch, a, _) = two_rectangles();
+    add(&mut doc, patch_of(sketch, &[&a]));
+    let plain = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0",
+               "opening": {"faces": [format!("F2:patch({a})")]}}}),
+    );
+    ok(&doc, plain);
+    assert_eq!(doc.bodies().len(), 2);
+    assert!(specs(&doc, "stitch").is_empty());
+}
+
+#[test]
 fn a_patch_refuses_what_it_cannot_fill() {
     let Block {
         mut doc,

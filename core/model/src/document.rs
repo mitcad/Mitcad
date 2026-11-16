@@ -57,7 +57,7 @@ pub use move_features::{MoveConflict, MoveGroup, MovePlan, MovedGroup, PlannedGr
 pub use move_features::{MoveDestination, MovedDestination};
 // What the importers say about the features they made (mitcad#170).
 mod import_notes;
-pub use import_notes::{feature_level, feature_notices, feature_notices_placed};
+pub use import_notes::{feature_level, feature_notices, feature_notices_placed, remark_notices};
 pub use import_notes::{status_message as noted_message, status_text as noted_status};
 // Origin groups of the final unused sketch (mitcad#193).
 mod autoselect;
@@ -1474,6 +1474,9 @@ pub struct TimelineItem<'a> {
     pub warning_places: &'a [(String, Vec<crate::notice::NoticePlace>)],
     /// What the importer that made it said (mitcad#170).
     pub import_note: Option<&'a str>,
+    /// What its panel points out while it is open, with their places
+    /// (mitcad#1914): information notices that do not count in its level.
+    pub remarks: &'a [(String, Vec<crate::notice::NoticePlace>)],
 }
 
 impl TimelineItem<'_> {
@@ -1495,16 +1498,18 @@ impl TimelineItem<'_> {
     }
 
     /// Its notices: its error, its warnings, its infos, its import note
-    /// ([`feature_notices`]).
+    /// ([`feature_notices`]), then its remarks ([`remark_notices`]).
     pub fn notices(&self) -> Vec<crate::notice::Notice> {
-        import_notes::feature_notices_placed(
+        let mut notices = import_notes::feature_notices_placed(
             self.status,
             self.warnings,
             self.infos,
             self.import_note,
             self.entry.uid,
             self.warning_places,
-        )
+        );
+        notices.extend(import_notes::remark_notices(self.remarks, self.entry.uid));
+        notices
     }
 
     /// Its level: error, warning or information ([`feature_level`]).
@@ -1607,6 +1612,9 @@ pub struct PreviewReport {
     pub infos: Vec<String>,
     /// Where its warnings are about, by message (mitcad#1327).
     pub warning_places: crate::notice::WarningPlaces,
+    /// What its panel points out while it is open, with their places
+    /// (mitcad#1914).
+    pub remarks: crate::notice::WarningPlaces,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<crate::transform::Transform>,
     pub anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -2372,6 +2380,13 @@ impl<K: Kernel> Document<K> {
         self.feature_result(uid).map_or(&[], |r| r.warning_places())
     }
 
+    /// The remarks of a feature that succeeded in the last recompute, with
+    /// their places (mitcad#1914: a fillet's tangent chain that stops
+    /// short): what its panel points out while it is open.
+    pub fn remarks(&self, uid: FeatureUid) -> &[(String, Vec<crate::notice::NoticePlace>)] {
+        self.feature_result(uid).map_or(&[], |r| r.remarks())
+    }
+
     pub fn timeline(&self) -> Vec<TimelineItem<'_>> {
         self.features()
             .map(|entry| TimelineItem {
@@ -2381,6 +2396,7 @@ impl<K: Kernel> Document<K> {
                 infos: self.infos(entry.uid),
                 warning_places: self.warning_places(entry.uid),
                 import_note: self.import_note(entry.uid),
+                remarks: self.remarks(entry.uid),
             })
             .collect()
     }
@@ -4935,6 +4951,10 @@ impl<K: Kernel> Document<K> {
                 .result(uid)
                 .map(|r| r.warning_places().to_vec())
                 .unwrap_or_default(),
+            remarks: result
+                .result(uid)
+                .map(|r| r.remarks().to_vec())
+                .unwrap_or_default(),
             elements: result
                 .result(uid)
                 .and_then(|r| r.output.as_ref())
@@ -5279,6 +5299,10 @@ pub use design_package::{DesignPackage, PackageExtra, UNSAVED_DESIGN_NAME};
 // features, every reference to it rewritten (mitcad#1815).
 mod convert_derived;
 pub use convert_derived::{CONVERT_LABEL, ConvertedPart};
+// The materials and appearances a linked design gives the bodies of the
+// component that links it, followed when the link is read again
+// (mitcad#1921).
+mod linked_looks;
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

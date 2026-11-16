@@ -39,7 +39,7 @@ taken within 2e-6 mm3 of the integral; before, the shape was invalid.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index bdcfd871..03047af2 100644
+index 0c0ab338..9d90d1ce 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -2307,6 +2307,7 @@ void ChFi3d_Builder::Compute()
@@ -50,7 +50,7 @@ index bdcfd871..03047af2 100644
    myStripeFailed.Clear();
    myStripeFailure.Clear();
    const auto noteFailure = [this](const occ::handle<ChFiDS_Stripe>& S, const FailureKind K) {
-@@ -3006,6 +3007,37 @@ void ChFi3d_Builder::Compute()
+@@ -3040,6 +3041,37 @@ void ChFi3d_Builder::Compute()
        // (Roundings that consume the face between them meet where their
        // contacts end.)
        joinEndsAlongContacts(DStr, myListStripe, 10. * tolapp3d);
@@ -88,7 +88,7 @@ index bdcfd871..03047af2 100644
      }
      if (done)
      {
-@@ -3754,7 +3786,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3788,7 +3820,13 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
            ChFi3d_InitChron(cl_perform1corner);
  #endif
            myCorner = Corner_EndMitred;
@@ -126,10 +126,10 @@ index 33734a2a..2b9dbf4a 100644
    //! whose balls are one ball rolling over a narrow face C between them (a
    //! strip that breaks the edge chain, its edges with the common face under
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 1647e27b..779eb658 100644
+index 495dd7a3..85ec914c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -8986,3 +8986,11 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -8999,3 +8999,11 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
    }
    return false;
  }
@@ -142,10 +142,10 @@ index 1647e27b..779eb658 100644
 +  return theEnds;
 +}
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 951ccbc8..dce45a7b 100644
+index e87bb6c0..6a06ee2e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -660,4 +660,22 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -662,4 +662,22 @@ bool ChFi3d_ContactOntoTangentFaceAtEnd(const occ::handle<ChFiDS_SurfData>& SD,
                                          const double                        Reach,
                                          const double                        Width);
  
@@ -169,12 +169,12 @@ index 951ccbc8..dce45a7b 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index f0c08991..a06cce0e 100644
+index 15699978..6f11773e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -41,7 +41,9 @@
- #include <ChFiDS_Map.hxx>
+@@ -42,7 +42,9 @@
  #include <ChFiDS_Spine.hxx>
+ #include <ChFiDS_ChamfSpine.hxx>
  #include <ChFiDS_FilSpine.hxx>
 +#include <Geom_Circle.hxx>
  #include <Geom_Ellipse.hxx>
@@ -182,7 +182,7 @@ index f0c08991..a06cce0e 100644
  #include <GeomAdaptor_Curve.hxx>
  #include <IntAna_QuadQuadGeo.hxx>
  #include <BRep_Tool.hxx>
-@@ -3330,6 +3332,645 @@ bool ChFi3d_Builder::PerformCapAtTangentEndFace(const int Index)
+@@ -3363,6 +3365,645 @@ bool ChFi3d_Builder::PerformCapAtTangentEndFace(const int Index)
    return true;
  }
  

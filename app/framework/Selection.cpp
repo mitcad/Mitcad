@@ -199,6 +199,9 @@ QJsonValue SelectionItem::reference() const {
     if (isFixedPlane(*this)) {
       return QJsonDocument::fromJson(name.toUtf8()).object();
     }
+    if (isMountFrame(*this)) {
+      return QJsonObject{{QStringLiteral("mount"), name}};
+    }
     return owner;
   case SelectKind::Axis:
   case SelectKind::Point:
@@ -225,6 +228,43 @@ bool isFixedPlaneRef(const QJsonValue& ref) {
   const QJsonObject o = ref.toObject();
   return o.value(QStringLiteral("origin")).toArray().size() == 3 &&
          o.value(QStringLiteral("normal")).toArray().size() == 3;
+}
+
+SelectionItem mountFrameItem(const QString& mount, const QString& occurrence) {
+  return {SelectKind::Plane, QStringLiteral("mount"), mount, QStringLiteral("plane"), occurrence};
+}
+
+bool isMountFrame(const SelectionItem& item) {
+  return item.kind == SelectKind::Plane && item.owner == QStringLiteral("mount") && !item.name.isEmpty();
+}
+
+SelectionItem openingEdgeItem(const QString& body, const QJsonObject& opening, const QString& occurrence) {
+  return {SelectKind::Edge, body, QString::fromUtf8(QJsonDocument(opening).toJson(QJsonDocument::Compact)),
+          QStringLiteral("other"), occurrence};
+}
+
+QJsonObject openingOf(const SelectionItem& item) {
+  return isOpeningEdge(item) ? QJsonDocument::fromJson(item.name.toUtf8()).object() : QJsonObject();
+}
+
+namespace {
+
+// "F7:mount(end_a)": where the name starts, or -1.
+int mountNameStart(const QString& text) {
+  const int open = text.indexOf(QStringLiteral(":mount("));
+  return open > 0 && text.endsWith(QLatin1Char(')')) ? open + 7 : -1;
+}
+
+} // namespace
+
+QString mountFrameName(const SelectionItem& item) {
+  const int start = isMountFrame(item) ? mountNameStart(item.name) : -1;
+  return start < 0 ? QString() : item.name.mid(start, item.name.size() - start - 1);
+}
+
+QString mountFramePart(const SelectionItem& item) {
+  const int start = isMountFrame(item) ? mountNameStart(item.name) : -1;
+  return start < 0 ? QString() : item.name.left(start - 7);
 }
 
 QString SelectionItem::kindName(SelectKind kind, int count) {
@@ -357,6 +397,9 @@ QString SelectionItem::logDescription() const {
   const QString kindText = kindName(kind);
   // Where an occurrence places it (components).
   const QString in = occurrence.isEmpty() ? QString() : QStringLiteral(" in ") + occurrence;
+  if (isMountFrame(*this)) {
+    return QStringLiteral("mount frame %1").arg(name) + in; // "F7:mount(end_a)"
+  }
   switch (kind) {
   case SelectKind::Face:
   case SelectKind::Edge:

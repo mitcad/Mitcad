@@ -9,6 +9,7 @@
 // The profile they take by themselves as they start (mitcad#1226): on a
 // sketch on a face, a shape drawn there before the face's leftover region
 // around the drawn shapes.
+#include "UnitTests.hpp"
 #include "commands/ProfilePicks.hpp"
 
 #include <cstdio>
@@ -155,3 +156,4 @@ int profilePicksTests() {
   }
   return failures;
 }
+MITCAD_UNIT_TEST(profilePicksTests);

@@ -95,6 +95,16 @@ pub struct BaseBody {
     /// body's evaluation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cage: Option<Box<super::cage::ControlCage>>,
+    /// A linked design's body (mitcad#1921): the material its source
+    /// design gives it, by its id in this design, and the appearance
+    /// likewise. The body takes them when the link is made and follows
+    /// them when the link is read again, unless one was set on it by hand
+    /// (`document/linked_looks.rs`). A record only: it does not change the
+    /// body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<String>,
 }
 
 impl<P> BaseDef<P> {

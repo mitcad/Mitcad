@@ -3,6 +3,7 @@
 // commands/PlaceGeometry.hpp): projections into the plane, distances from
 // edges and axes, the point at two distances, snapping and the two lines
 // a click is measured from.
+#include "UnitTests.hpp"
 #include "commands/PlaceGeometry.hpp"
 
 #include <cmath>
@@ -104,3 +105,4 @@ int placeGeometryTests() {
   CHECK(intoFace(front.direction, intoFront, up).IsEqual(gp_Dir(1, 0, 0), 1e-9));
   return failures;
 }
+MITCAD_UNIT_TEST(placeGeometryTests);

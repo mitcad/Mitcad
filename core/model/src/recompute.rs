@@ -320,6 +320,10 @@ pub struct Output<S> {
     /// Where its warnings are about, by message (mitcad#1327): faces,
     /// edges and vertices of its body, points.
     pub warning_places: crate::notice::WarningPlaces,
+    /// What its panel points out while it is open but the user accepts
+    /// with the result, with their places of its body (mitcad#1914): no
+    /// warning, nothing marks the feature for them.
+    pub remarks: crate::notice::WarningPlaces,
     /// A pattern's elements by number, suppressed ones too (P9).
     pub elements: Vec<Transform>,
     pub pattern_anchor: Option<crate::features::point_pattern::PatternAnchor>,
@@ -403,6 +407,15 @@ impl<S> FeatureResult<S> {
     pub fn warning_places(&self) -> &[(String, Vec<crate::notice::NoticePlace>)] {
         match &self.output {
             Some(output) if self.status.is_ok() => &output.warning_places,
+            _ => &[],
+        }
+    }
+
+    /// The remarks of a feature that succeeded with their places
+    /// (mitcad#1914); none otherwise.
+    pub fn remarks(&self) -> &[(String, Vec<crate::notice::NoticePlace>)] {
+        match &self.output {
+            Some(output) if self.status.is_ok() => &output.remarks,
             _ => &[],
         }
     }
@@ -2324,6 +2337,7 @@ fn evaluate<K: Kernel>(
     let warnings = std::mem::take(&mut ctx.warnings);
     let infos = std::mem::take(&mut ctx.infos);
     let warning_places = std::mem::take(&mut ctx.warning_places);
+    let remarks = std::mem::take(&mut ctx.remarks);
     // Angles of more than one turn where one is the most (mitcad#714).
     let turns = turn_warnings(entry, params);
     let elements = std::mem::take(&mut ctx.elements);
@@ -2333,6 +2347,7 @@ fn evaluate<K: Kernel>(
     let output = match result {
         Ok(produced) => Output {
             warning_places: placed_warnings(warning_places, &warnings, &produced.changes),
+            remarks: placed_remarks(remarks, &produced.changes),
             sheet_rules: produced.sheet_rules.map(|value| Versioned {
                 version: part_version(version, Part::SheetRules),
                 value,
@@ -2402,6 +2417,7 @@ fn evaluate<K: Kernel>(
             warnings: Vec::new(),
             infos: Vec::new(),
             warning_places: Vec::new(),
+            remarks: Vec::new(),
             elements: Vec::new(),
             pattern_anchor: None,
             // Known also when the sweep failed (mitcad#795): the panel
@@ -2522,6 +2538,16 @@ fn placed_warnings<S>(
             (message, places)
         })
         .collect()
+}
+
+/// A feature's remarks with their places in the body it sets, as
+/// [`placed_warnings`] gives its warnings' (mitcad#1914).
+fn placed_remarks<S>(
+    remarks: crate::notice::WarningPlaces,
+    changes: &[BodyChange<S>],
+) -> crate::notice::WarningPlaces {
+    let messages: Vec<String> = remarks.iter().map(|(message, _)| message.clone()).collect();
+    placed_warnings(remarks, &messages, changes)
 }
 
 fn with_turns(mut warnings: Vec<String>, turns: &[String]) -> Vec<String> {

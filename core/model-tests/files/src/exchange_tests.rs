@@ -1951,15 +1951,24 @@ fn file_structure_query_finds_step_assemblies() {
         &format!("ISO-10303-21;\n{usage}END-ISO-10303-21;\n"),
     );
     let other = write("machine.igs", usage);
-    let doc = Document::new(MockKernel::default());
-    for (path, expected) in [(&assembly, true), (&once, false), (&other, false)] {
-        let result: Value = serde_json::from_str(
+    let mut doc = Document::new(MockKernel::default());
+    let structure = |doc: &Document<MockKernel>, path: &str| -> Value {
+        serde_json::from_str(
             &doc.query(&json!({"query": "file_structure", "path": path}).to_string())
                 .unwrap(),
         )
-        .unwrap();
+        .unwrap()
+    };
+    for (path, expected) in [(&assembly, true), (&once, false), (&other, false)] {
+        let result = structure(&doc, path.as_str());
         assert_eq!(result["assembly"], expected, "{path}");
+        // An empty design (mitcad#1894: the app's Where to Import).
+        assert_eq!(result["content"], false, "{path}");
     }
+    // A design with a body has content, whatever the file.
+    doc.add_base_feature(BaseInput::new(vec![body(Some("Block"), "box", 6)]))
+        .unwrap();
+    assert_eq!(structure(&doc, other.as_str())["content"], true);
     // A name that spans two blocks of the scan is found too.
     let long = format!(
         "ISO-10303-21;\n{}{usage}{usage}",
@@ -1969,4 +1978,142 @@ fn file_structure_query_finds_step_assemblies() {
     assert!(file_has_assembly(&spanning).unwrap());
     assert!(file_has_assembly(dir.join("missing.step").to_str().unwrap()).is_err());
     mitcad_model::testing::remove_temp(&dir);
+}
+
+/// STEP keeps the design's components (mitcad#1915): an Arm placing a Pin
+/// twice, itself placed twice (the second turned a quarter about z), and a
+/// Plate placed once go to the kernel as a tree with one definition per
+/// component, holding its bodies once; each instance is at its
+/// occurrence's placement in its parent and named after it, the design's
+/// own body in the top assembly. A hidden occurrence is left out, as the
+/// other formats leave it out. Component coordinates, other formats and a
+/// kernel without trees take the bodies with their placements as before.
+#[test]
+fn step_export_writes_the_component_tree() {
+    use mitcad_model::ids::ComponentUid;
+    use mitcad_model::testing::WrittenDefinition;
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().step_trees.set(true);
+    let root = ComponentUid::ROOT;
+    let below = Transform::translation([0.0, 0.0, -10.0]);
+    let (plate, _) = doc.add_component(Some("Plate"), root, below).unwrap();
+    let up = Transform::translation([0.0, 100.0, 0.0]);
+    let (arm, _) = doc.add_component(Some("Arm"), root, up).unwrap();
+    let (pin, _) = doc
+        .add_component(Some("Pin"), arm, Transform::IDENTITY)
+        .unwrap();
+    let along = Transform::translation([0.0, 20.0, 0.0]);
+    doc.add_occurrence(pin, arm, along).unwrap();
+    let turned = Transform {
+        linear: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        translation: [300.0, 100.0, 0.0],
+    };
+    let second_arm = doc.add_occurrence(arm, root, turned).unwrap();
+    for (component, name) in [(plate, "Plate"), (pin, "Pin")] {
+        doc.add_base_feature(BaseInput {
+            component: Some(component),
+            ..BaseInput::new(vec![body(Some(name), name, 6)])
+        })
+        .unwrap();
+    }
+    doc.add_base_feature(BaseInput::new(vec![body(Some("Loose"), "loose", 6)]))
+        .unwrap();
+
+    let result = command(&mut doc, json!({"cmd": "export", "path": "machine.step"})).unwrap();
+    assert_eq!(result["bodies"].as_array().unwrap().len(), 3);
+    assert!(doc.kernel().written.borrow().is_empty());
+    let last = |doc: &Document<MockKernel>| -> (String, Vec<WrittenDefinition>) {
+        doc.kernel().written_trees.borrow().last().cloned().unwrap()
+    };
+    let (path, tree) = last(&doc);
+    assert_eq!(path, "machine.step");
+    let index = |name: &str| tree.iter().position(|d| d.name == name).unwrap();
+    // Each component once; the design first.
+    let names: Vec<&str> = tree.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert_eq!(names[0], "");
+    let (plate_def, arm_def, pin_def) = (index("Plate"), index("Arm"), index("Pin"));
+    let near = |a: &Transform, b: &Transform| {
+        (0..3).all(|r| {
+            (a.translation[r] - b.translation[r]).abs() < 1e-9
+                && (0..3).all(|c| (a.linear[r][c] - b.linear[r][c]).abs() < 1e-12)
+        })
+    };
+    let placed = |d: &WrittenDefinition| -> Vec<(usize, String)> {
+        d.instances
+            .iter()
+            .map(|i| (i.definition, i.name.clone()))
+            .collect()
+    };
+    let design = &tree[0];
+    assert_eq!(design.bodies, vec![("Loose".to_owned(), Vec::new())]);
+    assert_eq!(
+        placed(design),
+        [
+            (plate_def, "Plate:1".to_owned()),
+            (arm_def, "Arm:1".to_owned()),
+            (arm_def, "Arm:2".to_owned())
+        ]
+    );
+    for (instance, expected) in design.instances.iter().zip([below, up, turned]) {
+        assert!(near(&instance.transform, &expected), "{instance:?}");
+    }
+    let arm_tree = &tree[arm_def];
+    assert!(arm_tree.bodies.is_empty());
+    assert_eq!(
+        placed(arm_tree),
+        [(pin_def, "Pin:1".to_owned()), (pin_def, "Pin:2".to_owned())]
+    );
+    for (instance, expected) in arm_tree.instances.iter().zip([Transform::IDENTITY, along]) {
+        assert!(near(&instance.transform, &expected), "{instance:?}");
+    }
+    // The parts: their bodies once, in their own coordinates.
+    assert_eq!(
+        tree[plate_def].bodies,
+        vec![("Plate".to_owned(), Vec::new())]
+    );
+    assert_eq!(tree[pin_def].bodies, vec![("Pin".to_owned(), Vec::new())]);
+    assert!(tree[plate_def].instances.is_empty() && tree[pin_def].instances.is_empty());
+
+    // The second arm hidden: the design places the first alone.
+    doc.set_occurrence_visible(second_arm, false).unwrap();
+    command(&mut doc, json!({"cmd": "export", "path": "shown.step"})).unwrap();
+    let (_, tree) = last(&doc);
+    let arm_def = tree.iter().position(|d| d.name == "Arm").unwrap();
+    assert_eq!(
+        tree[0]
+            .instances
+            .iter()
+            .filter(|i| i.definition == arm_def)
+            .count(),
+        1
+    );
+
+    // Component coordinates and IGES: the bodies with their placements.
+    let trees = doc.kernel().written_trees.borrow().len();
+    for (path, coordinates) in [
+        ("local.step", json!("component")),
+        ("placed.igs", json!("design")),
+    ] {
+        command(
+            &mut doc,
+            json!({"cmd": "export", "path": path, "coordinates": coordinates}),
+        )
+        .unwrap();
+    }
+    assert_eq!(doc.kernel().written_trees.borrow().len(), trees);
+    let written = doc.kernel().written.borrow().clone();
+    assert_eq!(written.len(), 2);
+    assert_eq!(written[0].1, ExportFormat::Step);
+    assert_eq!(written[1].1, ExportFormat::Iges);
+    // A kernel without trees: STEP as before, each body at its placements.
+    doc.kernel().step_trees.set(false);
+    command(&mut doc, json!({"cmd": "export", "path": "flat.step"})).unwrap();
+    let placements = doc.kernel().written_placements.borrow().clone();
+    let flat = placements.last().unwrap();
+    assert_eq!(flat.len(), 3);
+    assert_eq!(
+        flat[1].iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+        ["Arm:1/Pin:1", "Arm:1/Pin:2"]
+    );
 }

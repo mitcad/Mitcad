@@ -35,10 +35,15 @@ RIGHT='F2:side(c2[c1,c3])'
 TOP_FRONT="E{$TOP|$FRONT}"
 TOP_RIGHT="E{$TOP|$RIGHT}"
 RIGHT_BOTTOM="E{$RIGHT|$BOTTOM}"
-# Two edges away from the arrows, to follow a zoom: the left upright edge
-# and the top back edge.
+# Two edges away from the arrows, to follow a zoom: the front face's left
+# and right upright edges. Not the top back edge: a pick place keeps off
+# what covers the view (the cards, the view cube), and with the block where
+# the free area beside the Browser's rows puts it (mitcad#1932) the top
+# back edge's place moved along the edge while Chamfer's panel was open,
+# so its places before and after a zoom were different points of the edge
+# and the followed middle landed beyond the arrow (mitcad#1934).
 LEFT_UP="E{$FRONT|F2:side(c4[c3,c1])}"
-TOP_BACK="E{$TOP|F2:side(c3[c2,c4])}"
+RIGHT_UP="E{$FRONT|$RIGHT}"
 
 # Part:1 (O1): the block of the demo in a component, turned a quarter
 # clockwise about Z and moved 100 mm along X, so that its right face
@@ -80,7 +85,7 @@ remember() {
   MIDDLE[$1]=$(tail -n +"${start:-1}" "$UI_LOG" | grep -F -- "Pick edge F2.b0/$1 at " | tail -1 |
     sed -n 's/.* at \([0-9-]*\),\([0-9-]*\)$/\1 \2/p')
   [ -n "${MIDDLE[$1]}" ] || ui_fail "no pick place of $1 logged"
-  REFERENCE="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$TOP_BACK")"
+  REFERENCE="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$RIGHT_UP")"
 }
 
 # follow_zoom edge: the edge's middle where the view now shows it, after
@@ -88,13 +93,13 @@ remember() {
 # where the two edges away from the arrows were and are now.
 follow_zoom() {
   local now
-  now="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$TOP_BACK")"
+  now="$(newest "Pick edge F2.b0/$LEFT_UP") $(newest "Pick edge F2.b0/$RIGHT_UP")"
   MIDDLE[$1]=$(echo "${MIDDLE[$1]} $REFERENCE $now" | awk '{
     if (NF != 10) { exit 1 }
     s = sqrt(($9 - $7) ^ 2 + ($10 - $8) ^ 2) / sqrt(($5 - $3) ^ 2 + ($6 - $4) ^ 2)
     x = $7 + s * ($1 - $3); y = $8 + s * ($2 - $4)
     printf "%d %d\n", (x < 0 ? x - 0.5 : x + 0.5), (y < 0 ? y - 0.5 : y + 0.5) }') ||
-    ui_fail "no places of $LEFT_UP and $TOP_BACK to follow the zoom with"
+    ui_fail "no places of $LEFT_UP and $RIGHT_UP to follow the zoom with"
   REFERENCE=$now
 }
 

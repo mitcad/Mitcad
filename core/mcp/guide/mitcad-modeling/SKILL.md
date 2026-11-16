@@ -23,3 +23,4 @@ or, as a skill, the file `references/<id>.md`.
 - [references](references/references.md): before placing a sketch, component or feature; stable parents and geometry that follows edits.
 - [verification](references/verification.md): after every modeling change; status, dimensions, bodies, pictures and recovery.
 - [3d-printing](references/3d-printing.md): when a component is to be FDM/FFF printed; orientation, fits, printable details, manufacturing checks and the export for a slicer.
+- [bug-reporting](references/bug-reporting.md): when a result is unexpected (a refusal or failure you cannot explain, wrong geometry, misleading text); the evidence to collect, how to collect it safely, and a report template.

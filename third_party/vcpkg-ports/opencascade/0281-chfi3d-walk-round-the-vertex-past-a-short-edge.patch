@@ -15,7 +15,9 @@ a rim's torus), that common edge does not hold the vertex.
   share several edges (a torus and a cylinder meeting along both ends of
   a groove, a line broken by a notch), and the far one was taken; the
   corner then failed ("pb orientation"). It is now the common edge at the
-  vertex where the walk stands (any one where none passes that vertex).
+  vertex where the walk stands (any one where none passes that vertex),
+  for roundings: a chamfer keeps OCCT's first common edge (OCCT's chamfer
+  sequences A5 got invalid corners with the other, mitcad#1902).
 - Where that edge is prolonged along the intersection of its faces'
   surfaces (a B-spline edge whose own curve ends at the edge), the
   prolongation started at the corner's vertex, which does not lie on that
@@ -25,10 +27,10 @@ a rim's torus), that common edge does not hold the vertex.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index bb385a9..579caa1 100644
+index f6a30e99..bab35181 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -2870,6 +2870,39 @@ static void cherche_edge1(const TopoDS_Face& F1, const TopoDS_Face& F2, TopoDS_E
+@@ -2875,6 +2875,39 @@ static void cherche_edge1(const TopoDS_Face& F1, const TopoDS_Face& F2, TopoDS_E
    }
  }
  
@@ -68,7 +70,7 @@ index bb385a9..579caa1 100644
  //=======================================================================
  // function : containV
  // purpose  : return true if vertex V belongs to F1
-@@ -3830,6 +3863,8 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3835,6 +3868,8 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    bool                                     oneintersection2 = false;
    TopoDS_Face                              Face[nn], F, F3;
    TopoDS_Vertex                            V1, V2, V, Vfin;
@@ -77,7 +79,7 @@ index bb385a9..579caa1 100644
    bool                                     findonf1 = false, findonf2 = false;
    NCollection_List<TopoDS_Shape>::Iterator It3;
    F1 = TopoDS::Face(DStr.Shape(Fd->IndexOfS1()));
-@@ -4106,10 +4141,11 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4113,10 +4148,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          while (!V1.IsSame(Vtx))
          {
            ChFi3d_cherche_element(V1, Ei, F1, E, V2);
@@ -88,11 +90,21 @@ index bb385a9..579caa1 100644
 +          Ei        = E;
            ChFi3d_cherche_face1(myEFMap(E), F1, Face[nb]);
 -          cherche_edge1(Face[nb - 1], Face[nb], Edge[nb]);
-+          cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
++          // (Roundings: OCCT's first common edge for chamfers, whose
++          // corners it made invalid where it took another, as in OCCT's
++          // chamfer sequences A5.)
++          if (occ::down_cast<ChFiDS_ChamfSpine>(stripe->Spine()).IsNull())
++          {
++            cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
++          }
++          else
++          {
++            cherche_edge1(Face[nb - 1], Face[nb], Edge[nb]);
++          }
            nb++;
            if (nb >= nn)
            {
-@@ -4146,10 +4182,11 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4153,10 +4199,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
          while (!V1.IsSame(Vfin))
          {
            ChFi3d_cherche_element(V1, Ei, F2, E, V2);
@@ -103,11 +115,21 @@ index bb385a9..579caa1 100644
 +          V1        = V2;
            ChFi3d_cherche_face1(myEFMap(E), F2, Face[nb]);
 -          cherche_edge1(Face[nb - 1], Face[nb], Edge[nb]);
-+          cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
++          // (Roundings: OCCT's first common edge for chamfers, whose
++          // corners it made invalid where it took another, as in OCCT's
++          // chamfer sequences A5.)
++          if (occ::down_cast<ChFiDS_ChamfSpine>(stripe->Spine()).IsNull())
++          {
++            cherche_edge1(Face[nb - 1], Face[nb], Vedge[nb], Edge[nb]);
++          }
++          else
++          {
++            cherche_edge1(Face[nb - 1], Face[nb], Edge[nb]);
++          }
            nb++;
            if (nb >= nn)
            {
-@@ -4616,6 +4653,15 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4623,6 +4680,15 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
                //              tolex=ChFi3d_EvalTolReached(H1,C2dint1,H2,C2dint2,cint);
                tolex = InterSS.TolReached3d();
              }

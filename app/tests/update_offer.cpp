@@ -4,6 +4,7 @@
 // platform: "Download it from its release page.") from a release that is
 // out for other platforms first (no download here yet: said so, no
 // Install, no Skip This Version, and an automatic check shows nothing).
+#include "UnitTests.hpp"
 #include "update/UpdateOffer.hpp"
 
 #include <cstdio>
@@ -149,3 +150,4 @@ int updateOfferTests() {
   noticeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(updateOfferTests);

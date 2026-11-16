@@ -50,6 +50,12 @@ pub(crate) const TOPICS: &[(&str, &str)] = &[
         "3d-printing",
         include_str!("../guide/mitcad-modeling/references/3d-printing.md"),
     ),
+    // What to collect for a report of an unexpected result, and how
+    // (mitcad#1897).
+    (
+        "bug-reporting",
+        include_str!("../guide/mitcad-modeling/references/bug-reporting.md"),
+    ),
 ];
 
 /// A line of the index.

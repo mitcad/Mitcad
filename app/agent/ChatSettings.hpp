@@ -87,6 +87,11 @@ void setCustomAgentCommand(const QString& command);
 QString customAgentArguments();
 void setCustomAgentArguments(const QString& arguments);
 
+// The API agents' and the custom command's settings above back to their
+// defaults (Preferences › Restore Defaults, mitcad#1887): none saved. The
+// API keys in the keychain stay.
+void resetAgentConnections();
+
 // Whether the chat panel offers an agent it found (mitcad#1299: the assistant
 // menu's checkmark under Outgoing connections); an agent turned off is not
 // listed in the panel and never started. Kept as the ids of the agents

@@ -3,6 +3,7 @@
 // choices as the definitions' `symmetric` and `distance_type` and back, the
 // length row's label, Flip while symmetric, the options in words; the
 // Pattern Type a selection made before the command picks (mitcad#1290).
+#include "UnitTests.hpp"
 #include "commands/PatternOptions.hpp"
 #include "framework/Command.hpp"
 
@@ -180,3 +181,4 @@ int patternOptionsTests() {
   preselectedTypeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(patternOptionsTests);

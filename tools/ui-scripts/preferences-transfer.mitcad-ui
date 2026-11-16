@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Export Settings and Import Settings (mitcad#1889, GitHub
+# mitcad/Mitcad#357) on a new design, in the Preferences dialog and in
+# macOS's Settings window:
+#   1. A preference changed on Display (Small circles Full Detail), and a
+#      keyboard shortcut (Home view: Shift+F8) and a navigation bar pin
+#      (Measure after Edit Parameters) saved as Keyboard Shortcuts and Pin
+#      to Navigation Bar save them.
+#   2. Export Settings… with the groups checked by default (recent files and
+#      this computer's folders and programs left out) to a file.
+#   3. Back to the defaults: Restore Defaults › All Settings, the shortcut
+#      and the pins saved as their defaults.
+#   4. Import Settings… of that file: the question says what the file holds;
+#      Import replaces the groups, the page shows Full Detail again, the
+#      store holds the three changes, the navigation bar shows Measure again
+#      and Shift+F8 turns the view to the home view's iso direction.
+# Run by tools/ui-preferences-transfer-test.sh (Linux),
+# tools/ui-windows-preferences-transfer-test.ps1 (Windows) and
+# tools/ui-macos-preferences-transfer-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+
+# 1. A preference, a shortcut and a pin.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+qt-choice preferencesSmallCircles 'Full Detail'
+key Return
+wait-log '^Preferences: small circles full$'
+focus-main
+wait-idle
+expect-setting view/smallCircles full
+set-setting shortcuts/view.iso Shift+F8
+set-setting navigationBarPins solid.parameters,inspect.measure
+
+# 2. Export Settings… with the default groups.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+button '^Export Settings$' preferencesExportSettings
+focus-dialog '^Export Settings$'
+expect-widget-property settingsGroup_preferences checked true
+expect-widget-property settingsGroup_shortcuts checked true
+expect-widget-property settingsGroup_pins checked true
+expect-widget-property settingsGroup_recent checked false
+expect-widget-property settingsGroup_folders checked false
+button '^Export$' settingsTransferAccept
+focus-dialog '^Save Settings File$'
+key ctrl+a
+type '${MITCAD_TEST_WORK}/setup.mitcad-settings'
+sleep 300
+key Return
+wait-log '^Preferences: settings exported to .*setup[.]mitcad-settings: preferences, navigation, shortcuts, pins, layout, libraries [(][0-9]+ settings[)]$'
+expect-file '${MITCAD_TEST_WORK}/setup.mitcad-settings'
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+
+# 3. Back to the defaults.
+mark
+button '^Restore Defaults$' preferencesRestoreDefaults
+popup 'All Settings'
+focus-dialog '^Restore Defaults$'
+button '^Restore Defaults$'
+wait-log '^Preferences: restore defaults, all settings: '
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+expect-widget-property preferencesSmallCircles currentIndex 0
+expect-setting view/smallCircles adaptive
+set-setting shortcuts/view.iso 7
+set-setting navigationBarPins solid.parameters
+
+# 4. Import Settings… of the file.
+mark
+button '^Import Settings$' preferencesImportSettings
+focus-dialog '^Choose a Settings File$'
+key ctrl+a
+type '${MITCAD_TEST_WORK}/setup.mitcad-settings'
+sleep 300
+key Return
+wait-log '^Preferences import settings asked: .*setup[.]mitcad-settings: written by MitCad .* groups preferences [(][0-9]+[)], navigation [(][0-9]+[)], shortcuts [(][0-9]+[)], pins [(][0-9]+[)], layout [(][0-9]+[)], libraries [(][0-9]+[)]; skipped none$'
+focus-dialog '^Import Settings$'
+expect-widget-property settingsGroup_preferences checked true
+expect-widget-property settingsGroup_shortcuts checked true
+expect-widget-property settingsGroup_pins checked true
+button '^Import$' settingsTransferAccept
+wait-log '^Preferences: settings imported from .*setup[.]mitcad-settings: preferences, navigation, shortcuts, pins, layout, libraries; [0-9]+ written, [0-9]+ back to their defaults, skipped none$'
+wait-log '^Shortcuts reloaded from the settings: [0-9]+ saved$'
+wait-log '^Navigation bar pinned: solid[.]parameters, inspect[.]measure$'
+focus-dialog '^(Preferences|Settings)$'
+wait-idle
+expect-widget-property preferencesSmallCircles currentIndex 1
+expect-setting view/smallCircles full
+expect-setting shortcuts/view.iso Shift+F8
+expect-setting navigationBarPins solid.parameters,inspect.measure
+key Escape
+focus-main
+wait-idle
+
+# The imported shortcut works in the window.
+mark
+key shift+F8
+wait-log '^View iso$'
+expect-never 'TestDriver: FAIL'

@@ -5,6 +5,7 @@
 // components placed off the origin, hidden bodies and occurrences and a
 // linked component. The reports are those the model gives for such a design
 // (core/model-tests/api/src/preview_placement_tests.rs checks the model's side).
+#include "UnitTests.hpp"
 #include "framework/PreviewBodies.hpp"
 
 #include <cmath>
@@ -256,3 +257,4 @@ int previewBodiesTests() {
   removedShownTests();
   return failures;
 }
+MITCAD_UNIT_TEST(previewBodiesTests);

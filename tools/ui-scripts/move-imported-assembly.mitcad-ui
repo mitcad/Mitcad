@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: MIT
+# Move/Copy with Move Object set to Components on an imported STEP
+# assembly (mitcad#1891, found in mitcad#1647), the shared input script of
+# tools/ui-move-imported-assembly-test.sh (Linux),
+# tools/ui-windows-move-imported-assembly-test.ps1 (Windows) and
+# tools/ui-macos-move-imported-assembly-test.sh (macOS), on the design
+# tools/ui-scripts/move-imported-assembly.json makes: Body1 in the root
+# ((-40, 0, 0) to (-20, 20, 5)), Frame:1, a component of the design in
+# the root ((40, 0, 0) to (50, 30, 4)), and the import's own component
+# placed in the root (imported:1), which places the imported component
+# Pin twice: Pin:1 ((0, 0, 0) to (8, 12, 6)) and Pin:2 (20 mm along Y).
+# Pin's body is the only one two occurrences deep (once per placement,
+# the same body) and Frame's the only one one deep, so the depth of a
+# body's path tells them apart whatever order the view lists them in.
+#   1. A click on a body of Pin (two occurrences deep) takes the
+#      occurrence the root places on its path, imported:1, as Bodies mode
+#      and a selection made before do; not Pin's own occurrence, which the
+#      model would refuse as placed in another component than the move's.
+#   2. 40 mm along X moves imported:1 only: Pin 40 mm along X, Frame and
+#      Body1 where they were; one undo step puts Pin back.
+wait-idle
+key F6
+wait-idle
+# The bodies the view shows: Pin's twice two occurrences deep, the same
+# body (the same uid twice; a path's depth ends at ", " or the line's
+# end), and Frame's one deep.
+wait-log '^Bodies shown: .* in O[0-9]+/O[0-9]+(, |$)'
+wait-log '^Bodies shown: .* in O[0-9]+(, |$)'
+capture pin '^Body (F[0-9]+[.]b0) in O[0-9]+/O[0-9]+ at '
+expect-no-log '^Bodies shown: .* in O[0-9]+/O[0-9]+(, |$).* in O[0-9]+/O[0-9]+(, |$).* in O[0-9]+/O[0-9]+(, |$)'
+expect-no-log '^Bodies shown: .* in O[0-9]+(, |$).* in O[0-9]+(, |$)'
+# Where the view shows them: a placement of Pin, the first step of its
+# path the import's occurrence in the root; Frame's occurrence.
+wait-log '^Body ${pin:re} in O[0-9]+/O[0-9]+ at '
+wait-log '^Body F[0-9]+[.]b0 in O[0-9]+ at '
+capture pinpath '^Body ${pin:re} in (O[0-9]+/O[0-9]+) at '
+capture imported '^Body ${pin:re} in (O[0-9]+)/O[0-9]+ at '
+capture frame '^Body (F[0-9]+[.]b0) in O[0-9]+ at '
+capture framepath '^Body F[0-9]+[.]b0 in (O[0-9]+) at '
+# Pin's placements differ only along Y: its X and Z range is known, its Y
+# range is read.
+capture-shown-body before ${pin} ${pinpath}
+expect-near ${before_volume} 576 0 0.00001
+expect-near ${before_min_x} 0 0 0.000001
+expect-near ${before_max_x} 8 0 0.000001
+expect-near ${before_min_z} 0 0 0.000001
+expect-near ${before_max_z} 6 0 0.000001
+expect-shown-body ${frame} ${framepath} 1200 40 0 0 50 30 4
+expect-shown-body F1.b0 - 2000 -40 0 0 -20 20 5
+capture-undo-depth baseline
+
+# --- 1. Move/Copy, Move Object: Components, a click on Pin's body.
+mark
+command solid.move
+wait-log '^Command Move/Copy started'
+wait-idle
+qt-choice input_move_type 'Components'
+wait-log '^Move/Copy: Move Object = Components$'
+wait-idle
+mark
+click-logged '^Body ${pin:re} in ${pinpath:re} at '
+wait-log '^Move/Copy: body ${pin:re} in ${pinpath:re} is placed through ${imported:re}: moving ${imported:re} \(Move Object: Components\)$'
+wait-log '^Move/Copy Objects: 1 component \[component +in ${imported:re}\]$'
+expect-no-log '^Move/Copy Objects: .* in ${pinpath:re}\]'
+wait-idle
+
+# --- 2. 40 mm along X: the import moves, Frame and Body1 stay.
+type-in '^Panel Move/Copy input tx at ' '40 mm'
+wait-log '^Preview Move/Copy: ok'
+wait-idle
+expect-no-log 'is placed in'
+mark
+key Return
+wait-log '^Moved 1 components \('
+wait-idle
+expect-undo-depth ${baseline} 1
+expect-shown-body ${pin} ${pinpath} 576 40 ${before_min_y} 0 48 ${before_max_y} 6
+expect-shown-body ${frame} ${framepath} 1200 40 0 0 50 30 4
+expect-shown-body F1.b0 - 2000 -40 0 0 -20 20 5
+expect-no-log 'is placed in'
+mark
+command edit.undo
+wait-log '^Undo: '
+wait-idle
+expect-undo-depth ${baseline} 0
+expect-shown-body ${pin} ${pinpath} 576 0 ${before_min_y} 0 8 ${before_max_y} 6
+expect-shown-body ${frame} ${framepath} 1200 40 0 0 50 30 4
+expect-never 'Recompute failed|TestDriver: FAIL'

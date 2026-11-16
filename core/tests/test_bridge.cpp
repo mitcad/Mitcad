@@ -1074,6 +1074,180 @@ void test_kernel_operation_cancelled_inside() {
   CHECK(std::abs(body_volume(*document) - 1302.830611500115) < 1e-3 * 1302.830611500115);
 }
 
+// Waits until the kernel calls a cancel or the time limit gave up have
+// returned (mitcad#1917), so that the process ends with none running.
+void wait_for_abandoned_calls() {
+  const auto start = std::chrono::steady_clock::now();
+  while (mitcad::abandoned_imports() > 0 && std::chrono::steady_clock::now() - start < std::chrono::seconds(30)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  CHECK(mitcad::abandoned_imports() == 0);
+}
+
+// A fillet whose kernel call does not return (a test hang, deaf to every
+// cancel, as OCCT's fillet that never looked at its progress range,
+// mitcad#1917): a cancel fails the command within a second, the document
+// stays as it was; without the job the kernel's time limit fails the
+// feature in words, and the document goes on (a later change computes).
+void test_kernel_call_given_up() {
+  auto document = mitcad::new_demo_document(); // d3: the extrusion's height
+  run(*document, fillet(quoted(corner1("F2")), 2)); // d4: the fillet's radius
+  const double before = body_volume(*document);
+  mitcad::set_test_kernel_hang(3.0);
+
+  const rust::Box<mitcad::JobControl> control = mitcad::new_job_control();
+  document->attach_job(*control);
+  std::string error;
+  std::thread worker([&] {
+    try {
+      document->command(set("d4", 3));
+    } catch (const rust::Error& e) {
+      error = e.what();
+    }
+  });
+  const auto start = std::chrono::steady_clock::now();
+  while (std::string(control->progress().feature) != "Fillet1" &&
+         std::chrono::steady_clock::now() - start < std::chrono::seconds(60)) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  const auto requested = std::chrono::steady_clock::now();
+  control->cancel();
+  worker.join();
+  const double after =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - requested).count();
+  std::printf("test_bridge: the hanging fillet was given up %.0f ms after the cancel\n", after);
+  CHECK(error == "the computation was canceled");
+  CHECK(after < 1000);
+  CHECK(mitcad::abandoned_imports() >= 1);
+  document->detach_job();
+  CHECK(near(body_volume(*document), before));
+
+  // The time limit, without a job.
+  const double limit = mitcad::kernel_time_limit();
+  mitcad::set_kernel_time_limit(1.0);
+  const auto timed = std::chrono::steady_clock::now();
+  std::string result;
+  try {
+    result = std::string(document->command(set("d4", 3)));
+  } catch (const rust::Error& e) {
+    result = e.what();
+  }
+  std::printf("test_bridge: at the time limit: %.300s\n", result.c_str());
+  const double took =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - timed).count();
+  std::printf("test_bridge: the hanging fillet failed after %.0f ms at the time limit\n", took);
+  CHECK(contains(result, "the geometry kernel did not finish within 1 s"));
+  CHECK(took < 2500);
+  mitcad::set_test_kernel_hang(0.0);
+  mitcad::set_kernel_time_limit(limit);
+  // The document goes on: another radius computes.
+  CHECK(contains(run(*document, set("d4", 2.5)), R"("error":null)"));
+  wait_for_abandoned_calls();
+}
+
+// The other kernel calls that may not return (mitcad#1922), one of each
+// family: a shell and an offset face (OCCT's offset), a coil (a helical
+// sweep without a progress range) and a deleted face (OCCT's defeaturing
+// heals the body). With the test hang (deaf to every cancel), a Cancel
+// rejects the feature's command within a second and the body stays as it
+// was; at the kernel's time limit the feature fails in words and keeps the
+// body. That failure is the feature's result, kept in the cache for its
+// inputs (mitcad#1917), so without the hang the feature computes once its
+// inputs changed: the block 25 high, the coil's pitch 12.
+void test_kernel_calls_given_up_by_family() {
+  struct Case {
+    const char* name; // the feature's name while it computes
+    std::string add;  // its add_feature
+    std::string again; // the same with other inputs, after the block's height changed
+  };
+  const std::string top = "F2:end(" + kRectangle + ")";
+  const std::vector<Case> cases = {
+      {"Shell1", R"({"cmd": "add_feature", "def": {"type": "shell", "body": "F2.b0", "faces": [")" + top +
+                     R"("], "inside": 2}})",
+       ""},
+      {"OffsetFace1", R"({"cmd": "add_feature", "def": {"type": "offset_face", "body": "F2.b0", "faces": [")" +
+                          top + R"("], "distance": 5}})",
+       ""},
+      {"Coil1", R"({"cmd": "add_feature", "def": {"type": "coil", "plane": "xy", "center": [0, 100],)"
+                R"( "diameter": 40, "helix": {"type": "revolutions_and_pitch", "revolutions": 3, "pitch": 10},)"
+                R"( "section_size": 4, "operation": "new_body"}})",
+                R"({"cmd": "add_feature", "def": {"type": "coil", "plane": "xy", "center": [0, 100],)"
+                R"( "diameter": 40, "helix": {"type": "revolutions_and_pitch", "revolutions": 3, "pitch": 12},)"
+                R"( "section_size": 4, "operation": "new_body"}})"},
+      // The rounding of the vertical edge at corner 1 (Fillet1, F3), deleted.
+      {"DeleteFace1", R"({"cmd": "add_feature", "def": {"type": "delete_face", "body": "F2.b0", "faces": [")" +
+                          std::string("F3:fillet(") + corner1("F2") + ")\"]}}",
+       ""},
+  };
+  const double limit = mitcad::kernel_time_limit();
+  for (const Case& c : cases) {
+    auto document = mitcad::new_demo_document(); // 60 x 40 x 20
+    if (std::string(c.name) == "DeleteFace1") {
+      run(*document, fillet(quoted(corner1("F2")), 2));
+    }
+    const double before = body_volume(*document);
+    mitcad::set_test_kernel_hang(3.0);
+
+    // A cancel.
+    const rust::Box<mitcad::JobControl> control = mitcad::new_job_control();
+    document->attach_job(*control);
+    std::string error;
+    std::thread worker([&] {
+      try {
+        document->command(c.add);
+      } catch (const rust::Error& e) {
+        error = e.what();
+      }
+    });
+    const auto start = std::chrono::steady_clock::now();
+    while (std::string(control->progress().feature) != c.name &&
+           std::chrono::steady_clock::now() - start < std::chrono::seconds(60)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const auto requested = std::chrono::steady_clock::now();
+    control->cancel();
+    worker.join();
+    const double after =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - requested).count();
+    std::printf("test_bridge: the hanging %s was given up %.0f ms after the cancel\n", c.name, after);
+    CHECK(error == "the computation was canceled");
+    CHECK(after < 1000);
+    document->detach_job();
+    CHECK(near(body_volume(*document), before));
+
+    // The time limit, without a job.
+    mitcad::set_kernel_time_limit(1.0);
+    const auto timed = std::chrono::steady_clock::now();
+    std::string result;
+    try {
+      result = std::string(document->command(c.add));
+    } catch (const rust::Error& e) {
+      result = e.what();
+    }
+    const double took =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - timed).count();
+    std::printf("test_bridge: the hanging %s failed after %.0f ms at the time limit\n", c.name, took);
+    CHECK(contains(result, std::string("\"name\":\"") + c.name + "\""));
+    CHECK(contains(result, "the geometry kernel did not finish within 1 s"));
+    CHECK(took < 2500);
+    CHECK(near(body_volume(*document), before));
+    mitcad::set_test_kernel_hang(0.0);
+    mitcad::set_kernel_time_limit(limit);
+
+    // Without the hang the feature computes on other inputs.
+    run(*document, R"({"cmd": "undo"})");
+    run(*document, set("d3", 25));
+    const std::string computed = run(*document, c.again.empty() ? c.add : c.again);
+    if (!contains(computed, R"("error":null)")) {
+      std::fprintf(stderr, "%s without the hang: %.400s\n", c.name, computed.c_str());
+    }
+    CHECK(contains(computed, R"("error":null)"));
+  }
+  wait_for_abandoned_calls();
+}
+
 // Jobs handed back and forth between two threads, as the application hands
 // its document to its worker and back: every result is right, and this
 // thread measures the shapes the jobs made. It holds the last result's
@@ -2054,6 +2228,8 @@ int main(int argc, char** argv) {
   test_job_cancelled_from_another_thread();
   test_jobs_handed_between_threads();
   test_kernel_operation_cancelled_inside();
+  test_kernel_call_given_up();
+  test_kernel_calls_given_up_by_family();
   test_remote_bridge();
   test_linked_projection_follows_its_source();
   test_a_cylinders_side_face_projects_as_its_outline();

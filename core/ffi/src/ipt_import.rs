@@ -338,12 +338,33 @@ impl Document {
                 wires.join(", ")
             ));
         }
-        if sources.is_empty() {
-            warnings.push(
-                "the part has no bodies: its B-rep record holds none and it has no mesh features"
-                    .into(),
-            );
-        }
+        // A part without bodies: none in the file, or bodies its result
+        // list names that the import did not find (mitcad#1913).
+        let geometry = if !sources.is_empty() {
+            "bodies"
+        } else {
+            let listed: usize = ipt
+                .result_bodies()
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .iter()
+                .filter(|b| b.exists())
+                .map(mitcad_ipt::result::ResultBody::bodies)
+                .sum();
+            if listed > 0 {
+                warnings.push(format!(
+                    "the part lists {listed} bodies that neither its B-rep record nor a mesh feature holds: they were not imported"
+                ));
+                "not found"
+            } else {
+                warnings.push(
+                    "the part has no bodies: its B-rep record holds none, it lists none and it has no mesh features"
+                        .into(),
+                );
+                "none"
+            }
+        };
         let built_seconds = started.elapsed().as_secs_f64() - read_seconds;
 
         // One undo step: the base features, the units and the material.
@@ -430,6 +451,9 @@ impl Document {
             "records": record_reports,
             "imported": found,
             "skipped": skipped,
+            // "bodies", or why there are none: "none" in the file, or
+            // listed bodies "not found" (mitcad#1913).
+            "geometry": geometry,
             "warnings": warnings,
             "notices": mitcad_model::notice::to_json(&notices),
             // The file's appearances on the bodies (mitcad#1375); null

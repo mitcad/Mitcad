@@ -247,6 +247,9 @@ impl<K: Kernel> Document<K> {
                 feature: FeatureUid(0),
                 envelope: None,
                 frames: Vec::new(),
+                // The bodies keep their materials: they are the file's.
+                looks: true,
+                given: Vec::new(),
             };
             self.replace_with_link(component, link, bodies)?;
             saved.link = Some(recorded);
@@ -1843,6 +1846,8 @@ fn keep_links(
                         frame: f.frame,
                     })
                     .collect(),
+                looks: l.looks,
+                given: l.given.clone(),
             }
         });
         if let Some(c) = design.assembly.component_mut(target) {

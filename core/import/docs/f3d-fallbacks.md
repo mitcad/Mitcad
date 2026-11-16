@@ -549,8 +549,10 @@ so a final body that close to the stored one came in without a word. The
 final comparison (`compare_final`) now adds one warning,
 `DesignReport::body_differences`, that names (the first five of) the
 final bodies that are not those stored in the file: a stored body the
-replay has none for, a body whose volume differs by more than 1e-6
-relative (`BODY_VOLUME_TOLERANCE`) or whose faces differ in number (the
+replay has none for, a body whose volume differs by more than 0.01 %
+(`BODY_VOLUME_TOLERANCE`, 1e-4 relative since mitcad#1893: within it the
+import report shows the body as matching the file's, the difference in
+its note; 1e-6 before) or whose faces differ in number (the
 report's `bodies[].file_faces` and `mitcad_faces`), and a replayed body
 the file does not store. Like every warning it is among the import's
 notices, which the application shows after the import. Where a fallback

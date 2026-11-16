@@ -5,6 +5,7 @@
 // component, an origin plane, a pick the design policy refuses, the
 // preference off), the names it gives, and the message box with its
 // buttons, default and check box.
+#include "UnitTests.hpp"
 #include "browser/ActivateQuestion.hpp"
 
 #include <cstdio>
@@ -401,3 +402,4 @@ int activateQuestionTests() {
   settingsTests();
   return failures;
 }
+MITCAD_UNIT_TEST(activateQuestionTests);

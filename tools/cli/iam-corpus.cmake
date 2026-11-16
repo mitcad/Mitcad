@@ -8,7 +8,9 @@
 # files by name. Every occurrence that is not suppressed must be placed,
 # every part file found must import, every placement must agree with the
 # one the file displays (where the file keeps one), and every placed
-# part's bodies must lie within the range box the file stores for it.
+# part's bodies must lie within the range box the file stores for it; a
+# part whose result lists bodies must bring them (a part without geometry
+# is one whose file holds none, mitcad#1913).
 # Files that are not in the corpus (library parts, files of other
 # projects) are reported, not failed. Prints a line per file; skipped
 # without the corpus.
@@ -71,6 +73,7 @@ function(check_file file)
   string(REGEX MATCH "files found: [^\n]*" found "${out}")
   string(REGEX MATCH "check: [0-9]+ of [0-9]+ parts. bodies lie within[^\n]*" boxes "${out}")
   string(REGEX MATCH "check: [0-9]+ of [0-9]+ placements agree[^\n]*" centres "${out}")
+  string(REGEX MATCH "parts without geometry: [^\n]*" empty "${out}")
   if(NOT summary)
     set(status 1)
   endif()
@@ -79,12 +82,20 @@ function(check_file file)
   else()
     set(status 1)
   endif()
+  # Every body a part lists comes in (mitcad#1913): a part without geometry
+  # is one whose file holds none.
+  if(empty MATCHES "parts that list bodies not found: [1-9]")
+    set(status 1)
+  endif()
+  if(empty)
+    set(empty "; ${empty}")
+  endif()
   if(status EQUAL 0)
-    message("ok     ${label}: ${summary}; ${found}; ${boxes}; ${centres}")
+    message("ok     ${label}: ${summary}; ${found}; ${boxes}; ${centres}${empty}")
     set(file_failed FALSE PARENT_SCOPE)
   else()
     string(REGEX MATCHALL "\n  (check failed|warning)[^\n]*|\n  part [^\n]*failed[^\n]*" problems "${out}")
-    message("FAILED ${label}: ${summary}; ${found}; ${boxes}; ${centres}${err}${problems}")
+    message("FAILED ${label}: ${summary}; ${found}; ${boxes}; ${centres}${empty}${err}${problems}")
     set(file_failed TRUE PARENT_SCOPE)
   endif()
 endfunction()

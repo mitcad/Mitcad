@@ -16,13 +16,18 @@ too big radiuses").
 - ChFi3d_Builder::PerformOneCorner: the second point on the face at the
   end is taken in the period within half a period of the first one, in u
   and in v. The intersection then runs the short way across the seam, and
-  is cut at the seam as before (the "couture" case).
+  is cut at the seam as before (the "couture" case). Only where the face
+  goes round the surface's whole period (mitcad#1883): a face on part of a
+  periodic surface has no seam, and a point moved by a period lay outside
+  it (a revolve of 270 degrees, its axis edge rounded up to the pole of an
+  ellipse's surface of revolution: OCCT's blend/simple H4 and
+  blend/buildevol D6 came out invalid).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 26d1498..6992da4 100644
+index 26d14987..46c13a33 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -1740,6 +1740,24 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1740,6 +1740,28 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
      {
        ChFi3d_Recale(Bs, pfac1, pfac2, (IFadArc == 1));
      }
@@ -32,13 +37,17 @@ index 26d1498..6992da4 100644
 +      // the face's seam starts at the corner's vertex, the arcs' curves on
 +      // the face lie on the seam's two sides, a period apart, and the
 +      // intersection, which crosses the seam (cut there below), was sought
-+      // round the whole face.
-+      if (Bs.IsUPeriodic())
++      // round the whole face. Only where the face goes round its whole
++      // period: a face on part of a periodic surface (a revolve of 270
++      // degrees) has no seam, and its points stay where they are.
++      double fu1 = 0., fu2 = 0., fv1 = 0., fv2 = 0.;
++      BRepTools::UVBounds(Fv, fu1, fu2, fv1, fv2);
++      if (Bs.IsUPeriodic() && fu2 - fu1 >= Bs.UPeriod() - Precision::PConfusion())
 +      {
 +        const double T = Bs.UPeriod();
 +        pfac2.SetX(ElCLib::InPeriod(pfac2.X(), pfac1.X() - 0.5 * T, pfac1.X() + 0.5 * T));
 +      }
-+      if (Bs.IsVPeriodic())
++      if (Bs.IsVPeriodic() && fv2 - fv1 >= Bs.VPeriod() - Precision::PConfusion())
 +      {
 +        const double T = Bs.VPeriod();
 +        pfac2.SetY(ElCLib::InPeriod(pfac2.Y(), pfac1.Y() - 0.5 * T, pfac1.Y() + 0.5 * T));

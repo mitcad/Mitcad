@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# check-all sources: app/browser/ParametersDialog.cpp app/browser/ParameterSort.cpp tools/cli
+# check-all sources: app/browser/ParametersDialog.cpp app/browser/ParameterSort.cpp app/framework/ParameterUnits.cpp tools/cli
 # check-all sources: tools/ui-scripts/parameters-sort.mitcad-ui tools/ui-scripts/parameters-sort.json
 # Edit Parameters sorted by a column (mitcad#1866): the shared input script
 # tools/ui-scripts/parameters-sort.mitcad-ui of tools/ui-parameters-sort-test.sh

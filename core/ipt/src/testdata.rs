@@ -231,6 +231,41 @@ pub fn test_part_with_hidden_body() -> Vec<u8> {
     )
 }
 
+/// An empty B-rep record with a result list that names one shown solid
+/// (the 10 mm cube's range): a part whose listed body is kept where the
+/// reader does not look (mitcad#1913).
+pub fn test_part_listing_a_missing_body() -> Vec<u8> {
+    use crate::result::{RESULT_BODIES, RESULT_SEGMENT, ResultBody, write};
+    let body = ResultBody {
+        node: 2,
+        features: vec![3],
+        visible: true,
+        solid: true,
+        kind: 2,
+        members: Vec::new(),
+        range: [[0.0; 3], [1.0; 3]],
+    };
+    let (m, b) = rse::write_segment(
+        RESULT_SEGMENT,
+        [0x45; 16],
+        &[[0x31; 16], RESULT_BODIES],
+        &[(1, write(&[body])), (0, vec![0; 8])],
+    );
+    part_file_with_streams(
+        &TestPart {
+            bodies: vec![empty_asm()],
+            part_number: "MITCAD-TEST-LISTED",
+            material: "Generic",
+            length_unit: 11269,
+            design: None,
+        },
+        &[
+            ("RSeStorage/Mtestresultsegment", m),
+            ("RSeStorage/Btestresultsegment", b),
+        ],
+    )
+}
+
 /// A part with the 10 mm cube as its body and the design that makes it
 /// (`testdesign::cube_design`): a parameter, a sketch and an extrusion;
 /// millimetres. The B-rep record has no ASM history.

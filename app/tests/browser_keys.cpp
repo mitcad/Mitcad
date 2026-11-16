@@ -4,6 +4,7 @@
 // Windows, where Qt reports AltGr as Control and Alt; Control shortcuts type
 // nothing; Option's characters on macOS are not system keys; Alt alone on
 // Windows stays one.
+#include "UnitTests.hpp"
 #include "webbrowser/BrowserKeys.hpp"
 
 #include <cstdio>
@@ -97,3 +98,4 @@ int browserKeysTests() {
   linuxTests();
   return failures;
 }
+MITCAD_UNIT_TEST(browserKeysTests);

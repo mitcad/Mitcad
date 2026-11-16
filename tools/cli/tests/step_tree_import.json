@@ -1,0 +1,16 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. STEP files keep the design's components (mitcad#1915), read back: tree.step, which step_tree_export.json wrote (cli.step_tree_export), comes into a new design as the tree it was written from. Plate placed once; Arm placed twice, both placements one component, each placing Pin twice: four components with the root, the same occurrence paths, and every placed copy where the design had it, within 1e-6 mm."},
+  {"cmd": "import_file", "path": "tree.step"},
+  {"expect": {"bodies": 2, "instances": 5, "world_volume": 12000}},
+  {"expect": {"query": {"query": "components"}, "result": {
+    "components": [{"uid": "C0"}, {"name": "Plate"}, {"name": "Arm"}, {"name": "Pin"}],
+    "occurrences": [
+      {"name": "Plate:1"},
+      {"name": "Arm:1", "children": [{"name": "Pin:1", "path": "Arm:1/Pin:1"}, {"name": "Pin:2", "path": "Arm:1/Pin:2"}]},
+      {"name": "Arm:2", "children": [{"name": "Pin:1", "path": "Arm:2/Pin:1"}, {"name": "Pin:2", "path": "Arm:2/Pin:2"}]}]}}},
+  {"expect": {"occurrence": "Plate:1", "body": "Plate", "volume": 10000, "center": [50, 25, -9], "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Arm:1/Pin:1", "body": "Pin", "bbox": {"min": [0, 100, 0], "max": [10, 110, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Arm:1/Pin:2", "body": "Pin", "bbox": {"min": [0, 120, 0], "max": [10, 130, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Arm:2/Pin:1", "body": "Pin", "bbox": {"min": [290, 100, 0], "max": [300, 110, 5]}, "tolerance": 1e-6}},
+  {"expect": {"occurrence": "Arm:2/Pin:2", "body": "Pin", "bbox": {"min": [270, 100, 0], "max": [280, 110, 5]}, "tolerance": 1e-6}}
+]

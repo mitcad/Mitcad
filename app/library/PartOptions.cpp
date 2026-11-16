@@ -3,11 +3,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include <QJsonArray>
 #include <QJsonValue>
 #include <QObject>
 #include <QRegularExpression>
+#include <QtLogging>
 
 namespace mitcad {
 namespace {
@@ -258,17 +260,76 @@ OptionsQuery libraryOptionsQuery(const JsonRunner& run, const QString& url, cons
   };
 }
 
+QJsonObject componentTrialParameters(const QList<PartOption>& options, const QJsonObject& values,
+                                     const QJsonValue& expressions) {
+  QJsonObject out;
+  for (auto it = values.begin(); it != values.end(); ++it) {
+    const QJsonValue value = it.value();
+    if (!value.isString()) {
+      out.insert(it.key(), value); // a number in mm or rad as it is
+      continue;
+    }
+    const QString text = value.toString();
+    const PartOption* known = nullptr;
+    for (const PartOption& option : options) {
+      if (option.name == it.key()) {
+        known = &option;
+        break;
+      }
+    }
+    if (known != nullptr) {
+      // A text option's text quoted, a bare number with the option's unit.
+      out.insert(it.key(), constantExpression(*known, text));
+    } else if (isConstantExpression(text)) {
+      out.insert(it.key(), text);
+    } else {
+      // Values are constants: one not of a number is a text.
+      PartOption textOption;
+      textOption.text = true;
+      out.insert(it.key(), constantExpression(textOption, text));
+    }
+  }
+  // An expression wins over a plain value of the same option.
+  const QJsonObject bound = expressions.toObject();
+  for (auto it = bound.begin(); it != bound.end(); ++it) {
+    out.insert(it.key(), it.value());
+  }
+  return out;
+}
+
+QString triedValuesRefused(const QString& message) {
+  static const QRegularExpression queryName(QStringLiteral("^\\s*configure\\s*:\\s*"));
+  QString why = message;
+  why.remove(queryName);
+  return why.isEmpty() ? QObject::tr("These values cannot be used.")
+                       : QObject::tr("These values cannot be used: %1").arg(why);
+}
+
 OptionsQuery componentOptionsQuery(const JsonRunner& query, const QString& component,
                                    const std::function<QJsonValue()>& parameters) {
-  return [query, component, parameters](const QJsonObject& values) {
+  // The options as the last answer gave them: a text option's value is sent
+  // quoted, a number option's with its unit.
+  auto known = std::make_shared<QList<PartOption>>();
+  return [query, component, parameters, known](const QJsonObject& values) {
     QJsonObject request{{QStringLiteral("query"), QStringLiteral("configure")},
-                        {QStringLiteral("component"), component},
-                        {QStringLiteral("values"), values}};
+                        {QStringLiteral("component"), component}};
+    // The model takes a component's values to try as its `parameters`
+    // (mitcad#1929): the values merged with the expressions bound here.
     const QJsonValue expressions = parameters ? parameters() : QJsonValue();
-    if (expressions.isObject()) {
-      request.insert(QStringLiteral("parameters"), expressions);
+    const QJsonObject tried = componentTrialParameters(*known, values, expressions);
+    if (!tried.isEmpty() || expressions.isObject()) {
+      request.insert(QStringLiteral("parameters"), tried);
     }
-    return optionsAnswer(query(request));
+    OptionsAnswer answer = optionsAnswer(query(request));
+    if (!answer.ok()) {
+      qInfo().noquote() << QStringLiteral("Options of %1 refused: %2").arg(component, answer.error);
+      if (!tried.isEmpty()) {
+        answer.error = triedValuesRefused(answer.error);
+      }
+    } else if (!answer.options.isEmpty()) {
+      *known = answer.options;
+    }
+    return answer;
   };
 }
 

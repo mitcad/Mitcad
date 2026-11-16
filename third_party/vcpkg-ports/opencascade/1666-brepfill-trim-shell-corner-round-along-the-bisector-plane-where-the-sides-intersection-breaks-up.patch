@@ -52,12 +52,17 @@ BRepFill_Sweep's round (Filling) gives the second side's end its curve
 on the turn by the first side's end turned, the parameters mapped
 linearly. Within twice the sweep's tolerance (the two sides' ends are
 each approximated within it) the edge's tolerance now covers how far its
-curve lies from the turn's (it was the turn's 1e-7 mm); further off, the
-piece is not the turned end (8 mm off, a diameter, where the trim along
-the intersection kept the other half of a side's end) and no turn is
-made, so that the try fails instead of making a solid through itself. A
-row's turn reuses the turn's edge the previous row made at their common
-end with that row's angle, so that the two meet there (each row's angle
+curve lies from the turn's (it was the turn's 1e-7 mm); off by a tenth of
+the end's extent or more, the piece is not the turned end (8 mm off, a
+diameter, where the trim along the intersection kept the other half of a
+side's end) and no turn is made, so that the try fails instead of making
+a solid through itself. In between the turn is made as OCCT makes it
+(mitcad#1899: the ends of a rectangle's sides along a closed polyline,
+turned to it, lie 0.07 mm apart; refusing those turns left OCCT's
+pipe/specific Z5 to ZC4 with 30 to 32 faces for 42, Z7's solid
+invalid). A row's turn reuses the turn's edge the previous row made at
+their common end with that row's angle, so that the two meet there (each
+row's angle
 is measured at its own farthest point and they differ slightly).
 Oriente, which orients a turn's edges by the bound of the turn's surface
 they lie at, took a degenerated edge at the turn's first end for one at
@@ -75,6 +80,9 @@ an edge and its arc is no longer than the distance between them, it is a
 degenerated edge as for a point on the axis (BRepLib_MakeEdge's
 StdFail_NotDone stopped the sweep); and BuildFace's test of whether a
 turn is planar no longer asks edges that make no wire for their wire.
+An exception in the cut along the bisector plane refuses it, as 1663's
+(mitcad#1899: OCCT's bugs/modalg_1 bug1477_11 stopped on a
+Standard_ConstructionError where stock gives its invalid shell).
 
 With MITCAD_TRACE_PIPE_CORNERS set, BRepFill_Sweep::PerformCorner and
 the trim write what each corner does on the standard error: its angle and
@@ -93,10 +101,11 @@ plus the turns'.
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx
-@@ -83,7 +83,10 @@
+@@ -83,7 +83,11 @@
  #include <NCollection_IndexedDataMap.hxx>
  #include <GeomLib_CheckCurveOnSurface.hxx>
  
++#include <Bnd_Box.hxx>
 +#include <cmath>
  #include <cstdio>
 +#include <iostream>
@@ -104,7 +113,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  
  // #include <BRepFill_TrimCorner.hxx>
  //  modified by NIZHNY-MKK  Wed Oct 22 12:25:45 2003
-@@ -92,6 +95,16 @@
+@@ -92,6 +96,16 @@
  // #include <GeomPlate_PointConstraint.hxx>
  // OCC500(apo)
  
@@ -121,7 +130,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  //=================================================================================================
  
  //=======================================================================
-@@ -575,15 +588,51 @@
+@@ -607,15 +621,51 @@
  
    isuiso = D.IsParallel(VRef, 0.1);
  
@@ -175,7 +184,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
      isopposite = D.IsOpposite(URef, 0.1);
      E.Orientation(TopAbs_FORWARD);
    }
-@@ -598,6 +647,29 @@
+@@ -630,6 +680,29 @@
    }
  }
  
@@ -205,7 +214,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  // OCC500(apo)->
  static void UpdateEdgeOnPlane(const TopoDS_Face& F, const TopoDS_Edge& E, const BRep_Builder& BB)
  {
-@@ -685,8 +757,19 @@
+@@ -717,8 +790,19 @@
        TE3->Tolerance(Precision::Confusion());
        TE4->Tolerance(Precision::Confusion());
  
@@ -227,7 +236,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
        if (NbPoints <= 100) // limitation for CPU
        {
          BRepLib_FindSurface FS(theWire, -1, true);
-@@ -946,6 +1029,42 @@
+@@ -978,6 +1062,42 @@
    BRepLib_MakeEdge MkE(C3d, VF, VL, f, l);
    if (!MkE.IsDone())
    { // Error of construction !!
@@ -270,7 +279,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
    }
  
    E = MkE.Edge();
-@@ -1086,6 +1205,20 @@
+@@ -1118,6 +1238,20 @@
      Angle = -Angle;
      axe.Reverse();
    }
@@ -291,40 +300,49 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  
    occ::handle<Geom_SurfaceOfRevolution> Rev = new (Geom_SurfaceOfRevolution)(Prof1, axe);
  
-@@ -1289,8 +1422,48 @@
+@@ -1321,8 +1455,57 @@
    // Update des Edges
    TopLoc_Location         Loc;
    occ::handle<Geom_Curve> C3d;
 +  // (mitcad#1564) The second side's end is the first's turned only within
 +  // the approximation of the two sides (each within Tol of the sweep): its
 +  // tolerance covers how far its curve lies from the turn's up to twice
-+  // that. Further off, the turn is not the second side's end (a piece of
-+  // the wrong part of it, or of another row): no turn is made.
++  // that. Off by a tenth of its own extent or more, the turn is not the
++  // second side's end (a piece of the wrong part of it, or of another row:
++  // a diameter off a half circle) and no turn is made. In between (the
++  // ends of sides swept along lines with the section turned to them lie a
++  // few hundredths of a millimetre apart) the turn is made as OCCT makes
++  // it (mitcad#1899).
 +  double                        aOff = 0.;
 +  double                        aF2 = 0., aL2 = 0.;
 +  const occ::handle<Geom_Curve> aE2 = BRep_Tool::Curve(E2, aF2, aL2);
 +  if (!aE2.IsNull())
 +  {
++    Bnd_Box aExtent;
 +    for (int i = 0; i <= 32; ++i)
 +    {
 +      const double aT = aF2 + (aL2 - aF2) * i / 32.;
 +      gp_Pnt2d     aUV;
 +      C2->D0(aT, aUV);
-+      aOff = std::max(aOff, aE2->Value(aT).Distance(Surf->Value(aUV.X(), aUV.Y())));
++      const gp_Pnt aP = aE2->Value(aT);
++      aExtent.Add(aP);
++      aOff = std::max(aOff, aP.Distance(Surf->Value(aUV.X(), aUV.Y())));
 +    }
++    const double aWrong = 0.1 * std::sqrt(aExtent.SquareExtent());
 +    if (TracePipeCorners())
 +    {
 +      std::cerr << "pipe corner: the second side's end lies " << aOff << " off the turn (tolerance "
-+                << BRep_Tool::Tolerance(E2) << ", " << 2. * Tol << " allowed)" << std::endl;
++                << BRep_Tool::Tolerance(E2) << ", " << 2. * Tol << " covered, " << aWrong
++                << " refused)" << std::endl;
 +    }
-+    if (aOff > 2. * Tol)
++    if (aOff > 2. * Tol && aOff >= aWrong)
 +    {
 +      return false;
 +    }
 +  }
    B.UpdateEdge(E1, C1, Surf, Loc, /*Tol3d*/ Precision::Confusion());
    B.UpdateEdge(E2, C2, Surf, Loc, /*Tol3d*/ Precision::Confusion());
-+  if (aOff > BRep_Tool::Tolerance(E2))
++  if (aOff > BRep_Tool::Tolerance(E2) && aOff <= 2. * Tol)
 +  {
 +    B.UpdateEdge(E2, aOff);
 +    TopoDS_Vertex aVF2, aVL2;
@@ -340,7 +358,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  
    if (E3.IsSame(E4))
    {
-@@ -1359,8 +1532,36 @@
+@@ -1391,8 +1574,36 @@
      }
    }
  
@@ -377,7 +395,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  
    // Set the continuities.
    B.Continuity(E1, TopoDS::Face(F1), Result, GeomAbs_G1);
-@@ -3746,6 +3947,14 @@
+@@ -3782,6 +3993,14 @@
    myLoc->Law(I2)->GetDomain(F, L);
    myLoc->Law(I2)->GetCurve()->D1(F, P2, T2);
    T2.Normalize();
@@ -392,7 +410,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  
    if (T1.Angle(T2) < myAngMin)
    {
-@@ -3887,6 +4096,10 @@
+@@ -3923,6 +4142,10 @@
    }
    else if ((TheTransition == BRepFill_Right) || aTrim.HasSection())
    {
@@ -403,7 +421,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
  #ifdef OCCT_DEBUG
      std::cout << "Fail of TrimCorner" << std::endl;
  #endif
-@@ -3913,6 +4126,11 @@
+@@ -3949,6 +4172,11 @@
      {
        KeepEdge(myFaces->Value(ii, I1), Bounds->Value(ii, 1), list1);
        KeepEdge(myFaces->Value(ii, I2), Bounds->Value(ii, 2), list2);
@@ -415,7 +433,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
        if (list1.Extent() == list2.Extent())
        {
          NCollection_List<TopoDS_Shape>::Iterator It1(list1);
-@@ -3977,6 +4195,10 @@
+@@ -4013,6 +4241,10 @@
                        Bord1,
                        Bord2,
                        FF);
@@ -429,7 +447,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_Sweep.cxx b/src/Mod
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-@@ -60,6 +60,9 @@
+@@ -61,6 +61,9 @@
  #include <Bnd_Box.hxx>
  #include <algorithm>
  #include <vector>
@@ -439,7 +457,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
  #include <NCollection_Array2.hxx>
  #include <BRepLib.hxx>
  #include <BRepTools.hxx>
-@@ -281,11 +284,30 @@
+@@ -282,11 +285,30 @@
    }
  }
  
@@ -470,7 +488,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
    // Two sides of one section touch where their normals coincide (at the
    // corner's sides), and along a small corner they meet at a shallow
    // angle: there the intersection of approximated sides can come in
-@@ -299,6 +321,28 @@
+@@ -309,6 +331,35 @@
      {
        myHistMap.Clear();
      }
@@ -486,7 +504,14 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  else if (!myDone && myTransition == BRepFill_Round)
 +  {
 +    myHistMap.Clear();
-+    myDone = PerformRoundByBisectorPlane();
++    try
++    {
++      myDone = PerformRoundByBisectorPlane();
++    }
++    catch (const Standard_Failure&)
++    {
++      myDone = false;
++    }
 +    if (!myDone)
 +    {
 +      myHistMap.Clear();
@@ -499,7 +524,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
    }
  }
  
-@@ -3643,3 +3687,1208 @@
+@@ -3676,3 +3727,1208 @@
    }
    return true;
  }

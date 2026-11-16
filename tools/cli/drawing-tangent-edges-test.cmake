@@ -11,8 +11,12 @@ cmake_minimum_required(VERSION 3.24)
 # lines thin; every other sharp line that OCCT's hidden-line removal
 # draws of the body as it is still drawn; the body unchanged. Before the
 # fix, 25 lines along tangent edges and one along a seam were drawn as
-# sharp edges in those views. Skipped when the folder or the design is not
-# there.
+# sharp edges in those views. Since OCCT's fillet records G1 on every
+# tangent edge it makes (port patch 0350, mitcad#1880), its hidden-line
+# removal alone draws only the seam; the same body with its edges'
+# continuity left out (as a later operation or an import leaves it) is
+# checked as well, its tangent edges drawn as sharp ones by the hidden-line
+# removal alone. Skipped when the folder or the design is not there.
 #
 # cmake -DCLI=<mitcad-cli> -DTEST=<test_drawing> -DWORK=<folder> -P drawing-tangent-edges-test.cmake
 

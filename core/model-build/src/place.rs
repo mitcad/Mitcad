@@ -565,6 +565,42 @@ pub(crate) fn offset_of(from: SideFrom, tx: f64, near: f64, far: f64, length: Op
     if offset.abs() < 1e-9 { 0.0 } else { offset }
 }
 
+/// The offset of a part on a side or a rail from what it is placed from
+/// (its record's `from`), measured as `build_edit`'s `at.offset` takes it,
+/// in mm (mitcad#1885: `build_parts`' `offset`, which the BUILD Placement
+/// panel fills its Offset from); none for a part placed otherwise.
+pub fn side_offset<K: Kernel>(doc: &Document<K>, component: ComponentUid) -> Option<f64> {
+    let info = doc.part_info(component)?;
+    let from = info.record.from?;
+    let joint = info.record.joint?;
+    let Some(FeatureDef::Joint(j)) = doc.feature(joint).map(|e| &e.def) else {
+        return None;
+    };
+    let motion = match j.kind {
+        JointKind::Slider => j.slide_axis.motion(),
+        JointKind::Cylindrical => Motion::Tz,
+        _ => return None,
+    };
+    let (length, _) = doc.joint_target_length(joint);
+    let (near, far) = doc.side_reach(&info, joint, None);
+    let tx = j
+        .position
+        .get(&motion)
+        .and_then(|id| doc.parameters().value(*id))
+        .unwrap_or(0.0);
+    let offset = if from == SideFrom::Gap {
+        let middle = (near + far) / 2.0;
+        let gap =
+            crate::gap::gap_of_part(doc, component, &info.name, j, tx + middle, length).ok()?;
+        tx + middle - gap.middle()
+    } else {
+        offset_of(from, tx, near, far, length)
+    };
+    // Rounded to the nanometre, and never -0.
+    let offset = (offset * 1e6).round() / 1e6;
+    Some(if offset.abs() < 1e-9 { 0.0 } else { offset })
+}
+
 /// The slide's value as the joint keeps it, bound to its reference: from
 /// end A the offset less the part's reach behind its frame, from end B
 /// and the middle an expression of the profile's length parameter `name`
@@ -625,9 +661,9 @@ pub struct SidePlan {
     pub snap: f64,
     /// The slot's grid (the system's), 0 when it has none.
     pub grid: f64,
-    /// The snap a click took (`end_a`, `end_b`, `middle`, `gap`, `grid`),
-    /// or the clamp at an end (`clamped`); None for a click between them
-    /// or a typed offset that fits.
+    /// The snap a click took (`end_a`, `end_b`, `middle`, `gap`, `grid`,
+    /// `inline`, `flush_face`), or the clamp at an end (`clamped`); None
+    /// for a click between them or a typed offset that fits.
     pub snapped: Option<&'static str>,
     /// The near face's distance from end A.
     pub offset: f64,
@@ -647,6 +683,22 @@ pub struct SidePlan {
     /// The free stretch the part stands in: the one it is centred in when
     /// `from` is `Gap`.
     pub gap: Option<crate::gap::SideGap>,
+    // In line with the frame's other profiles (mitcad#1886).
+    /// Where the part lines up with the frame's profiles that do not stand
+    /// on the side (`lineup.rs`), along the side.
+    pub lines: Vec<crate::lineup::LineUp>,
+    /// The line-up a click took (`snapped` `inline` or `flush_face`).
+    pub line: Option<crate::lineup::LineUp>,
+}
+
+/// A snap point along a side's slot (`SidePlan::snaps`): its kind, the new
+/// part's near face from end A there, and the profile it lines up with
+/// (`inline`, `flush_face`, mitcad#1886).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SideSnap<'a> {
+    pub kind: &'static str,
+    pub offset: f64,
+    pub with: Option<&'a crate::lineup::LineUp>,
 }
 
 /// A part on an end (mitcad#417): what the click chose, the new part's
@@ -666,36 +718,53 @@ pub struct EndPlan {
 }
 
 impl SidePlan {
-    /// The snap points along the slot: (kind, the near face's distance
-    /// from end A).
-    pub fn snaps(&self) -> Vec<(&'static str, f64)> {
+    /// The snap points along the slot: their kind, the near face's
+    /// distance from end A, and the profile a line-up is with.
+    pub fn snaps(&self) -> Vec<SideSnap<'_>> {
         let Some(length) = self.length else {
             return Vec::new();
         };
+        let snap = |kind, offset| SideSnap {
+            kind,
+            offset,
+            with: None,
+        };
         let width = self.far - self.near;
-        let mut out = vec![("end_a", 0.0)];
+        let mut out = vec![snap("end_a", 0.0)];
         if length - width > 1e-9 {
-            out.push(("end_b", length - width));
-            out.push(("middle", (length - width) / 2.0));
+            out.push(snap("end_b", length - width));
+            out.push(snap("middle", (length - width) / 2.0));
         }
+        let free = |out: &[SideSnap<'_>], d: f64| out.iter().all(|s| (s.offset - d).abs() > 1e-9);
         // The middles of the free stretches between profiles the part fits
         // in (mitcad#1401), where no other snap is.
         for gap in self.gaps.iter().filter(|g| g.between() && g.takes(width)) {
             let d = gap.middle() - width / 2.0;
-            if out.iter().all(|(_, o)| (o - d).abs() > 1e-9) {
-                out.push(("gap", d));
+            if free(out.as_slice(), d) {
+                out.push(snap("gap", d));
             }
         }
         if self.grid > 1e-9 {
             let mut d = self.grid;
             while d < length - width - 1e-9 && out.len() < 1000 {
-                if out.iter().all(|(_, o)| (o - d).abs() > 1e-9) {
-                    out.push(("grid", d));
+                if free(out.as_slice(), d) {
+                    out.push(snap("grid", d));
                 }
                 d += self.grid;
             }
         }
-        out.sort_by(|a, b| a.1.total_cmp(&b.1));
+        // In line with the frame's other profiles (mitcad#1886), where no
+        // other snap is: the current ones come first.
+        for line in &self.lines {
+            if out.iter().all(|s| (s.offset - line.offset).abs() > 1e-6) {
+                out.push(SideSnap {
+                    kind: line.kind,
+                    offset: line.offset,
+                    with: Some(line),
+                });
+            }
+        }
+        out.sort_by(|a, b| a.offset.total_cmp(&b.offset));
         out
     }
 }
@@ -2351,6 +2420,11 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             (Some(b), true) => (b.max[0] - b.min[0]).max(b.max[1] - b.min[1]),
             _ => f64::INFINITY,
         };
+        // The profiles standing on the slot (mitcad#1401).
+        let standing = match target.info.length {
+            Some(_) => crate::gap::standing_on(self, &target.path, target.part()?, slot, None),
+            None => Vec::new(),
+        };
         let mut side = SidePlan {
             near,
             far,
@@ -2372,14 +2446,28 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             // The free stretches between the profiles on the slot
             // (mitcad#1401).
             gaps: match target.info.length {
-                Some((_, l)) => crate::gap::gaps_along(
-                    &crate::gap::standing_on(self, &target.path, target.part()?, slot, None),
-                    l,
-                ),
+                Some((_, l)) => crate::gap::gaps_along(&standing, l),
                 None => Vec::new(),
             },
             gap: None,
+            lines: Vec::new(),
+            line: None,
         };
+        // In line with the frame's other profiles (mitcad#1886): for a
+        // click, a part square on the side.
+        if let (Some(l), Some(_), None) = (side.length, at.point, &tilted) {
+            let mut except: Vec<ComponentUid> = standing.iter().map(|s| s.component).collect();
+            except.push(target.info.component);
+            side.lines = crate::lineup::line_ups(
+                self,
+                &target.placement.after(&slot_local),
+                near,
+                far,
+                l,
+                &side.gaps,
+                &except,
+            );
+        }
         let point_local = at.point.map(|p| inverse(&target.placement).apply_point(p));
         let mut warnings = Vec::new();
         let (value, tx) = self.side_value(
@@ -2541,6 +2629,20 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                         tx = found.middle() - middle;
                         side.snapped = Some("gap");
                         gap = Some(found);
+                    } else if let Some(line) = crate::lineup::nearest(&side.lines, face, fine) {
+                        // In line with another profile of the frame
+                        // (mitcad#1886); a grid point there is the grid's.
+                        let line = line.clone();
+                        tx = line.offset - near;
+                        let on_grid = side.grid > 0.0
+                            && (line.offset - (line.offset / side.grid).round() * side.grid).abs()
+                                <= 1e-6;
+                        if on_grid {
+                            side.snapped = Some("grid");
+                        } else {
+                            side.snapped = Some(line.kind);
+                            side.line = Some(line);
+                        }
                     } else if side.grid > 0.0 {
                         let grid = (face / side.grid).round() * side.grid;
                         let within = (side.snap / 4.0)

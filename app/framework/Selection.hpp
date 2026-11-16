@@ -126,6 +126,37 @@ bool isFixedPlane(const SelectionItem& item);
 // Whether a definition's reference is a fixed plane.
 bool isFixedPlaneRef(const QJsonValue& ref);
 
+// A derived part's mount frame of a definition (`{"mount":
+// "F7:mount(end_a)"}`, a BUILD joint's origin) as an item (mitcad#1885): a
+// plane owned by "mount" whose name is the frame's reference text, so that
+// `reference()` gives it back unchanged. Nothing in the view picks one; an
+// edited joint shows its origin on a mount frame so.
+SelectionItem mountFrameItem(const QString& mount, const QString& occurrence = QString());
+bool isMountFrame(const SelectionItem& item);
+// The mount frame's name ("end_a" of "F7:mount(end_a)") and the derived
+// part it is of ("F7"); empty when the text is no mount frame's.
+QString mountFrameName(const SelectionItem& item);
+QString mountFramePart(const SelectionItem& item);
+
+// An opening of a surface body, as one of its free edges is picked
+// (mitcad#1927): an edge item of the body whose name is the opening as a
+// definition refers to it, `{"faces": [...], "index": k}` (the faces its
+// edges bound and its place among the openings along the same faces,
+// core/model-api/src/commands.md "patch"), as compact JSON. Free edges
+// (edges of one face only) have no names of their own: the view names a
+// picked one so while an input takes openings (InputDef::takesOpenings),
+// and the item stands for the whole loop of free edges.
+SelectionItem openingEdgeItem(const QString& body, const QJsonObject& opening,
+                              const QString& occurrence = QString());
+// Inline: InputDef::accepts (framework/Command.cpp) asks it, and test
+// targets compile Command.cpp without Selection.cpp (test_drag_proxy).
+inline bool isOpeningEdge(const SelectionItem& item) {
+  // A named edge is "E{...}"; an opening's name is a JSON object.
+  return item.kind == SelectKind::Edge && item.name.startsWith(QLatin1Char('{'));
+}
+// The opening of such an item; empty for any other item.
+QJsonObject openingOf(const SelectionItem& item);
+
 // Order in which a window selection prefers kinds: it keeps one kind.
 SelectKind preferredKind(const Selection& items);
 

@@ -99,6 +99,7 @@ fn components_of_other_documents_are_filled_from_their_imports() {
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -232,6 +233,7 @@ fn components_filled_before_the_replay_take_the_joints_in_place() {
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -352,6 +354,7 @@ fn a_combine_takes_a_tool_in_a_component_of_another_document() {
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -474,6 +477,7 @@ fn a_component_placed_twice_inside_a_copy_gets_a_copy_for_each_arrangement() {
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -497,6 +501,7 @@ fn a_component_placed_twice_inside_a_copy_gets_a_copy_for_each_arrangement() {
         Referenced {
             document: &sub,
             occurrence_guids: &sub_report.components.occurrence_guids,
+            occurrence_objects: &sub_report.components.occurrence_objects,
             name: "Sub".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -567,6 +572,7 @@ fn a_tool_of_the_part_placed_twice_is_linked_through_the_occurrence_its_context_
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -638,6 +644,7 @@ fn two_occurrences_of_one_part_named_by_one_item_get_a_copy_each() {
         Referenced {
             document: &part,
             occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
             name: "Part".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &NO_ENTITIES,
@@ -697,4 +704,110 @@ fn two_occurrences_of_one_part_named_by_one_item_get_a_copy_each() {
         .collect();
     assert_eq!(sources.len(), 2, "{def}");
     assert_ne!(sources[0], sources[1], "{def}");
+}
+
+/// An assembly whose one occurrence of the part the file places only along
+/// paths inside it (mitcad#1892: a joint on a part inside an inserted
+/// design moves the whole occurrence, and the file keeps the placement of
+/// the path to each occurrence inside): its own placements leave it where
+/// it was inserted (the identity), the path to the part's pin (3 cm up in
+/// the part) puts the pin turned a quarter about x at (1, -1, 0) cm, and a
+/// path to an occurrence the part does not have says nothing.
+fn placed_inside_dump() -> Dump {
+    let identity = json!([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ]);
+    let pin = json!([
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, -1.0, -1.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ]);
+    let elsewhere = json!([
+        [1.0, 0.0, 0.0, 7.0],
+        [0.0, 1.0, 0.0, 7.0],
+        [0.0, 0.0, 1.0, 7.0],
+        [0.0, 0.0, 0.0, 1.0]
+    ]);
+    let step = |t: &Value| json!([{"index": 0, "object_id": 50, "transform": t}]);
+    dump(json!({
+        "schema": "mitcad-f3d-dump", "schema_version": 2,
+        "source": {"mode": "f3d_stream", "file": "assembly.f3d"},
+        "document": {"name": "Assembly", "root_component": "Assembly"},
+        "components": [{"name": "Assembly", "is_root": true, "_f3d": {"object_id": 1}}],
+        "occurrences": [{
+            "transform": identity,
+            "isReferencedComponent": true,
+            "children": [],
+            "_f3d": {"object_id": 10, "component_object": 1, "external_key": "00000000000000aa",
+                     "external_document": PART_URN,
+                     "guids": ["c0ffee00-0000-4000-8000-0000000000a1"],
+                     "placements": step(&identity),
+                     "inside_placements": [
+                         {"inner": [999], "placements": step(&elsewhere)},
+                         {"inner": [80], "placements": step(&pin)}
+                     ]}
+        }],
+        "timeline": {"items": [{
+            "index": 0, "name": "Component Insert1", "objectType": "ComponentInsert",
+            "_f3d": {"component": 1, "object_id": 50}
+        }]},
+        "_f3d": {"external_documents": [{"key": "00000000000000aa", "urn": PART_URN, "version": 1}]}
+    }))
+}
+
+#[test]
+fn an_occurrence_placed_along_paths_inside_it_takes_their_placement() {
+    let mut part = Document::new(MockKernel::default());
+    let part_report = import(&mut part, &part_dump());
+    assert_eq!(part_report.components.occurrence_objects.len(), 1);
+    let dump = placed_inside_dump();
+    let stored = HashMap::new();
+    let sources = HashMap::from([(
+        PART_URN.to_owned(),
+        Referenced {
+            document: &part,
+            occurrence_guids: &part_report.components.occurrence_guids,
+            occurrence_objects: &part_report.components.occurrence_objects,
+            name: "Part".to_owned(),
+            stored_bodies: &stored,
+            entity_bodies: &NO_ENTITIES,
+        },
+    )]);
+    let placed = |sources: Option<&HashMap<String, Referenced<'_, MockKernel>>>| {
+        let mut doc = Document::new(MockKernel::default());
+        let report = crate::import_design_with(
+            &mut doc,
+            &dump,
+            &mut NoGeometry,
+            &Options::default(),
+            sources,
+        );
+        let o = report.components.occurrence_objects[&10];
+        doc.assembly().occurrence(o).unwrap().transform
+    };
+    // The part's own placement: the pin's with the pin's 3 cm taken off,
+    // within 1e-6 mm.
+    let t = placed(Some(&sources));
+    let want_linear = [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+    for (row, want_row) in t.linear.iter().zip(want_linear.iter()) {
+        for (got, want) in row.iter().zip(want_row.iter()) {
+            assert!((got - want).abs() < 1e-9, "{t:?}");
+        }
+    }
+    let want = [10.0, 20.0, 0.0];
+    assert!(
+        (0..3).all(|i| (t.translation[i] - want[i]).abs() < 1e-6),
+        "{t:?}"
+    );
+    // Without the part's file the paths inside cannot be undone: the
+    // occurrence stays where its own placements put it.
+    let t = placed(None);
+    assert!(
+        t.translation.iter().all(|v| v.abs() < 1e-6) && (t.linear[1][1] - 1.0).abs() < 1e-9,
+        "{t:?}"
+    );
 }

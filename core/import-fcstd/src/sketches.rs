@@ -168,7 +168,163 @@ pub(super) struct Placed {
     pub transform: Transform,
 }
 
+/// The offsets of a coordinate system that expressions drive, carried into
+/// a sketch on it or on one of its planes as the sketch's placement on its
+/// plane (mitcad#1930).
+struct CarriedShift {
+    /// The sketch's frame without that move.
+    base: SketchFrame,
+    /// The sketch definition's `placement`.
+    placement: Value,
+    /// A note for the report.
+    note: String,
+    /// The coordinate system and its bound paths.
+    system: String,
+    paths: Vec<String>,
+}
+
 impl<K: Kernel> Importer<'_, '_, K> {
+    /// The move of a sketch attached to a coordinate system or one of its
+    /// planes (FreeCAD's local coordinate systems, PartDesign's datum ones)
+    /// by that system's attachment offset, where expressions drive it
+    /// (mitcad#1930: a bend whose radius moves the profile's coordinate
+    /// system). FreeCAD places the system at its support's frame times the
+    /// offset, so the offset's position runs along the support frame's
+    /// axes: the system's turn less the offset's. Each axis's share along
+    /// the sketch's x, y and normal becomes the placement's `x`, `y` and
+    /// `offset`, an expression of the offset's expressions. None when no
+    /// expression drives the system's position or it is in another
+    /// component.
+    fn carried_shift(
+        &mut self,
+        object: &Object,
+        frame: &SketchFrame,
+        component: ComponentUid,
+    ) -> Option<CarriedShift> {
+        let doc = &self.sources[0].file.document;
+        if doc.enum_text(object, "MapMode").as_deref() == Some("Deactivated") {
+            return None;
+        }
+        let support: Vec<&mitcad_freecad::LinkRef> = ["AttachmentSupport", "Support"]
+            .iter()
+            .flat_map(|p| object.links(p))
+            .collect();
+        let [link] = support.as_slice() else {
+            return None;
+        };
+        let system = self.coordinate_system_of(&link.object)?;
+        let cs = self.sources[0].object(&system)?.clone();
+        let placed = self
+            .place_of(&system, false)
+            .filter(|p| p.component == component)?;
+        let offset = match cs.value("AttachmentOffset") {
+            Some(mitcad_freecad::Value::Placement(p)) => *p,
+            _ => return None,
+        };
+        let turn = transform(&placement_of(&cs)).linear;
+        let undo = transform(&offset).linear;
+        let mut terms: Vec<([f64; 3], super::params::Q)> = Vec::new();
+        let mut paths = Vec::new();
+        for (k, (local, name)) in undo.iter().zip(["x", "y", "z"]).enumerate() {
+            let Some(q) = self.position_quantity(&cs, k) else {
+                continue;
+            };
+            // The offset's turn undone (its inverse is its transpose: row k
+            // is the undone axis k), then the system's, then into the
+            // component.
+            let along: [f64; 3] = std::array::from_fn(|r| dot(turn[r], *local));
+            terms.push((placed.transform.apply_vector(along), q));
+            paths.push(format!("AttachmentOffset.Base.{name}"));
+        }
+        if terms.is_empty() {
+            return None;
+        }
+        for path in [
+            "AttachmentOffset.Rotation.Angle",
+            "AttachmentOffset.Rotation.Axis.x",
+            "AttachmentOffset.Rotation.Axis.y",
+            "AttachmentOffset.Rotation.Axis.z",
+        ] {
+            self.kept_value(
+                &cs,
+                path,
+                "a turn of a coordinate system's attachment offset: the sketches on it keep \
+                 FreeCAD's turn",
+            );
+        }
+        let shift = terms
+            .iter()
+            .fold([0.0; 3], |sum, (d, q)| add(sum, scale(*d, q.value)));
+        let base = SketchFrame {
+            origin: sub(frame.origin, shift),
+            ..*frame
+        };
+        let mut placement = serde_json::Map::new();
+        for (slot, axis) in [
+            ("x", frame.x_axis),
+            ("y", frame.y_axis),
+            ("offset", geom::normal(frame)),
+        ] {
+            let parts: Vec<super::params::Q> = terms
+                .iter()
+                .filter_map(|(d, q)| {
+                    let c = dot(*d, axis);
+                    if c.abs() < 1e-9 {
+                        None
+                    } else if (c.abs() - 1.0).abs() < 1e-9 {
+                        Some(q.signed(c))
+                    } else {
+                        Some(q.scale(c))
+                    }
+                })
+                .collect();
+            let value = match parts.as_slice() {
+                [] => continue,
+                [one] => one.clone(),
+                many => {
+                    let sum = many.iter().map(|q| q.value).sum();
+                    let refs: Vec<&super::params::Q> = many.iter().collect();
+                    super::params::Q::combine(&refs, sum, super::params::Kind::Length, |operands| {
+                        operands.join(" + ")
+                    })
+                }
+            };
+            placement.insert(slot.to_owned(), value.json());
+        }
+        let texts: Vec<String> = terms.iter().filter_map(|(_, q)| q.text.clone()).collect();
+        Some(CarriedShift {
+            base,
+            placement: Value::Object(placement),
+            note: format!(
+                "moved on its plane by its coordinate system's attachment offset ({})",
+                texts.join(", ")
+            ),
+            system,
+            paths,
+        })
+    }
+
+    /// The coordinate system an attachment's support names: the system
+    /// itself, or the one whose origin features hold that plane, axis or
+    /// point.
+    fn coordinate_system_of(&self, name: &str) -> Option<String> {
+        let source = &self.sources[0];
+        let o = source.object(name)?;
+        if super::history::is_coordinate_system(&o.type_name) {
+            return Some(name.to_owned());
+        }
+        source
+            .file
+            .document
+            .objects
+            .iter()
+            .find(|cs| {
+                super::history::is_coordinate_system(&cs.type_name)
+                    && cs.links("OriginFeatures").iter().any(|l| l.object == name)
+            })
+            .map(|cs| cs.name.clone())
+    }
+
     /// Imports a sketch of the document (in the timeline's order).
     pub(super) fn sketch_item(&mut self, name: &str) {
         let report = self.import_sketch(name);
@@ -244,7 +400,12 @@ impl<K: Kernel> Importer<'_, '_, K> {
         // Dimensions of the constraints' parameters and expressions.
         let adopt = self.dimension_values(&object, &mut t);
         self.reference_values(&object, &mut t);
-        let frame_def = geom::relative_frame(&plane.1, &frame);
+        // A coordinate system's offset that expressions drive moves the
+        // sketch with it (mitcad#1930): that move is the sketch's placement
+        // on its plane, and its own frame is FreeCAD's without it.
+        let carried = self.carried_shift(&object, &frame, place.component);
+        let base = carried.as_ref().map_or(frame, |c| c.base);
+        let frame_def = geom::relative_frame(&plane.1, &base);
         let mut entities = external.entities.clone();
         entities.extend(t.entities.iter().cloned());
         // Every constraint and dimension active (level 0); the fewest that
@@ -261,6 +422,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
             }
             if let Some(link) = &plane_link {
                 def["plane_link"] = link.clone();
+            }
+            if let Some(c) = &carried {
+                def["placement"] = c.placement.clone();
             }
             def
         };
@@ -317,6 +481,9 @@ impl<K: Kernel> Importer<'_, '_, K> {
             report.mitcad_constraints = t.constraints.len();
             report.dimensions = t.dimensions.len();
             report.notes.extend(plane.2.iter().cloned());
+            if let Some(c) = &carried {
+                report.notes.push(c.note.clone());
+            }
             if level == 2 {
                 report.notes.push(
                     "no subset of its constraints and dimensions solves to FreeCAD's \
@@ -421,6 +588,17 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
         // Not the plane made for it either.
         self.undo_to(start);
+        if let Some(c) = &carried
+            && let Some(system) = self.sources[0].object(&c.system).cloned()
+        {
+            for path in &c.paths {
+                self.left_out(
+                    &system,
+                    path,
+                    "the sketch on the coordinate system was not imported",
+                );
+            }
+        }
         report.notes.insert(0, format!("not imported: {last}"));
         report
     }

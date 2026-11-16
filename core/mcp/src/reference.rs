@@ -38,8 +38,14 @@ const EXCERPT: usize = 240;
 /// The most of one paragraph or list item a brief answer keeps, in bytes
 /// (mitcad#1587).
 const BRIEF_ITEM: usize = 800;
+/// The largest section a command or query described in prose (without
+/// table rows) is answered with whole (mitcad#1897); a larger one gives the
+/// paragraphs, examples and lists of it that describe the name.
+const ENTRY_WHOLE: usize = 16 * 1024;
+/// The most other sections an entry lists in `also_in`.
+const ALSO_IN: usize = 20;
 
-const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; a section or a feature type comes in brief (the example, the tables, each field's text, the subsections' headings), and extended: true gives its whole text; with guide, a guide on how to model well here (guides lists them, \"index\" says when to read each); offset continues a truncated answer from its next_offset (for search: the hits to skip).";
+const USAGE: &str = "model_reference with section (a heading, or a name a heading lists), query, command, feature (a feature type) or search gives that part of the reference; a section or a feature type comes in brief (the example, the tables, each field's text, the subsections' headings), and extended: true gives its whole text; a query or a command gives its entry (its table rows, or the section that describes it in prose, with section and path) and a command its JSON Schema (schema) where one exists, and extended: true adds what other sections say of it; brief: true says an answer was shortened on purpose (extended: true gives the rest), truncated: true that it was cut for size (pass next_offset as offset); with guide, a guide on how to model well here (guides lists them, \"index\" says when to read each; \"bug-reporting\" when a result is unexpected); offset continues a truncated answer from its next_offset (for search: the hits to skip).";
 
 /// The names MCP permits, which the backend supplies
 /// (`mitcad_model_api::classes`): the reference does not tell them.
@@ -197,6 +203,125 @@ struct Reference {
     /// Whether each line is a code fence or inside a code block.
     code: Vec<bool>,
     headings: Vec<Heading>,
+    /// The paragraphs, list items, tables and code blocks, in order
+    /// (mitcad#1897): what a command's or a query's entry is made of.
+    blocks: Vec<Block>,
+}
+
+/// What a [`Block`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockKind {
+    Paragraph,
+    /// A top-level list item with its continuation and nested items.
+    Item,
+    Table,
+    /// A fenced code block, its fences included.
+    Code,
+}
+
+/// Lines of the reference that belong together (mitcad#1897), never
+/// across a heading.
+struct Block {
+    lines: Range<usize>,
+    kind: BlockKind,
+}
+
+/// Whether a line, without its indentation, starts a list item: `- `,
+/// `* ` or `1. `.
+fn is_bullet(trimmed: &str) -> bool {
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+        return true;
+    }
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    digits > 0 && trimmed[digits..].starts_with(". ")
+}
+
+/// The blocks of a reference's lines (mitcad#1897).
+fn split_blocks(lines: &[String], code: &[bool], headings: &[Heading]) -> Vec<Block> {
+    let heading_lines: std::collections::BTreeSet<usize> =
+        headings.iter().map(|heading| heading.line).collect();
+    let fence = |i: usize| code[i] && lines[i].trim_start().starts_with("```");
+    // A list item at the left margin; nested ones continue it.
+    let bullet = |i: usize| {
+        let line = &lines[i];
+        let trimmed = line.trim_start();
+        line.len() - trimmed.len() < 2 && is_bullet(trimmed)
+    };
+    // A line that continues a paragraph or a list item.
+    let continues = |i: usize| {
+        !code[i]
+            && !heading_lines.contains(&i)
+            && !lines[i].trim().is_empty()
+            && !lines[i].starts_with('|')
+            && !bullet(i)
+    };
+    let mut blocks = Vec::new();
+    let count = lines.len();
+    let mut i = 0;
+    while i < count {
+        if heading_lines.contains(&i) || (!code[i] && lines[i].trim().is_empty()) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        let kind = if code[start] {
+            if fence(start) {
+                while i < count && code[i] && !fence(i) {
+                    i += 1;
+                }
+                if i < count && fence(i) {
+                    i += 1;
+                }
+            } else {
+                while i < count && code[i] && !fence(i) {
+                    i += 1;
+                }
+            }
+            BlockKind::Code
+        } else if lines[start].starts_with('|') {
+            while i < count && !code[i] && lines[i].starts_with('|') {
+                i += 1;
+            }
+            BlockKind::Table
+        } else {
+            while i < count && continues(i) {
+                i += 1;
+            }
+            if bullet(start) {
+                BlockKind::Item
+            } else {
+                BlockKind::Paragraph
+            }
+        };
+        blocks.push(Block {
+            lines: start..i,
+            kind,
+        });
+    }
+    blocks
+}
+
+/// A query's or a command's entry (mitcad#1897), as
+/// [`Reference::item_entry`] makes it.
+struct ItemEntry {
+    /// The section that describes it: its heading as shown, and its path.
+    section: Option<(String, String)>,
+    /// What a lookup answers: its table rows; else the section that
+    /// describes it in prose, whole up to [`ENTRY_WHOLE`], else that
+    /// section's paragraphs, examples and lists about it.
+    text: String,
+    /// What a lookup with `extended: true` answers: the rows and every
+    /// other paragraph and example that names it; else the whole section
+    /// and what the other sections say of it.
+    extended: String,
+    /// Whether `text` is that section's extract rather than its whole
+    /// text.
+    extract: bool,
+    /// Whether it has table rows.
+    rows: bool,
+    /// The other sections that name it, which `text` leaves out.
+    also_in: Vec<String>,
 }
 
 /// The whole reference, as the developers' document has it.
@@ -254,8 +379,8 @@ pub fn reference_losses(vocabulary: &Vocabulary) -> Vec<String> {
                     .sum()
             };
             let listed = |reference: &Reference| !reference.listing(name).is_empty();
-            let named =
-                |reference: &Reference| !reference.lines_with(&format!("`{name}`")).is_empty();
+            // Named in prose or in a JSON example (mitcad#1897).
+            let named = |reference: &Reference| !reference.naming(kind, name).is_empty();
             let kept = if rows(whole) > 0 {
                 rows(view) == rows(whole)
             } else if listed(whole) {
@@ -409,16 +534,32 @@ pub(crate) fn cut(
     Ok((rest[..end].to_owned(), Some(offset + end)))
 }
 
-/// Says in `answer` whether its text was cut, and where to continue.
+/// Says in `answer` whether its text was cut, and where to continue. A
+/// cut for size is said before any other note (mitcad#1897: a brief
+/// answer's note stays beside it).
 pub(crate) fn mark_cut(answer: &mut Value, next: Option<usize>) {
     answer["truncated"] = json!(next.is_some());
     if let Some(next) = next {
         answer["next_offset"] = json!(next);
-        answer["note"] = json!(format!(
+        let cut = format!(
             "cut at {} kB: call again with the same arguments and offset {next} for the rest",
             LIMIT / 1024
-        ));
+        );
+        let note = match answer.get("note").and_then(Value::as_str) {
+            Some(other) => format!("{cut}. {other}"),
+            None => cut,
+        };
+        answer["note"] = json!(note);
     }
+}
+
+/// Adds a sentence to `answer`'s note.
+fn add_note(answer: &mut Value, text: &str) {
+    let note = match answer.get("note").and_then(Value::as_str) {
+        Some(other) => format!("{other}. {text}"),
+        None => text.to_owned(),
+    };
+    answer["note"] = json!(note);
 }
 
 /// The search excerpt of `line` around the first place of `wanted` (in
@@ -481,10 +622,12 @@ impl Reference {
             }
         }
         set_ends(&mut headings, lines.len());
+        let blocks = split_blocks(&lines, &code, &headings);
         Self {
             lines,
             code,
             headings,
+            blocks,
         }
     }
 
@@ -566,10 +709,12 @@ impl Reference {
             code.push(self.code[i]);
         }
         set_ends(&mut headings, lines.len());
+        let blocks = split_blocks(&lines, &code, &headings);
         Self {
             lines,
             code,
             headings,
+            blocks,
         }
     }
 
@@ -750,7 +895,9 @@ impl Reference {
     }
 
     /// The lines of [`Self::rows`]: each table's header line and its rows'
-    /// lines.
+    /// lines. A row is the name's in a table whose first header cell names
+    /// the kind (`Command`, `Query`), or in any table when its first cell
+    /// is the kind and the name (`` command `set_table` ``, mitcad#1897).
     fn row_lines(&self, kind: &str, name: &str) -> Vec<(usize, Vec<usize>)> {
         let names = |cell: &str| {
             cell.split('`')
@@ -758,6 +905,8 @@ impl Reference {
                 .step_by(2)
                 .any(|token| token.trim() == name)
         };
+        let labelled = format!("{kind} {name}");
+        let labels = |cell: &str| normal(cell) == labelled;
         let mut tables = Vec::new();
         let mut i = 0;
         while i < self.lines.len() {
@@ -773,17 +922,262 @@ impl Reference {
             while end < self.lines.len() && self.lines[end].starts_with('|') {
                 end += 1;
             }
-            if normal(first_cell(&self.lines[header])).contains(kind) {
-                let rows: Vec<usize> = (header + 2..end)
-                    .filter(|&row| names(first_cell(&self.lines[row])))
-                    .collect();
-                if !rows.is_empty() {
-                    tables.push((header, rows));
-                }
+            let of_kind = normal(first_cell(&self.lines[header])).contains(kind);
+            let rows: Vec<usize> = (header + 2..end)
+                .filter(|&row| {
+                    let cell = first_cell(&self.lines[row]);
+                    (of_kind && names(cell)) || labels(cell)
+                })
+                .collect();
+            if !rows.is_empty() {
+                tables.push((header, rows));
             }
             i = end;
         }
         tables
+    }
+
+    /// The JSON key that names a query or a command (`kind`) in an
+    /// example: `"query": "bodies"`, `"cmd": "add_feature"`.
+    fn key(kind: &str) -> &'static str {
+        if kind == "query" { "query" } else { "cmd" }
+    }
+
+    /// Whether a block names a query or a command (mitcad#1897): prose and
+    /// tables with it in backticks, code with it as its key's value.
+    fn block_names(&self, block: &Block, kind: &str, name: &str) -> bool {
+        let lines = &self.lines[block.lines.clone()];
+        if block.kind == BlockKind::Code {
+            let key = Self::key(kind);
+            let spaced = format!("\"{key}\": \"{name}\"");
+            let tight = format!("\"{key}\":\"{name}\"");
+            lines
+                .iter()
+                .any(|line| line.contains(&spaced) || line.contains(&tight))
+        } else {
+            let quoted = format!("`{name}`");
+            lines.iter().any(|line| line.contains(&quoted))
+        }
+    }
+
+    /// The blocks that name a query or a command, in order.
+    fn naming(&self, kind: &str, name: &str) -> Vec<usize> {
+        (0..self.blocks.len())
+            .filter(|&k| self.block_names(&self.blocks[k], kind, name))
+            .collect()
+    }
+
+    /// The innermost heading of a block, by its index.
+    fn owner(&self, block: usize) -> Option<usize> {
+        let line = self.blocks[block].lines.start;
+        self.headings
+            .partition_point(|heading| heading.line <= line)
+            .checked_sub(1)
+    }
+
+    /// The heading of the section that describes what these blocks name:
+    /// the one with most of them, a code example counting three (the
+    /// first on a tie).
+    fn home(&self, naming: &[usize]) -> Option<usize> {
+        let mut weights: Vec<(usize, usize)> = Vec::new();
+        for &block in naming {
+            let Some(heading) = self.owner(block) else {
+                continue;
+            };
+            let weight = if self.blocks[block].kind == BlockKind::Code {
+                3
+            } else {
+                1
+            };
+            match weights.iter_mut().find(|(known, _)| *known == heading) {
+                Some(entry) => entry.1 += weight,
+                None => weights.push((heading, weight)),
+            }
+        }
+        let best = weights.iter().map(|(_, weight)| *weight).max()?;
+        weights
+            .iter()
+            .find(|(_, weight)| *weight == best)
+            .map(|(heading, _)| *heading)
+    }
+
+    /// Whether a block's last line ends with a colon: it introduces what
+    /// follows.
+    fn introduces(&self, block: usize) -> bool {
+        self.lines[self.blocks[block].lines.clone()]
+            .last()
+            .is_some_and(|line| line.trim_end().ends_with(':'))
+    }
+
+    /// The blocks that name something with what belongs to them
+    /// (mitcad#1897), in order: the paragraph that introduces a code
+    /// block, a table or a list (ending with a colon), the code blocks,
+    /// tables and list items a paragraph introduces, the code block a list
+    /// item introduces, and the paragraph that follows a code example.
+    fn entry_blocks(&self, naming: &[usize]) -> Vec<usize> {
+        let count = self.blocks.len();
+        // Whether block `b` follows block `a` in the same section.
+        let next = |a: usize, b: usize| b == a + 1 && b < count && self.owner(a) == self.owner(b);
+        let kind = |block: usize| self.blocks[block].kind;
+        let mut picked = std::collections::BTreeSet::new();
+        for &block in naming {
+            picked.insert(block);
+            if kind(block) != BlockKind::Paragraph {
+                let mut first = block;
+                while first > 0 && next(first - 1, first) && kind(first - 1) != BlockKind::Paragraph
+                {
+                    first -= 1;
+                }
+                if first > 0
+                    && next(first - 1, first)
+                    && kind(first - 1) == BlockKind::Paragraph
+                    && self.introduces(first - 1)
+                {
+                    picked.insert(first - 1);
+                }
+            }
+            match kind(block) {
+                BlockKind::Paragraph if self.introduces(block) => {
+                    let mut after = block;
+                    while next(after, after + 1) && kind(after + 1) != BlockKind::Paragraph {
+                        after += 1;
+                        picked.insert(after);
+                    }
+                }
+                BlockKind::Item if self.introduces(block) => {
+                    let mut after = block;
+                    while next(after, after + 1) && kind(after + 1) == BlockKind::Code {
+                        after += 1;
+                        picked.insert(after);
+                    }
+                }
+                BlockKind::Code
+                    if next(block, block + 1) && kind(block + 1) == BlockKind::Paragraph =>
+                {
+                    picked.insert(block + 1);
+                }
+                _ => {}
+            }
+        }
+        picked.into_iter().collect()
+    }
+
+    /// The blocks as text, each section's under a heading line with its
+    /// path.
+    fn render(&self, blocks: &[usize]) -> String {
+        let mut out = String::new();
+        let mut section = None;
+        for &block in blocks {
+            let owner = self.owner(block);
+            if owner != section {
+                if let Some(heading) = owner.map(|h| &self.headings[h]) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    let path = self.path(heading.line);
+                    let label = if path.is_empty() {
+                        heading.title.as_str()
+                    } else {
+                        path.as_str()
+                    };
+                    out.push_str(&"#".repeat(heading.level));
+                    out.push(' ');
+                    out.push_str(label);
+                    out.push('\n');
+                }
+                section = owner;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&self.lines[self.blocks[block].lines.clone()].join("\n"));
+            out.push('\n');
+        }
+        out
+    }
+
+    /// The sections that hold these blocks, by their paths, in order and
+    /// once each, at most [`ALSO_IN`].
+    fn paths_of(&self, blocks: &[usize]) -> Vec<String> {
+        let mut paths: Vec<String> = Vec::new();
+        for &block in blocks {
+            let path = self.path(self.blocks[block].lines.start);
+            if !path.is_empty() && !paths.contains(&path) {
+                paths.push(path);
+            }
+            if paths.len() == ALSO_IN {
+                break;
+            }
+        }
+        paths
+    }
+
+    /// A query's or a command's entry (mitcad#1897): its table rows, else
+    /// the section that describes it in prose; None when the reference
+    /// names it nowhere.
+    fn item_entry(&self, kind: &str, name: &str) -> Option<ItemEntry> {
+        let tables = self.row_lines(kind, name);
+        let naming = self.naming(kind, name);
+        if let Some((header, _)) = tables.first() {
+            let rows: Vec<usize> = tables
+                .iter()
+                .flat_map(|(_, rows)| rows.iter().copied())
+                .collect();
+            // The rows' own tables are in the text already.
+            let others: Vec<usize> = naming
+                .into_iter()
+                .filter(|&block| {
+                    !self.blocks[block]
+                        .lines
+                        .clone()
+                        .any(|line| rows.contains(&line))
+                })
+                .collect();
+            let text = self.rows(kind, name).join("\n\n");
+            let more = self.render(&self.entry_blocks(&others));
+            let extended = if more.is_empty() {
+                text.clone()
+            } else {
+                format!("{text}\n\n{more}")
+            };
+            return Some(ItemEntry {
+                section: self
+                    .heading_of(*header)
+                    .map(|heading| (heading.title.clone(), self.path(*header))),
+                text,
+                extended,
+                extract: false,
+                rows: true,
+                also_in: self.paths_of(&others),
+            });
+        }
+        let home = &self.headings[self.home(&naming)?];
+        let inside = home.line..home.end;
+        let (own, others): (Vec<usize>, Vec<usize>) = naming
+            .into_iter()
+            .partition(|&block| inside.contains(&self.blocks[block].lines.start));
+        let mut whole = self.text(home);
+        whole.push('\n');
+        let extract = whole.len() > ENTRY_WHOLE;
+        let text = if extract {
+            self.render(&self.entry_blocks(&own))
+        } else {
+            whole.clone()
+        };
+        let more = self.render(&self.entry_blocks(&others));
+        let extended = if more.is_empty() {
+            whole
+        } else {
+            format!("{whole}\n{more}")
+        };
+        Some(ItemEntry {
+            section: Some((home.title.clone(), self.path(home.line))),
+            text,
+            extended,
+            extract,
+            rows: false,
+            also_in: self.paths_of(&others),
+        })
     }
 
     /// The lines that contain a text, in any case.
@@ -1007,8 +1401,21 @@ fn without_issue_numbers(text: &str) -> String {
     out
 }
 
-/// The answer of `model_reference` to its (validated) arguments.
+/// The answer of `model_reference` to its (validated) arguments, in the
+/// headless server.
+#[cfg(test)]
 pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value, String> {
+    answer_in(arguments, vocabulary, false)
+}
+
+/// The answer of `model_reference` to its (validated) arguments; `live`
+/// for the live server, whose commands' schemas say its restrictions
+/// (mitcad#1897).
+pub(crate) fn answer_in(
+    arguments: &Value,
+    vocabulary: &Vocabulary,
+    live: bool,
+) -> Result<Value, String> {
     let offset = arguments
         .get("offset")
         .and_then(Value::as_u64)
@@ -1036,19 +1443,27 @@ pub(crate) fn answer(arguments: &Value, vocabulary: &Vocabulary) -> Result<Value
         ["section"] => section(reference, &text("section"), offset, extended),
         ["query"] => item(
             reference,
-            "query",
-            &text("query"),
-            &vocabulary.queries,
+            Lookup {
+                kind: "query",
+                name: &text("query"),
+                names: &vocabulary.queries,
+                offset,
+                extended,
+                live,
+            },
             vocabulary,
-            offset,
         ),
         ["command"] => item(
             reference,
-            "command",
-            &text("command"),
-            &vocabulary.commands,
+            Lookup {
+                kind: "command",
+                name: &text("command"),
+                names: &vocabulary.commands,
+                offset,
+                extended,
+                live,
+            },
             vocabulary,
-            offset,
         ),
         ["feature"] => feature(reference, &text("feature"), vocabulary, offset, extended),
         ["search"] => search(reference, &text("search"), offset),
@@ -1086,7 +1501,9 @@ fn contents(
     .flatten()
     .map(|name| name.len() + 3)
     .sum();
-    let others = names + guides.to_string().len();
+    // The commands with a JSON Schema (mitcad#1897): their names only.
+    let schemas = crate::schemas::schema_commands(vocabulary);
+    let others = names + guides.to_string().len() + schemas.len() * 24;
     let (text, next) = cut(&outline, offset, LIMIT.saturating_sub(others).max(4096))?;
     let mut answer = json!({
         "contents": text,
@@ -1094,6 +1511,7 @@ fn contents(
         "queries": vocabulary.queries,
         "commands": vocabulary.commands,
         "features": vocabulary.features,
+        "schemas": schemas,
         "usage": USAGE,
     });
     mark_cut(&mut answer, next);
@@ -1124,58 +1542,107 @@ fn section(
     Ok(answer)
 }
 
-/// A query's or a command's reference rows (`kind`), with the sections
-/// whose headings list it; without rows, the lines that name it.
+/// A query or a command looked up.
+struct Lookup<'a> {
+    /// `query` or `command`.
+    kind: &'a str,
+    name: &'a str,
+    /// The names of its kind MCP permits.
+    names: &'a [String],
+    offset: usize,
+    extended: bool,
+    /// The live server's lookup (a command's schema says its
+    /// restrictions).
+    live: bool,
+}
+
+/// A query's or a command's entry (mitcad#1897, [`ItemEntry`]): its
+/// reference rows, else the section that describes it in prose, with that
+/// section and its path, the sections whose headings list it and the other
+/// sections that name it; a command's JSON Schema where one exists.
+/// `brief` says that `extended: true` gives more, `truncated` that the
+/// text was cut for size.
 fn item(
     reference: &Reference,
-    kind: &str,
-    name: &str,
-    names: &[String],
+    lookup: Lookup<'_>,
     vocabulary: &Vocabulary,
-    offset: usize,
 ) -> Result<Value, String> {
+    let Lookup {
+        kind,
+        name,
+        names,
+        offset,
+        extended,
+        live,
+    } = lookup;
     let permitted = names.iter().any(|known| known == name);
     let sections: Vec<&str> = reference
         .listing(name)
         .into_iter()
         .map(|heading| heading.title.as_str())
         .collect();
-    let tables = reference.rows(kind, name);
-    let text = if tables.is_empty() {
-        reference
-            .lines_with(&format!("`{name}`"))
-            .into_iter()
-            .map(|line| {
-                format!(
-                    "{}: {}",
-                    reference.path(line),
-                    excerpt(&reference.lines[line], &format!("`{name}`").to_lowercase())
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        tables.join("\n\n")
-    };
-    if text.is_empty() && sections.is_empty() {
+    let Some(entry) = reference.item_entry(kind, name).or_else(|| {
+        // A name only a heading lists: no text of its own.
+        (!sections.is_empty()).then(|| ItemEntry {
+            section: None,
+            text: String::new(),
+            extended: String::new(),
+            extract: false,
+            rows: false,
+            also_in: Vec::new(),
+        })
+    }) else {
         let plural = if kind == "query" {
             "queries"
         } else {
             "commands"
         };
         // One the agents' view leaves out (mitcad#1509).
-        if !permitted && !self::reference().row_lines(kind, name).is_empty() {
+        if !permitted && self::reference().item_entry(kind, name).is_some() {
             return Err(unavailable(kind, plural, name, names));
         }
         return Err(unknown(kind, plural, name, names));
+    };
+    let brief = !extended && entry.extended.len() > entry.text.len();
+    let whole = if extended {
+        &entry.extended
+    } else {
+        &entry.text
+    };
+    let (text, next) = cut(whole, offset, LIMIT)?;
+    let mut answer = json!({kind: name, "text": text, "sections": sections, "brief": brief});
+    if let Some((title, path)) = &entry.section {
+        answer["section"] = json!(title);
+        answer["path"] = json!(path);
     }
-    let (text, next) = cut(&text, offset, LIMIT)?;
-    let mut answer = json!({kind: name, "text": text, "sections": sections});
+    if !extended && !entry.also_in.is_empty() {
+        answer["also_in"] = json!(entry.also_in);
+    }
     if !vocabulary.is_empty() {
         answer["permitted"] = json!(permitted);
         if !permitted {
-            answer["note"] = json!(format!("this {kind} is not available through MCP"));
+            add_note(
+                &mut answer,
+                &format!("this {kind} is not available through MCP"),
+            );
         }
+    }
+    if brief {
+        let size = entry.extended.len().div_ceil(1024);
+        let what = if entry.rows {
+            "its table rows; the same call with extended: true adds the paragraphs and examples elsewhere in the reference that name it"
+        } else if entry.extract {
+            "the paragraphs, examples and lists of its section that describe it; the same call with extended: true gives the whole section and what other sections say of it"
+        } else {
+            "the whole section that describes it; the same call with extended: true adds what other sections (also_in) say of it"
+        };
+        add_note(&mut answer, &format!("in brief: {what} ({size} kB in all)"));
+    }
+    // Its JSON Schema, on demand only (mitcad#1897).
+    if kind == "command"
+        && let Some(schema) = crate::schemas::command_schema(name, vocabulary, live)
+    {
+        answer["schema"] = schema;
     }
     mark_cut(&mut answer, next);
     Ok(answer)
@@ -1315,10 +1782,14 @@ pub(crate) fn explain_refusal(arguments: &Value, value: &mut Value, vocabulary: 
         .get("cmd")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // Its rows, or the section that describes it in prose (mitcad#1897).
     let rows = if name.is_empty() {
         String::new()
     } else {
-        reference.rows("command", name).join("\n\n")
+        reference
+            .item_entry("command", name)
+            .map(|entry| entry.text)
+            .unwrap_or_default()
     };
     // A missing field the command's rows name is the command's; an unknown
     // one is the command's when the command itself has it.

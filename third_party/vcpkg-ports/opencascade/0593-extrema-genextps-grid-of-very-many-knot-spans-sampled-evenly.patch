@@ -14,29 +14,36 @@ cost about 500000 of each, the union of a part with such a thread insert
 spent most of its 13 s in them, and each face's grid held 100 MB in every
 thread's context (7.5 GB for that union).
 
-A direction of more than 1001 such parameters is now sampled at 1001
-parameters evenly over the range, as many as Adaptor3d_TopolTool samples a
-B-spline at most (BSplSamplePnts); a range of fewer is unchanged.
+A direction of more than 1001 such parameters now keeps 1001 of them,
+evenly through their list, as many as Adaptor3d_TopolTool samples a
+B-spline at most (BSplSamplePnts); a range of fewer is unchanged. (Taken
+evenly over the range instead, they missed a surface's detail where its
+knots crowd together: OCCT's buc60555_3, a half-space bounded by an
+extrusion of a curve of 206 knots of degree 8 nearly all in a hundredth of
+its range, found the wrong side and cut the part away.)
 
+diff --git a/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx b/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx
+index e22509a0..8039ceb1 100644
 --- a/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx
 +++ b/src/ModelingData/TKGeomBase/Extrema/Extrema_GenExtPS.cxx
-@@ -361,6 +361,22 @@
+@@ -361,6 +361,23 @@ inline static void fillParams(const NCollection_Array1<double>&         theKnots
    {
      return;
    }
 +  // A range of very many knot spans (a thread's face running tens of turns,
 +  // its helices interpolated at a hundred points a turn: 10000 parameters)
-+  // is sampled evenly at as many points as Adaptor3d_TopolTool samples a
-+  // B-spline at most: every projection computes the distances to all nodes,
-+  // edges and cells of the grid (mitcad#235).
++  // keeps as many of these parameters as Adaptor3d_TopolTool samples a
++  // B-spline at most, evenly through the list (so the grid stays as dense
++  // where the knots are dense): every projection computes the distances to
++  // all nodes, edges and cells of the grid (mitcad#235).
 +  constexpr int THE_MAX_PARAMS = 1001;
 +  if (nbPar > THE_MAX_PARAMS)
 +  {
 +    theParams = new NCollection_HArray1<double>(1, THE_MAX_PARAMS);
 +    for (i = 0; i < THE_MAX_PARAMS; i++)
 +    {
-+      theParams->SetValue(i + 1,
-+                          theParMin + (theParMax - theParMin) * i / (THE_MAX_PARAMS - 1));
++      const int anIndex = static_cast<int>((static_cast<double>(nbPar - 1) * i) / (THE_MAX_PARAMS - 1) + 0.5);
++      theParams->SetValue(i + 1, aParams(std::min(anIndex, nbPar - 1)));
 +    }
 +    return;
 +  }

@@ -3,7 +3,9 @@
 
 // Navigation with a 3D mouse (mitcad#951): its settings (Preferences >
 // Navigation > 3D mouse, saved in the group "view") and the pure mapping
-// from the device's six axes to the camera, which the unit tests check.
+// from the device's six axes to the camera, with its cross-talk filter,
+// the device's reach and Dominant axis only's hold (mitcad#1720), which
+// the unit tests check.
 //
 // The device's axes come in the view's frame (platform/SpaceMouseDevice.hpp).
 // Its Navigation mode (mitcad#978) says what follows the cap. Object (the
@@ -15,7 +17,8 @@
 // perspective; in orthographic as Camera). The 3D mouse's own Lock horizon
 // keeps world Z upright and takes no roll, whatever the mouse's
 // Constrained orbit. A flat view (sketch mode) takes the pan and the zoom
-// only, in the mode's direction.
+// only, in the mode's direction, until Lock Rotation frees the rotation
+// for that sketch (mitcad#1910, SpaceMouseController).
 
 #include <algorithm>
 #include <array>
@@ -73,8 +76,21 @@ struct SpaceMouseSettings {
   std::array<bool, 6> reversed{{false, false, false, false, false, false}};
   bool lockRotation = false;
   bool lockTranslation = false;
-  // Only the axis deflected most moves the view.
+  // Only the axis deflected most moves the view, held until the cap comes
+  // to rest (SpaceMouseDominantAxis, mitcad#1720).
   bool dominantAxis = false;
+  // The cross-talk filter (mitcad#1720), in percent, 0 off: an axis
+  // deflected less than this share of the axis deflected most does nothing
+  // in that frame. A cap that couples its axes moves the view along
+  // several of them for a motion along one (a device moved along a single
+  // axis was seen reporting 30-80 % of it on others), which reads as every
+  // axis doing the same. The default, 50 %, drops a weaker axis that is
+  // less than half the strongest, the stray part of a mildly coupled cap,
+  // and still lets a deliberate motion along two axes (a diagonal pan, a
+  // pan while zooming) move both whenever the weaker is at least half the
+  // stronger, as a hand moving two ways on purpose gives them. A cap that
+  // couples more takes a higher share, up to 90 %, or Dominant axis only.
+  int crossTalk = 50;
   // The command each button runs (0 the first), empty for none.
   QStringList buttons{QStringLiteral("view.fit"), QStringLiteral("view.home")};
 };
@@ -82,6 +98,12 @@ struct SpaceMouseSettings {
 inline double sanitizeSpaceMouseSpeed(double speed) {
   return std::isfinite(speed) ? std::clamp(speed, 0.1, 4.0) : 1.0;
 }
+
+// The cross-talk filter's highest share, in percent: at 100 only axes
+// deflected exactly as far as the strongest would move the view.
+constexpr int kSpaceMouseCrossTalkMax = 90;
+
+inline int sanitizeSpaceMouseCrossTalk(int percent) { return std::clamp(percent, 0, kSpaceMouseCrossTalkMax); }
 
 // The axes' names in the settings.
 inline const char* spaceMouseAxisKey(std::size_t axis) {
@@ -112,6 +134,8 @@ inline void loadSpaceMouseSettings(const QSettings& store, SpaceMouseSettings& s
   settings.lockRotation = store.value(prefix + QStringLiteral("LockRotation"), false).toBool();
   settings.lockTranslation = store.value(prefix + QStringLiteral("LockTranslation"), false).toBool();
   settings.dominantAxis = store.value(prefix + QStringLiteral("DominantAxis"), false).toBool();
+  const int crossTalk = store.value(prefix + QStringLiteral("CrossTalk"), settings.crossTalk).toInt(&ok);
+  settings.crossTalk = ok ? sanitizeSpaceMouseCrossTalk(crossTalk) : SpaceMouseSettings().crossTalk;
   // A JSON array, so that an unbound button ("") keeps its place.
   const QString buttonsKey = prefix + QStringLiteral("Buttons");
   if (store.contains(buttonsKey)) {
@@ -150,11 +174,94 @@ inline void saveSpaceMouseSettings(QSettings& store, const SpaceMouseSettings& s
   store.setValue(prefix + QStringLiteral("LockRotation"), settings.lockRotation);
   store.setValue(prefix + QStringLiteral("LockTranslation"), settings.lockTranslation);
   store.setValue(prefix + QStringLiteral("DominantAxis"), settings.dominantAxis);
+  store.setValue(prefix + QStringLiteral("CrossTalk"), sanitizeSpaceMouseCrossTalk(settings.crossTalk));
   QJsonArray buttons;
   for (const QString& id : settings.buttons) {
     buttons.append(id);
   }
   store.setValue(prefix + QStringLiteral("Buttons"), QJsonDocument(buttons).toJson(QJsonDocument::Compact));
+}
+
+// Lock Rotation (mitcad#1910): the checkable view command a button can run
+// to lock and free the 3D mouse's rotation.
+inline QString spaceMouseLockRotationCommand() { return QStringLiteral("view.space_mouse_lock_rotation"); }
+
+// Whether the 3D mouse's rotation is locked (mitcad#1910): in a flat view
+// (a sketch) until Lock Rotation frees it for that sketch
+// (`freedInSketch`), whatever the settings say; elsewhere as the
+// settings' Lock rotation says.
+inline bool spaceMouseRotationLocked(const SpaceMouseSettings& settings, bool flat, bool freedInSketch) {
+  return flat ? !freedInSketch : settings.lockRotation;
+}
+
+// A device's HID vendor and product ids from its name as a backend gives
+// it, "SpaceMouse Pro (HID 046d:c62b)" or "HID 046d:c62b" (Raw Input and
+// IOKit HID; spacenavd's socket names no device): false when the name has
+// none.
+inline bool spaceMouseHidIds(const QString& device, int& vendor, int& product) {
+  const int at = int(device.lastIndexOf(QStringLiteral("HID ")));
+  if (at < 0) {
+    return false;
+  }
+  const QString ids = device.mid(at + 4, 9);
+  if (ids.size() != 9 || ids.at(4) != QLatin1Char(':')) {
+    return false;
+  }
+  bool vendorOk = false;
+  bool productOk = false;
+  const int readVendor = ids.left(4).toInt(&vendorOk, 16);
+  const int readProduct = ids.mid(5, 4).toInt(&productOk, 16);
+  if (!vendorOk || !productOk) {
+    return false;
+  }
+  vendor = readVendor;
+  product = readProduct;
+  return true;
+}
+
+// The button (0 the first) of a device's rotation lock key, by its HID ids,
+// or -1 when its number is not known. Without the vendor's driver the key
+// is a plain numbered button of the device's button report. Known: the
+// SpaceMouse Pro (product c62b) and the SpaceMouse Pro Wireless (c631 by
+// cable, c632 through its receiver, c638), vendor 046d or 256f, whose
+// lock key is the report's bit 26, button 27. A universal receiver (c652)
+// is left out: the device behind it may have no such key.
+inline int spaceMouseLockKeyButton(int vendor, int product) {
+  if (vendor != 0x046d && vendor != 0x256f) {
+    return -1;
+  }
+  switch (product) {
+  case 0xc62b:
+  case 0xc631:
+  case 0xc632:
+  case 0xc638:
+    return 26;
+  default:
+    return -1;
+  }
+}
+
+// A connected device's default button (mitcad#1910): its rotation lock key
+// runs Lock Rotation when the key's number is known
+// (spaceMouseLockKeyButton) and the settings have no entry for that button
+// yet (their list ends before it). Every other button, and a lock key the
+// user has bound or set to None, stays as it is. True when it changed the
+// settings.
+inline bool addSpaceMouseDeviceButtons(SpaceMouseSettings& settings, const QString& device) {
+  int vendor = 0;
+  int product = 0;
+  if (!spaceMouseHidIds(device, vendor, product)) {
+    return false;
+  }
+  const int key = spaceMouseLockKeyButton(vendor, product);
+  if (key < 0 || key >= 32 || settings.buttons.size() > key) {
+    return false;
+  }
+  while (settings.buttons.size() < key) {
+    settings.buttons.append(QString());
+  }
+  settings.buttons.append(spaceMouseLockRotationCommand());
+  return true;
 }
 
 // The share of a full deflection that does nothing (the cap's rest noise).
@@ -179,32 +286,191 @@ inline double spaceMouseResponse(double value) {
   return std::copysign(t * (0.25 + 0.75 * t), value);
 }
 
-// The axes that move the view: the response curve, the axes switched off,
-// the locks (a flat view has its rotation locked), the reversed directions
-// and the dominant axis.
-inline SpaceMouseAxes spaceMouseFiltered(const SpaceMouseSettings& settings, const SpaceMouseAxes& axes,
-                                         bool flat) {
-  SpaceMouseAxes result{};
+// One axis's deflection, 0 to a full one (beyond a full one counts as a
+// full one, as in spaceMouseResponse; a value that is no number as none).
+inline double spaceMouseDeflection(double value) {
+  return std::isfinite(value) ? std::min(std::abs(value), 1.0) : 0.0;
+}
+
+// How far a device's cap goes (mitcad#1720): the largest deflection it has
+// shown of each kind, translation and rotation, so that axes are compared
+// as shares of their own kind's full deflection and one kind does not win
+// by its scale. The devices report both kinds on one nominal scale
+// (kSpaceMouseFullScale), but caps reach them unevenly: a SpaceMouse
+// Compact was seen reaching 350 counts in translation and 280 in rotation,
+// a SpaceNavigator 190 in translation and 340 in rotation. A reach starts
+// at `start` for both kinds (the same, so that a new device's axes compare
+// as they come) and grows with every deflection beyond it, up to a full
+// one. The default start, a full deflection, is the nominal scale and
+// learns nothing; the controller starts each device at
+// kSpaceMouseReachStart.
+class SpaceMouseReach {
+public:
+  explicit SpaceMouseReach(double start = 1.0)
+      : m_start(sanitized(start)), m_translation(m_start), m_rotation(m_start) {}
+
+  // A frame's axes: a deflection beyond its kind's reach widens it.
+  void add(const SpaceMouseAxes& axes) {
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      double& reach = axis < 3 ? m_translation : m_rotation;
+      reach = std::max(reach, spaceMouseDeflection(axes[axis]));
+    }
+  }
+  // The reach of an axis's kind (tx, ty, tz the translation; rx, ry, rz
+  // the rotation).
+  double of(std::size_t axis) const { return axis < 3 ? m_translation : m_rotation; }
+  // An axis's deflection as a share of its kind's reach, what the
+  // comparisons between axes use.
+  double share(std::size_t axis, double value) const { return spaceMouseDeflection(value) / of(axis); }
+  void reset() { m_translation = m_rotation = m_start; }
+
+private:
+  static double sanitized(double start) { return std::isfinite(start) ? std::clamp(start, 0.1, 1.0) : 1.0; }
+  double m_start;
+  double m_translation;
+  double m_rotation;
+};
+
+// The reach a device starts with, in both kinds, until it shows more.
+constexpr double kSpaceMouseReachStart = 0.5;
+// Dominant axis only (mitcad#1720): the deflection the strongest axis must
+// reach before it is chosen, and before another axis may take over from
+// the held one. Above the dead zone, so that the first stray counts of a
+// motion (a cap pushed in was seen moving 0.06-0.09 up first) choose
+// nothing, and so that the axes that linger as the cap returns to rest
+// (seen up to 0.08 after the held axis was back in the dead zone) do not
+// take over.
+constexpr double kSpaceMouseDominantChoice = 0.1;
+// How many times the held axis's share of its reach another axis's share
+// must be before it takes over: a cap pushed left was seen reporting up to
+// 1.34 times as much in and out as left during the push.
+constexpr double kSpaceMouseDominantMargin = 1.5;
+
+// Dominant axis only with a hold (mitcad#1720, GitHub mitcad/Mitcad#343):
+// the one axis that moves the view. The axis is chosen once the strongest
+// eligible axis (switched on and not locked) is deflected
+// kSpaceMouseDominantChoice, and kept until the cap is back at rest (every
+// axis, eligible or not, in the dead zone); before that another axis takes
+// over only when it is deflected as far and its share of its reach is
+// more than kSpaceMouseDominantMargin times the held one's (a held axis
+// switched off or locked meanwhile counts as none). Axes are compared as
+// shares of their kind's reach. Choosing again at every frame let a cap
+// that couples its axes flip between two of similar size during one
+// motion: the view alternated between them, mixed motion and jumps.
+class SpaceMouseDominantAxis {
+public:
+  // The axis (0 tx … 5 rz) that moves the view for the device's `axes` this
+  // frame, or -1 for none.
+  int update(const SpaceMouseAxes& axes, const std::array<bool, 6>& eligible, const SpaceMouseReach& reach) {
+    bool rest = true;
+    for (const double value : axes) {
+      if (spaceMouseDeflection(value) > kSpaceMouseDeadzone) {
+        rest = false;
+      }
+    }
+    if (rest) {
+      m_held = -1;
+      return m_held;
+    }
+    std::array<double, 6> shares{};
+    int strongest = -1;
+    for (std::size_t axis = 0; axis < 6; ++axis) {
+      if (eligible[axis] && spaceMouseDeflection(axes[axis]) > kSpaceMouseDeadzone) {
+        shares[axis] = reach.share(axis, axes[axis]);
+        if (strongest < 0 || shares[axis] > shares[static_cast<std::size_t>(strongest)]) {
+          strongest = static_cast<int>(axis);
+        }
+      }
+    }
+    if (strongest < 0 || strongest == m_held ||
+        spaceMouseDeflection(axes[static_cast<std::size_t>(strongest)]) < kSpaceMouseDominantChoice) {
+      return m_held;
+    }
+    if (m_held < 0 || shares[static_cast<std::size_t>(strongest)] >
+                          kSpaceMouseDominantMargin * shares[static_cast<std::size_t>(m_held)]) {
+      m_held = strongest;
+    }
+    return m_held;
+  }
+  int held() const { return m_held; }
+  void reset() { m_held = -1; }
+
+private:
+  int m_held = -1;
+};
+
+// What the 3D mouse's mapping keeps from one frame to the next
+// (mitcad#1720): the device's reach and Dominant axis only's held axis.
+// The controller keeps one for its device; without one, every frame is
+// taken as a motion's first, on the nominal scale.
+struct SpaceMouseMemory {
+  SpaceMouseReach reach{kSpaceMouseReachStart};
+  SpaceMouseDominantAxis dominant;
+};
+
+// The cross-talk filter (mitcad#1720): the device's axes with every axis
+// deflected less than `percent` % of the axis deflected most set to zero,
+// each deflection a share of its kind's `reach` (SpaceMouseReach; by
+// default the nominal scale); 0 keeps them all. It compares the device's
+// own values, before the response curve, the axes switched off and the
+// locks: the coupling is the cap's, so a motion along an axis switched off
+// or locked does not leak into the others either.
+inline SpaceMouseAxes spaceMouseWithoutCrossTalk(const SpaceMouseAxes& axes, int percent,
+                                                 const SpaceMouseReach& reach = SpaceMouseReach()) {
+  SpaceMouseAxes result = axes;
+  const int share = sanitizeSpaceMouseCrossTalk(percent);
+  if (share == 0) {
+    return result;
+  }
+  double strongest = 0.0;
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    strongest = std::max(strongest, reach.share(axis, axes[axis]));
+  }
+  const double least = strongest * share / 100.0;
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    if (!(std::isfinite(result[axis]) && reach.share(axis, result[axis]) >= least)) {
+      result[axis] = 0.0;
+    }
+  }
+  return result;
+}
+
+// The axes that move the view: the cross-talk filter (unless the dominant
+// axis alone moves it), the response curve, the axes switched off, the
+// locks (a flat view has its rotation locked), the reversed directions and
+// the dominant axis. `memory` (the controller's) learns the device's reach
+// and holds the dominant axis; without it the frame stands alone.
+inline SpaceMouseAxes spaceMouseFiltered(const SpaceMouseSettings& settings, const SpaceMouseAxes& axes, bool flat,
+                                         SpaceMouseMemory* memory = nullptr) {
+  SpaceMouseReach nominal;
+  SpaceMouseDominantAxis single;
+  const SpaceMouseReach* reach = &nominal;
+  SpaceMouseDominantAxis* dominant = &single;
+  if (memory != nullptr) {
+    memory->reach.add(axes);
+    reach = &memory->reach;
+    dominant = &memory->dominant;
+  }
+  std::array<bool, 6> eligible{};
   for (std::size_t axis = 0; axis < 6; ++axis) {
     const bool rotation = axis >= 3;
-    if (!settings.axisOn[axis] || (rotation && (settings.lockRotation || flat)) ||
-        (!rotation && settings.lockTranslation)) {
+    eligible[axis] = settings.axisOn[axis] && !(rotation && (settings.lockRotation || flat)) &&
+                     !(!rotation && settings.lockTranslation);
+  }
+  int held = -1;
+  if (settings.dominantAxis) {
+    held = dominant->update(axes, eligible, *reach);
+  } else {
+    dominant->reset();
+  }
+  const SpaceMouseAxes device =
+      settings.dominantAxis ? axes : spaceMouseWithoutCrossTalk(axes, settings.crossTalk, *reach);
+  SpaceMouseAxes result{};
+  for (std::size_t axis = 0; axis < 6; ++axis) {
+    if (!eligible[axis] || (settings.dominantAxis && static_cast<int>(axis) != held)) {
       continue;
     }
-    result[axis] = spaceMouseResponse(axes[axis]) * (settings.reversed[axis] ? -1.0 : 1.0);
-  }
-  if (settings.dominantAxis) {
-    std::size_t strongest = 0;
-    for (std::size_t axis = 1; axis < 6; ++axis) {
-      if (std::abs(result[axis]) > std::abs(result[strongest])) {
-        strongest = axis;
-      }
-    }
-    for (std::size_t axis = 0; axis < 6; ++axis) {
-      if (axis != strongest) {
-        result[axis] = 0.0;
-      }
-    }
+    result[axis] = spaceMouseResponse(device[axis]) * (settings.reversed[axis] ? -1.0 : 1.0);
   }
   return result;
 }
@@ -225,11 +491,13 @@ struct SpaceMouseRates {
   bool turning() const { return pitch != 0.0 || yaw != 0.0 || roll != 0.0; }
 };
 
-inline SpaceMouseRates spaceMouseRates(const SpaceMouseSettings& settings, const SpaceMouseAxes& axes, bool flat) {
+// `memory` as in spaceMouseFiltered.
+inline SpaceMouseRates spaceMouseRates(const SpaceMouseSettings& settings, const SpaceMouseAxes& axes, bool flat,
+                                       SpaceMouseMemory* memory = nullptr) {
   if (!settings.enabled) {
     return {};
   }
-  const SpaceMouseAxes moved = spaceMouseFiltered(settings, axes, flat);
+  const SpaceMouseAxes moved = spaceMouseFiltered(settings, axes, flat, memory);
   const double speed = sanitizeSpaceMouseSpeed(settings.speed);
   SpaceMouseRates rates;
   rates.panX = moved[0] * kSpaceMousePanRate * speed;

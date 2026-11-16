@@ -144,12 +144,12 @@ SettingsWindow::SettingsWindow(QWidget* parent, Selector selector) : QWidget(par
   m_savedOpacity = new QGraphicsOpacityEffect(m_savedNote);
   m_savedOpacity->setOpacity(0.0);
   m_savedNote->setGraphicsEffect(m_savedOpacity);
-  auto* footer = new QHBoxLayout;
+  m_footer = new QHBoxLayout;
   // The pane's own margins at the sides (addPane), so that the note ends
   // where the pane's controls do; below it the window's margin.
-  footer->setContentsMargins(24, 0, 24, selector == Selector::IconRow ? 12 : 0);
-  footer->addWidget(m_savedNote, 1);
-  layout->addLayout(footer);
+  m_footer->setContentsMargins(24, 0, 24, selector == Selector::IconRow ? 12 : 0);
+  m_footer->addWidget(m_savedNote, 1);
+  layout->addLayout(m_footer);
   m_savedFade = new QPropertyAnimation(m_savedOpacity, "opacity", this);
   connect(m_savedFade, &QPropertyAnimation::finished, this, [this] {
     if (m_savedOpacity->opacity() <= 0.0) {
@@ -215,6 +215,13 @@ void SettingsWindow::showPane(int index) {
   m_pages->setCurrentIndex(index);
   layout()->invalidate();
   layout()->activate();
+}
+
+int SettingsWindow::currentPane() const { return m_pages->currentIndex(); }
+
+void SettingsWindow::addFooterButton(QWidget* button) {
+  // Before the note, which takes the rest of the row.
+  m_footer->insertWidget(m_footer->indexOf(m_savedNote), button);
 }
 
 void SettingsWindow::showEvent(QShowEvent* event) {

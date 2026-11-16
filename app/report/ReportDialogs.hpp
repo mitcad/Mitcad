@@ -12,6 +12,7 @@
 #include <QList>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include "report/ReportText.hpp"
@@ -75,6 +76,9 @@ struct Feedback {
   // Include the design (mitcad#1795): a zip of the open design and the
   // files it refers to, the report, the screenshot and the log.
   bool includeDesign = false;
+  // Include the logs (mitcad#1896): this session's and the previous
+  // session's log files.
+  bool includeLogs = false;
 };
 
 // Help > Send Feedback: the kind, a summary, a description, an optional
@@ -104,6 +108,7 @@ private:
   QCheckBox* m_diagnostics = nullptr;
   QCheckBox* m_screenshot = nullptr;
   QCheckBox* m_design = nullptr;
+  QCheckBox* m_logs = nullptr;
   ScreenshotView* m_view = nullptr;
   QWidget* m_viewRow = nullptr;
 };
@@ -119,8 +124,11 @@ public:
   // `logFile`: the latest debug log (mitcad#269), offered unchecked; "" none.
   // `design`: the design's zip (mitcad#1795), its path "" when the form did
   // not ask for it; offered checked, with its size.
+  // `sessionLogs`: the session logs the form asked for (mitcad#1896),
+  // offered checked; in the design's zip when there is one.
   ReportPreviewDialog(const Report& report, const QImage& screenshot, const QString& destination, QWidget* parent,
-                      const QString& logFile = QString(), const DesignZip& design = DesignZip());
+                      const QString& logFile = QString(), const DesignZip& design = DesignZip(),
+                      const QStringList& sessionLogs = QStringList());
 
   // The report as edited, with the sections left out unchecked.
   Report report() const;
@@ -130,6 +138,8 @@ public:
   QString logFile() const;
   // Whether the design's zip is still included (made, and checked).
   bool designIncluded() const;
+  // The session logs when they are still included, else none.
+  QStringList sessionLogs() const;
 
 protected:
   void showEvent(QShowEvent* event) override;
@@ -147,6 +157,8 @@ private:
   QGroupBox* m_logFileBox = nullptr;
   DesignZip m_design;
   QGroupBox* m_designBox = nullptr;
+  QStringList m_sessionLogs;
+  QGroupBox* m_sessionLogsBox = nullptr;
 };
 
 // Logs "<what> at x,y" for UI tests, in the main window's coordinates (the

@@ -6,6 +6,7 @@
 // model measures the first distance on; and the edges of a real L bracket
 // read from its solid, an inside corner concave, the outside edges convex
 // (mitcad#571).
+#include "UnitTests.hpp"
 #include "commands/ChamferHandles.hpp"
 
 #include <cmath>
@@ -335,3 +336,4 @@ int chamferHandleTests() {
   measuredSideTests();
   return failures;
 }
+MITCAD_UNIT_TEST(chamferHandleTests);

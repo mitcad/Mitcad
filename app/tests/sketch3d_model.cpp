@@ -3,6 +3,7 @@
 // query's answer (in the form core/model-api/src/sketch3d.rs gives it) read
 // into the model, its status, details, sources and descriptions, and the
 // log line; a failed sketch; a planar sketch's answer read as nothing.
+#include "UnitTests.hpp"
 #include "sketch/Sketch3dModel.hpp"
 
 #include <cstdio>
@@ -325,3 +326,4 @@ int sketch3dModelTests() {
   failureTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketch3dModelTests);

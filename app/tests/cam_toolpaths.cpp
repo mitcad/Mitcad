@@ -4,6 +4,7 @@
 // rapids, cuts and entries (a plunge, a ramp, a helix), arcs drawn in
 // steps with their sweep and direction, the tool's places for Simulate and
 // the log lines the UI tests read.
+#include "UnitTests.hpp"
 #include "cam/CamToolpaths.hpp"
 
 #include <cmath>
@@ -168,3 +169,4 @@ int camToolpathsTests() {
   sceneTests();
   return failures;
 }
+MITCAD_UNIT_TEST(camToolpathsTests);

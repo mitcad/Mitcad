@@ -3,6 +3,7 @@
 // from the query, runs and their changes, the surface with its sides and
 // shades by the material left, the snapshots' places along the playback
 // and the log lines the UI tests read.
+#include "UnitTests.hpp"
 #include "cam/CamStock.hpp"
 
 #include <cmath>
@@ -133,3 +134,4 @@ int camStockTests() {
   logTests();
   return failures;
 }
+MITCAD_UNIT_TEST(camStockTests);

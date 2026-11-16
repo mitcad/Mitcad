@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #353's second design (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): the same stepped block as fillet_exact_reported.json, Fillet1 (F12), radius 5, on every edge round both side faces but their bottom and back edges: the front's upright edges, the lower top's, the step's upright edges and the upper top's. The chains end on the side faces' bottom and back edges, which the roundings reach exactly. Before the fix it was built 0.1 % smaller with a warning and slivers. Now it is built at its size with no warning or information: the side faces, the front, the tops and the step's wall taken away, the volume 500/3 + 125 pi, no face under 0.01 mm2."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F12"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 559.3657484, "min_face_area": 0.01}}
+]

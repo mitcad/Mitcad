@@ -18,9 +18,10 @@ use mitcad_model::notice::{self, Notice};
 use mitcad_model::sketch::cleanup::Removal;
 use mitcad_model::sketch::edit::{EditReport, Freedom, PointInput, SketchEdit};
 use mitcad_model::sketch::geometry::Curve2;
+use mitcad_model::sketch::inputs::{DrawnInputs, InputPoints};
 use mitcad_model::sketch::modify::{DragTarget, Item, Map2, point_input};
 use mitcad_model::sketch::offset::derived_entities;
-use mitcad_model::sketch::pattern::PatternChange;
+use mitcad_model::sketch::pattern::{PatternChange, PatternKind};
 use mitcad_model::sketch::regions::Region;
 use mitcad_model::sketch::solve::{SketchStatus, SolverItem};
 use mitcad_model::sketch::spacing::{SpacingDimension, SpacingInput};
@@ -72,7 +73,9 @@ named_enum! {
         },
         "sketch.add_point" => AddPoint {
             sketch: FeatureUid,
-            at: [f64; 2],
+            /// A position [x, y], whose coordinates may be expressions
+            /// (mitcad#1897).
+            at: Value,
             #[serde(default)]
             fixed: bool,
         },
@@ -390,9 +393,14 @@ named_enum! {
         },
         "sketch.move" => Move {
             sketch: FeatureUid,
-            entities: Vec<Ref>,
             #[serde(default)]
-            by: Option<[f64; 2]>,
+            entities: Vec<Ref>,
+            /// Texts moved or copied with the entities (mitcad#1911):
+            /// `["t5"]`.
+            #[serde(default)]
+            texts: Vec<String>,
+            #[serde(default)]
+            by: Option<Value>,
             /// Point to Point (mitcad#1563): the move by `to` − `from`,
             /// each an existing point or a position, read before the move.
             #[serde(default)]
@@ -988,6 +996,74 @@ mod points_opt {
 
 fn point(value: &Value) -> Result<PointInput, String> {
     point_input(value)
+}
+
+/// Whether a position has a coordinate written as text (an expression,
+/// mitcad#1897).
+fn written_as_text(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|xy| xy.iter().any(Value::is_string))
+}
+
+/// A pattern's centre written with an expression, its number coordinates
+/// written as lengths in millimetres too (mitcad#1912): the new centre
+/// point is held by dimensions in both coordinates, where a centre given
+/// by numbers is fixed.
+fn held_whole(value: &Value) -> Value {
+    match value {
+        Value::Array(xy) => Value::Array(
+            xy.iter()
+                .map(|v| match v.as_f64() {
+                    Some(mm) => json!(format!("{mm} mm")),
+                    None => v.clone(),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A circular pattern's new centre point no longer fixed: the dimensions
+/// of its coordinates written as expressions hold it (mitcad#1912).
+fn free_center(edit: &mut SketchEdit<'_>, pattern: ConstraintUid) {
+    let center = edit.def.patterns.iter().find_map(|p| match &p.kind {
+        PatternKind::Circular { center, .. } if p.id == pattern => Some(*center),
+        _ => None,
+    });
+    if let Some(entity) = center.and_then(|c| edit.def.entity_mut(c)) {
+        entity.fixed = false;
+    }
+}
+
+/// A command's `inputs` (mitcad#1897): each point input field with the
+/// point it became (`null` where the command made none), a list field
+/// (a spline's `points`) as a list in its order.
+fn input_points_json(inputs: &InputPoints) -> Value {
+    let mut fields = serde_json::Map::new();
+    for input in &inputs.points {
+        let point = match input.point {
+            Some(p) => json!(Ref::Point(p).to_string()),
+            None => Value::Null,
+        };
+        match input.index {
+            None => {
+                fields.insert(input.field.clone(), point);
+            }
+            Some(i) => {
+                let list = fields
+                    .entry(input.field.clone())
+                    .or_insert_with(|| json!([]));
+                if let Value::Array(list) = list {
+                    if list.len() <= i {
+                        list.resize(i + 1, Value::Null);
+                    }
+                    list[i] = point;
+                }
+            }
+        }
+    }
+    Value::Object(fields)
 }
 
 /// Where a point input is: its position, or where the existing point is.
@@ -2465,10 +2541,19 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
         };
         // What a refusal for conflicting constraints names (mitcad#1566).
         let change = refused_change(&command);
+        // The drawing tools' point inputs as written: the points they
+        // became, and coordinates written as expressions (mitcad#1897).
+        let drawn = DrawnInputs::default();
+        let drawn = &drawn;
+        let mut inputs = InputPoints::default();
+        let inputs_ref = &mut inputs;
         let ((), report) = self.edit_sketch(sketch, label, |edit| {
             edit.change = change.to_owned();
             match command {
                 C::AddPoint { at, fixed, .. } => {
+                    let PointInput::At(at) = drawn.read(edit, "at", &at)? else {
+                        return Err("\"at\" is a position [x, y], not a point id".to_owned());
+                    };
                     let p = edit.point(PointInput::At(at))?;
                     edit.def.entity_mut(p).expect("added").fixed = fixed;
                 }
@@ -2483,20 +2568,15 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 } => {
                     let m = mode.as_deref().unwrap_or("two_point");
                     let l = match m {
-                        "two_point" => edit.add_line(
-                            point(&need(start, "start", m)?)?,
-                            point(&end)?,
-                            construction,
-                            centerline,
-                        )?,
+                        "two_point" => {
+                            let start = drawn.read(edit, "start", &need(start, "start", m)?)?;
+                            let end = drawn.read(edit, "end", &end)?;
+                            edit.add_line(start, end, construction, centerline)?
+                        }
                         "midpoint" => {
-                            edit.midpoint_line(
-                                point(&need(center, "center", m)?)?,
-                                point(&end)?,
-                                construction,
-                                centerline,
-                            )?
-                            .0
+                            let center = drawn.read(edit, "center", &need(center, "center", m)?)?;
+                            let end = drawn.read(edit, "end", &end)?;
+                            edit.midpoint_line(center, end, construction, centerline)?.0
                         }
                         other => {
                             return Err(format!(
@@ -2520,17 +2600,17 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let m = mode.as_str();
                     let mode = match m {
                         "two_point" => RectangleMode::TwoPoint {
-                            a: point(&need(a, "a", m)?)?,
-                            b: point(&need(b, "b", m)?)?,
+                            a: drawn.read(edit, "a", &need(a, "a", m)?)?,
+                            b: drawn.read(edit, "b", &need(b, "b", m)?)?,
                         },
                         "three_point" => RectangleMode::ThreePoint {
-                            a: point(&need(a, "a", m)?)?,
-                            b: point(&need(b, "b", m)?)?,
+                            a: drawn.read(edit, "a", &need(a, "a", m)?)?,
+                            b: drawn.read(edit, "b", &need(b, "b", m)?)?,
                             c: need(c, "c", m)?,
                         },
                         "center" => RectangleMode::Center {
-                            center: point(&need(center, "center", m)?)?,
-                            corner: point(&need(corner, "corner", m)?)?,
+                            center: drawn.read(edit, "center", &need(center, "center", m)?)?,
+                            corner: drawn.read(edit, "corner", &need(corner, "corner", m)?)?,
                         },
                         other => {
                             return Err(format!(
@@ -2569,17 +2649,17 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     };
                     let mode = match m {
                         "center" => CircleMode::CenterRadius {
-                            center: point(&need(center, "center", m)?)?,
+                            center: drawn.read(edit, "center", &need(center, "center", m)?)?,
                             radius: need(radius, "radius", m)?,
                         },
                         "two_point" => CircleMode::TwoPoint {
-                            a: point(&need(a, "a", m)?)?,
-                            b: point(&need(b, "b", m)?)?,
+                            a: drawn.read(edit, "a", &need(a, "a", m)?)?,
+                            b: drawn.read(edit, "b", &need(b, "b", m)?)?,
                         },
                         "three_point" => CircleMode::ThreePoint {
-                            a: point(&need(a, "a", m)?)?,
-                            b: point(&need(b, "b", m)?)?,
-                            c: point(&need(c, "c", m)?)?,
+                            a: drawn.read(edit, "a", &need(a, "a", m)?)?,
+                            b: drawn.read(edit, "b", &need(b, "b", m)?)?,
+                            c: drawn.read(edit, "c", &need(c, "c", m)?)?,
                         },
                         "two_tangent" => CircleMode::TwoTangent {
                             a: line(0)?,
@@ -2617,17 +2697,17 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let m = mode.as_str();
                     let mode = match m {
                         "three_point" => ArcMode::ThreePoint {
-                            start: point(&need(start, "start", m)?)?,
-                            through: point(&need(through, "through", m)?)?,
-                            end: point(&need(end, "end", m)?)?,
+                            start: drawn.read(edit, "start", &need(start, "start", m)?)?,
+                            through: drawn.read(edit, "through", &need(through, "through", m)?)?,
+                            end: drawn.read(edit, "end", &need(end, "end", m)?)?,
                         },
                         "center" => {
                             let end = need(end, "end", m)?;
                             let end: [f64; 2] = serde_json::from_value(end)
                                 .map_err(|_| "\"end\" is a direction point [x, y]".to_owned())?;
                             ArcMode::Center {
-                                center: point(&need(center, "center", m)?)?,
-                                start: point(&need(start, "start", m)?)?,
+                                center: drawn.read(edit, "center", &need(center, "center", m)?)?,
+                                start: drawn.read(edit, "start", &need(start, "start", m)?)?,
                                 end,
                                 clockwise,
                             }
@@ -2637,14 +2717,14 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                                 from, "from", m,
                             )?)
                             .map_err(|e| e.to_string())?,
-                            end: point(&need(end, "end", m)?)?,
+                            end: drawn.read(edit, "end", &need(end, "end", m)?)?,
                         },
                         "normal" => ArcMode::Normal {
                             from: mitcad_model::sketch::internal::point_serde::parse(&need(
                                 from, "from", m,
                             )?)
                             .map_err(|e| e.to_string())?,
-                            end: point(&need(end, "end", m)?)?,
+                            end: drawn.read(edit, "end", &need(end, "end", m)?)?,
                             toward,
                         },
                         other => {
@@ -2664,13 +2744,10 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     construction,
                     ..
                 } => {
-                    *made_ref = curve_list(edit.polygon(
-                        point(&center)?,
-                        point(&vertex)?,
-                        sides,
-                        inscribed,
-                        construction,
-                    )?);
+                    let center = drawn.read(edit, "center", &center)?;
+                    let vertex = drawn.read(edit, "vertex", &vertex)?;
+                    *made_ref =
+                        curve_list(edit.polygon(center, vertex, sides, inscribed, construction)?);
                 }
                 C::Slot {
                     mode,
@@ -2685,16 +2762,16 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let m = mode.as_str();
                     let mode = match m {
                         "center_to_center" => SlotMode::CenterToCenter {
-                            a: point(&need(a, "a", m)?)?,
-                            b: point(&need(b, "b", m)?)?,
+                            a: drawn.read(edit, "a", &need(a, "a", m)?)?,
+                            b: drawn.read(edit, "b", &need(b, "b", m)?)?,
                         },
                         "center_point" => SlotMode::CenterPoint {
-                            center: point(&need(center, "center", m)?)?,
-                            end: point(&need(end, "end", m)?)?,
+                            center: drawn.read(edit, "center", &need(center, "center", m)?)?,
+                            end: drawn.read(edit, "end", &need(end, "end", m)?)?,
                         },
                         "arc" => SlotMode::Arc {
-                            center: point(&need(center, "center", m)?)?,
-                            start: point(&need(start, "start", m)?)?,
+                            center: drawn.read(edit, "center", &need(center, "center", m)?)?,
+                            start: drawn.read(edit, "start", &need(start, "start", m)?)?,
                             end: serde_json::from_value(need(end, "end", m)?).map_err(|_| {
                                 "\"end\" of an arc slot is a direction point [x, y]".to_owned()
                             })?,
@@ -2716,18 +2793,16 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     construction,
                     ..
                 } => {
+                    let center = drawn.read(edit, "center", &center)?;
+                    let major = drawn.read(edit, "major", &major)?;
                     let arc = match (start, end) {
-                        (Some(s), Some(e)) => Some((point(&s)?, point(&e)?)),
+                        (Some(s), Some(e)) => {
+                            Some((drawn.read(edit, "start", &s)?, drawn.read(edit, "end", &e)?))
+                        }
                         (None, None) => None,
                         _ => return Err("an elliptical arc needs \"start\" and \"end\"".to_owned()),
                     };
-                    let id = edit.ellipse(
-                        point(&center)?,
-                        point(&major)?,
-                        minor_radius,
-                        arc,
-                        construction,
-                    )?;
+                    let id = edit.ellipse(center, major, minor_radius, arc, construction)?;
                     made_ref.push(Ref::Curve(id).to_string());
                 }
                 C::Spline {
@@ -2737,8 +2812,11 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     construction,
                     ..
                 } => {
-                    let points = points.iter().map(point).collect::<Result<Vec<_>, _>>()?;
-                    let id = edit.spline(&points, degree, closed, construction)?;
+                    let mut read = Vec::with_capacity(points.len());
+                    for (i, p) in points.iter().enumerate() {
+                        read.push(drawn.read_at(edit, "points", Some(i), p)?);
+                    }
+                    let id = edit.spline(&read, degree, closed, construction)?;
                     made_ref.push(Ref::Curve(id).to_string());
                 }
                 C::AddText {
@@ -3102,6 +3180,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 }
                 C::Move {
                     entities,
+                    texts,
                     by,
                     from,
                     to,
@@ -3110,6 +3189,47 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     hold,
                     ..
                 } => {
+                    // Texts (mitcad#1911): one in a frame moves its frame's
+                    // rectangle with the entities; one on a path is refused.
+                    let texts = texts
+                        .iter()
+                        .map(|t| {
+                            mitcad_model::internal::ids::parse_number(t, "t")
+                                .map(EntityUid)
+                                .ok_or_else(|| format!("{t} is not a text like \"t5\""))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut moved = entities.clone();
+                    for r in edit.text_carriers(&texts)? {
+                        if !moved.contains(&r) {
+                            moved.push(r);
+                        }
+                    }
+                    if moved.is_empty() && texts.is_empty() {
+                        return Err("give \"entities\" or \"texts\"".to_owned());
+                    }
+                    // A move is made once: coordinates written as
+                    // expressions cannot follow parameters (mitcad#1912).
+                    if by.as_ref().is_some_and(written_as_text) {
+                        return Err(
+                            "\"by\" of a move is read once, so it cannot follow parameters: \
+                             give numbers"
+                                .to_owned(),
+                        );
+                    }
+                    let pivot = rotate.as_ref().and_then(|r| r.center.clone());
+                    for (field, v) in [("from", &from), ("to", &to), ("rotate.center", &pivot)] {
+                        if v.as_ref().is_some_and(written_as_text) {
+                            return Err(format!(
+                                "\"{field}\" of a move is read once, so it cannot follow \
+                                 parameters: give numbers or an existing point"
+                            ));
+                        }
+                    }
+                    let by = by
+                        .map(serde_json::from_value::<[f64; 2]>)
+                        .transpose()
+                        .map_err(|_| "\"by\" is an offset [dx, dy] of numbers".to_owned())?;
                     let map = match (by, from, to, rotate) {
                         (Some(by), None, None, None) => Map2::translation(by),
                         // Point to Point (mitcad#1563): both read where
@@ -3123,7 +3243,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                             // given (mitcad#1563).
                             let center = match &r.center {
                                 Some(center) => place_of(edit, center)?,
-                                None => edit.middle_of(&entities)?,
+                                None => edit.middle_of_objects(&moved, &texts)?,
                             };
                             Map2::rotation(center, r.angle)
                         }
@@ -3134,8 +3254,11 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         }
                     };
                     let copies = if copy {
-                        let copies =
-                            edit.copy_entities(&entities, &map, &Default::default(), true)?;
+                        let copies = if moved.is_empty() {
+                            std::collections::BTreeMap::new()
+                        } else {
+                            edit.copy_entities(&moved, &map, &Default::default(), true)?
+                        };
                         for r in &entities {
                             if let Some(c) = copies.get(&r.uid()) {
                                 made_ref.push(
@@ -3147,9 +3270,15 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                                 );
                             }
                         }
+                        for t in edit.copy_texts(&texts, &map, &copies)? {
+                            made_ref.push(format!("t{}", t.0));
+                        }
                         copies
                     } else {
-                        edit.move_entities(&entities, &map)?;
+                        if !moved.is_empty() {
+                            edit.move_entities(&moved, &map)?;
+                        }
+                        edit.move_texts(&texts, &map)?;
                         std::collections::BTreeMap::new()
                     };
                     // Held where it was dropped (mitcad#1645), in this step.
@@ -3225,7 +3354,18 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     angle,
                     ..
                 } => {
-                    let id = edit.circular_pattern(&entities, point(&center)?, count, &angle)?;
+                    // A centre written as expressions is a new point held by
+                    // dimensions instead of fixed (mitcad#1912).
+                    let held = written_as_text(&center);
+                    let center = if held {
+                        drawn.read(edit, "center", &held_whole(&center))?
+                    } else {
+                        point(&center)?
+                    };
+                    let id = edit.circular_pattern(&entities, center, count, &angle)?;
+                    if held {
+                        free_center(edit, id);
+                    }
                     *made_ref = pattern_made(&edit.def, id);
                 }
                 C::RectangularPattern {
@@ -3255,15 +3395,24 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     entities,
                     ..
                 } => {
+                    let held = center.as_ref().is_some_and(written_as_text);
+                    let center = match &center {
+                        Some(c) if held => Some(drawn.read(edit, "center", &held_whole(c))?),
+                        Some(c) => Some(point(c)?),
+                        None => None,
+                    };
                     let change = PatternChange {
                         count: count.as_ref().map(pattern_count).transpose()?,
                         angle,
                         spacing,
                         direction,
-                        center: center.as_ref().map(point).transpose()?,
+                        center,
                         entities,
                     };
                     edit.edit_pattern(pattern, &change)?;
+                    if held {
+                        free_center(edit, pattern);
+                    }
                     *made_ref = pattern_made(&edit.def, pattern);
                 }
                 C::EditOffset {
@@ -3415,6 +3564,12 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     made_ref.push(Ref::Point(p).to_string());
                 }
                 C::Scale { factor, center, .. } => {
+                    // A scale is made once (mitcad#1912).
+                    if center.as_ref().is_some_and(written_as_text) {
+                        return Err("\"center\" of a scale is read once, so it cannot follow \
+                             parameters: give numbers or an existing point"
+                            .to_owned());
+                    }
                     let center = match center.as_ref().map(point).transpose()? {
                         None => [0.0, 0.0],
                         Some(PointInput::At(at)) => at,
@@ -3438,11 +3593,29 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     unreachable!("handled above")
                 }
             }
+            *inputs_ref = drawn.finish(edit)?;
             Ok(())
         })?;
         let mut value = report_json(&report, self.sketch_def(sketch));
         if !made.is_empty() {
             value["made"] = json!(made);
+        }
+        // The point at each point input as written, and the dimensions
+        // that hold coordinates written as expressions (mitcad#1897).
+        if !inputs.points.is_empty() {
+            value["inputs"] = input_points_json(&inputs);
+        }
+        if !inputs.coordinates.is_empty() {
+            let coordinates: Vec<Value> = inputs
+                .coordinates
+                .iter()
+                .map(|c| {
+                    json!({"point": Ref::Point(c.point).to_string(), "axis": c.axis,
+                           "dimension": c.dimension.to_string(), "expression": c.expression,
+                           "parameter": c.parameter})
+                })
+                .collect();
+            value["coordinates"] = json!(coordinates);
         }
         if let Some(Value::Object(fields)) = joined {
             for (key, field) in fields {

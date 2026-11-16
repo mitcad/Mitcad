@@ -725,6 +725,11 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("gltf_file", FileIo),
     // How a face's walls continue, for Press Pull (mitcad#1850).
     ("face_run", Model),
+    // The corners of a flange on several edges (mitcad#1877).
+    ("sheet_flange_corners", Model),
+    // A body slid or turned into place and where it first runs into
+    // others (mitcad#1737).
+    ("assembly_path", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

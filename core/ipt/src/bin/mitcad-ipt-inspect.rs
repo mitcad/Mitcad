@@ -64,7 +64,11 @@ const USAGE: &str = "usage: mitcad-ipt-inspect <command> ...
                                 coordinates (pen, extent, pieces)
   appearances <file> [--json]   the styles, the defaults, the package's
                                 assets, the faces' colours; --json the
-                                dump's appearance data (mitcad#1367)";
+                                dump's appearance data (mitcad#1367)
+  translation <file>            the translation report a converted file
+                                keeps: source, translator, each document
+                                made with its status and messages
+                                (mitcad#1913)";
 
 fn open(path: &str) -> Result<IptFile, String> {
     IptFile::open(Path::new(path)).map_err(|e| format!("{path}: {e}"))
@@ -2046,6 +2050,41 @@ fn cmd_appearances(path: &str, json: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// The translation report the file keeps (mitcad#1913), and the streams
+/// of embedded packages.
+fn cmd_translation(path: &str) -> Result<(), String> {
+    use mitcad_ipt::translation;
+    let f = open(path)?;
+    for (stream, entry) in f.container.entries() {
+        if entry.kind == EntryKind::Stream
+            && stream.rsplit('/').next() == Some(translation::PACKAGE_STREAM)
+        {
+            println!("package {} ({} bytes)", printable(stream), entry.size);
+        }
+    }
+    let Some(r) = translation::read(&f) else {
+        println!("no translation report");
+        return Ok(());
+    };
+    println!(
+        "source {:?} ({:?}), translator {:?}, {} documents",
+        r.source,
+        r.source_extension(),
+        r.translator,
+        r.components.len()
+    );
+    let mut said: BTreeMap<String, usize> = BTreeMap::new();
+    for c in &r.components {
+        let text: Vec<&str> = c.messages.iter().map(|m| m.text.as_str()).collect();
+        println!("{} [{}] {}", c.name, c.status, text.join(" | "));
+        *said.entry(text.join(" | ")).or_default() += 1;
+    }
+    for (text, n) in said {
+        println!("{n} documents: {text:?}");
+    }
+    Ok(())
+}
+
 /// A decimal or `0x` hexadecimal number.
 fn parse_number(text: &str) -> Result<usize, String> {
     match text.strip_prefix("0x") {
@@ -2130,6 +2169,7 @@ fn run(args: &[String]) -> Result<(), String> {
         ["texts", file] => cmd_texts(file),
         ["appearances", file] => cmd_appearances(file, false),
         ["appearances", file, "--json"] => cmd_appearances(file, true),
+        ["translation", file] => cmd_translation(file),
         ["write-test", out] => std::fs::write(out, mitcad_ipt::testdata::test_part())
             .map_err(|e| format!("{out}: {e}")),
         _ => Err(USAGE.to_string()),

@@ -3,6 +3,7 @@
 // mitcad#735): the actual modal parent picker with a model boundary that
 // records every mutation. The move itself, its geometry, references and
 // undo have core tests.
+#include "UnitTests.hpp"
 #include "framework/MoveOccurrenceDialog.hpp"
 
 #include <cstdio>
@@ -326,3 +327,4 @@ int moveOccurrenceTests() {
   check(commands.isEmpty(), "no command for an occurrence that cannot move");
   return failures;
 }
+MITCAD_UNIT_TEST(moveOccurrenceTests);

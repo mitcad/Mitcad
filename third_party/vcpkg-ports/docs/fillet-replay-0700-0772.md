@@ -155,6 +155,19 @@ at the vertex, as on the replay's modelled thread), its ends on the periodic
 opposite face are taken in one period (`ChFi3d_Recale`): a period apart, the
 intersection ran the long way round.
 
+Corrected by mitcad#1883 after OCCT's own cases: the edge's curve is not
+continued where a p-curve's end lies past its surface's parameters in a
+direction that is not periodic (an ellipse's meridian continued past the
+axis, through the pole of its surface of revolution: OCCT's blend/simple
+H3, invalid), the ends are taken in one period only on an opposite face
+that goes round the whole period (on a revolve of 270 degrees the point at
+the pole moved off the face), and a p-curve that already has the 3d
+curve's range (a circle's p-curve that is a circle, reversed as the circle
+is) is no longer made a B-spline, whose other parametrization put its
+points off the circle's at equal parameters and raised the edge's
+tolerance to 1.5e-4 (OCCT's bugs/modalg_7 bug28828_16, a throat chamfer,
+allows 1e-4; now 8.7e-5) (`test_fillet_occt_cases.cpp`).
+
 ## 0740 to 0742: a bore's wall in three faces, a recess's rim, a thread's root
 
 The patches 0740 to 0742 go on with the `.ipt` import's replay gaps
@@ -320,7 +333,13 @@ last section at least 5e-4 of the radius wide, each section from the one
 before (its step on the faces no longer than the walk's before), until
 narrower within a hundredth of the radius of the vertex
 (`ChFi3d_EndBeforeVanishing`); the corner moves that end to the vertex
-(0770).
+(0770). The contour stops only where the faces come tangent within 5e-4
+rad, the width relative to the radius at which that walk ends (the block on
+the post: within 7e-5), not at any vertex within the angular tolerance
+(mitcad#1883): two cylinders of one radius whose axes miss each other by
+1e-3 cross at 0.008 rad where their intersection curves come nearest
+(OCCT's blend/bfuseblend B7), and the rounding of those curves, stopped
+there, failed; it walks through such a vertex as before (`test_fillet_occt_cases.cpp`).
 
 ### 0772-chfi3d-stripes-joined-across-a-corner-of-the-solid
 

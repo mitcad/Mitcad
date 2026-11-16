@@ -24,6 +24,25 @@ the toolbar. The bar does not block your work. It has the buttons
 skip a version, MitCad does not announce that version again
 automatically.
 
+**One update for the application (mitcad#1890):** the update's state
+(an offer, a check or a download under way with its progress, verified
+and waiting to install, a message) belongs to MitCad, not to a window
+(`UpdateController::application()`, its row `UpdateRow`). Every design's
+window has a bar of its own that shows that state; a window opened later
+shows it at once, and a button clicked in any window (*Install*, *Skip
+This Version*, *Later*, *Release Notes*, *Cancel*) acts once for the
+application. Closing a design's window, also the one where *Install* was
+chosen, keeps the download and the installation going while another
+window stays open. The last window does not drop a download silently:
+when it closes during a download (*File › Exit*, its close button),
+MitCad says that the update is still downloading, with *Keep
+Downloading* (the window stays open, and the update installs once it is
+downloaded, closing the windows as below) and *Stop and Close* (the
+download stops, MitCad closes). A download that is verified and waits
+for the model to finish is staged when the last window closes, so that
+it installs once MitCad has quit. To install, MitCad closes every
+design's window as Quit does, each asking to save.
+
 **Install on Windows (NSIS installation):** MitCad downloads the
 installer to a private folder with a random name in the temp folder,
 `%TEMP%\mitcad-update-<random>`, and verifies it. Then the window
@@ -580,6 +599,22 @@ MitCad at their own server only in a test build
   release page. A release without a download for the platform says so
   in the platform's name, without *Install* and *Skip This Version*, and
   an automatic check shows nothing of it.
+- `app.unit` (`app/tests/update_row.cpp`, every platform): the
+  application's update row with two windows' bars (mitcad#1890).
+  *Install* clicked in the first acts once; the first window closes and
+  the second keeps the download's state and its progress, which goes on
+  there; a window opened later shows it at once; *Skip This Version* and
+  *Later* in one window hide the row in every window.
+- `tools/ui-update-one-row-test.sh` (Linux), the ctests
+  `app.ui-windows-update-one-row` and `app.ui-macos-update-one-row`
+  (mitcad#1890): the shared steps `tools/ui-scripts/update-one-row.mitcad-ui`
+  with the fake offer (the test driver's step `update-fake-offer`, no
+  server, no request; every build, the Windows VM's `dev` preset too,
+  runs it). *Install*
+  in the first design's window, a second design's row shows the
+  download, the first design closed leaves the download going on in the
+  second to "downloaded"; *File › Exit* during a download asks, and
+  *Keep Downloading* keeps MitCad open until it is downloaded.
 - `app.update_source_release` and `app.update_source_hooks`
   (`app/tests/update_source.cpp`, every platform): the update source
   built as a release and as a test build, whatever the build's own
@@ -717,3 +752,14 @@ part of `app.installer-windows`.
 
 The other UI tests set `MITCAD_NO_UPDATE_CHECK=1` (in `ui-test-lib.sh`
 and `ui-windows-lib.ps1`). Thus they make no requests.
+
+The update row's UI tests (mitcad#1890) take a fake offer from the test
+driver instead of a server: its step `update-fake-offer <seconds>` makes
+the updates offer MitCad 999.0.0 without a request, installable whatever
+the installation, "downloaded" in steps over that time and then neither
+verified nor installed (*MitCad 999.0.0 is downloaded. A test's fake
+update is not installed.*). It answers *Check for Updates* also with
+`MITCAD_NO_UPDATE_CHECK` set, which the tests keep. No environment
+variable turns it on: only a script the driver runs (`MITCAD_TEST_INPUT`)
+does, and a driver can already do anything a user can; nothing it offers
+is installed.

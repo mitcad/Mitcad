@@ -125,7 +125,8 @@ double CommandContext::unitMillimetres() const {
 
 bool InputDef::accepts(const SelectionItem& item) const {
   return type == Type::Selection && filter.testFlag(item.kind) &&
-         !(refusesMeshes && item.geometry == QStringLiteral("mesh")) && (!test || test(item));
+         !(refusesMeshes && item.geometry == QStringLiteral("mesh")) && (takesOpenings || !isOpeningEdge(item)) &&
+         (!test || test(item));
 }
 
 SelectFilter InputDef::filterIn(const CommandState& state) const {

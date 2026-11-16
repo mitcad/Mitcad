@@ -1649,6 +1649,18 @@
         <translation>Päästö</translation>
     </message>
     <message>
+        <source>Bisect</source>
+        <translation>Puolittava</translation>
+    </message>
+    <message>
+        <source>Earlier Edge Runs Past</source>
+        <translation>Aiempi särmä jatkuu ohi</translation>
+    </message>
+    <message>
+        <source>Later Edge Runs Past</source>
+        <translation>Myöhempi särmä jatkuu ohi</translation>
+    </message>
+    <message>
         <source>Keep</source>
         <translation>Säilytä</translation>
     </message>
@@ -4106,6 +4118,38 @@
 <context>
     <name>QObject</name>
     <message>
+        <source>An origin is geometry the panel cannot show, such as a fixed point, axis or plane.</source>
+        <translation>Origo on geometriaa, jota paneeli ei voi näyttää, esimerkiksi kiinteä piste, akseli tai taso.</translation>
+    </message>
+    <message>
+        <source>A limit has a minimum without a maximum, or a maximum without a minimum, which the panel cannot hold.</source>
+        <translation>Rajalla on minimi ilman maksimia tai maksimi ilman minimiä, eikä paneeli voi esittää sitä.</translation>
+    </message>
+    <message>
+        <source>A constraint centers between two origins on its first side, which the panel cannot hold.</source>
+        <translation>Rajoite keskittää kahden origon väliin ensimmäisellä puolellaan, eikä paneeli voi esittää sitä.</translation>
+    </message>
+    <message>
+        <source>A constraint&apos;s limits are incomplete (a minimum, a maximum or a rest value alone), which the panel cannot hold.</source>
+        <translation>Rajoitteen rajat ovat vajaat (pelkkä minimi, maksimi tai lepoarvo), eikä paneeli voi esittää niitä.</translation>
+    </message>
+    <message>
+        <source>Moves a component along the side or rail it is on: its Offset and From</source>
+        <translation>Siirtää komponenttia sivua tai kiskoa pitkin, jolla se on: sen siirtymä ja lähtökohta</translation>
+    </message>
+    <message>
+        <source>%1 is not on a side or a rail: its place is set by its joint, which Joint edits.</source>
+        <translation>%1 ei ole sivulla eikä kiskolla: sen paikan määrää sen liitos, jota muokataan Liitos-komennolla.</translation>
+    </message>
+    <message>
+        <source>Measured from %1, where it is now</source>
+        <translation>Mitattuna kohdasta %1, nykyisellä paikallaan</translation>
+    </message>
+    <message>
+        <source>%1 from %2</source>
+        <translation>%1 kohdasta %2</translation>
+    </message>
+    <message>
         <source>A parametric desktop CAD application with a history-based modeling workflow.</source>
         <translation>Parametrinen CAD-työpöytäsovellus, jossa mallinnus etenee historiapohjaisesti.</translation>
     </message>
@@ -5305,6 +5349,22 @@
     <message>
         <source>end</source>
         <translation>loppu</translation>
+    </message>
+    <message>
+        <source>in line</source>
+        <translation>linjassa</translation>
+    </message>
+    <message>
+        <source>flush</source>
+        <translation>tasan</translation>
+    </message>
+    <message>
+        <source>in line with %1</source>
+        <translation>linjassa kohteen %1 kanssa</translation>
+    </message>
+    <message>
+        <source>flush with %1</source>
+        <translation>tasan kohteen %1 kanssa</translation>
     </message>
     <message>
         <source>Openings: %1</source>
@@ -11148,8 +11208,8 @@
         <translation>Levyn suoraa särmää pitkin ylös taivutettu seinämä</translation>
     </message>
     <message>
-        <source>A straight edge or side face of the sheet</source>
-        <translation>Levyn suora särmä tai sivutahko</translation>
+        <source>Straight edges or side faces of the sheet; edges connected at their ends meet mitered</source>
+        <translation>Levyn suoria särmiä tai sivutahkoja; päistään toisiinsa liittyvät särmät kohtaavat jiirissä</translation>
     </message>
     <message>
         <source>0 with no hem: the bend alone, without a wall (a rolled hem)</source>
@@ -11250,6 +11310,58 @@
     <message>
         <source>Select a straight edge of a flat face of the sheet.</source>
         <translation>Valitse levyn tasaisen tahkon suora särmä.</translation>
+    </message>
+    <message>
+        <source>Pick a corner where two of the flange&apos;s edges meet.</source>
+        <translation>Poimi nurkka, jossa kaksi laipan särmää kohtaa.</translation>
+    </message>
+    <message>
+        <source>An edge or a vertex of the sheet where two of the flange&apos;s edges meet</source>
+        <translation>Levyn särmä tai kärkipiste, jossa kaksi laipan särmää kohtaa</translation>
+    </message>
+    <message>
+        <source>Edges %1 and %2</source>
+        <translation>Särmät %1 ja %2</translation>
+    </message>
+    <message>
+        <source>Where two walls meet: cut on the corner&apos;s bisecting plane, or one wall runs past</source>
+        <translation>Missä kaksi seinämää kohtaa: leikkaus nurkan puolittavalla tasolla, tai toinen seinämä jatkuu ohi</translation>
+    </message>
+    <message>
+        <source>Own Corner Gap</source>
+        <translation>Oma nurkan rako</translation>
+    </message>
+    <message>
+        <source>Off: the gap between the walls at a corner is the sheet&apos;s thickness</source>
+        <translation>Pois: seinämien välinen rako nurkassa on levyn paksuus</translation>
+    </message>
+    <message>
+        <source>Corner Gap</source>
+        <translation>Nurkan rako</translation>
+    </message>
+    <message>
+        <source>The gap between two walls where they meet; 0 where they only touch along a line</source>
+        <translation>Kahden seinämän välinen rako niiden kohtaamiskohdassa; 0, kun ne koskettavat vain viivaa pitkin</translation>
+    </message>
+    <message>
+        <source>How the two walls meet at this corner, in place of the flange&apos;s Miter</source>
+        <translation>Miten kaksi seinämää kohtaa tässä nurkassa laipan jiirin sijaan</translation>
+    </message>
+    <message>
+        <source>Add Corner</source>
+        <translation>Lisää nurkka</translation>
+    </message>
+    <message>
+        <source>Corner %1</source>
+        <translation>Nurkka %1</translation>
+    </message>
+    <message>
+        <source>Corners whose walls meet otherwise than the flange&apos;s Miter says</source>
+        <translation>Nurkat, joissa seinämät kohtaavat toisin kuin laipan jiiri määrää</translation>
+    </message>
+    <message>
+        <source>Select edges of one sheet for one flange.</source>
+        <translation>Valitse yhdelle laipalle saman levyn särmät.</translation>
     </message>
     <message>
         <source>Bend</source>
@@ -11708,8 +11820,8 @@
         <translation>Toinen viiva</translation>
     </message>
     <message>
-        <source>Moves or copies sketch geometry; a move keeps its constraints</source>
-        <translation>Siirtää tai kopioi luonnosgeometriaa; siirto säilyttää sen rajoitteet</translation>
+        <source>Moves or copies sketch geometry and texts; a move keeps its constraints</source>
+        <translation>Siirtää tai kopioi luonnosgeometriaa ja tekstejä; siirto säilyttää sen rajoitteet</translation>
     </message>
     <message>
         <source>Translate</source>
@@ -11814,6 +11926,22 @@
     <message>
         <source>Corner Y</source>
         <translation>Kulma Y</translation>
+    </message>
+    <message>
+        <source>Position X</source>
+        <translation>Sijainti X</translation>
+    </message>
+    <message>
+        <source>Position Y</source>
+        <translation>Sijainti Y</translation>
+    </message>
+    <message>
+        <source>Where the text&apos;s anchor is in the sketch; a QR code&apos;s lower left corner</source>
+        <translation>Tekstin ankkurin sijainti luonnoksessa; QR-koodin vasen alakulma</translation>
+    </message>
+    <message>
+        <source>A text on a path follows its curve: move the curve instead.</source>
+        <translation>Polulla oleva teksti seuraa käyräänsä: siirrä käyrää.</translation>
     </message>
     <message>
         <source>Type the code&apos;s content.</source>
@@ -12412,8 +12540,20 @@
         <translation>Profiilit tai särmät</translation>
     </message>
     <message>
-        <source>Profiles of one sketch, or edges of one body that close up into a loop</source>
-        <translation>Yhden luonnoksen profiilit tai yhden kappaleen särmät, jotka sulkeutuvat silmukaksi</translation>
+        <source>Profiles of one sketch, edges of one body closing a loop, or an open edge for its whole opening</source>
+        <translation>Yhden luonnoksen profiilit, silmukaksi sulkeutuvat yhden kappaleen särmät tai avoin särmä koko aukkonsa puolesta</translation>
+    </message>
+    <message>
+        <source>Sews the patch onto the body of the opening; a solid where it closes it</source>
+        <translation>Ompelee paikan aukon kappaleeseen; solidi, jos se sulkee kappaleen</translation>
+    </message>
+    <message>
+        <source>Select edges that close up into a loop, or an open edge for its whole opening, not both.</source>
+        <translation>Valitse silmukaksi sulkeutuvat särmät tai avoin särmä koko aukkonsa puolesta, ei molempia.</translation>
+    </message>
+    <message>
+        <source>Select one opening: a patch fills one loop.</source>
+        <translation>Valitse yksi aukko: paikka täyttää yhden silmukan.</translation>
     </message>
     <message>
         <source>How a patch of edges meets the faces beside them</source>
@@ -12464,16 +12604,20 @@
         <translation>Valitse särmiä tai tahkoja, joiden avoimia särmiä tarkoitetaan.</translation>
     </message>
     <message>
-        <source>Edges of one body</source>
-        <translation>Yhden kappaleen särmät</translation>
+        <source>Edges of one body; an open edge of a surface body takes its whole opening</source>
+        <translation>Yhden kappaleen särmät; pintakappaleen avoin särmä ottaa koko aukkonsa</translation>
     </message>
     <message>
         <source>Open Edges Of</source>
         <translation>Avoimet särmät kohteesta</translation>
     </message>
     <message>
-        <source>Faces of a surface body: their open edges (which cannot be picked themselves) are taken</source>
-        <translation>Pintakappaleen tahkot: niiden avoimet särmät (joita ei voi poimia suoraan) otetaan mukaan</translation>
+        <source>Boundary Edges</source>
+        <translation>Reunasärmät</translation>
+    </message>
+    <message>
+        <source>Edges of one body round the loop; an open edge of a surface body takes its whole opening</source>
+        <translation>Yhden kappaleen särmät silmukan ympäri; pintakappaleen avoin särmä ottaa koko aukkonsa</translation>
     </message>
     <message>
         <source>Offset Surface</source>
@@ -13916,6 +14060,41 @@
         <translation>Tiedoston kappaleet tai komponentit tulevat suoraan aktiiviseen komponenttiin</translation>
     </message>
     <message>
+        <source>Import %1 into this design as a component, or as a new design?</source>
+        <translation>Tuodaanko %1 tähän malliin komponentiksi vai uudeksi malliksi?</translation>
+    </message>
+    <message numerus="yes">
+        <source>Import %n files into this design as components, or each as a new design?</source>
+        <translation>
+            <numerusform>Tuodaanko %n tiedosto tähän malliin komponentiksi vai uudeksi malliksi?</numerusform>
+            <numerusform>Tuodaanko %n tiedostoa tähän malliin komponenteiksi vai kukin uudeksi malliksi?</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Into &amp;This Design</source>
+        <translation>&amp;Tähän malliin</translation>
+    </message>
+    <message>
+        <source>A component of the active component, with the file&apos;s history and material</source>
+        <translation>Aktiivisen komponentin komponentti tiedoston historian ja materiaalin kanssa</translation>
+    </message>
+    <message>
+        <source>A &amp;New Design</source>
+        <translation>&amp;Uusi malli</translation>
+    </message>
+    <message>
+        <source>Opens in a tab of its own; this design stays as it is</source>
+        <translation>Avautuu omaan välilehteensä; tämä malli pysyy ennallaan</translation>
+    </message>
+    <message>
+        <source>&amp;Linked: saved in the project as a design of its own</source>
+        <translation>&amp;Linkitettynä: tallennetaan projektiin omaksi mallikseen</translation>
+    </message>
+    <message>
+        <source>Designs that link it share it; off: a copy that is edited here</source>
+        <translation>Sen linkittävät mallit jakavat sen; pois: kopio, jota muokataan täällä</translation>
+    </message>
+    <message>
         <source>Import Assembly</source>
         <translation>Tuo kokoonpano</translation>
     </message>
@@ -14052,12 +14231,32 @@
         <translation>&lt;br&gt;&lt;b&gt;Tuonti pysäytettiin&lt;/b&gt; viimeisen kohteen jälkeen: kappaleita verrattiin vain tilavuuden perusteella.</translation>
     </message>
     <message>
+        <source>&amp;Show:</source>
+        <translation>&amp;Näytä:</translation>
+    </message>
+    <message>
+        <source>All rows</source>
+        <translation>Kaikki rivit</translation>
+    </message>
+    <message>
+        <source>Warnings and errors</source>
+        <translation>Varoitukset ja virheet</translation>
+    </message>
+    <message>
+        <source>Errors</source>
+        <translation>Virheet</translation>
+    </message>
+    <message>
         <source>#</source>
         <translation>#</translation>
     </message>
     <message>
         <source>Item</source>
         <translation>Kohde</translation>
+    </message>
+    <message>
+        <source>Status</source>
+        <translation>Tila</translation>
     </message>
     <message>
         <source>Came in as</source>
@@ -14112,6 +14311,30 @@
         <translation>peruspiirre %1</translation>
     </message>
     <message>
+        <source>a body of the file</source>
+        <translation>tiedoston kappale</translation>
+    </message>
+    <message>
+        <source>body</source>
+        <translation>kappale</translation>
+    </message>
+    <message>
+        <source>not built</source>
+        <translation>ei rakennettu</translation>
+    </message>
+    <message>
+        <source>compared with the file&apos;s body</source>
+        <translation>verrattu tiedoston kappaleeseen</translation>
+    </message>
+    <message>
+        <source>missing</source>
+        <translation>puuttuu</translation>
+    </message>
+    <message>
+        <source>not in the file</source>
+        <translation>ei tiedostossa</translation>
+    </message>
+    <message>
         <source>%1 meshes, %2 boxes%3</source>
         <translation>%1 verkkokappaletta, %2 laatikkoa%3</translation>
     </message>
@@ -14162,6 +14385,10 @@
     <message>
         <source>&lt;b&gt;Warnings&lt;/b&gt;&lt;br&gt;%1</source>
         <translation>&lt;b&gt;Varoitukset&lt;/b&gt;&lt;br&gt;%1</translation>
+    </message>
+    <message>
+        <source>No warnings.</source>
+        <translation>Ei varoituksia.</translation>
     </message>
     <message>
         <source>%1: kept %2; replaced %3</source>
@@ -15217,6 +15444,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>the options could not be read</source>
         <translation>vaihtoehtoja ei voitu lukea</translation>
+    </message>
+    <message>
+        <source>These values cannot be used.</source>
+        <translation>Näitä arvoja ei voi käyttää.</translation>
+    </message>
+    <message>
+        <source>These values cannot be used: %1</source>
+        <translation>Näitä arvoja ei voi käyttää: %1</translation>
     </message>
     <message>
         <source>does not fit</source>
@@ -17594,6 +17829,30 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
 <context>
     <name>Selection</name>
     <message>
+        <source>End A frame of %1</source>
+        <translation>Pään A kehys kohteessa %1</translation>
+    </message>
+    <message>
+        <source>End A frame</source>
+        <translation>Pään A kehys</translation>
+    </message>
+    <message>
+        <source>End B frame of %1</source>
+        <translation>Pään B kehys kohteessa %1</translation>
+    </message>
+    <message>
+        <source>End B frame</source>
+        <translation>Pään B kehys</translation>
+    </message>
+    <message>
+        <source>Mount frame of %1</source>
+        <translation>Kiinnityskehys kohteessa %1</translation>
+    </message>
+    <message>
+        <source>Mount frame</source>
+        <translation>Kiinnityskehys</translation>
+    </message>
+    <message>
         <source>Component: %1</source>
         <translation>Komponentti: %1</translation>
     </message>
@@ -17891,6 +18150,69 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>nothing</source>
         <translation>ei mitään</translation>
+    </message>
+</context>
+<context>
+    <name>Settings</name>
+    <message>
+        <source>Preferences</source>
+        <translation>Asetukset</translation>
+    </message>
+    <message>
+        <source>Navigation and 3D mouse</source>
+        <translation>Navigointi ja 3D-hiiri</translation>
+    </message>
+    <message>
+        <source>Keyboard shortcuts</source>
+        <translation>Pikanäppäimet</translation>
+    </message>
+    <message>
+        <source>Navigation bar, toolbar and quick-access pins</source>
+        <translation>Navigointipalkin, työkalurivin ja pikavalikon kiinnitykset</translation>
+    </message>
+    <message>
+        <source>Toolbar and panels layout</source>
+        <translation>Työkalurivin ja paneelien asettelu</translation>
+    </message>
+    <message>
+        <source>Library sources</source>
+        <translation>Kirjastolähteet</translation>
+    </message>
+    <message>
+        <source>Recent files</source>
+        <translation>Viimeisimmät tiedostot</translation>
+    </message>
+    <message>
+        <source>Folders and programs on this computer</source>
+        <translation>Tämän tietokoneen kansiot ja ohjelmat</translation>
+    </message>
+    <message>
+        <source>The file could not be read.</source>
+        <translation>Tiedostoa ei voitu lukea.</translation>
+    </message>
+    <message>
+        <source>The file does not hold MitCad settings.</source>
+        <translation>Tiedostossa ei ole MitCadin asetuksia.</translation>
+    </message>
+    <message>
+        <source>The file was written by a newer MitCad, in settings version %1. This MitCad reads settings up to version %2: update MitCad to import them.</source>
+        <translation>Tiedoston on kirjoittanut uudempi MitCad, asetusversiolla %1. Tämä MitCad lukee asetuksia versioon %2 asti: päivitä MitCad tuodaksesi ne.</translation>
+    </message>
+    <message>
+        <source>No temporary folder could be made.</source>
+        <translation>Väliaikaista kansiota ei voitu luoda.</translation>
+    </message>
+    <message>
+        <source>The settings could not be written.</source>
+        <translation>Asetuksia ei voitu kirjoittaa.</translation>
+    </message>
+    <message>
+        <source>The file could not be written: %1</source>
+        <translation>Tiedostoa ei voitu kirjoittaa: %1</translation>
+    </message>
+    <message>
+        <source>MitCad settings (*.%1)</source>
+        <translation>MitCad-asetukset (*.%1)</translation>
     </message>
 </context>
 <context>
@@ -18690,6 +19012,94 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
 </context>
 <context>
+    <name>SyncState</name>
+    <message>
+        <source>Waiting for the project&apos;s other server work…</source>
+        <translation>Odottaa projektin muita palvelintöitä…</translation>
+    </message>
+    <message>
+        <source>Sending to the project&apos;s server…</source>
+        <translation>Lähetetään projektin palvelimelle…</translation>
+    </message>
+    <message>
+        <source>Syncing with the project&apos;s server…</source>
+        <translation>Synkronoidaan projektin palvelimen kanssa…</translation>
+    </message>
+    <message>
+        <source>Connecting to the project&apos;s server…</source>
+        <translation>Yhdistetään projektin palvelimeen…</translation>
+    </message>
+    <message>
+        <source>Checking the project&apos;s server…</source>
+        <translation>Tarkistetaan projektin palvelinta…</translation>
+    </message>
+    <message>
+        <source>Not synced: files changed here and on the server need your choice (Sync)</source>
+        <translation>Ei synkronoitu: sekä täällä että palvelimella muuttuneet tiedostot odottavat valintaasi (Synkronoi)</translation>
+    </message>
+    <message numerus="yes">
+        <source>Offline: changes are kept and sent later (%n version(s) waiting)</source>
+        <translation>
+            <numerusform>Ei yhteyttä: muutokset säilyvät ja lähetetään myöhemmin (%n versio odottaa)</numerusform>
+            <numerusform>Ei yhteyttä: muutokset säilyvät ja lähetetään myöhemmin (%n versiota odottaa)</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Offline: changes are kept and sent later</source>
+        <translation>Ei yhteyttä: muutokset säilyvät ja lähetetään myöhemmin</translation>
+    </message>
+    <message>
+        <source>Sign-in needed: changes are kept and sent after signing in</source>
+        <translation>Kirjautuminen tarvitaan: muutokset säilyvät ja lähetetään kirjautumisen jälkeen</translation>
+    </message>
+    <message>
+        <source>The project&apos;s server was not found: changes are kept and sent later</source>
+        <translation>Projektin palvelinta ei löytynyt: muutokset säilyvät ja lähetetään myöhemmin</translation>
+    </message>
+    <message>
+        <source>Not synced: git is missing; changes are kept on this computer</source>
+        <translation>Ei synkronoitu: git puuttuu; muutokset säilyvät tällä tietokoneella</translation>
+    </message>
+    <message>
+        <source>Not synced: the repository&apos;s own git settings name programs</source>
+        <translation>Ei synkronoitu: repositorion omat git-asetukset nimeävät ohjelmia</translation>
+    </message>
+    <message>
+        <source>Not sent: the server did not take the versions; they are kept and tried again later</source>
+        <translation>Ei lähetetty: palvelin ei ottanut versioita vastaan; ne säilyvät ja lähetystä yritetään myöhemmin uudelleen</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n version(s) to send, and newer ones on the server: Sync takes them</source>
+        <translation>
+            <numerusform>%n versio lähetettävänä ja uudempia palvelimella: Synkronoi hakee ne</numerusform>
+            <numerusform>%n versiota lähetettävänä ja uudempia palvelimella: Synkronoi hakee ne</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n version(s) waiting to be sent</source>
+        <translation>
+            <numerusform>%n versio odottaa lähetystä</numerusform>
+            <numerusform>%n versiota odottaa lähetystä</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Newer versions on the server: Sync takes them</source>
+        <translation>Palvelimella on uudempia versioita: Synkronoi hakee ne</translation>
+    </message>
+    <message>
+        <source>Up to date</source>
+        <translation>Ajan tasalla</translation>
+    </message>
+    <message>
+        <source>Not synced yet</source>
+        <translation>Ei vielä synkronoitu</translation>
+    </message>
+    <message>
+        <source>%1, last sync %2</source>
+        <translation>%1, viimeksi synkronoitu %2</translation>
+    </message>
+</context>
+<context>
     <name>Update</name>
     <message>
         <source>The release gives no SHA-256 of the installer.</source>
@@ -19093,8 +19503,8 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Lisää käyttäjäparametri</translation>
     </message>
     <message>
-        <source>Empty for a number without a unit; Text for a text, such as &apos;Box &apos; &amp; Width</source>
-        <translation>Tyhjä yksiköttömälle luvulle; Text tekstille, kuten &apos;Box &apos; &amp; Width</translation>
+        <source>Number for a number without a unit; Text for a text, such as &apos;Box &apos; &amp; Width</source>
+        <translation>Luku yksiköttömälle luvulle; Teksti tekstille, esimerkiksi &apos;Box &apos; &amp; Width</translation>
     </message>
     <message>
         <source>Name</source>
@@ -19776,6 +20186,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
 </context>
 <context>
     <name>mitcad::BrowserController</name>
+    <message>
+        <source>Show All Sketches</source>
+        <translation>Näytä kaikki luonnokset</translation>
+    </message>
+    <message>
+        <source>Hide All Sketches</source>
+        <translation>Piilota kaikki luonnokset</translation>
+    </message>
     <message>
         <source>Find in Design: components and bodies by name</source>
         <translation>Etsi mallista: komponentit ja kappaleet nimellä</translation>
@@ -22208,6 +22626,10 @@ Napsautus: %2</translation>
         <translation>Omat sivustosi sekä niiden lisääminen ja muokkaaminen</translation>
     </message>
     <message>
+        <source>3D previews failed on this computer&apos;s graphics card. Restart MitCad to draw them in software.</source>
+        <translation>3D-esikatselut epäonnistuivat tämän tietokoneen näytönohjaimella. Käynnistä MitCad uudelleen, niin ne piirretään ohjelmallisesti.</translation>
+    </message>
+    <message>
         <source>Components from the web</source>
         <translation>Komponentit verkosta</translation>
     </message>
@@ -22868,8 +23290,8 @@ Napsautus: %2</translation>
         <translation>Arvo tai lauseke, kuten 30 tai d1 * 2</translation>
     </message>
     <message>
-        <source>Empty for a number without a unit</source>
-        <translation>Tyhjä: yksikötön luku</translation>
+        <source>Number for a number without a unit</source>
+        <translation>Luku yksiköttömälle luvulle</translation>
     </message>
     <message>
         <source>Name</source>
@@ -23321,6 +23743,10 @@ Napsautus: %2</translation>
     <message>
         <source>Importing %1</source>
         <translation>Tuodaan %1</translation>
+    </message>
+    <message>
+        <source>Importing %1 (file %2 of %3)</source>
+        <translation>Tuodaan %1 (tiedosto %2/%3)</translation>
     </message>
     <message>
         <source>it crashed</source>
@@ -24846,9 +25272,51 @@ Haetaanko ne?</translation>
         <source>%1 declined your request: &quot;%2&quot;</source>
         <translation>%1 hylkäsi pyyntösi: ”%2”</translation>
     </message>
+    <message>
+        <source>Checking the lock…</source>
+        <translation>Tarkistetaan muokkauslukkoa…</translation>
+    </message>
+    <message numerus="yes">
+        <source>Sending the versions of %1 before MitCad closes…
+What is not sent within %n second(s) is sent the next time the project opens.</source>
+        <translation>
+            <numerusform>Mallin %1 versioita lähetetään ennen kuin MitCad sulkeutuu…
+Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerran avataan.</numerusform>
+            <numerusform>Mallin %1 versioita lähetetään ennen kuin MitCad sulkeutuu…
+Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerran avataan.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>The versions of %1 were not sent: the server has newer versions of files you changed too. Sync to choose what to keep; its edit lock stays until then.</source>
+        <translation>Mallin %1 versioita ei lähetetty: palvelimella on uudempia versioita tiedostoista, joita muutit myös itse. Valitse synkronoimalla, mitä säilytetään; muokkauslukko pysyy siihen asti.</translation>
+    </message>
+    <message>
+        <source>The versions of %1 wait: the project&apos;s server could not be reached. They are sent later; its edit lock stays until then.</source>
+        <translation>Mallin %1 versiot odottavat: projektin palvelimeen ei saatu yhteyttä. Ne lähetetään myöhemmin; muokkauslukko pysyy siihen asti.</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MainWindow</name>
+    <message>
+        <source>Show All Sketches</source>
+        <translation>Näytä kaikki luonnokset</translation>
+    </message>
+    <message>
+        <source>Hide All Sketches</source>
+        <translation>Piilota kaikki luonnokset</translation>
+    </message>
+    <message>
+        <source>Turns on the light bulb of every sketch in the design</source>
+        <translation>Sytyttää mallin jokaisen luonnoksen hehkulampun</translation>
+    </message>
+    <message>
+        <source>Turns off the light bulb of every sketch in the design</source>
+        <translation>Sammuttaa mallin jokaisen luonnoksen hehkulampun</translation>
+    </message>
+    <message>
+        <source>Its panel cannot edit this feature: %1 Its values can be changed in Edit Parameters.</source>
+        <translation>Paneeli ei voi muokata tätä piirrettä: %1 Sen arvoja voi muuttaa kohdassa Muokkaa parametreja.</translation>
+    </message>
     <message>
         <source>Chat</source>
         <translation>Keskustelu</translation>
@@ -25405,6 +25873,42 @@ Haetaanko ne?</translation>
     <message>
         <source>Import of %1 canceled.</source>
         <translation>Tiedoston %1 tuonti peruttiin.</translation>
+    </message>
+    <message>
+        <source>No temporary directory for the import.</source>
+        <translation>Tuonnille ei ole väliaikaishakemistoa.</translation>
+    </message>
+    <message>
+        <source>%1: the imported design could not be written</source>
+        <translation>%1: tuotua mallia ei voitu kirjoittaa</translation>
+    </message>
+    <message>
+        <source>Import %1</source>
+        <translation>Tuo %1</translation>
+    </message>
+    <message numerus="yes">
+        <source>Import %n files</source>
+        <translation>
+            <numerusform>Tuo %n tiedosto</numerusform>
+            <numerusform>Tuo %n tiedostoa</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Imported %1 into this design.</source>
+        <translation>%1 tuotiin tähän malliin.</translation>
+    </message>
+    <message numerus="yes">
+        <source>Imported %n files into this design.</source>
+        <translation>
+            <numerusform>%n tiedosto tuotiin tähän malliin.</numerusform>
+            <numerusform>%n tiedostoa tuotiin tähän malliin.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Could not import into this design:
+%1</source>
+        <translation>Tähän malliin ei voitu tuoda:
+%1</translation>
     </message>
     <message>
         <source>Reading the imported %1</source>
@@ -28320,8 +28824,8 @@ Lisää tallennetun mallin.</translation>
         <translation>Avaa lokikansio</translation>
     </message>
     <message>
-        <source>Opens the folder of the debug log&apos;s files</source>
-        <translation>Avaa vianetsintälokin tiedostojen kansion</translation>
+        <source>Opens the folder of the session logs, debug logs and crash dumps</source>
+        <translation>Avaa istuntolokien, vianetsintälokien ja kaatumisvedosten kansion</translation>
     </message>
     <message>
         <source>Turn Off Debug Log</source>
@@ -29562,6 +30066,14 @@ Poistetaanko silti? Nuo muutokset menetetään.</translation>
         <source>The source design could not be written to %1.</source>
         <translation>Lähdemallia ei voitu kirjoittaa kansioon %1.</translation>
     </message>
+    <message>
+        <source>3D mouse rotation locked</source>
+        <translation>3D-hiiren kierto lukittu</translation>
+    </message>
+    <message>
+        <source>3D mouse rotation unlocked</source>
+        <translation>3D-hiiren kierto vapautettu</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::MakeBodyCard</name>
@@ -30755,12 +31267,28 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
         <translation>Vain hallitseva akseli</translation>
     </message>
     <message>
+        <source>Only the axis moved most moves the view, and it stays the same until the 3D mouse is released</source>
+        <translation>Vain eniten liikutettu akseli liikuttaa näkymää, ja se pysyy samana, kunnes 3D-hiiri vapautetaan</translation>
+    </message>
+    <message>
         <source>Lock horizon</source>
         <translation>Lukitse horisontti</translation>
     </message>
     <message>
         <source>Keeps Z upright and the view level; the roll axis does nothing</source>
         <translation>Pitää Z:n pystyssä ja näkymän vaakasuorassa; kallistusakseli ei tee mitään</translation>
+    </message>
+    <message>
+        <source>Off</source>
+        <translation>Pois</translation>
+    </message>
+    <message>
+        <source>An axis moved less than this share of the most moved axis does not move the view</source>
+        <translation>Akseli, jota liikutetaan vähemmän kuin tämä osuus eniten liikutetusta akselista, ei liikuta näkymää</translation>
+    </message>
+    <message>
+        <source>Ignore weaker axes:</source>
+        <translation>Ohita heikommat akselit:</translation>
     </message>
     <message>
         <source>Button</source>
@@ -31328,6 +31856,13 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     </message>
 </context>
 <context>
+    <name>mitcad::ParameterUnits</name>
+    <message>
+        <source>Number</source>
+        <translation>Luku</translation>
+    </message>
+</context>
+<context>
     <name>mitcad::ParametersDialog</name>
     <message>
         <source>Parameters</source>
@@ -31420,6 +31955,10 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>Slider</source>
         <translation>Liukusäädin</translation>
+    </message>
+    <message>
+        <source>Number for a number without a unit; Text for a text</source>
+        <translation>Luku yksiköttömälle luvulle; Teksti tekstille</translation>
     </message>
     <message>
         <source>Favorites: listed first</source>
@@ -32222,14 +32761,6 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
         </translation>
     </message>
     <message>
-        <source>Up to date, last sync %1</source>
-        <translation>Ajan tasalla, viimeksi synkronoitu %1</translation>
-    </message>
-    <message>
-        <source>Up to date</source>
-        <translation>Ajan tasalla</translation>
-    </message>
-    <message>
         <source>Not synced yet</source>
         <translation>Ei vielä synkronoitu</translation>
     </message>
@@ -32264,6 +32795,10 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>&amp;Save to Project…</source>
         <translation>&amp;Tallenna projektiin…</translation>
+    </message>
+    <message>
+        <source>Waiting</source>
+        <translation>Odottaa</translation>
     </message>
 </context>
 <context>
@@ -33145,6 +33680,20 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>%1 has no web page MitCad knows of.</source>
         <translation>Kohteella %1 ei ole MitCadin tuntemaa verkkosivua.</translation>
+    </message>
+    <message numerus="yes">
+        <source>Sending the project&apos;s versions before MitCad closes…
+What is not sent within %n second(s) is sent the next time the project opens.</source>
+        <translation>
+            <numerusform>Projektin versioita lähetetään ennen kuin MitCad sulkeutuu…
+Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerran avataan.</numerusform>
+            <numerusform>Projektin versioita lähetetään ennen kuin MitCad sulkeutuu…
+Mitä ei ole lähetetty %n sekunnissa, lähetetään kun projekti seuraavan kerran avataan.</numerusform>
+        </translation>
+    </message>
+    <message>
+        <source>Close &amp;Now</source>
+        <translation>Sulje &amp;nyt</translation>
     </message>
 </context>
 <context>
@@ -34173,6 +34722,38 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>Do &amp;not offer error reports again</source>
         <translation>Älä &amp;tarjoa virheraportteja enää</translation>
+    </message>
+    <message>
+        <source>MitCad ended unexpectedly the last time it ran: it may have stopped responding and been closed, or crashed.</source>
+        <translation>MitCad päättyi odottamatta edellisellä käyttökerralla: se on voinut lakata vastaamasta ja tulla suljetuksi, tai kaatua.</translation>
+    </message>
+    <message>
+        <source>MitCad ended unexpectedly the last time it ran, and a crash dump was saved.</source>
+        <translation>MitCad päättyi odottamatta edellisellä käyttökerralla, ja kaatumisvedos tallennettiin.</translation>
+    </message>
+    <message>
+        <source>Open &amp;Log Folder</source>
+        <translation>Avaa &amp;lokikansio</translation>
+    </message>
+    <message>
+        <source>Last Session</source>
+        <translation>Edellinen istunto</translation>
+    </message>
+    <message>
+        <source>Its log is kept in the logs folder and may tell what MitCad was doing. Help › Send Feedback can attach it to a report.</source>
+        <translation>Sen loki on tallessa lokikansiossa ja voi kertoa, mitä MitCad oli tekemässä. Ohje › Lähetä palautetta voi liittää sen raporttiin.</translation>
+    </message>
+    <message>
+        <source>&amp;Open Log Folder</source>
+        <translation>&amp;Avaa lokikansio</translation>
+    </message>
+    <message>
+        <source>&amp;Close</source>
+        <translation>&amp;Sulje</translation>
+    </message>
+    <message>
+        <source>The session logs are copied to %1, open in your file manager: drag them into the form to attach them.</source>
+        <translation>Istuntolokit on kopioitu kansioon %1, joka on auki tiedostonhallinnassa: liitä ne vetämällä lomakkeeseen.</translation>
     </message>
 </context>
 <context>
@@ -35754,10 +36335,6 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
         <translation>Kysyy, onko uudempi MitCad julkaistu (Työkalut › Asetukset: automaattiset tarkistukset)</translation>
     </message>
     <message>
-        <source>Update</source>
-        <translation>Päivitys</translation>
-    </message>
-    <message>
         <source>Downloading MitCad %1…</source>
         <translation>Ladataan MitCad %1…</translation>
     </message>
@@ -35812,6 +36389,34 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>MitCad %1 was not installed: MitCad stayed open.</source>
         <translation>MitCad %1 jäi asentamatta: MitCad pysyi auki.</translation>
+    </message>
+    <message>
+        <source>MitCad %1 is downloaded. A test&apos;s fake update is not installed.</source>
+        <translation>MitCad %1 on ladattu. Testin valepäivitystä ei asenneta.</translation>
+    </message>
+    <message>
+        <source>MitCad %1 installs when MitCad closes.</source>
+        <translation>MitCad %1 asennetaan, kun MitCad suljetaan.</translation>
+    </message>
+    <message>
+        <source>MitCad</source>
+        <translation>MitCad</translation>
+    </message>
+    <message>
+        <source>MitCad %1 is still downloading.</source>
+        <translation>MitCad %1 latautuu vielä.</translation>
+    </message>
+    <message>
+        <source>Keep MitCad open until the update is downloaded and installed, or stop the download and close MitCad.</source>
+        <translation>Pidä MitCad auki, kunnes päivitys on ladattu ja asennettu, tai keskeytä lataus ja sulje MitCad.</translation>
+    </message>
+    <message>
+        <source>&amp;Keep Downloading</source>
+        <translation>&amp;Jatka latausta</translation>
+    </message>
+    <message>
+        <source>&amp;Stop and Close</source>
+        <translation>&amp;Keskeytä ja sulje</translation>
     </message>
 </context>
 <context>
@@ -35898,6 +36503,13 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>Update checks are turned off by your administrator.</source>
         <translation>Järjestelmänvalvoja on poistanut päivitystarkistukset käytöstä.</translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::UpdateRow</name>
+    <message>
+        <source>Update</source>
+        <translation>Päivitys</translation>
     </message>
 </context>
 <context>
@@ -36100,6 +36712,14 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
 </context>
 <context>
     <name>mitcad::ViewController</name>
+    <message>
+        <source>Sketches Through Bodies</source>
+        <translation>Luonnokset kappaleiden läpi</translation>
+    </message>
+    <message>
+        <source>Shows the parts of the shown sketches that bodies hide, faint and dashed</source>
+        <translation>Näyttää näkyvien luonnosten kappaleiden peittämät osat himmeinä ja katkoviivoin</translation>
+    </message>
     <message>
         <source>the design&apos;s printer</source>
         <translation>mallin tulostin</translation>
@@ -36821,6 +37441,14 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
         <translation>&amp;Selaimen tausta:</translation>
     </message>
     <message>
+        <source>With Rows, the Browser widens to its longest name, up to this share of the view&apos;s width</source>
+        <translation>Rivit-taustalla Selain levenee pisimmän nimensä mukaan enintään tämän osuuden näkymän leveydestä</translation>
+    </message>
+    <message>
+        <source>R&amp;ows at most:</source>
+        <translation>Rivit &amp;enintään:</translation>
+    </message>
+    <message>
         <source>Applies in the Floating layout.</source>
         <translation>Pätee Kelluva-asettelussa.</translation>
     </message>
@@ -36951,6 +37579,34 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>O&amp;rigin planes:</source>
         <translation>O&amp;rigon tasot:</translation>
+    </message>
+    <message>
+        <source>Puts the settings of this page, or of all pages, back to their defaults</source>
+        <translation>Palauttaa tämän sivun tai kaikkien sivujen asetukset oletuksiin</translation>
+    </message>
+    <message>
+        <source>All Settings</source>
+        <translation>Kaikki asetukset</translation>
+    </message>
+    <message>
+        <source>Current Group (%1)</source>
+        <translation>Nykyinen ryhmä (%1)</translation>
+    </message>
+    <message>
+        <source>Import Settings…</source>
+        <translation>Tuo asetukset…</translation>
+    </message>
+    <message>
+        <source>Export Settings…</source>
+        <translation>Vie asetukset…</translation>
+    </message>
+    <message>
+        <source>Takes the settings from a file saved on this or another computer</source>
+        <translation>Ottaa asetukset tällä tai toisella tietokoneella tallennetusta tiedostosta</translation>
+    </message>
+    <message>
+        <source>Saves the settings to a file to take to another computer</source>
+        <translation>Tallentaa asetukset tiedostoon toiselle tietokoneelle vietäväksi</translation>
     </message>
     <message>
         <source>Settings</source>
@@ -37131,6 +37787,122 @@ Näet tämän istunnon viestit napsauttamalla.</translation>
     <message>
         <source>Snapshot saved as %1.</source>
         <translation>Tilannekuva tallennettu: %1.</translation>
+    </message>
+    <message>
+        <source>Restore the defaults of all settings?</source>
+        <translation>Palautetaanko kaikki asetukset oletuksiin?</translation>
+    </message>
+    <message>
+        <source>Restore the defaults of the %1 settings?</source>
+        <translation>Palautetaanko ryhmän %1 asetukset oletuksiin?</translation>
+    </message>
+    <message>
+        <source>Every setting in Preferences goes back to its default.</source>
+        <translation>Jokainen asetus palaa oletukseensa.</translation>
+    </message>
+    <message>
+        <source>The settings on the %1 page go back to their defaults. The other pages keep their settings, and changes made on them are saved.</source>
+        <translation>Sivun %1 asetukset palaavat oletuksiin. Muut sivut pitävät asetuksensa, ja niihin tehdyt muutokset tallennetaan.</translation>
+    </message>
+    <message>
+        <source>Kept: recent files, library sources and fetched libraries, favorites, window sizes and places, API keys, chat histories, and keyboard shortcuts, which Keyboard Shortcuts resets on its own.</source>
+        <translation>Säilyvät: viimeisimmät tiedostot, kirjastolähteet ja haetut kirjastot, suosikit, ikkunoiden koot ja paikat, API-avaimet, keskusteluhistoriat sekä pikanäppäimet, jotka Pikanäppäimet-ikkuna palauttaa erikseen.</translation>
+    </message>
+    <message>
+        <source>Restore Defaults</source>
+        <translation>Palauta oletukset</translation>
+    </message>
+    <message>
+        <source>&amp;Restore Defaults</source>
+        <translation>&amp;Palauta oletukset</translation>
+    </message>
+    <message>
+        <source>Export Settings</source>
+        <translation>Vie asetukset</translation>
+    </message>
+    <message>
+        <source>Choose the settings to save to a file.</source>
+        <translation>Valitse tiedostoon tallennettavat asetukset.</translation>
+    </message>
+    <message>
+        <source>Recent files and this computer&apos;s folders and programs are left out unless checked: another computer may not have them.</source>
+        <translation>Viimeisimmät tiedostot sekä tämän tietokoneen kansiot ja ohjelmat jätetään pois, ellei niitä valita: toisella tietokoneella niitä ei ehkä ole.</translation>
+    </message>
+    <message>
+        <source>Export…</source>
+        <translation>Vie…</translation>
+    </message>
+    <message>
+        <source>Save Settings File</source>
+        <translation>Tallenna asetustiedosto</translation>
+    </message>
+    <message>
+        <source>The settings were not saved.</source>
+        <translation>Asetuksia ei tallennettu.</translation>
+    </message>
+    <message>
+        <source>Settings saved to %1.</source>
+        <translation>Asetukset tallennettu tiedostoon %1.</translation>
+    </message>
+    <message>
+        <source>Choose a Settings File</source>
+        <translation>Valitse asetustiedosto</translation>
+    </message>
+    <message>
+        <source>All files (*)</source>
+        <translation>Kaikki tiedostot (*)</translation>
+    </message>
+    <message>
+        <source>The file holds no settings this MitCad can take.</source>
+        <translation>Tiedostossa ei ole asetuksia, jotka tämä MitCad voi ottaa.</translation>
+    </message>
+    <message>
+        <source>Import Settings</source>
+        <translation>Tuo asetukset</translation>
+    </message>
+    <message>
+        <source>The settings were not imported.</source>
+        <translation>Asetuksia ei tuotu.</translation>
+    </message>
+    <message>
+        <source>Import the settings in %1?</source>
+        <translation>Tuodaanko tiedoston %1 asetukset?</translation>
+    </message>
+    <message>
+        <source>Written by MitCad %1 on %2, %3.</source>
+        <translation>Kirjoittanut MitCad %1 alustalla %2, %3.</translation>
+    </message>
+    <message>
+        <source>Written by MitCad %1 on %2.</source>
+        <translation>Kirjoittanut MitCad %1 alustalla %2.</translation>
+    </message>
+    <message>
+        <source>The groups checked replace this computer&apos;s settings of the same groups: those not in the file go back to their defaults. The others stay as they are.</source>
+        <translation>Valitut ryhmät korvaavat tämän tietokoneen samojen ryhmien asetukset: tiedostosta puuttuvat palaavat oletuksiinsa. Muut säilyvät ennallaan.</translation>
+    </message>
+    <message>
+        <source>Not on this computer, so skipped and not written:</source>
+        <translation>Ei tällä tietokoneella, joten ohitetaan eikä kirjoiteta:</translation>
+    </message>
+    <message>
+        <source>Import</source>
+        <translation>Tuo</translation>
+    </message>
+    <message>
+        <source>Settings imported from %1.</source>
+        <translation>Asetukset tuotu tiedostosta %1.</translation>
+    </message>
+    <message>
+        <source>Settings imported from %1. Some take effect when MitCad starts again.</source>
+        <translation>Asetukset tuotu tiedostosta %1. Osa tulee voimaan, kun MitCad käynnistetään uudelleen.</translation>
+    </message>
+    <message>
+        <source>Lock Rotation</source>
+        <translation>Lukitse kierto</translation>
+    </message>
+    <message>
+        <source>Locks or frees the 3D mouse&apos;s rotation; in a sketch, for that sketch only</source>
+        <translation>Lukitsee tai vapauttaa 3D-hiiren kierron; luonnoksessa vain sille luonnokselle</translation>
     </message>
 </context>
 <context>
@@ -38286,6 +39058,14 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>%1: tahko</translation>
     </message>
     <message>
+        <source>Extreme point of %1</source>
+        <translation>%1: ääripiste</translation>
+    </message>
+    <message>
+        <source>Outline of %1</source>
+        <translation>%1: ääriviiva</translation>
+    </message>
+    <message>
         <source>PDF…</source>
         <translation>PDF…</translation>
     </message>
@@ -38788,6 +39568,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>Rotate 90° Right</source>
         <translation>Kierrä 90° oikealle</translation>
+    </message>
+    <message>
+        <source>Reset Label Position</source>
+        <translation>Palauta tunnuksen paikka</translation>
     </message>
     <message>
         <source>Add Copy</source>
@@ -39935,6 +40719,14 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <source>See and edit everything the report contains before sending it</source>
         <translation>Katso ja muokkaa raportin koko sisältöä ennen lähettämistä</translation>
     </message>
+    <message>
+        <source>Include the &amp;logs of this session and the last one</source>
+        <translation>Liitä tämän ja edellisen istunnon l&amp;okit</translation>
+    </message>
+    <message>
+        <source>MitCad&apos;s log files, to attach to the issue; they may contain file and design names</source>
+        <translation>MitCadin lokitiedostot ilmoitukseen liitettäväksi; niissä voi olla tiedostojen ja mallien nimiä</translation>
+    </message>
 </context>
 <context>
     <name>mitcad::report::ReportPreviewDialog</name>
@@ -40001,6 +40793,22 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>&amp;Send</source>
         <translation>&amp;Lähetä</translation>
+    </message>
+    <message>
+        <source>Session logs (files you attach to the issue)</source>
+        <translation>Istuntolokit (tiedostot, jotka liität ilmoitukseen)</translation>
+    </message>
+    <message>
+        <source>%1. Send copies them into a folder and opens it, to drag them into the form.</source>
+        <translation>%1. Lähetä kopioi ne kansioon ja avaa sen, jotta voit vetää ne lomakkeeseen.</translation>
+    </message>
+    <message>
+        <source>%1. They go into the design&apos;s zip.</source>
+        <translation>%1. Ne tulevat mallin zip-tiedostoon.</translation>
+    </message>
+    <message>
+        <source>A log may contain file paths, design names and entity names; it is not masked.</source>
+        <translation>Lokissa voi olla tiedostopolkuja sekä mallien ja kohteiden nimiä; sitä ei peitetä.</translation>
     </message>
 </context>
 <context>
@@ -41077,6 +41885,10 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     <message>
         <source>Drag: the point snaps to points and curves and is held where it is dropped (Shift or Alt: no snap).</source>
         <translation>Veto: piste kohdistuu pisteisiin ja käyriin ja pysyy siinä, mihin se pudotetaan (Shift tai Alt: ei kohdistusta).</translation>
+    </message>
+    <message>
+        <source>Drag: the text&apos;s anchor snaps to points and curves (Shift or Alt: no snap).</source>
+        <translation>Veto: tekstin ankkuri kohdistuu pisteisiin ja käyriin (Shift tai Alt: ei kohdistusta).</translation>
     </message>
     <message>
         <source>Drag: the geometry follows as far as its constraints let it.</source>

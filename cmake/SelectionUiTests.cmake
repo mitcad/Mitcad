@@ -246,7 +246,10 @@ endif()
 # context, draws a triangle and reads it back, through the GPU where there
 # is one and in software (SwiftShader) on the hidden displays here; the
 # same script on Linux and Windows, run by a wrapper on macOS; only where
-# the web browser component is built.
+# the web browser component is built. In two sessions (mitcad#1906): a
+# failure of the GPU process given to the first leaves the marker the second
+# follows (WebGL in software only), and both check that Help > Send
+# Feedback's diagnostics carry the browser's WebGL, GPU and page errors.
 if(BUILD_TESTING AND TARGET mitcad AND Python3_Interpreter_FOUND
    AND selection_ui_platform AND selection_ui_web_browser)
   set(webgl_ui_test "app.ui-${selection_ui_platform}-component-web-webgl")
@@ -263,7 +266,7 @@ if(BUILD_TESTING AND TARGET mitcad AND Python3_Interpreter_FOUND
               "$<TARGET_FILE:mitcad>" "${CMAKE_BINARY_DIR}/ui-${selection_ui_platform}-component-web-webgl"
               "$<TARGET_FILE_DIR:Qt6::Core>" "${selection_ui_web_browser}")
   endif()
-  set_tests_properties("${webgl_ui_test}" PROPERTIES TIMEOUT 300 ${selection_ui_alone}
+  set_tests_properties("${webgl_ui_test}" PROPERTIES TIMEOUT 480 ${selection_ui_alone}
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   if(selection_ui_platform STREQUAL "linux")
     set_property(TEST "${webgl_ui_test}" APPEND PROPERTY ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1")

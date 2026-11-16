@@ -60,11 +60,23 @@ vanishes only in parts stays, and with the arc join one with a tube along an
 edge. Before, the shell failed (the thick solid had fewer faces than the
 body), a closed offset had no solid, or the solid was wrong: the inverted
 rounding kept, or with the arc join the body itself, unshelled. A thick
-solid to which the offset contributes no face is no longer done. The private
-methods `BuildOffsetByArc`, `BuildOffsetByInter`, `Intersection3D`,
-`IntersectEdges` and `ToContext` of `BRepOffset_MakeOffset` and three
-methods of `BRepOffset_Inter2d` and `BRepOffset_Inter3d` get parameters; no
-class gets members.
+solid to which the offset contributes no face is no longer done.
+
+That last change makes 19 of OCCT's own offset cases (offset/faces_type_i
+B4 B5 C2 D1 E8 E9 F1 F3 F4 F5 I5 J5 K6 M6 M8, offset/bugs bug5806,
+bugs/modalg_2 bug427_6, bugs/modalg_7 bug25939, bugs/modalg_8 bug31601)
+and 14 of its known-problem cases fail with "not done" (mitcad#1878). On
+purpose: in each of them stock 8.0.1's offset fails and the thick solid it
+returns is the input body unchanged, whose volume the case takes as its
+reference. `FindVanishingFaces` marks no face in any of them, and without
+the not-done check the patched offset gives stock's results. The case
+list is in
+[occt-master-comparison.md](occt-master-comparison.md#occts-own-tests-against-the-patches).
+
+The private methods `BuildOffsetByArc`, `BuildOffsetByInter`,
+`Intersection3D`, `IntersectEdges` and `ToContext` of
+`BRepOffset_MakeOffset` and three methods of `BRepOffset_Inter2d` and
+`BRepOffset_Inter3d` get parameters; no class gets members.
 
 ## 0960: the projection's boundary search
 

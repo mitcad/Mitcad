@@ -6,6 +6,7 @@
 // colour in its middle and along its sides, and at its corners, outside the
 // rounding, the view's background, not the backdrop's colour; outside the
 // backdrop the view's gradient, on a light and a dark palette, at 1x and 2x.
+#include "UnitTests.hpp"
 #include "files/StartBackdrop.hpp"
 
 #include <algorithm>
@@ -147,3 +148,4 @@ int startBackdropTests() {
   emptyTests();
   return failures;
 }
+MITCAD_UNIT_TEST(startBackdropTests);

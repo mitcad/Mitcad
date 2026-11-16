@@ -1236,6 +1236,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 || o.type_name == "App::VarSet"
                 || super::is_sketch(&o.type_name)
                 || self.replay.replayed.contains(object)
+                // Its offset moves the sketches on it (mitcad#1930).
+                || super::history::is_coordinate_system(&o.type_name)
                 // A Body's or part's position moves its occurrence
                 // (mitcad#1560).
                 || (o.type_name == "PartDesign::Body" || super::is_component(&o.type_name))
@@ -1602,7 +1604,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     super::ObjectOutcome::Fallback | super::ObjectOutcome::Skipped
                 )
             });
+            // A coordinate system is no feature of its own: the sketches on
+            // it carry its offset's expressions (mitcad#1930).
+            let carried = r.outcome == ExpressionOutcome::Expression
+                && self.sources[0]
+                    .object(&r.object)
+                    .is_some_and(|o| super::history::is_coordinate_system(&o.type_name));
             if fell_back
+                && !carried
                 && matches!(
                     r.outcome,
                     ExpressionOutcome::Expression | ExpressionOutcome::Unused

@@ -23,9 +23,13 @@ fn query(doc: &Document<MockKernel>, query: Value) -> Value {
     serde_json::from_str(&doc.query(&query.to_string()).unwrap()).unwrap()
 }
 
-/// `scene` written as `name` into a folder of the test's own.
+/// `scene` written as `name` into a folder of its own: the tests run on
+/// several threads of one process, and two of them writing `crate.glb` into
+/// one folder read each other's half-written file.
 fn written(scene: &TestScene, name: &str, form: &Form) -> String {
-    let dir = std::env::temp_dir().join(format!("mitcad-gltf-import-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("mitcad-gltf-import-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (bytes, files) = testfile::write(scene, form);
     for (file, data) in files {
@@ -206,7 +210,10 @@ fn into_a_design_with_content_a_gltf_file_comes_in_its_own_component() {
     );
     // The answer of file_structure says so too.
     let answer = query(&doc, json!({"query": "file_structure", "path": path}));
-    assert_eq!(answer, json!({"assembly": false, "wrap": true}));
+    assert_eq!(
+        answer,
+        json!({"assembly": false, "content": true, "wrap": true})
+    );
 }
 
 #[test]
@@ -219,7 +226,10 @@ fn a_new_design_with_its_empty_component1_takes_a_gltf_file_as_it_is() {
     assert!(!doc.import_wraps_by_default(&path));
     assert!(!doc.import_wraps_by_default("/models/bracket.step"));
     let answer = query(&doc, json!({"query": "file_structure", "path": path}));
-    assert_eq!(answer, json!({"assembly": false, "wrap": false}));
+    assert_eq!(
+        answer,
+        json!({"assembly": false, "content": false, "wrap": false})
+    );
     let result = command(&mut doc, json!({"cmd": "import_file", "path": path})).unwrap();
     assert!(result.get("component").is_none(), "{result}");
     assert!(component_named(&doc, "robot new").is_none());

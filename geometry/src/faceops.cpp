@@ -5,26 +5,40 @@
 #include <cmath>
 #include <exception>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 
 #include <BOPAlgo_Alerts.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepBuilderAPI_Transform.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepFill.hxx>
 #include <BRepGProp.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffset_MakeOffset.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAPI_PointsToBSpline.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom_BSplineCurve.hxx>
 #include <Geom_Surface.hxx>
+#include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
+#include <Precision.hxx>
 #include <ShapeBuild_ReShape.hxx>
 #include <ShapeUpgrade_ShapeDivideContinuity.hxx>
 #include <Standard_OutOfMemory.hxx>
@@ -33,8 +47,13 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shell.hxx>
+#include <NCollection_Array1.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp_Pnt2d.hxx>
+#include <gp_Trsf.hxx>
 
+#include "face_join.hpp"
 #include "face_select.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/cancel.hpp"
@@ -783,11 +802,286 @@ detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int
   return namer;
 }
 
+// Offset faces across seams (mitcad#1928): a moved face that continues
+// smoothly into a face that stays, as the pieces of a split face do, cannot
+// be moved by the geometry kernel's offset alone: the neighbour that stays
+// on the moved face's surface (or one tangent to it) cannot extend or
+// shorten along its own surface to meet it. There the moved faces and the
+// faces they continue into smoothly are offset together, the region between
+// the body and that offset is cut at the seams by walls along the moved
+// faces' normals, and only its parts at the moved faces are removed from
+// the body (inward) or added to it (outward): the seam becomes a step.
+
+// Why an offset across a seam failed, for the error.
+constexpr const char* kSeamFailure =
+    "the offset faces continue smoothly into faces that stay, and the step between them could not "
+    "be made";
+
+// An edge where a moved face continues smoothly into a face that stays.
+struct Seam {
+  TopoDS_Edge edge;
+  int face = -1;             // the moved face
+  bool one_surface = false; // the face that stays lies on the moved face's surface
+};
+
+// Whether two faces lie on one surface: coplanar planes, or one surface
+// (detail::same_surface), as the pieces of a split face do.
+bool on_one_surface(const TopoDS_Face& a, const TopoDS_Face& b) {
+  const std::optional<gp_Pln> pa = detail::face_plane(a);
+  const std::optional<gp_Pln> pb = detail::face_plane(b);
+  if (pa && pb) {
+    return pa->Axis().Direction().IsParallel(pb->Axis().Direction(), 1.0e-9) &&
+           pa->Distance(pb->Location()) < 1.0e-6;
+  }
+  return !pa && !pb && detail::same_surface(BRep_Tool::Surface(a), BRep_Tool::Surface(b));
+}
+
+std::vector<Seam> seams_of(const Shape& body, const std::vector<int>& moved) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+      ancestors;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, ancestors);
+  std::vector<Seam> seams;
+  ShapeMap seen;
+  for (int f : moved) {
+    const TopoDS_Face& face = body.face(f);
+    for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+      if (BRep_Tool::Degenerated(edge) || !ancestors.Contains(edge) || seen.Contains(edge)) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : ancestors.FindFromKey(edge)) {
+        const int g = body.face_index(other);
+        if (g >= 0 && std::find(moved.begin(), moved.end(), g) == moved.end() &&
+            detail::is_smooth(edge, face, TopoDS::Face(other))) {
+          seams.push_back({edge, f, on_one_surface(face, TopoDS::Face(other))});
+          seen.Add(edge);
+          break;
+        }
+      }
+    }
+  }
+  return seams;
+}
+
+// The wall that cuts the region between the body and the offset at a seam:
+// the seam swept along the moved face's normal `reach` to each side. On a
+// planar face a prism of the seam (a straight seam lengthened by `reach` at
+// both ends, so that it cuts through the region where it ends on its
+// boundary); on a curved face a ruled face between the seam's points moved
+// along the face's normal at each.
+TopoDS_Shape seam_wall(const Shape& body, const Seam& seam, double reach) {
+  const TopoDS_Face& face = body.face(seam.face);
+  const BRepAdaptor_Curve curve(seam.edge);
+  const double first = curve.FirstParameter();
+  const double last = curve.LastParameter();
+  if (const std::optional<gp_Pln> plane = detail::face_plane(face)) {
+    const gp_Vec normal(plane->Axis().Direction());
+    TopoDS_Shape base = seam.edge;
+    if (curve.GetType() == GeomAbs_Line) {
+      const gp_Pnt a = curve.Value(first);
+      const gp_Pnt b = curve.Value(last);
+      const gp_Vec along(a, b);
+      if (along.Magnitude() > Precision::Confusion()) {
+        const gp_Vec past = along.Normalized() * reach;
+        base = BRepBuilderAPI_MakeEdge(a.Translated(-past), b.Translated(past)).Edge();
+      }
+    }
+    gp_Trsf down;
+    down.SetTranslation(-normal * reach);
+    const TopoDS_Shape start = BRepBuilderAPI_Transform(base, down, true).Shape();
+    return BRepPrimAPI_MakePrism(start, normal * (2.0 * reach), true).Shape();
+  }
+  constexpr int kSamples = 33;
+  NCollection_Array1<gp_Pnt> below(1, kSamples);
+  NCollection_Array1<gp_Pnt> above(1, kSamples);
+  for (int i = 0; i < kSamples; ++i) {
+    const double t = static_cast<double>(i) / (kSamples - 1);
+    const gp_Pnt p = curve.Value(first + (last - first) * t);
+    const gp_Vec normal(detail::normal_on_edge(face, seam.edge, t));
+    below.SetValue(i + 1, p.Translated(-normal * reach));
+    above.SetValue(i + 1, p.Translated(normal * reach));
+  }
+  GeomAPI_PointsToBSpline low(below, 3, 8, GeomAbs_C2, 1.0e-6);
+  GeomAPI_PointsToBSpline high(above, 3, 8, GeomAbs_C2, 1.0e-6);
+  if (!low.IsDone() || !high.IsDone()) {
+    throw std::runtime_error(kSeamFailure);
+  }
+  return BRepFill::Face(BRepBuilderAPI_MakeEdge(low.Curve()).Edge(),
+                        BRepBuilderAPI_MakeEdge(high.Curve()).Edge());
+}
+
+// A point inside the face, if one is found.
+std::optional<gp_Pnt> point_inside(const TopoDS_Face& face) {
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
+  const BRepAdaptor_Surface surface(face);
+  for (const int cells : {5, 24}) {
+    for (int a = 0; a < cells; ++a) {
+      for (int b = 0; b < cells; ++b) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * (a + 0.5) / cells, v0 + (v1 - v0) * (b + 0.5) / cells);
+        if (classifier.Perform(uv) == TopAbs_IN) {
+          return surface.Value(uv.X(), uv.Y());
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+// True when the point lies on the face (within its tolerance, at least
+// 1e-5 mm).
+bool on_face(const gp_Pnt& point, const TopoDS_Face& face) {
+  BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(), face);
+  return distance.IsDone() && distance.Value() <= std::max(1.0e-5, BRep_Tool::Tolerance(face));
+}
+
+// The shape `operation` makes of the first shape and the others (on copies
+// of them, which share their sub-shapes).
+template <class Operation>
+TopoDS_Shape boolean_of(const std::vector<TopoDS_Shape>& shapes) {
+  const detail::InputCopy copy(shapes);
+  Operation operation;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(copy.shape(0));
+  NCollection_List<TopoDS_Shape> tools;
+  for (std::size_t i = 1; i < shapes.size(); ++i) {
+    tools.Append(copy.shape(i));
+  }
+  operation.SetArguments(arguments);
+  operation.SetTools(tools);
+  operation.SetNonDestructive(true);
+  detail::build(operation);
+  if (!operation.IsDone() || operation.HasErrors()) {
+    throw std::runtime_error(kSeamFailure);
+  }
+  return operation.Shape();
+}
+
+// The body with the cells removed (Cut) or added (Fuse), its faces' names
+// carried, the coincident faces merged; the faces without a name then take
+// those of the offset body's face they lie in (the moved faces and the
+// neighbours' continuations), the rest are the steps.
+template <class Operation>
+detail::FaceNamer apply_cells(const Shape& body, const std::vector<TopoDS_Shape>& cells,
+                              const Shape& offset) {
+  std::vector<TopoDS_Shape> inputs{body.occt()};
+  inputs.insert(inputs.end(), cells.begin(), cells.end());
+  const detail::InputCopy copy(inputs);
+  Operation operation;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(copy.shape(0));
+  NCollection_List<TopoDS_Shape> tools;
+  for (std::size_t i = 1; i < inputs.size(); ++i) {
+    tools.Append(copy.shape(i));
+  }
+  operation.SetArguments(arguments);
+  operation.SetTools(tools);
+  operation.SetNonDestructive(true);
+  detail::build(operation);
+  if (!operation.IsDone() || operation.HasErrors()) {
+    throw std::runtime_error(kSeamFailure);
+  }
+  operation.SimplifyResult();
+  detail::FaceNamer namer(operation.Shape());
+  namer.carry(operation, body, copy);
+  namer.carry_by_containment(offset, 1.0e-6);
+  return namer;
+}
+
+ShapePtr offset_across_seams(const std::string& feature, const Shape& body,
+                             const std::vector<int>& chosen, const std::vector<Seam>& seams,
+                             double distance) {
+  // The moved faces with every face they continue into smoothly, offset
+  // together: there the neighbours can follow.
+  const std::vector<int> chain = detail::tangent_closure(body, chosen);
+  std::vector<std::pair<int, double>> moves;
+  for (int f : chain) {
+    moves.emplace_back(f, distance);
+  }
+  NCollection_List<TopoDS_Shape> moved;
+  const ShapePtr whole = move_faces(body, moves, {}, moved).shape();
+  // The region between the body and that offset, cut at the seams.
+  const bool inward = distance < 0.0;
+  const TopoDS_Shape region = inward ? boolean_of<BRepAlgoAPI_Cut>({body.occt(), whole->occt()})
+                                     : boolean_of<BRepAlgoAPI_Cut>({whole->occt(), body.occt()});
+  const double reach = 2.0 * std::abs(distance);
+  BRepAlgoAPI_Splitter splitter;
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(region);
+  NCollection_List<TopoDS_Shape> walls;
+  for (const Seam& seam : seams) {
+    walls.Append(seam_wall(body, seam, reach));
+  }
+  splitter.SetArguments(arguments);
+  splitter.SetTools(walls);
+  splitter.SetNonDestructive(true);
+  detail::build(splitter);
+  if (!splitter.IsDone() || splitter.HasErrors()) {
+    throw std::runtime_error(kSeamFailure);
+  }
+  // The cells at the moved faces: a face of the cell lies on one. A cell
+  // that also lies on a face that stays was not cut off at its seam.
+  std::vector<TopoDS_Shape> cells;
+  for (TopExp_Explorer solid(splitter.Shape(), TopAbs_SOLID); solid.More(); solid.Next()) {
+    bool at_moved = false;
+    bool at_kept = false;
+    for (TopExp_Explorer it(solid.Current(), TopAbs_FACE); it.More(); it.Next()) {
+      const std::optional<gp_Pnt> point = point_inside(TopoDS::Face(it.Current()));
+      if (!point) {
+        continue;
+      }
+      for (int f : chain) {
+        if (on_face(*point, body.face(f))) {
+          if (std::find(chosen.begin(), chosen.end(), f) != chosen.end()) {
+            at_moved = true;
+          } else {
+            at_kept = true;
+          }
+          break;
+        }
+      }
+    }
+    if (at_moved && at_kept) {
+      throw std::runtime_error(kSeamFailure);
+    }
+    if (at_moved) {
+      cells.push_back(solid.Current());
+    }
+  }
+  if (cells.empty()) {
+    throw std::runtime_error(kSeamFailure);
+  }
+  detail::FaceNamer namer = inward ? apply_cells<BRepAlgoAPI_Cut>(body, cells, *whole)
+                                   : apply_cells<BRepAlgoAPI_Fuse>(body, cells, *whole);
+  // The steps: named after the moved face whose seam is nearest,
+  // <feature>:step(<face>).
+  for (TopExp_Explorer it(namer.result(), TopAbs_FACE); it.More(); it.Next()) {
+    if (namer.named(it.Current())) {
+      continue;
+    }
+    const std::optional<gp_Pnt> point = point_inside(TopoDS::Face(it.Current()));
+    const Seam* nearest = &seams.front();
+    if (point) {
+      double best = -1.0;
+      for (const Seam& seam : seams) {
+        BRepExtrema_DistShapeShape gap(BRepBuilderAPI_MakeVertex(*point).Vertex(), seam.edge);
+        if (gap.IsDone() && (best < 0.0 || gap.Value() < best)) {
+          best = gap.Value();
+          nearest = &seam;
+        }
+      }
+    }
+    namer.add(it.Current(), face_name(feature, "step", detail::primary_name(body, nearest->face)));
+  }
+  namer.finish();
+  return namer.shape();
+}
+
 } // namespace
 
 ShapePtr offset_faces(const std::string& feature, const Shape& body,
                       const std::vector<std::string>& faces, double distance) {
-  (void)feature;
   detail::require_finite("offset distance", distance);
   if (distance == 0.0) {
     throw std::invalid_argument("the offset distance must not be zero");
@@ -795,16 +1089,53 @@ ShapePtr offset_faces(const std::string& feature, const Shape& body,
   detail::require_surfaces(body.occt(), "offset faces");
   const std::vector<int> chosen = detail::resolve_faces(body, faces, "faces to offset");
   return detail::run("offset faces", [&] {
-    std::vector<std::pair<int, double>> moves;
-    for (int f : chosen) {
-      moves.emplace_back(f, distance);
+    // Where a moved face continues smoothly into a face that stays (the
+    // pieces of a split face), the seam becomes a step (mitcad#1928).
+    const std::vector<Seam> seams = seams_of(body, chosen);
+    // The geometry kernel's offset gives faces tangent to each other one
+    // distance: beside a piece of the same surface it would move the
+    // pieces that stay as well, so it is not tried there.
+    const bool split_piece =
+        std::any_of(seams.begin(), seams.end(), [](const Seam& seam) { return seam.one_surface; });
+    std::exception_ptr failure;
+    try {
+      if (split_piece) {
+        throw std::runtime_error(kSeamFailure);
+      }
+      std::vector<std::pair<int, double>> moves;
+      for (int f : chosen) {
+        moves.emplace_back(f, distance);
+      }
+      NCollection_List<TopoDS_Shape> moved;
+      detail::FaceNamer namer = move_faces(body, moves, {}, moved);
+      namer.finish();
+      ShapePtr result = namer.shape();
+      check_result(result, "the offset");
+      return result;
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const Standard_OutOfMemory&) {
+      throw;
+    } catch (const std::runtime_error&) {
+      failure = std::current_exception();
+    } catch (const Standard_Failure&) {
+      failure = std::current_exception();
     }
-    NCollection_List<TopoDS_Shape> moved;
-    detail::FaceNamer namer = move_faces(body, moves, {}, moved);
-    namer.finish();
-    ShapePtr result = namer.shape();
-    check_result(result, "the offset");
-    return result;
+    if (seams.empty()) {
+      std::rethrow_exception(failure);
+    }
+    try {
+      ShapePtr result = offset_across_seams(feature, body, chosen, seams, distance);
+      check_result(result, "the offset");
+      return result;
+    } catch (const Cancelled&) {
+      throw;
+    } catch (const Standard_OutOfMemory&) {
+      throw;
+    } catch (const std::runtime_error&) {
+    } catch (const Standard_Failure&) {
+    }
+    throw std::runtime_error(kSeamFailure);
   });
 }
 

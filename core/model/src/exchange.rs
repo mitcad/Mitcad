@@ -50,9 +50,16 @@ pub use assembly_import::{ImportStructure, ImportedComponent, ImportedFile, file
 // the file (mitcad#1629).
 pub use assembly_import::ImportWrapper;
 
+// STEP files of the design's component tree (mitcad#1915).
+mod step_tree;
+
 // glTF files as mesh bodies and components (mitcad#1826).
 mod gltf_import;
 pub use gltf_import::{gltf_file_json, is_gltf_path};
+
+// .serp files as bodies by layer, blocks as components (mitcad#1870).
+mod serp_import;
+pub use serp_import::is_serp_path;
 
 // Animated USDZ export: time-sampled placements (mitcad#1597).
 pub mod usdz_animation;
@@ -62,9 +69,10 @@ pub use usdz_animation::{
 
 // The data the kernel reads and writes, below the model (mitcad#777).
 pub use mitcad_model_base::exchange::{
-    BodyKind, BodyPlacement, ExportBody, ExportFormat, ExportOptions, FaceMeshes, FileRead,
-    ImportAssembly, ImportBody, ImportInstance, ImportPart, LengthUnit, MeshTolerance, ReadOptions,
-    Refinement, RefinementPreset, StepSchema, TriangleMesh,
+    BodyKind, BodyPlacement, ExportBody, ExportDefinition, ExportFormat, ExportInstance,
+    ExportOptions, ExportTree, FaceMeshes, FileRead, ImportAssembly, ImportBody, ImportInstance,
+    ImportPart, LengthUnit, MeshTolerance, ReadOptions, Refinement, RefinementPreset, StepSchema,
+    TriangleMesh,
 };
 
 /// Where exported bodies are (mitcad#17, mitcad#19).
@@ -365,6 +373,8 @@ impl<K: Kernel> Document<K> {
                 number: None,
                 first_face: None,
                 cage: None,
+                material: None,
+                appearance: None,
             });
         }
         Ok(out)
@@ -559,7 +569,8 @@ impl<K: Kernel> Document<K> {
     /// those it places). A 3MF file holds the solids and meshes (of all
     /// bodies, sheet and empty bodies are left out) as the parts of one
     /// object, each placed where its component's occurrences place it; a
-    /// STEP file of moved bodies is an assembly of their parts; a USDZ file
+    /// STEP file keeps the components that place the bodies as its
+    /// assemblies, each written once (mitcad#1915, `step_tree`); a USDZ file
     /// keeps the occurrences as a hierarchy and the bodies' appearances (of
     /// all bodies, hidden ones are left out; `usdz`).
     pub fn export_bodies(
@@ -964,6 +975,20 @@ impl<K: Kernel> Document<K> {
                 shape: body.shape,
                 placements,
             });
+        }
+        // STEP keeps the design's components as its assemblies
+        // (mitcad#1915, `step_tree`): each body at the occurrences written.
+        if format == ExportFormat::Step && design {
+            let paths: Vec<Vec<Vec<OccurrenceUid>>> = chosen
+                .iter()
+                .map(|b| instances_of(b.uid).iter().map(|i| i.path.clone()).collect())
+                .collect();
+            if self.write_step_tree(path, &out, &paths, frame, options)? {
+                return Ok(Exported {
+                    bodies: chosen.iter().map(|b| b.uid).collect(),
+                    ..Exported::default()
+                });
+            }
         }
         self.kernel()
             .write_file(path, &out, options)

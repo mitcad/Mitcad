@@ -24,7 +24,14 @@ contact's, and the approximation of the line between failed or wandered
   the faces come tangent.
 - PerformElement: at a vertex where the faces of both edges come tangent
   the contour stops (downstream and upstream): each side is a stripe of
-  its own, ending in a point at the vertex.
+  its own, ending in a point at the vertex. Tangent within 5e-4 rad, the
+  width relative to the radius at which a walk into the vertex ends
+  (below), not only within the angular tolerance (mitcad#1883): two
+  cylinders of one radius whose axes miss each other by 1e-3 cross at
+  0.008 rad where their intersection curves come nearest, and the
+  rounding of those curves, walked through such a vertex as before, failed
+  when stopped there (OCCT's blend/bfuseblend B7). The block on the post
+  comes tangent within 7e-5 rad.
 - ContactsAtTangentEnd: a walk towards such a vertex also ends where its
   section has no width any more (its contacts within Tol of each other)
   within a hundredth of the radius of the vertex.
@@ -39,7 +46,7 @@ contact's, and the approximation of the line between failed or wandered
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
-index 93ed362..7bc592e 100644
+index 93ed3625..1904a2d4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
 @@ -779,40 +779,43 @@ static bool TangentExtremity(const TopoDS_Vertex&                    V,
@@ -114,26 +121,33 @@ index 93ed362..7bc592e 100644
    return (n1.Angle(n2) < tang);
  }
  
-@@ -1155,6 +1158,13 @@ bool ChFi3d_Builder::PerformElement(const occ::handle<ChFiDS_Spine>& Spine,
+@@ -1155,6 +1158,19 @@ bool ChFi3d_Builder::PerformElement(const occ::handle<ChFiDS_Spine>& Spine,
              if (OnAjoute && (degeneOnEc || TangentOnVertex(LVEc, Ev, myEFMap, ta)))
              {
                OnAjoute = ((!rev && av1v2 < ta) || (rev && (M_PI - av1v2) < ta));
 +              // (A vertex where the faces of both edges come tangent: the
 +              // rounding vanishes there, which no walk passes; the contour
-+              // stops, each side ending in a point at the vertex.)
-+              if (OnAjoute && degeneOnEc && TangentOnVertex(LVEc, Ev, myEFMap, ta))
++              // stops, each side ending in a point at the vertex. Only
++              // where the faces come tangent within 5e-4 rad, the width
++              // relative to the radius at which a walk into the vertex ends
++              // (ChFi3d_EndBeforeVanishing): faces crossing at a small angle,
++              // up to the angular tolerance, have a rounding there, which
++              // the walk passes as before.)
++              if (OnAjoute && degeneOnEc && TangentOnVertex(LVEc, Ev, myEFMap, ta)
++                  && TangentOnVertex(LVEc, Ec, myEFMap, 5.e-4) && TangentOnVertex(LVEc, Ev, myEFMap, 5.e-4))
 +              {
 +                OnAjoute = false;
 +              }
              }
              if (OnAjoute && StopsAtTurn(av1v2, rev, Ev))
              {
-@@ -1267,6 +1277,11 @@ bool ChFi3d_Builder::PerformElement(const occ::handle<ChFiDS_Spine>& Spine,
+@@ -1267,6 +1283,12 @@ bool ChFi3d_Builder::PerformElement(const occ::handle<ChFiDS_Spine>& Spine,
                if (OnAjoute && (degeneOnEc || TangentOnVertex(FVEc, Ev, myEFMap, ta)))
                {
                  OnAjoute = ((!rev && av1v2 < ta) || (rev && (M_PI - av1v2) < ta));
 +                // (The same at the contour's start.)
-+                if (OnAjoute && degeneOnEc && TangentOnVertex(FVEc, Ev, myEFMap, ta))
++                if (OnAjoute && degeneOnEc && TangentOnVertex(FVEc, Ev, myEFMap, ta)
++                    && TangentOnVertex(FVEc, Ec, myEFMap, 5.e-4) && TangentOnVertex(FVEc, Ev, myEFMap, 5.e-4))
 +                {
 +                  OnAjoute = false;
 +                }
@@ -141,10 +155,10 @@ index 93ed362..7bc592e 100644
                if (OnAjoute && StopsAtTurn(av1v2, rev, Ev))
                {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 066cf84..365654d 100644
+index 58b33a70..80092029 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -4191,16 +4191,25 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
+@@ -4217,16 +4217,25 @@ static bool ChFi3d_ConcaveTurnWedge(TopOpeBRepDS_DataStructure&
  static bool ContactsAtTangentEnd(const occ::handle<ChFiDS_SurfData>& SD,
                                   const bool                          isFirst,
                                   const TopoDS_Vertex&                V,
@@ -173,7 +187,7 @@ index 066cf84..365654d 100644
  }
  
  //=================================================================================================
-@@ -4270,6 +4279,11 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -4296,6 +4305,11 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
    // occ::handle<ChFiDS_Spine>&  Spine = Stripe->ChangeSpine();
    int    ii, nbed = Spine->NbEdges();
    double lastedlastp = Spine->LastParameter(nbed);
@@ -185,7 +199,7 @@ index 066cf84..365654d 100644
  
    TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
  
-@@ -5237,7 +5251,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5263,7 +5277,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        // short of the guide's end: past it both contacts would lie on the
        // faces beyond, a section of no width.
        if (!fini && !Spine->IsPeriodic() && Spine->IsTangencyExtremity(false)
@@ -194,7 +208,7 @@ index 066cf84..365654d 100644
        {
          fini = true;
        }
-@@ -5295,7 +5309,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5321,7 +5335,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        }
        // (The same at the spine's start.)
        if (!fini && !Spine->IsPeriodic() && Spine->IsTangencyExtremity(true)
@@ -204,7 +218,7 @@ index 066cf84..365654d 100644
          fini = true;
        }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index a53b083..e92474b 100644
+index fadf9d19..2c7d59f9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -33,6 +33,7 @@
@@ -231,7 +245,7 @@ index a53b083..e92474b 100644
  #include <math_Vector.hxx>
  #include <Precision.hxx>
  #include <TopExp.hxx>
-@@ -585,6 +588,178 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
+@@ -657,6 +660,178 @@ static void ChFi3d_CutSingularExtension(occ::handle<BRepBlend_Line>&     Lin,
    }
  }
  
@@ -410,7 +424,7 @@ index a53b083..e92474b 100644
  //=======================================================================
  // function : CompleteData
  // purpose  : Calculates curves and CommonPoints from the data
-@@ -2659,6 +2834,18 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
+@@ -2751,6 +2926,18 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
      }
    }
    ChFi3d_CutSingularExtension(Lin, Spine);

@@ -7,6 +7,7 @@
 // as the UI tests' logs give them (no separators, hidden entries or "&");
 // and the widgets that take Enter themselves, so that Enter does not
 // repeat the last command there.
+#include "UnitTests.hpp"
 #include "framework/EnterRepeat.hpp"
 #include "framework/MenuBarReveal.hpp"
 
@@ -159,3 +160,4 @@ int menuBarTests() {
   QCoreApplication::setApplicationName(application);
   return failures;
 }
+MITCAD_UNIT_TEST(menuBarTests);

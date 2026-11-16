@@ -45,6 +45,8 @@ std::optional<ChromeStyle> layoutPreference() {
 
 void setLayoutPreference(ChromeStyle style) { QSettings().setValue(kLayoutKey, chromeStyleName(style)); }
 
+void clearLayoutPreference() { QSettings().remove(kLayoutKey); }
+
 bool layoutChoosable() { return g_layoutChoosable; }
 
 void setLayoutChoosable(bool choosable) { g_layoutChoosable = choosable; }

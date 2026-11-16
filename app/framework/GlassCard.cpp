@@ -554,6 +554,22 @@ void GlassCard::setWidthAdjustable(int minimum) {
   m_grip->show();
 }
 
+void GlassCard::clearWidthAdjustable() {
+  if (m_grip != nullptr) {
+    m_grip->hide();
+  }
+}
+
+bool GlassCard::isWidthAdjustable() const { return m_grip != nullptr && !m_grip->isHidden(); }
+
+QRect GlassCard::coveredRect() const {
+  const QRect whole = slot();
+  if (!m_bare || mask().isEmpty()) {
+    return whole;
+  }
+  return mask().boundingRect().translated(whole.topLeft()).intersected(whole);
+}
+
 void GlassCard::placeGrip() {
   if (m_grip == nullptr) {
     return;

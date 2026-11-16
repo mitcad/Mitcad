@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. The owner's case of mitcad#1819, rebuilt from the report (opened with --open, never committed; tools/cli/chamfer-end-wall-reported-test.cmake): a nut cap whose threaded collar's bore holds a band 2.5 wide along three sides, flush with the collar's end face (Plane12 F175, Sketch55 F176, Extrude38 F177), and Chamfer7 (F178), 2.7 mm equal distance, on the bore's rim from one end wall of the band to the other. The end face beside the rim is narrower than the bevel (it runs onto the thread), and the rim's chain ends against the band's end walls, which lie on the bore's side of its wall: the geometry kernel failed at every size. Now the bevel ends on the end walls' planes, the end walls grown out to meet it: built, no warning or information, the volume 27939.977 (the body's 28341.589 before it)."},
+  {"expect": {"feature": "Chamfer7", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F178"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "F157.b0", "volume": 27939.977, "tolerance": 1e-5}}
+]

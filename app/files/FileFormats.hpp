@@ -24,6 +24,10 @@ enum class FileKind {
 };
 
 FileKind fileKind(const QString& path);
+// A design file of another format that the import process brings in with
+// its history (.ipt, .iam, .f3d, .f3z, .FCStd): File › Import offers it
+// into the open design as a component, or as a new design (mitcad#1894).
+bool importsAsComponent(FileKind kind);
 // A drawing that is an SVG one, not DXF (mitcad#473).
 bool isSvgDrawing(const QString& path);
 

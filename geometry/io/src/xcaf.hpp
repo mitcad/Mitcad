@@ -43,6 +43,21 @@ bool placed(const Body& body);
 void add_assembly(const occ::handle<TDocStd_Document>& document, const std::vector<Body>& bodies,
                   const std::string& name);
 
+// A shape whose representation item gets a name in a STEP file: a solid
+// of a part made of several bodies (mitcad#1915), which XCAF's writer
+// names only as a product.
+struct ItemName {
+  TopoDS_Shape shape;
+  std::string name;
+};
+
+// Adds a component tree (write_step_tree) as one assembly named `name` (a
+// free shape) and returns the solids to name once it is transferred.
+// Throws Error for a body without a shape, an instance of a definition
+// that does not exist or one placed inside itself.
+std::vector<ItemName> add_tree(const occ::handle<TDocStd_Document>& document, const StepTree& tree,
+                               const std::string& name);
+
 // The parts of a document as bodies: assemblies are flattened with their
 // placements and parts made of several solids are split into solids (see
 // read_step). Unnamed bodies are called Body1, Body2, ...

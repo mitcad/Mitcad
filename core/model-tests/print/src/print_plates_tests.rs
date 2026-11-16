@@ -1167,3 +1167,71 @@ fn an_occurrence_item_follows_its_occurrence_to_another_parent() {
     assert_eq!(plate["items"][0]["occurrence"], arm, "{plate}");
     assert_eq!(plate["pieces"], 3);
 }
+
+/// A slicer's own key in a plate's values (mitcad#1897): refused with the
+/// Mitcad key to write and the value in Mitcad's form, nothing stored; the
+/// key it names stores the value as a plate keeps it, under Mitcad's key.
+#[test]
+fn a_slicer_s_key_on_a_plate_names_the_key_to_write() {
+    let (mut doc, root_body, _, _) = plated();
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    command(&mut doc, json!({"cmd": "add_print_plate", "name": "Walls"}));
+    command(
+        &mut doc,
+        json!({"cmd": "place_on_plate", "plate": "Walls",
+               "items": [{"body": root_body.to_string()}]}),
+    );
+    let refused = |doc: &mut Document<MockKernel>, values: Value| {
+        doc.command(
+            &json!({"cmd": "edit_print_plate", "plate": "Walls", "values": values}).to_string(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let error = refused(&mut doc, json!({"wall_generator": "arachne"}));
+    assert!(
+        error.contains("wall_generator is no key of the Print Process set"),
+        "{error}"
+    );
+    assert!(
+        error.contains(
+            "Bambu Studio, OrcaSlicer and QIDI Studio key of perimeter_generator (Wall generator)"
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("write \"perimeter_generator\": \"arachne\" instead"),
+        "{error}"
+    );
+    assert!(error.contains("print_keys query"), "{error}");
+    // A key no slicer has: as before. One that slicers use for different
+    // settings: every candidate, none chosen.
+    let error = refused(&mut doc, json!({"wall_generatr": "arachne"}));
+    assert!(
+        error.contains("wall_generatr is no key of the Print Process set"),
+        "{error}"
+    );
+    assert!(!error.contains("perimeter_generator"), "{error}");
+    let error = refused(&mut doc, json!({"support_angle": 40}));
+    assert!(error.contains("support_material_angle"), "{error}");
+    assert!(error.contains("support_material_threshold"), "{error}");
+    // Nothing was stored.
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    assert_eq!(plates["plates"][1]["values"], json!([]), "{plates}");
+
+    // The key it names: stored under Mitcad's key, the plate's value of the
+    // body.
+    command(
+        &mut doc,
+        json!({"cmd": "edit_print_plate", "plate": "Walls",
+               "values": {"perimeter_generator": "arachne"}}),
+    );
+    let plates = query(&doc, json!({"query": "print_plates"}));
+    let values = plates["plates"][1]["values"].as_array().unwrap();
+    assert_eq!(values.len(), 1, "{plates}");
+    assert_eq!(values[0]["key"], "perimeter_generator");
+    assert_eq!(values[0]["value"], "arachne");
+    let walls = process_value(&doc, root_body, "perimeter_generator");
+    assert_eq!(walls["value"], "arachne", "{walls}");
+    assert_eq!(walls["from"], "plate");
+}

@@ -423,3 +423,41 @@ impl ExportOptions {
         }
     }
 }
+
+/// A design's component tree for a STEP export (mitcad#1915,
+/// [`Kernel::write_step_tree`]): each distinct component once, as a
+/// definition with its bodies and the instances of the definitions it
+/// places, so that the file keeps the components and writes a component
+/// placed several times once.
+#[derive(Debug, Clone)]
+pub struct ExportTree<'a, S> {
+    /// The definitions; `definitions[0]` is the design itself (the file's
+    /// top assembly, named after the file), which nothing places.
+    pub definitions: Vec<ExportDefinition<'a, S>>,
+}
+
+/// A component in an [`ExportTree`]: its name, its bodies in its own
+/// coordinates and the instances it places. Two occurrences of a component
+/// share a definition when they place the same bodies and the same
+/// instances at the same placements.
+#[derive(Debug, Clone)]
+pub struct ExportDefinition<'a, S> {
+    /// The component's name (empty for the design).
+    pub name: String,
+    /// Its bodies, each once per placement in the definition
+    /// ([`ExportBody::placements`]: the design's frame for the design's
+    /// own bodies, mitcad#1775) or once as it is without placements.
+    pub bodies: Vec<ExportBody<'a, S>>,
+    pub instances: Vec<ExportInstance>,
+}
+
+/// An instance of [`ExportTree::definitions`]`[definition]` in its parent
+/// definition: an occurrence's placement in its parent component (a
+/// rotation and a translation, millimetres) and the occurrence's name
+/// (`Pin:2`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportInstance {
+    pub definition: usize,
+    pub transform: Transform,
+    pub name: String,
+}

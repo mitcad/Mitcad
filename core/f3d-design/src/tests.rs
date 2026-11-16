@@ -3302,7 +3302,51 @@ fn extrusion_up_to_a_face() {
         ]),
     );
 
+    // A symmetric cut that starts on a construction plane (mitcad#1904):
+    // the two bytes after the plane's selection are 0 and 0.
+    d.obj(
+        971,
+        EXTRUDE,
+        cat(&[
+            &[0, 0],
+            &r(741),
+            &[0, 0],
+            &u32b(2),
+            &u32b(3),
+            &u32b(2),
+            &[0, 1],
+            &u32b(2),
+            &f64s(&[0.0, 0.0, 1.0]),
+            &[0; 7],
+            &u32b(1),
+            &[0; 9],
+            &u32b(0),
+            &[0; 6],
+            &[0],
+            &[0; 5],
+            &[0],
+            &u32b(0),
+            &[0],
+            &[0; 5],
+            &u32b(1),
+            &r(741),
+            &tail(8, "Extrude", 5, "", [0, 0, 0], 701),
+        ]),
+    );
+
     let seg = d.segment();
+    let on_plane = decode::extrude_fields(&seg, seg.object(971).unwrap()).unwrap();
+    assert_eq!(
+        (
+            on_plane.operation_code,
+            on_plane.extent_a,
+            on_plane.extent_b,
+            on_plane.start,
+            on_plane.start_entity,
+            on_plane.vector
+        ),
+        (2, 3, 2, Some(2), Some(741), Some([0.0, 0.0, 1.0]))
+    );
     let started = decode::extrude_fields(&seg, seg.object(970).unwrap()).unwrap();
     assert_eq!(
         (
@@ -4842,6 +4886,104 @@ fn occurrence_of_a_component_of_another_document() {
     );
     assert_eq!(super::build::urn_version("urn:x?version=12"), Some(12));
     assert_eq!(super::build::urn_version("urn:x"), None);
+}
+
+/// The placements of paths through an occurrence of a component of another
+/// document to occurrences inside it (mitcad#1892: a joint on a part inside
+/// an inserted design) are the paths', not the occurrence's own: they come
+/// apart as `_f3d.inside_placements`, and the occurrence's own placements
+/// are those of the object that names no level inside, whichever of the
+/// objects comes last.
+#[test]
+fn placements_of_paths_inside_an_inserted_design_are_kept_apart() {
+    let mut d = sample();
+    d.class(OCCURRENCE_PLACEMENTS, ROOT, 4);
+    let key = 0x0102_0304_0506_0708;
+    let identity = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    d.obj(
+        83,
+        OCCURRENCE,
+        cat(&[
+            &[0, 0],
+            &context_ref(0x7777, key, COMPONENT),
+            &[0],
+            &f64s(&identity),
+            &u32b(0),
+            &s16("124bea26-b9ef-4785-962e-5f51a19652ce"),
+            &r(84),
+        ]),
+    );
+    d.obj(84, OCCURRENCE_CONTAINER, cat(&[&[0, 0], &r(83), &r(2)]));
+    d.externals.push(super::writer::WriterExternal {
+        key,
+        guids: [
+            "7A3F46D6-B137-489D-84BA-42A1B0ED13DF".into(),
+            "f7d6678d-a812-4537-98bd-7db7eea2ea52".into(),
+        ],
+        urn: "urn:test:fs.file:vf.part?version=3".into(),
+        document_guid: "6bb3e201-b763-4428-a07d-12d3975a4494".into(),
+    });
+    // Turned half round about z, then a quarter about x, moved.
+    let first = [
+        -1.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let second = [
+        1.0, 0.0, 0.0, 4.0, 0.0, 0.0, -1.0, 5.0, 0.0, 1.0, 0.0, 6.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    // Two paths inside (to the occurrences 0x501 and 0x503 of the other
+    // document), the first item placing them, the second moving them;
+    // the occurrence's own path between them, the first item only.
+    let inside = |id: u64, inner: u64| {
+        (
+            id,
+            cat(&[
+                &[0, 0],
+                &r(83),
+                &context_ref(inner, key, OCCURRENCE),
+                &r(2),
+                &u32b(2),
+                &[1, 0],
+                &r(10),
+                &[0],
+                &f64s(&first),
+                &[1, 0],
+                &r(20),
+                &[0],
+                &f64s(&second),
+            ]),
+        )
+    };
+    let own = cat(&[&[0, 0], &r(83), &r(2), &u32b(1), &[1, 0], &r(10), &[1]]);
+    // Ids the sample does not use (its 90 and 91 are a body's blob).
+    for (id, data) in [inside(95, 0x501), (96, own), inside(97, 0x503)] {
+        d.obj(id, OCCURRENCE_PLACEMENTS, data);
+    }
+    let (m, b) = d.streams();
+    let design = Design::parse(&m, b).unwrap();
+    let v = serde_json::to_value(design.dump("assembly.f3d", "Design1")).unwrap();
+    let ext = v["occurrences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["isReferencedComponent"] == true)
+        .expect("the occurrence of the other document's component")
+        .clone();
+    let rows = |m: &[f64; 16]| json!([&m[0..4], &m[4..8], &m[8..12], &m[12..16]]);
+    assert_eq!(
+        ext["_f3d"]["placements"],
+        json!([{"index": 0, "object_id": 10, "transform": rows(&identity)}])
+    );
+    let steps = json!([
+        {"index": 0, "object_id": 10, "transform": rows(&first)},
+        {"index": 1, "object_id": 20, "transform": rows(&second)}
+    ]);
+    assert_eq!(
+        ext["_f3d"]["inside_placements"],
+        json!([{"inner": [0x501], "placements": steps},
+               {"inner": [0x503], "placements": steps}])
+    );
 }
 
 /// An input slot's role key carries the placement of the occurrence the

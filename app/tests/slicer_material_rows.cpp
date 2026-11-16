@@ -3,6 +3,7 @@
 // the FDM plastics first, each part grouped by where the material lives;
 // the bodies grouped by material into the 3MF's filaments, those without
 // a material of their own as one row that says so.
+#include "UnitTests.hpp"
 #include "print/SlicerMaterialRows.hpp"
 
 #include <cstdio>
@@ -149,3 +150,4 @@ int slicerMaterialRowsTests() {
   groups();
   return failures;
 }
+MITCAD_UNIT_TEST(slicerMaterialRowsTests);

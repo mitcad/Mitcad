@@ -83,6 +83,10 @@ public:
     // the rest).
     qreal maxHeightShare = 1.0;
     bool shown = true; // initially
+    // An upper left card's width for the view's width, asked on each
+    // layout (mitcad#1932: the Browser's card with the Rows background
+    // follows its rows); 0 or less, or null: `width`.
+    std::function<int(int viewWidth)> widthFor = nullptr;
   };
 
   static constexpr int kMargin = 12;

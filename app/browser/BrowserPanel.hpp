@@ -307,6 +307,10 @@ public:
   // coordinates: the rows' boxes in sight, the scroll bars shown and an
   // open rename editor.
   QRegion rowsRegion() const;
+  // The panel's width at which every row in sight shows its whole name on
+  // its box (mitcad#1932: the bare card widens to it, up to a limit); 0
+  // without rows in sight.
+  int rowsWidth() const;
   // The Rows background's vertical scroll bar at the left edge, beside the
   // rows' start (mitcad#425), instead of the tree's at the right: a bar of
   // the panel's own that mirrors the tree's, shown while the rows overflow

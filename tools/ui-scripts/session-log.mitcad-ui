@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: MIT
+# The session log and the hang marker (mitcad#1896), the first run, with
+# MITCAD_HANG_WATCHDOG_MS=1000 and the log folder of the test's own
+# (MITCAD_DEBUG_LOG_DIR):
+#   1. The session's log file is written from the start, its lines as the
+#      log has them.
+#   2. A few commands (Open Log Folder, Create Sketch, Fit): their lines in
+#      the file at once.
+#   3. A hang of 3 s (freeze-ui): the watchdog thread logs "UI not
+#      responding for 1 s" with the step as the last action, the UI thread
+#      "UI responding again after 3.x s" once it runs; both in the file.
+#   4. The process is killed (no clean end): its lock stays, which the next
+#      run (session-log-ended.mitcad-ui) finds.
+# Run by tools/ui-session-log-test.sh (Linux),
+# tools/ui-windows-session-log-test.ps1 (Windows) and
+# tools/ui-macos-session-log-test.sh (macOS), which check the files after.
+expect-ever 'View area'
+wait-idle
+expect-ever '^Session log: .*session-[0-9]{8}-[0-9]{6}-[0-9]+\.log$' 10
+expect-ever '^Hang watchdog: 1000 ms$' 10
+expect-session-log '^MitCad session log$'
+expect-session-log '^Started: .*, file 1$'
+expect-session-log 'info +Session log: '
+
+# 2. A few commands.
+mark
+command help.open_log_folder
+expect-log '^Open Log Folder: '
+expect-log '^Open URL \(test, not opened\): file:'
+command sketch.create
+expect-log '^Create Sketch: select a plane' 10
+key Escape
+wait-idle
+command view.fit
+wait-idle
+expect-session-log 'info +Open Log Folder: '
+expect-session-log 'Create Sketch: select a plane'
+
+# 3. A hang of 3 s.
+mark
+freeze-ui 3000
+expect-log '^UI not responding for [0-9]+ s \(last action: test step freeze-ui 3000 ms' 10
+expect-log '^UI responding again after [0-9]+\.[0-9] s$' 10
+expect-session-log 'warning +\[hang watchdog\] UI not responding for [0-9]+ s \(last action: test step freeze-ui 3000 ms'
+expect-session-log 'info +UI responding again after [0-9]+\.[0-9] s$'
+
+# 4. Ended without its clean end.
+kill

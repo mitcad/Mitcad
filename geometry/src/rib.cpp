@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 #include <Adaptor3d_TopolTool.hxx>
@@ -24,11 +25,13 @@
 #include <Bnd_Box.hxx>
 #include <Contap_Contour.hxx>
 #include <Contap_Line.hxx>
+#include <ElSLib.hxx>
 #include <GeomAPI_PointsToBSpline.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_SurfaceType.hxx>
 #include <GeomAdaptor_Surface.hxx>
+#include <Geom2d_Curve.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_Surface.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
@@ -43,8 +46,10 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Lin.hxx>
+#include <gp_Pnt2d.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Sphere.hxx>
 
@@ -461,13 +466,124 @@ void add_outlines(const TopoDS_Face& face, const gp_Dir& along, double length, s
   }
 }
 
+// A plane face of the bodies that a continuation leaves at a rim
+// (mitcad#1888): at an edge of the bodies between a face the tangent runs
+// into (a boss's wall) and a plane face it runs away from (its top face),
+// the points just past the edge pass over the plane face, yet below its
+// level they are closed off by the first. The plane, extended past the
+// edge, caps what the end fills there: the end fills up to the wall below
+// the top face's level, so that the fill's top lies in the top face and
+// meets it along the rim, with no step between the line along the tangent
+// through the rim and the top face. A curved face the tangent runs away
+// from keeps that line as its bound.
+struct Cap {
+  TopoDS_Face face; // the plane extended past the rim, to divide by
+  gp_Pln plane;     // its normal out of the bodies
+};
+
+// The normal of the face where the edge is at the middle of its range,
+// pointing out of the solid the face bounds, and that point; null when it
+// has none there.
+gp_Vec normal_on_edge(const TopoDS_Edge& edge, const TopoDS_Face& face, gp_Pnt& point) {
+  double first = 0.0;
+  double last = 0.0;
+  const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+  if (pcurve.IsNull()) {
+    return gp_Vec();
+  }
+  const gp_Pnt2d uv = pcurve->Value((first + last) / 2.0);
+  const BRepAdaptor_Surface surface(face);
+  gp_Vec du;
+  gp_Vec dv;
+  surface.D1(uv.X(), uv.Y(), point, du, dv);
+  gp_Vec normal = du.Crossed(dv);
+  if (normal.Magnitude() <= Precision::Confusion()) {
+    return gp_Vec();
+  }
+  normal.Normalize();
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  return normal;
+}
+
+// The cap of a plane face of the bodies the tangent runs away from at
+// `at`, with `outward` its normal out of the bodies: the plane `length`
+// each way from `at`. None for a face of any other kind.
+std::optional<Cap> cap_of(const TopoDS_Face& face, const gp_Pnt& at, const gp_Vec& outward, double length) {
+  const BRepAdaptor_Surface surface(face);
+  if (surface.GetType() != GeomAbs_Plane) {
+    return std::nullopt;
+  }
+  gp_Pln plane = surface.Plane();
+  gp_Ax3 axes = plane.Position();
+  if (gp_Vec(axes.Direction()).Dot(outward) < 0.0) {
+    axes.ZReverse();
+  }
+  plane.SetPosition(axes);
+  double u = 0.0;
+  double v = 0.0;
+  ElSLib::Parameters(plane, at, u, v);
+  BRepBuilderAPI_MakeFace maker(plane, u - length, u + length, v - length, v + length);
+  if (!maker.IsDone()) {
+    return std::nullopt;
+  }
+  return Cap{maker.Face(), plane};
+}
+
+// Where the point lies under the cap (on the bodies' side of its plane),
+// the tangent `along` turned into the plane: the way the point reaches the
+// faces below the cap's level. None above it, or where the tangent runs
+// straight through the plane.
+std::optional<gp_Dir> under(const Cap& cap, const gp_Pnt& point, const gp_Dir& along) {
+  const gp_Vec normal(cap.plane.Axis().Direction());
+  if (gp_Vec(cap.plane.Location(), point).Dot(normal) >= -Precision::Confusion()) {
+    return std::nullopt;
+  }
+  const gp_Vec flat = gp_Vec(along) - normal * gp_Vec(along).Dot(normal);
+  if (flat.Magnitude() <= 1.0e-6) {
+    return std::nullopt;
+  }
+  return gp_Dir(flat);
+}
+
+// The cap moved by `offset` (a copy).
+Cap moved_cap(const Cap& cap, const gp_Vec& offset) {
+  gp_Trsf move;
+  move.SetTranslation(offset);
+  return Cap{TopoDS::Face(cap.face.Moved(TopLoc_Location(move))), cap.plane.Translated(offset)};
+}
+
+// True when the cap's plane is one of the caps' already.
+bool has_plane(const std::vector<Cap>& caps, const Cap& cap) {
+  for (const Cap& other : caps) {
+    if (other.plane.Axis().IsParallel(cap.plane.Axis(), 1.0e-9) &&
+        other.plane.Distance(cap.plane.Location()) <= Precision::Confusion()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// How a face of the bodies faces the tangent at an edge: -1 when the
+// tangent runs into it, 1 when away from it, 0 along it. `normal` points
+// out of the piece, into the bodies.
+int facing(const gp_Vec& normal, const gp_Dir& along) {
+  constexpr double kSlant = 1.0e-4;
+  const double dot = -normal.Dot(gp_Vec(along));
+  return dot < -kSlant ? -1 : (dot > kSlant ? 1 : 0);
+}
+
 // The faces that divide a piece of a continuation (mitcad#1857) into parts
 // whose points all reach the faces of the bodies along `along`, or all
 // pass them: swept back against `along` from the edges where two faces of
 // the bodies meet in the piece (a top face's rim) and from the outlines of
 // their curved faces. Edges on the band's own faces and seams divide
-// nothing.
-std::vector<TopoDS_Shape> reach_bounds(const Shape& piece, const gp_Dir& along, double length) {
+// nothing. At a rim where the tangent runs into one face and away from the
+// other, a plane, the plane's cap (mitcad#1888) is added to `caps` and
+// divides too.
+std::vector<TopoDS_Shape> reach_bounds(const Shape& piece, const gp_Dir& along, double length,
+                                       std::vector<Cap>& caps) {
   ShapeMap band;
   std::vector<TopoDS_Face> stops;
   for (int i = 0; i < piece.face_count(); ++i) {
@@ -494,6 +610,21 @@ std::vector<TopoDS_Shape> reach_bounds(const Shape& piece, const gp_Dir& along, 
     }
     if (!between_stops) {
       continue;
+    }
+    if (faces_of_edge.FindFromIndex(i).Size() == 2) {
+      const TopoDS_Face& one = TopoDS::Face(faces_of_edge.FindFromIndex(i).First());
+      const TopoDS_Face& other = TopoDS::Face(faces_of_edge.FindFromIndex(i).Last());
+      gp_Pnt at;
+      const gp_Vec n1 = normal_on_edge(edge, one, at);
+      const gp_Vec n2 = normal_on_edge(edge, other, at);
+      if (n1.Magnitude() > 0.5 && n2.Magnitude() > 0.5 && facing(n1, along) * facing(n2, along) < 0) {
+        const bool first_away = facing(n1, along) > 0;
+        const std::optional<Cap> cap = cap_of(first_away ? one : other, at, first_away ? -n1 : -n2, length);
+        if (cap && !has_plane(caps, *cap)) {
+          tools.push_back(cap->face);
+          caps.push_back(*cap);
+        }
+      }
     }
     // A line along the tangent sweeps no face.
     const BRepAdaptor_Curve curve(edge);
@@ -579,6 +710,21 @@ private:
   double m_length;
 };
 
+// Whether the point reaches a face of the bodies (as the rays find them)
+// along the tangent, or lies under one of the caps and reaches one along
+// the cap's surface (mitcad#1888).
+bool reaches(const Reach& rays, const std::vector<Cap>& caps, const gp_Pnt& point, const gp_Dir& along) {
+  if (rays.meets(point, along)) {
+    return true;
+  }
+  for (const Cap& cap : caps) {
+    if (const std::optional<gp_Dir> flat = under(cap, point, along); flat && rays.meets(point, *flat)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // The faces of the shapes whose bounds meet the piece's, added to `tools`.
 void add_faces_near(const std::vector<TopoDS_Shape>& shapes, const Shape& piece, std::vector<TopoDS_Shape>& tools) {
   const Bnd_Box around = detail::bounds_of(piece.occt());
@@ -604,10 +750,13 @@ bool touching(const Shape& a, const Shape& b) {
 // (it runs on to the far end of the band, or up to the next faces past
 // their depth: the continuation passes over or beside the bodies) keeps
 // only the parts whose points reach a face along the tangent and that join
-// the rib through such parts (mitcad#1857); with a positive offset, the
-// points must also reach the bodies where they are (mitcad#1865). Null when there is nothing
-// between the tip and the faces, or with a note when no part of the
-// continuation meets a face.
+// the rib through such parts (mitcad#1857), or that lie under the cap of a
+// rim the continuation passes over and reach the bodies along it, so that
+// the fill ends in the top face's level with no step at the rim
+// (mitcad#1888); with a positive offset, the points must also reach the
+// bodies where they are (mitcad#1865), under their caps where they are.
+// Null when there is nothing between the tip and the faces, or with a note
+// when no part of the continuation meets a face.
 ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, const gp_Vec& depth, double low,
                    double high, double length, std::vector<std::pair<std::string, gp_Pnt>>& notes) {
   if (spec.bodies.empty()) {
@@ -685,9 +834,17 @@ ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, c
     if (sunk && !bare_rays) {
       bare_rays = std::make_unique<Reach>(bodies, length);
     }
-    std::vector<TopoDS_Shape> bounds = reach_bounds(*piece, end.outward, length);
+    std::vector<Cap> caps;
+    std::vector<TopoDS_Shape> bounds = reach_bounds(*piece, end.outward, length, caps);
+    // The caps of the bodies where they are: the rims of the moved faces
+    // moved back.
+    std::vector<Cap> bare_caps;
     if (sunk) {
       add_faces_near(bodies, *piece, bounds);
+      for (const Cap& cap : caps) {
+        bare_caps.push_back(moved_cap(cap, gp_Vec(end.outward) * -spec.end_offset));
+        bounds.push_back(bare_caps.back().face);
+      }
     }
     std::vector<ShapePtr> parts;
     try {
@@ -701,7 +858,8 @@ ShapePtr extension(const RibSpec& spec, const Shape& drawn, const RibEnd& end, c
         continue;
       }
       const gp_Pnt inside = detail::interior_point(part->occt());
-      if (rays->meets(inside, end.outward) && (!bare_rays || bare_rays->meets(inside, end.outward))) {
+      if (reaches(*rays, caps, inside, end.outward) &&
+          (!bare_rays || reaches(*bare_rays, bare_caps, inside, end.outward))) {
         reaching.push_back(part);
       }
     }

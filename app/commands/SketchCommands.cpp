@@ -931,8 +931,9 @@ void addChamfer(CommandRegistry& registry, SketchController& c) {
 }
 
 // Where the points of sketch entities are, each point once, in the order
-// the entities name them: "p2 (-20.000, 0.000), p3 (20.000, 10.000)";
-// "none" without points.
+// the entities name them: "p2 (-20.000, 0.000), p3 (20.000, 10.000)"; a
+// text by its anchor, "t5 (10.000, 0.000)" (mitcad#1911); "none" without
+// points.
 QString pointPositions(const sketch::SketchModel& model, const QStringList& entities) {
   // No "-0.000" for a coordinate the solver left a hair below zero.
   const auto coordinate = [](double v) { return QString::number(std::abs(v) < 5e-4 ? 0.0 : v, 'f', 3); };
@@ -945,6 +946,8 @@ QString pointPositions(const sketch::SketchModel& model, const QStringList& enti
     seen << id;
     if (const sketch::PointData* p = model.point(id)) {
       shown << QStringLiteral("%1 (%2, %3)").arg(id, coordinate(p->at.x), coordinate(p->at.y));
+    } else if (const auto anchor = sketch::textAnchor(model, id)) {
+      shown << QStringLiteral("%1 (%2, %3)").arg(id, coordinate(anchor->x), coordinate(anchor->y));
     }
   };
   for (const QString& id : entities) {
@@ -983,7 +986,7 @@ void addMove(CommandRegistry& registry, SketchController& c) {
                                  CommandDef::Kind::Feature);
   def.sketchCommand = true;
   def.shortcut = QKeySequence(Qt::Key_M);
-  def.tooltip = QObject::tr("Moves or copies sketch geometry; a move keeps its constraints");
+  def.tooltip = QObject::tr("Moves or copies sketch geometry and texts; a move keeps its constraints");
   const QVector<QPair<QString, QString>> types = {{QStringLiteral("translate"), QObject::tr("Translate")},
                                                    {QStringLiteral("rotate"), QObject::tr("Rotate")},
                                                    {QStringLiteral("point_to_point"), QObject::tr("Point to Point")}};
@@ -1008,9 +1011,11 @@ void addMove(CommandRegistry& registry, SketchController& c) {
     return input;
   };
   def.inputs = {
+      // Texts and QR codes too (mitcad#1911): the model moves a text's
+      // anchor, or the rectangle of a text in a frame.
       selectionInput(QStringLiteral("entities"), QObject::tr("Objects"),
                      SelectKind::SketchCurve | SelectKind::SketchPoint, 1, 0)
-          .withAccepts(ofSketch(c)),
+          .withAccepts([&c](const SelectionItem& item) { return item.owner == c.uid(); }),
       choiceInput(QStringLiteral("type"), QObject::tr("Move Type"), types, QStringLiteral("translate")),
       valueInput(QStringLiteral("dx"), QObject::tr("X Distance"), ValueKind::Length, QStringLiteral("0 mm"))
           .withVisible(typeIs("translate")),
@@ -1039,7 +1044,17 @@ void addMove(CommandRegistry& registry, SketchController& c) {
     for (const SelectionItem& item : entities) {
       *objects << item.name;
     }
-    cmd.insert(QStringLiteral("entities"), names(entities));
+    // A text on a path follows its curve (mitcad#1911): the model refuses
+    // it, the panel says so on the Objects.
+    if (!sketch::textOnPath(c.model(), *objects).isEmpty()) {
+      return Built::failure(QObject::tr("A text on a path follows its curve: move the curve instead."),
+                            QStringLiteral("entities"));
+    }
+    const sketch::MoveObjects split = sketch::moveObjects(c.model(), *objects);
+    cmd.insert(QStringLiteral("entities"), QJsonArray::fromStringList(split.entities));
+    if (!split.texts.isEmpty()) {
+      cmd.insert(QStringLiteral("texts"), QJsonArray::fromStringList(split.texts));
+    }
     const QString type = s.choice(QStringLiteral("type"));
     if (type == QStringLiteral("rotate")) {
       // No Pivot Point: the model turns about the objects' middle
@@ -1381,6 +1396,28 @@ void addQrCode(CommandRegistry& registry, SketchController& c) {
   registry.add(def);
 }
 
+// Edit Text's and Edit QR Code's Position X and Y (mitcad#1911): where a
+// text without a frame or a path is (its anchor, the model's `at`), a
+// code's lower left corner; a changed one is sent as `at`.
+InputDef positionInput(const QString& id, const QString& label) {
+  return valueInput(id, label, ValueKind::Length, QStringLiteral("0 mm"))
+      .withTooltip(QObject::tr("Where the text's anchor is in the sketch; a QR code's lower left corner"));
+}
+
+void setPosition(CommandState& s, const sketch::TextData& text, const CommandContext& context) {
+  if (const auto at = sketch::freeTextPosition(text)) {
+    const double unit = context.unitMillimetres();
+    s.setText(QStringLiteral("x"), QString::number(at->x / unit, 'g', 12));
+    s.setText(QStringLiteral("y"), QString::number(at->y / unit, 'g', 12));
+  }
+}
+
+void insertChangedPosition(QJsonObject& cmd, const CommandState& s, const sketch::TextData& text) {
+  if (const auto at = sketch::changedTextPosition(text, s.value(QStringLiteral("x")), s.value(QStringLiteral("y")))) {
+    cmd.insert(QStringLiteral("at"), QJsonArray{at->x, at->y});
+  }
+}
+
 // Edit QR Code (mitcad#473): a code's content, module size and error
 // correction (`sketch.edit_code`); a double-click on the code opens it.
 void addEditCode(CommandRegistry& registry, SketchController& c) {
@@ -1399,6 +1436,9 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
       textInput(QStringLiteral("content"), QObject::tr("Content")),
       valueInput(QStringLiteral("module"), QObject::tr("Module Size"), ValueKind::Length, QStringLiteral("1 mm")),
       choiceInput(QStringLiteral("ecc"), QObject::tr("Error Correction"), kCodeLevels, QStringLiteral("M")),
+      // Where the code's lower left corner is (mitcad#1911).
+      positionInput(QStringLiteral("x"), QObject::tr("Position X")),
+      positionInput(QStringLiteral("y"), QObject::tr("Position Y")),
   };
   def.init = [&c, lookup](CommandState& s, const CommandContext& context) {
     const Selection& picked = s.items(QStringLiteral("code"));
@@ -1409,10 +1449,12 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
     s.setText(QStringLiteral("content"), t->text);
     s.setText(QStringLiteral("module"), QString::number(t->height / context.unitMillimetres(), 'g', 12));
     s.setChoice(QStringLiteral("ecc"), t->ecc);
+    setPosition(s, *t, context);
   };
   def.build = [&c, lookup](const CommandState& s, const CommandContext&) -> Built {
     const Selection& picked = s.items(QStringLiteral("code"));
-    if (picked.isEmpty() || lookup(c.model(), picked.first().name) == nullptr) {
+    const sketch::TextData* code = picked.isEmpty() ? nullptr : lookup(c.model(), picked.first().name);
+    if (code == nullptr) {
       return Built::failure(QObject::tr("Pick a QR code."), QStringLiteral("code"));
     }
     const QString content = s.text(QStringLiteral("content"));
@@ -1424,6 +1466,7 @@ void addEditCode(CommandRegistry& registry, SketchController& c) {
     cmd.insert(QStringLiteral("text"), content);
     cmd.insert(QStringLiteral("module"), s.value(QStringLiteral("module")));
     cmd.insert(QStringLiteral("ecc"), s.choice(QStringLiteral("ecc")));
+    insertChangedPosition(cmd, s, *code);
     return Built::of(cmd);
   };
   def.describe = [](const CommandState& s, const CommandContext&) {
@@ -1463,6 +1506,9 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
       valueInput(QStringLiteral("height"), QObject::tr("Height"), ValueKind::Length, QStringLiteral("5")),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("0 deg"))
           .withVisible(free),
+      // Where a text without a frame or a path is (mitcad#1911).
+      positionInput(QStringLiteral("x"), QObject::tr("Position X")).withVisible(free),
+      positionInput(QStringLiteral("y"), QObject::tr("Position Y")).withVisible(free),
       fontInput(c),
       checkInput(QStringLiteral("bold"), QObject::tr("Bold")),
       checkInput(QStringLiteral("italic"), QObject::tr("Italic")),
@@ -1502,6 +1548,7 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     s.setText(QStringLiteral("value"), t->value);
     s.setText(QStringLiteral("height"), QString::number(t->height / context.unitMillimetres(), 'g', 12));
     s.setText(QStringLiteral("angle"), QStringLiteral("%1 deg").arg(t->angle * 180.0 / 3.14159265358979323846, 0, 'g', 12));
+    setPosition(s, *t, context);
     if (!t->fontFile.isEmpty()) {
       // The file where it is now: where it was read, or one of the same
       // name in the font folders.
@@ -1547,6 +1594,10 @@ void addEditText(CommandRegistry& registry, SketchController& c) {
     cmd.insert(QStringLiteral("height"), s.value(QStringLiteral("height")));
     if (!std::isnan(s.value(QStringLiteral("angle")))) {
       cmd.insert(QStringLiteral("angle"), s.value(QStringLiteral("angle")));
+    }
+    // A changed Position of a text without a frame or a path (mitcad#1911).
+    if (edited != nullptr && s.items(QStringLiteral("path")).isEmpty()) {
+      insertChangedPosition(cmd, s, *edited);
     }
     const QString fontFile = sketch::fontFileOfChoice(s.choice(QStringLiteral("font")));
     if (fontFile.isEmpty()) {

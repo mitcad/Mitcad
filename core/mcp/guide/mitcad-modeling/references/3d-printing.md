@@ -66,6 +66,22 @@ cap. Make each kind of fit its own user parameter (`add_parameter` with
 `min`, `max` and `step`, and a `comment` saying per side or across), so
 that one test print tunes every fit of that kind.
 
+A fit that holds where the parts sit can still block the way in. For
+each part pushed or turned into place after printing (a peg into its
+hole, a lid onto its rim, a keyed part turned from its key angle), run
+`assembly_path` on the exact shapes rather than on exported meshes: it
+slides the body along its joint axis (`slide` with `direction` and
+`distance`) or turns it about an axis (`turn` with `axis` and `angle` in
+radians) past the bodies in `against`, and answers the first `hit` (the
+step, how far the body gets, the bodies and faces that meet), the
+`min_clearance` along the way and `touches_at_end` when it reaches its
+seat. Bodies are taken where the design places them, also an
+occurrence's.
+
+```json
+{"query": "assembly_path", "body": "Peg", "against": ["Base"], "slide": {"direction": [0, 0, -1], "distance": 12}}
+```
+
 Use `printed_fit_parameters` to discover MitCad's fit names and defaults;
 use `parameters` to check any existing values before using the names in
 expressions. Use
@@ -171,7 +187,9 @@ Distinguish modeled ears from a slicer's brim when estimating plate space.
    0.8 mm is an analysis threshold, not a strength certificate. The
    MCP summary suffices until a flagged region needs closer inspection.
    For bodies printed in place, run `print_min_gap` (by `plate` or
-   `bodies`) and widen every narrow gap it reports.
+   `bodies`) and widen every narrow gap it reports. For parts assembled
+   after printing, run `assembly_path` along each joint's way in and fix
+   every `hit`; a `certified` false asks for more `steps`.
 4. Check `build_volume` against the selected printer and `print_plates`
    for the intended grouping. An item is on one plate at most:
    `place_on_plate` moves one from another plate, and its result's

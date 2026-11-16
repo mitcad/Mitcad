@@ -5,6 +5,7 @@
 // another sketch or of a text that is gone names none. The item Edit Text's
 // input keeps for such a region is the text's curve pick, and an input made
 // as Edit Text's takes the region selected before it.
+#include "UnitTests.hpp"
 #include "sketch/SketchModel.hpp"
 
 #include <cstdio>
@@ -133,3 +134,4 @@ int sketchTextPickTests() {
   inputTests();
   return failures;
 }
+MITCAD_UNIT_TEST(sketchTextPickTests);

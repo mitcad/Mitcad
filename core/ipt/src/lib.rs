@@ -47,6 +47,8 @@ pub mod testdata;
 #[doc(hidden)]
 pub mod testdesign;
 pub mod text;
+// The translation report of a converted file (mitcad#1913).
+pub mod translation;
 
 use std::fmt;
 

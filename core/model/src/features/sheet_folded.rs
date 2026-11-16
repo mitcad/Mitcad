@@ -118,6 +118,36 @@ pub enum SheetFlangeCorner {
 /// of the wall it lies over (mm, mitcad#1410).
 pub const HALF_OPEN_SEAM: f64 = 1e-5;
 
+/// How the walls of a flange on several edges meet where their edges do
+/// (mitcad#1872). Walls are cut normal to their surfaces, as a laser cuts
+/// sheet metal:
+///
+/// - `bisect`: each flange stays on its side of the plane that bisects the
+///   corner, half the corner gap from it (walls, and the bends, which end
+///   square where all their material clears that plane);
+/// - `earlier_runs_past`: the wall of the edge earlier in the flange's list
+///   runs on to the other wall's outer surface, and the other wall ends
+///   the corner gap short of the passing wall's inner surface;
+/// - `later_runs_past`: the same with the later edge's wall passing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetMiter {
+    #[default]
+    Bisect,
+    EarlierRunsPast,
+    LaterRunsPast,
+}
+
+/// The miter of one corner of a flange on several edges (mitcad#1872), in
+/// place of the flange's own `miter` there: `edges` are the indices of the
+/// two edges that meet (0 is `boundary`, 1 the first of `boundaries`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetMiterCorner {
+    pub edges: [u32; 2],
+    pub miter: SheetMiter,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetLength<P> {
@@ -165,6 +195,33 @@ pub struct SheetFlangeDef<P = ParamId> {
     /// of `length`, `offsets` and `width`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<FeatureUid>,
+    /// Further straight boundaries after `boundary` (mitcad#1872): one
+    /// wall on each, all of the flange's angle, length, position and
+    /// radius. The edges are connected at their ends (at a common vertex,
+    /// or across the side of a bend between their faces); where two of
+    /// them meet, their walls are mitred ([`SheetMiter`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<BoundaryRef>,
+    /// The gap between the walls at a corner of a flange on several edges
+    /// (or between its wall and an existing flange's wall it meets); none:
+    /// the sheet's thickness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_gap: Option<P>,
+    /// How the walls meet at the corners; none: `bisect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miter: Option<SheetMiter>,
+    /// Corners whose miter differs from `miter`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub corner_miters: Vec<SheetMiterCorner>,
+}
+
+impl<P> SheetFlangeDef<P> {
+    /// The flange's edges in order: `boundary`, then `boundaries`.
+    pub fn edges(&self) -> Vec<&BoundaryRef> {
+        std::iter::once(&self.boundary)
+            .chain(&self.boundaries)
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -345,6 +402,14 @@ impl<P> SheetFlangeDef<P> {
                 .transpose()?,
             corner: self.corner,
             profile: self.profile,
+            boundaries: self.boundaries.clone(),
+            corner_gap: self
+                .corner_gap
+                .as_ref()
+                .map(|p| f("corner_gap", p))
+                .transpose()?,
+            miter: self.miter,
+            corner_miters: self.corner_miters.clone(),
         })
     }
 }
@@ -520,6 +585,9 @@ impl FeatureInfo for SheetFlangeDef {
         let mut r = References::default();
         r.body(self.body);
         boundary_ref(&mut r, &self.boundary);
+        for b in &self.boundaries {
+            boundary_ref(&mut r, b);
+        }
         if let Some(profile) = self.profile {
             r.features.insert(profile);
         }
@@ -528,6 +596,22 @@ impl FeatureInfo for SheetFlangeDef {
     fn check(&self, c: &CheckContext<'_>) -> Result<(), String> {
         if let Some(profile) = self.profile {
             c.sketch(profile)?;
+        }
+        let edges = self.edges();
+        for (i, edge) in edges.iter().enumerate() {
+            if edges[..i].contains(edge) {
+                return Err("The flange's edges include the same edge twice.".into());
+            }
+        }
+        for corner in &self.corner_miters {
+            let [a, b] = corner.edges;
+            if a == b || a as usize >= edges.len() || b as usize >= edges.len() {
+                return Err(
+                    "A corner's miter names edges the flange does not have; a corner is two \
+                     different edges of the flange."
+                        .into(),
+                );
+            }
         }
         checked(c, self.body, self.references())
     }

@@ -75,6 +75,12 @@ end point, taken as crossing) and in `ChFi3d_StripeEdgeInter`. Such a pair
 on a strip face between their edges is recorded as 0016's ride (the face
 standing for the support), so that the blends meet on the line and the face
 vanishes; caps tangent at their own end are not taken as crossing.
+Not where another rounding reaches a vertex of the two edges (mitcad#1883,
+in 0270's part of the code): a box 100 wide whose top's two edges and two
+vertical edges at their ends are rounded with 50 (OCCT's bug119) came out
+invalid, its corners built round the top that vanishes. Without the ride
+the corners cut the roundings by each other: valid, 809366.2 against the
+two roundings' 809366.23 computed apart (`test_fillet_occt_cases.cpp`).
 
 ## 0200: a walked blend about a standing contact
 
@@ -183,7 +189,8 @@ point inside the face where both corners end, having cut the face off there
 (the edge of the face at the end prolonged across the root). At such a point
 each corner made its own point: the later stripe's is made the earlier one's
 throughout the data structure, so that the face's wire closes there. The
-face keeps its part past the line's ends.
+face keeps its part past the line's ends. Neither pair is recorded where
+another stripe reaches a vertex of the two edges (see 0153, mitcad#1883).
 
 ### 0271-chfi3d-roundings-cut-by-each-other-where-their-contacts-cross
 

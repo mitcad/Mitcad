@@ -342,6 +342,13 @@ QString snapHint(const QJsonObject& answer) {
 // "Corner of Tube 2"; never its ids.
 QString pickWords(const QString& seen, const QJsonObject& pick, const QString& body) {
   const QString of = body.isEmpty() ? DrawingWorkspace::tr("a body") : body;
+  // An extreme point of a curve, a curved face's outline (mitcad#1909).
+  if (pick.contains(QStringLiteral("extreme"))) {
+    return DrawingWorkspace::tr("Extreme point of %1").arg(of);
+  }
+  if (pick.contains(QStringLiteral("outline"))) {
+    return DrawingWorkspace::tr("Outline of %1").arg(of);
+  }
   if (seen == QStringLiteral("point") || seen == QStringLiteral("center line")) {
     return pick.value(QStringLiteral("point")).toString() == QStringLiteral("center")
                ? DrawingWorkspace::tr("Center of %1").arg(of)
@@ -667,6 +674,13 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
          {QStringLiteral("drawing"), m_drawing},
          {QStringLiteral("view"), view},
          {QStringLiteral("center"), QJsonArray{center.x(), center.y()}}});
+  });
+  // A view's label dragged (mitcad#1909): kept as its offset from its place.
+  connect(m_sheetView, &DrawingSheetView::viewLabelMoved, this, [this](int view, QPointF delta) {
+    run({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_view")},
+         {QStringLiteral("drawing"), m_drawing},
+         {QStringLiteral("view"), view},
+         {QStringLiteral("label_move"), QJsonArray{delta.x(), delta.y()}}});
   });
   connect(m_sheetView, &DrawingSheetView::toolCancelled, this, [this] { escape(); });
   connect(m_sheetView, &DrawingSheetView::placing, this, [this] {
@@ -2141,6 +2155,11 @@ void DrawingWorkspace::addWanted(QJsonObject& query, const QHash<QString, QStrin
   if (type != QStringLiteral("dimension")) {
     query.insert(QStringLiteral("type"), type);
   }
+  // A dimension's second pick also finds the extreme points of circles and
+  // round faces, and those along the line from its first (mitcad#1909).
+  if ((type == QStringLiteral("dimension") || type == QStringLiteral("linear")) && m_pickPoints.size() == 1) {
+    query.insert(QStringLiteral("from"), QJsonArray{m_pickPoints.first().x(), m_pickPoints.first().y()});
+  }
 }
 
 bool DrawingWorkspace::picksAuto() const {
@@ -3045,6 +3064,15 @@ void DrawingWorkspace::contextMenu(QPointF at, const QPoint& global) {
         const QString degrees = QString::number(turned + by, 'g', 10);
         add(tr(text), later([this, viewId, degrees] { editView(viewId, QStringLiteral("rotation"), degrees); }));
       }
+    }
+    // A label dragged away (mitcad#1909): back under the view.
+    if (shown != nullptr && shown->json.value(QStringLiteral("label_offset")).isArray()) {
+      add(tr("Reset Label Position"), later([this, viewId] {
+            run({{QStringLiteral("cmd"), QStringLiteral("edit_drawing_view")},
+                 {QStringLiteral("drawing"), m_drawing},
+                 {QStringLiteral("view"), viewId},
+                 {QStringLiteral("label_offset"), QJsonArray{0.0, 0.0}}});
+          }));
     }
     menu.addSeparator();
     // The panel's check boxes, as checkable entries.

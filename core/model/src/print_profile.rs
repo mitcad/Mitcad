@@ -355,7 +355,14 @@ impl PrintProfile {
 pub fn check_value(set: PrintSet, key: &str, value: &Value) -> Result<(), String> {
     let def = print_keys::key(key)
         .filter(|def| def.set == set)
-        .ok_or_else(|| format!("{key} is no key of the {} set", set.property_set()))?;
+        .ok_or_else(|| {
+            let name = set.property_set();
+            match print_keys::key_hint(key, set, Some(value)) {
+                // A slicer's own key (mitcad#1897).
+                Some(hint) => format!("{key} is no key of the {name} set{hint}"),
+                None => format!("{key} is no key of the {name} set"),
+            }
+        })?;
     if def.per_dialect {
         let Value::Object(values) = value else {
             return Err(format!(

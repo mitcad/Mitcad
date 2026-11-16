@@ -50,6 +50,8 @@ mitcad-subdiv = { path = "../subdiv" }
 mitcad-zip = { path = "../zip" }
 # glTF files read as mesh bodies and components (mitcad#1826).
 mitcad-gltf = { path = "../gltf" }
+# .serp files read as bodies by layer and blocks (mitcad#1870).
+mitcad-serp = { path = "../serp" }
 
 [dev-dependencies]
 # The mock kernel of the model's own unit tests (mitcad#777).

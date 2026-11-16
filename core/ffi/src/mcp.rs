@@ -815,6 +815,28 @@ impl Backend for CadBackend {
                 let hints = mitcad_mcp::command_hints_enabled(arguments)?;
                 let array = arguments["command"].is_array();
                 let entries = command_entries(arguments)?;
+                // Names and references between the entries (mitcad#1897),
+                // checked before any entry runs. A print import reads its
+                // sources before the array runs: it takes no references.
+                let checked = mitcad_mcp::check_refs(&entries).and_then(|()| {
+                    match entries.iter().position(|entry| {
+                        print_import::is_print_import(entry) && mitcad_mcp::has_refs(entry)
+                    }) {
+                        Some(i) => Err((
+                            i,
+                            "a print import reads its sources before the array runs, so it \
+                             takes no references"
+                                .to_owned(),
+                        )),
+                        None => Ok(()),
+                    }
+                });
+                if let Err((i, error)) = checked {
+                    if !array {
+                        return Err(error);
+                    }
+                    return Ok(refused_entry(id, i, &error, 0));
+                }
                 // Preparation is read-only, but its allocations need the same
                 // memory guard as applying commands. One budget covers every
                 // source and expanded preset in this call, including arrays.
@@ -990,7 +1012,7 @@ impl CadBackend {
                         "model_render requires overwrite",
                     )
                 })?;
-                require_extension(&path, "png")?;
+                require_extension(&path, render::extension(arguments))?;
                 Some(path)
             }
             None => None,
@@ -1100,12 +1122,31 @@ fn run_commands(
     let mut results = Vec::with_capacity(entries.len());
     let mut times = Vec::new();
     let mut stopped = None;
+    // The entries as they ran, their references replaced (mitcad#1897).
+    let mut resolved_entries: Vec<Value> = Vec::with_capacity(entries.len());
     for (i, entry) in entries.iter().enumerate() {
+        // References to the results of the entries before it
+        // (mitcad#1897), checked again as the command they make.
+        let resolved = mitcad_mcp::resolve_entry(entries, i, &results).and_then(|resolved| {
+            if mitcad_mcp::has_refs(entry) {
+                validate_command(&resolved)?;
+                opened_document_validation(&document.0, &resolved).map_err(|e| e.to_string())?;
+            }
+            Ok(resolved)
+        });
+        let resolved = match resolved {
+            Ok(resolved) => resolved,
+            Err(error) if !array => return Err(error),
+            Err(error) => {
+                let undone = undo_to(document, depth)?;
+                return Ok(refused_entry(id, i, &error, undone));
+            }
+        };
         // Selections by geometry become names on the document as the
         // entries before left it (mitcad#1587); a print import reads the
         // source prepared for it (mitcad#1570).
         let ran = document
-            .mcp_resolve_command(&entry.to_string())
+            .mcp_resolve_command(&resolved.to_string())
             .and_then(|command| match &prepared[i] {
                 Some(reader) => {
                     use mitcad_model_api::PrintImportApi;
@@ -1135,6 +1176,7 @@ fn run_commands(
         }
         let failed = mitcad_mcp::entry_failed(&result);
         results.push(result);
+        resolved_entries.push(resolved);
         if failed && i + 1 < entries.len() {
             stopped = Some(i);
             break;
@@ -1161,7 +1203,18 @@ fn run_commands(
     value["result"] = results.last().cloned().unwrap_or(Value::Null);
     if hints {
         value["hints"] = json!([]);
-        let commands: Vec<Value> = entries.iter().map(|entry| (*entry).clone()).collect();
+        // The entries that ran as they ran (mitcad#1897), the others as
+        // given.
+        let commands: Vec<Value> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                resolved_entries
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_else(|| (*entry).clone())
+            })
+            .collect();
         if let Some(request) = mitcad_mcp::command_hint_query(
             &commands,
             &results,
@@ -1545,8 +1598,9 @@ impl Document {
     /// The live server's `model_render` (mitcad#1487): the headless
     /// server's picture of the design at the marker, whatever the window
     /// shows. `document` is the window's handle; `path` (empty for none) a
-    /// new `.png` file the application checked. The result as the tool
-    /// gives it; a refusal has `error` (and `error_code`).
+    /// new `.png` file (`.svg` for line art, mitcad#1736) the application
+    /// checked. The result as the tool gives it; a refusal has `error`
+    /// (and `error_code`).
     pub fn mcp_render(
         &self,
         arguments: &str,
@@ -1562,7 +1616,7 @@ impl Document {
         }
         let path = (!path.is_empty()).then(|| Path::new(path));
         if let Some(path) = path {
-            require_extension(path, "png").map_err(crate::ApiError)?;
+            require_extension(path, render::extension(&arguments)).map_err(crate::ApiError)?;
         }
         let result =
             render::answer(&self.0, document, &arguments, path).map_err(crate::ApiError)?;
@@ -1658,6 +1712,39 @@ pub fn mcp_entry_failed(result: &str) -> bool {
 /// `recompute_times` query tells what (mitcad#689).
 pub fn mcp_recomputed(result: &str) -> bool {
     serde_json::from_str::<Value>(result).is_ok_and(|result| mitcad_mcp::recomputed(&result))
+}
+
+/// Live MCP's references between array entries (mitcad#1897): why the
+/// names and references of the commands `entries` (a JSON array) refuse
+/// them before any runs, as `{"entry", "error"}`, or `{}`.
+pub fn mcp_check_refs(entries: &str) -> Result<String, crate::ApiError> {
+    let entries: Vec<Value> = serde_json::from_str(entries)
+        .map_err(|error| crate::ApiError(format!("invalid MCP command array JSON: {error}")))?;
+    let entries: Vec<&Value> = entries.iter().collect();
+    Ok(match mitcad_mcp::check_refs(&entries) {
+        Ok(()) => "{}".to_owned(),
+        Err((entry, error)) => json!({"entry": entry, "error": error}).to_string(),
+    })
+}
+
+/// Live MCP's references between array entries (mitcad#1897): entry
+/// `index` of `entries` (a JSON array) without its `as` and with its
+/// references replaced by what they name in `results` (the results of the
+/// entries before it). The application checks an entry that had any again
+/// as the command it makes (`validate_mcp_document_command`), as the
+/// headless server does.
+pub fn mcp_resolve_entry(
+    entries: &str,
+    index: usize,
+    results: &str,
+) -> Result<String, crate::ApiError> {
+    let entries: Vec<Value> = serde_json::from_str(entries)
+        .map_err(|error| crate::ApiError(format!("invalid MCP command array JSON: {error}")))?;
+    let results: Vec<Value> = serde_json::from_str(results)
+        .map_err(|error| crate::ApiError(format!("invalid MCP results JSON: {error}")))?;
+    let list: Vec<&Value> = entries.iter().collect();
+    let resolved = mitcad_mcp::resolve_entry(&list, index, &results).map_err(crate::ApiError)?;
+    Ok(resolved.to_string())
 }
 
 fn success(value: Value) -> Result<ToolResult, String> {

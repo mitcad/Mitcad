@@ -4,6 +4,7 @@
 // plain number), the Shift and fine modifiers (Ctrl, Option on macOS), the
 // minimum, and the texts left alone (an expression, a parameter's name, a
 // unit of another kind).
+#include "UnitTests.hpp"
 #include "framework/ValueStep.hpp"
 
 #include <cmath>
@@ -202,3 +203,4 @@ int valueStepTests() {
   zeroTests();
   return failures;
 }
+MITCAD_UNIT_TEST(valueStepTests);

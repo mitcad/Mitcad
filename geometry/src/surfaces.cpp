@@ -154,6 +154,23 @@ bool closes(const Shape& body, const std::vector<int>& edges) {
          std::all_of(ends.begin(), ends.end(), [](const auto& entry) { return entry.second == 2; });
 }
 
+// The primary names of the faces a loop of free edges bounds, sorted, each
+// once; unnamed faces are left out.
+NameList loop_faces(const Shape& body, const detail::EdgeFaces& edge_faces, const std::vector<int>& loop) {
+  NameList faces;
+  for (const int e : loop) {
+    for (const int f : edge_faces.at(e)) {
+      std::string name = detail::primary_name(body, f);
+      if (!name.empty()) {
+        faces.push_back(std::move(name));
+      }
+    }
+  }
+  std::sort(faces.begin(), faces.end());
+  faces.erase(std::unique(faces.begin(), faces.end()), faces.end());
+  return faces;
+}
+
 // Points along the edge, its ends included, at most kBoundaryStep apart
 // by parameter steps.
 void sample_edge(const TopoDS_Edge& edge, std::vector<gp_Pnt>& points) {
@@ -548,18 +565,25 @@ std::vector<OpenBoundary> open_boundaries(const Shape& body) {
     const detail::EdgeFaces edge_faces(body);
     for (const std::vector<int>& loop : free_loops(body)) {
       OpenBoundary boundary;
+      boundary.faces = loop_faces(body, edge_faces, loop);
       for (const int e : loop) {
-        for (const int f : edge_faces.at(e)) {
-          const std::string name = detail::primary_name(body, f);
-          if (!name.empty()) {
-            boundary.faces.push_back(name);
-          }
-        }
         sample_edge(body.edge(e), boundary.points);
       }
-      std::sort(boundary.faces.begin(), boundary.faces.end());
-      boundary.faces.erase(std::unique(boundary.faces.begin(), boundary.faces.end()), boundary.faces.end());
       boundary.closed = closes(body, loop);
+      boundaries.push_back(std::move(boundary));
+    }
+    return boundaries;
+  });
+}
+
+std::vector<OpenBoundaryEdges> open_boundary_edges(const Shape& body) {
+  return detail::run("open boundaries", [&] {
+    std::vector<OpenBoundaryEdges> boundaries;
+    const detail::EdgeFaces edge_faces(body);
+    for (std::vector<int>& loop : free_loops(body)) {
+      OpenBoundaryEdges boundary;
+      boundary.faces = loop_faces(body, edge_faces, loop);
+      boundary.edges = std::move(loop);
       boundaries.push_back(std::move(boundary));
     }
     return boundaries;

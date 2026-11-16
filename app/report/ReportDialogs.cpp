@@ -263,6 +263,15 @@ FeedbackDialog::FeedbackDialog(const QImage& screenshot, bool designOpen,
   connect(m_design, &QCheckBox::toggled, this, [](bool on) {
     qInfo().noquote() << QStringLiteral("Feedback design %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
   });
+  // Include the logs (mitcad#1896): off; this session's log and the
+  // previous session's, files on this computer until the user attaches them.
+  m_logs = new QCheckBox(tr("Include the &logs of this session and the last one"), this);
+  m_logs->setObjectName(QStringLiteral("feedbackLogs"));
+  m_logs->setToolTip(tr("MitCad's log files, to attach to the issue; they may contain file and design names"));
+  layout->addWidget(m_logs);
+  connect(m_logs, &QCheckBox::toggled, this, [](bool on) {
+    qInfo().noquote() << QStringLiteral("Feedback logs %1").arg(on ? QStringLiteral("on") : QStringLiteral("off"));
+  });
   connect(m_screenshot, &QCheckBox::toggled, this, [this](bool on) {
     m_viewRow->setVisible(on);
     adjustSize();
@@ -300,13 +309,14 @@ Feedback FeedbackDialog::feedback() const {
     feedback.screenshot = m_view->image();
   }
   feedback.includeDesign = m_design->isEnabled() && m_design->isChecked();
+  feedback.includeLogs = m_logs->isChecked();
   return feedback;
 }
 
 void FeedbackDialog::preview() {
   const Feedback form = feedback();
   qInfo().noquote() << QStringLiteral("Feedback form: kind %1, summary '%2', description %3 characters, contact %4, "
-                                      "diagnostics %5, screenshot %6, design %7")
+                                      "diagnostics %5, screenshot %6, design %7, logs %8")
                            .arg(form.kind, form.summary)
                            .arg(form.description.size())
                            .arg(form.contact.isEmpty() ? QStringLiteral("none") : QStringLiteral("given"),
@@ -315,7 +325,8 @@ void FeedbackDialog::preview() {
                                                          : QStringLiteral("%1x%2")
                                                                .arg(form.screenshot.width())
                                                                .arg(form.screenshot.height()),
-                                form.includeDesign ? QStringLiteral("on") : QStringLiteral("off"));
+                                form.includeDesign ? QStringLiteral("on") : QStringLiteral("off"),
+                                form.includeLogs ? QStringLiteral("on") : QStringLiteral("off"));
   if (m_preview(form)) {
     accept();
   }
@@ -325,8 +336,10 @@ void FeedbackDialog::preview() {
 // The preview
 
 ReportPreviewDialog::ReportPreviewDialog(const Report& report, const QImage& screenshot, const QString& destination,
-                                         QWidget* parent, const QString& logFile, const DesignZip& design)
-    : QDialog(parent), m_report(report), m_screenshot(screenshot), m_logFile(logFile), m_design(design) {
+                                         QWidget* parent, const QString& logFile, const DesignZip& design,
+                                         const QStringList& sessionLogs)
+    : QDialog(parent), m_report(report), m_screenshot(screenshot), m_logFile(logFile), m_design(design),
+      m_sessionLogs(sessionLogs) {
   setObjectName(QStringLiteral("reportPreview"));
   setWindowTitle(tr("Review Report"));
   auto* layout = new QVBoxLayout(this);
@@ -444,6 +457,36 @@ ReportPreviewDialog::ReportPreviewDialog(const Report& report, const QImage& scr
     });
     sections->addWidget(m_designBox);
   }
+  if (!m_sessionLogs.isEmpty()) {
+    // Include the logs (mitcad#1896): this session's file and the previous
+    // session's, as they are on disk.
+    m_sessionLogsBox = new QGroupBox(tr("Session logs (files you attach to the issue)"), content);
+    m_sessionLogsBox->setObjectName(QStringLiteral("reportSection_sessionlogs"));
+    m_sessionLogsBox->setCheckable(true);
+    m_sessionLogsBox->setChecked(true);
+    mac::styleSection(m_sessionLogsBox);
+    auto* boxLayout = new QVBoxLayout(m_sessionLogsBox);
+    QStringList names;
+    for (const QString& log : std::as_const(m_sessionLogs)) {
+      names << QStringLiteral("%1 (%2)").arg(QFileInfo(log).fileName().toHtmlEscaped(),
+                                             designZipSizeText(QFileInfo(log).size()));
+    }
+    const QString text =
+        (m_design.path.isEmpty() || !m_design.error.isEmpty()
+             ? tr("%1. Send copies them into a folder and opens it, to drag them into the form.")
+             : tr("%1. They go into the design's zip."))
+            .arg(names.join(QStringLiteral(", "))) +
+        QLatin1Char(' ') + tr("A log may contain file paths, design names and entity names; it is not masked.");
+    auto* note = new QLabel(text, m_sessionLogsBox);
+    note->setWordWrap(true);
+    note->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    boxLayout->addWidget(note);
+    connect(m_sessionLogsBox, &QGroupBox::toggled, this, [](bool on) {
+      qInfo().noquote() << QStringLiteral("Report section sessionlogs %1")
+                               .arg(on ? QStringLiteral("included") : QStringLiteral("left out"));
+    });
+    sections->addWidget(m_sessionLogsBox);
+  }
   sections->addStretch(1);
   scroll->setWidget(content);
   layout->addWidget(scroll, 1);
@@ -503,6 +546,10 @@ bool ReportPreviewDialog::designIncluded() const {
   return m_designBox != nullptr && m_design.error.isEmpty() && m_designBox->isChecked();
 }
 
+QStringList ReportPreviewDialog::sessionLogs() const {
+  return m_sessionLogsBox != nullptr && m_sessionLogsBox->isChecked() ? m_sessionLogs : QStringList();
+}
+
 void ReportPreviewDialog::showEvent(QShowEvent* event) {
   QDialog::showEvent(event);
   TestSync::singleShot(100, this, [this] { logContent(); });
@@ -542,6 +589,14 @@ void ReportPreviewDialog::logContent() const {
       qInfo().noquote() << QStringLiteral("Report section design: not made: %1").arg(m_design.error);
     }
     logPlace(QStringLiteral("Report section design"), m_designBox, checkBoxRect(m_designBox));
+  }
+  if (m_sessionLogsBox != nullptr) {
+    QStringList names;
+    for (const QString& log : m_sessionLogs) {
+      names << QFileInfo(log).fileName();
+    }
+    qInfo().noquote() << QStringLiteral("Report section sessionlogs: %1").arg(names.join(QStringLiteral(", ")));
+    logPlace(QStringLiteral("Report section sessionlogs"), m_sessionLogsBox, checkBoxRect(m_sessionLogsBox));
   }
   if (!m_report.key.isEmpty()) {
     qInfo().noquote() << QStringLiteral("Report key: mitcad-%1").arg(m_report.key);

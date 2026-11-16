@@ -5,6 +5,7 @@
 // (its transparency once read as a colour role, the name in error red) and
 // has the half-open eye; a visible body inside a hidden occurrence has the
 // open eye (its grey name role once read as transparent).
+#include "UnitTests.hpp"
 #include "browser/BrowserPanel.hpp"
 
 #include <cstdio>
@@ -407,3 +408,4 @@ int browserRolesTests() {
   folderEyeTests();
   return failures;
 }
+MITCAD_UNIT_TEST(browserRolesTests);

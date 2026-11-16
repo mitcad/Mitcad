@@ -9,9 +9,11 @@
 #include <utility>
 #include <vector>
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QList>
@@ -24,6 +26,7 @@
 #include <QtLogging>
 
 #include "CefView.hpp"
+#include "webbrowser/BrowserDiagnostics.hpp"
 #include "include/cef_app.h"
 #include "include/cef_command_line.h"
 #include "include/cef_version.h"
@@ -97,6 +100,10 @@ private:
 
 Pump* g_pump = nullptr;
 
+// How WebGL is drawn this run (mitcad#1906): chosen before CEF starts, read
+// as CEF makes its command line.
+browserdiag::GpuChoice g_gpu;
+
 class App : public CefApp, public CefBrowserProcessHandler {
 public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
@@ -120,8 +127,20 @@ public:
     // in the GPU process. Allowed here, as a site without WebGL does not
     // work at all, the GPU is used wherever it can be, and the pages are
     // the supplier sites the user chose (app/COMMANDS.md, "Component from
-    // Web", The browser). Not "disable-gpu", which turns WebGL off.
+    // Web", The browser). Not "disable-gpu" by default, which leaves only
+    // SwiftShader (and without this switch no WebGL at all).
     commandLine->AppendSwitch("enable-unsafe-swiftshader");
+    // A WebGL context lost on the GPU (the GPU process ended or reset) does
+    // not block WebGL for the page's site for the rest of the run (mitcad#1906,
+    // GitHub mitcad/Mitcad#364): Chromium does that by default, and the
+    // site's preview then failed sooner after each Reload.
+    commandLine->AppendSwitch("disable-domain-blocking-for-3d-apis");
+    // The GPU path failed in an earlier session of this CEF (its marker in
+    // the profile), or MITCAD_WEB_GPU=software: no GPU, WebGL in software
+    // (SwiftShader, allowed above) as on a machine without a usable GPU.
+    if (g_gpu.software) {
+      commandLine->AppendSwitch("disable-gpu");
+    }
     commandLine->AppendSwitch("no-first-run");
     commandLine->AppendSwitch("no-default-browser-check");
 #if defined(__APPLE__)
@@ -174,6 +193,21 @@ struct Engine {
   CefRefPtr<CefRequestContext> context;
   QList<QPointer<CefView>> views;
   std::vector<CefRefPtr<CefBrowser>> browsers;
+  // The diagnostics (mitcad#1906, webbrowser/BrowserDiagnostics.hpp): the
+  // state the application object carries, the profile (the GPU's marker),
+  // CEF's log read from where it ended before this start, and whether the
+  // GPU path failed with WebGL drawn on the GPU.
+  browserdiag::State diag;
+  QString profile;
+  QString logPath;
+  qint64 logOffset = 0;
+  QByteArray logPartial;
+  QTimer* logTimer = nullptr;
+  bool seenGpuWebgl = false;
+  bool failurePending = false;
+  bool markerFailed = false; // the marker could not be written: not tried again
+  QString failure;
+  QString testFailure; // MITCAD_TEST_WEB_GPU_FAILURE
 };
 
 Engine& engine() {
@@ -181,10 +215,129 @@ Engine& engine() {
   return state;
 }
 
+// The state into the application object's property, where Help › Send
+// Feedback's diagnostics read it.
+void publish() {
+  if (QCoreApplication* application = QCoreApplication::instance()) {
+    application->setProperty(browserdiag::kStateProperty, browserdiag::toVariant(engine().diag));
+  }
+}
+
+QString webglText(const QString& webgl, const QString& detail) {
+  if (webgl == QLatin1String("gpu")) {
+    return QStringLiteral("on the GPU, ") + detail;
+  }
+  if (webgl == QLatin1String("software")) {
+    return QStringLiteral("in software, ") + detail;
+  }
+  return QStringLiteral("off, ") + detail;
+}
+
+// After a failure of the GPU process where WebGL had been drawn on the GPU
+// this run (or is off), or when a page found WebGL off with the GPU in use
+// (Chromium refused a context there without falling back to SwiftShader):
+// the next start of CEF draws it in software (CEF starts once per process,
+// so not this run), and the windows say so
+// (browserdiag::softwareNextWanted). Not where WebGL was in software all
+// along (a machine whose GPU Chromium refused at once): nothing to gain
+// there.
+void fallBackIfFailed() {
+  Engine& state = engine();
+  if (state.markerFailed || !browserdiag::softwareNextWanted(state.diag, state.seenGpuWebgl, state.failurePending)) {
+    return;
+  }
+  if (!state.failurePending) {
+    state.failure = QStringLiteral("WebGL unavailable on the GPU: %1").arg(state.diag.webglDetail);
+  }
+  const QString marker = QDir(state.profile).filePath(QLatin1String(browserdiag::kSoftwareMarker));
+  if (!browserdiag::writeSoftwareMarker(marker, QStringLiteral(CEF_VERSION), state.failure)) {
+    qWarning().noquote() << QStringLiteral("Component browser: the GPU's marker could not be written: %1")
+                                .arg(QDir::toNativeSeparators(marker));
+    state.failurePending = false;
+    state.markerFailed = true;
+    return;
+  }
+  state.diag.softwareNext = true;
+  qInfo().noquote() << QStringLiteral("Component browser: the GPU failed (%1); WebGL in software from the next start")
+                           .arg(state.failure);
+  publish();
+  for (const QPointer<CefView>& view : std::as_const(state.views)) {
+    if (!view.isNull()) {
+      view->gpuFailedNotice();
+    }
+  }
+}
+
+// A line of CEF's log: the GPU's kept, a failure of its process counted.
+void noteLogLine(const QString& line) {
+  const browserdiag::GpuLogLine kind = browserdiag::classifyGpuLogLine(line);
+  if (kind == browserdiag::GpuLogLine::Other) {
+    return;
+  }
+  Engine& state = engine();
+  const QString text = browserdiag::gpuLogText(line);
+  browserdiag::addGpuLine(state.diag, text);
+  if (kind == browserdiag::GpuLogLine::Failure) {
+    ++state.diag.gpuFailures;
+    state.failurePending = true;
+    state.failure = text;
+    qInfo().noquote() << QStringLiteral("Component browser GPU failure: %1").arg(text);
+    fallBackIfFailed();
+  }
+  publish();
+}
+
+// CEF's log (every CEF process writes it, from warnings up) since the last
+// read: its new whole lines.
+void readLog() {
+  Engine& state = engine();
+  if (!state.testFailure.isEmpty()) {
+    // For the test of the fallback: a failure of the GPU process as after
+    // WebGL had been drawn on the GPU (the test machines have no GPU).
+    const QString line = state.testFailure;
+    state.testFailure.clear();
+    state.seenGpuWebgl = true;
+    qInfo().noquote() << QStringLiteral("Component browser: a GPU failure for a test (MITCAD_TEST_WEB_GPU_FAILURE)");
+    noteLogLine(line);
+  }
+  QFile file(state.logPath);
+  if (!file.open(QIODevice::ReadOnly)) {
+    return;
+  }
+  const qint64 size = file.size();
+  if (size < state.logOffset) {
+    // Started again from nothing.
+    state.logOffset = 0;
+    state.logPartial.clear();
+  }
+  if (size == state.logOffset || !file.seek(state.logOffset)) {
+    return;
+  }
+  QByteArray data = file.read(std::min<qint64>(size - state.logOffset, qint64(4) * 1024 * 1024));
+  state.logOffset += data.size();
+  data.prepend(state.logPartial);
+  const qsizetype end = data.lastIndexOf('\n');
+  if (end < 0) {
+    state.logPartial = data.size() > 65536 ? QByteArray() : data;
+    return;
+  }
+  state.logPartial = data.mid(end + 1);
+  const QList<QByteArray> lines = data.left(end).split('\n');
+  for (const QByteArray& line : lines) {
+    const QString text = QString::fromUtf8(line).trimmed();
+    if (!text.isEmpty()) {
+      noteLogLine(text);
+    }
+  }
+}
+
 void shutDown() {
   Engine& state = engine();
   if (!state.running) {
     return;
+  }
+  if (state.logTimer != nullptr) {
+    state.logTimer->stop();
   }
   // Every view drops its browser, the browsers close, then CEF ends; within
   // a few seconds, whatever a page does.
@@ -266,6 +419,15 @@ bool startEngine(const QString& componentFolder, const QString& profileFolder, Q
     *error = state.error;
     return false;
   }
+  // How WebGL is drawn this run (mitcad#1906), and CEF's log from where it
+  // ends now: what this run adds is read for the GPU's failures.
+  state.profile = profileFolder;
+  g_gpu = browserdiag::chooseGpu(qEnvironmentVariable("MITCAD_WEB_GPU"),
+                                 QDir(profileFolder).filePath(QLatin1String(browserdiag::kSoftwareMarker)),
+                                 QStringLiteral(CEF_VERSION));
+  state.logPath = QDir(profileFolder).filePath(QStringLiteral("cef.log"));
+  state.logOffset = QFileInfo(state.logPath).size();
+  state.testFailure = qEnvironmentVariable("MITCAD_TEST_WEB_GPU_FAILURE");
   g_pump = new Pump();
   g_pump->setParent(QCoreApplication::instance());
   CefRefPtr<App> app(new App());
@@ -290,8 +452,62 @@ bool startEngine(const QString& componentFolder, const QString& profileFolder, Q
   qInfo().noquote() << QStringLiteral("Component browser: CEF %1 started from %2, profile %3")
                            .arg(QStringLiteral(CEF_VERSION), QDir::toNativeSeparators(folder),
                                 QDir::toNativeSeparators(profileFolder));
+  state.diag.cef = QStringLiteral(CEF_VERSION);
+  state.diag.softwareOnly = g_gpu.software;
+  state.diag.softwareReason = g_gpu.reason;
+  publish();
+  if (g_gpu.software) {
+    qInfo().noquote() << QStringLiteral("Component browser: WebGL in software only (%1)").arg(g_gpu.reason);
+  } else {
+    qInfo().noquote() << QStringLiteral("Component browser: WebGL on the GPU where Chromium accepts it, else in software");
+  }
+  state.logTimer = new QTimer(QCoreApplication::instance());
+  state.logTimer->setInterval(2000);
+  QObject::connect(state.logTimer, &QTimer::timeout, state.logTimer, [] { readLog(); });
+  state.logTimer->start();
   return true;
 }
+
+void notePageMessage(const QString& pageUrl, bool error, const QString& message, const QString& source, int line) {
+  if (!browserdiag::keepPageMessage(error, message, source)) {
+    return;
+  }
+  Engine& state = engine();
+  const QString text = browserdiag::pageErrorLine(pageUrl, message, source, line);
+  if (state.diag.pageErrors.isEmpty() || state.diag.pageErrors.constLast() != text) {
+    qDebug().noquote() << QStringLiteral("Component browser page console: %1").arg(text);
+  }
+  browserdiag::addPageError(state.diag, text);
+  publish();
+}
+
+bool noteScriptMessage(const QString& message) {
+  Engine& state = engine();
+  if (message.startsWith(QLatin1String("mitcad:webgl-lost"))) {
+    ++state.diag.contextsLost;
+    qDebug().noquote() << QStringLiteral("Component browser: a WebGL context of the page was lost");
+    publish();
+    return true;
+  }
+  QString webgl;
+  QString detail;
+  if (!browserdiag::parseWebglProbe(message, &webgl, &detail)) {
+    return false;
+  }
+  if (webgl != state.diag.webgl || detail != state.diag.webglDetail) {
+    state.diag.webgl = webgl;
+    state.diag.webglDetail = detail;
+    qInfo().noquote() << QStringLiteral("Component browser WebGL: %1").arg(webglText(webgl, detail));
+  }
+  if (webgl == QLatin1String("gpu")) {
+    state.seenGpuWebgl = true;
+  }
+  fallBackIfFailed();
+  publish();
+  return true;
+}
+
+bool gpuFailed() { return engine().diag.softwareNext; }
 
 bool engineRunning() { return engine().running; }
 

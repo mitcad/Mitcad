@@ -69,6 +69,7 @@ fn a_derive_copies_the_body_of_another_document_where_it_puts_it() {
         Referenced {
             document: &block,
             occurrence_guids: &block_report.components.occurrence_guids,
+            occurrence_objects: &block_report.components.occurrence_objects,
             name: "Block".to_owned(),
             stored_bodies: &stored,
             entity_bodies: &entities,

@@ -283,3 +283,40 @@ fn a_stored_corner_finds_the_edge_it_lies_on() {
     assert_eq!(found(&stored(4, 1), &unlisted).as_deref(), Some(walls));
     assert_eq!(found(&stored(1, 3), &unlisted), None);
 }
+
+#[test]
+fn a_refusal_of_meeting_walls_names_their_domains() {
+    // The kernel's refusal of two walls that meet (mitcad#1409) names them
+    // by domain; a flange on several edges paints them (mitcad#1877).
+    let walls = crate::sheet::walls_named(
+        "sheet walls panel F6 slot 1 and bend F4 slot 0 pass through each other",
+    );
+    assert_eq!(
+        walls,
+        vec![
+            SheetDomainRef::Panel(PanelId {
+                feature: uid("F6"),
+                slot: 1
+            }),
+            SheetDomainRef::Bend(BendId {
+                feature: uid("F4"),
+                slot: 0
+            }),
+        ]
+    );
+    // Their names as the timeline shows them, unchanged.
+    let named = crate::sheet::name_walls(
+        "sheet walls panel F6 slot 1 and bend F4 slot 0 pass through each other",
+        &|feature| format!("Flange{}", feature.0),
+    );
+    assert_eq!(
+        named,
+        "sheet walls Flange6 (wall 2) and Flange4 (bend) pass through each other"
+    );
+    assert!(crate::sheet::walls_named("sheet walls meet").is_empty());
+    // The wall a corner refusal paints: the side face of the edge.
+    assert_eq!(
+        wall_name(beside_panel(), &beside_curve(2)),
+        "F3:sheet_side0(F3:sheet_curve(2))"
+    );
+}
