@@ -374,15 +374,45 @@ void BrowserController::showIssues(bool warnings, const QPoint& globalPosition) 
       }
     }
   }
-  if (features.size() == 1 && fixing.isEmpty()) {
+  // The failures' badge: one is revealed at once. The warnings' always
+  // opens its menu, which offers to acknowledge them (mitcad#1935).
+  if (!warnings && features.size() == 1) {
     reveal(features.first()->uid);
     return;
   }
   Menu menu(m_window);
+  QStringList warned;
   for (const DocumentSnapshot::Feature* feature : features) {
     const QString uid = feature->uid;
     menu.add(featureIcon(feature->type), QStringLiteral("%1: %2").arg(feature->name, feature->error),
              [this, uid] { reveal(uid); });
+    warned << uid;
+  }
+  if (warnings) {
+    // Those acknowledged (mitcad#1935): dimmed, each with Show Again.
+    for (const DocumentSnapshot::Feature* feature : m_snapshot.acknowledgedWarnings()) {
+      const QString uid = feature->uid;
+      auto* again = new QMenu(tr("%1: %2 (acknowledged)").arg(feature->name, feature->error), menu.widget());
+      const QIcon icon = themeIcon(featureIcon(feature->type));
+      again->setIcon(QIcon(icon.pixmap(QSize(16, 16), QIcon::Disabled)));
+      QObject::connect(again->addAction(tr("Show Again")), &QAction::triggered, this,
+                       [this, uid] { acknowledgeWarnings({uid}, false); });
+      menu.addSubmenu(again, again->title());
+    }
+    menu.separator();
+    if (warned.size() == 1) {
+      menu.add(QStringLiteral("ok"), tr("Acknowledge Warning"), [this, warned] { acknowledgeWarnings(warned, true); });
+    } else {
+      auto* one = new QMenu(tr("Acknowledge Warning"), menu.widget());
+      for (const DocumentSnapshot::Feature* feature : features) {
+        const QString uid = feature->uid;
+        QObject::connect(one->addAction(themeIcon(featureIcon(feature->type)), feature->name), &QAction::triggered,
+                         this, [this, uid] { acknowledgeWarnings({uid}, true); });
+      }
+      menu.addSubmenu(one, one->title());
+      menu.add(QStringLiteral("ok"), tr("Acknowledge All Warnings"),
+               [this, warned] { acknowledgeWarnings(warned, true); });
+    }
   }
   if (!fixing.isEmpty()) {
     menu.separator();
@@ -623,6 +653,17 @@ void BrowserController::updateFailures() {
         qDebug().noquote() << QStringLiteral("Warnings button at %1,%2").arg(at.x()).arg(at.y());
       }
     });
+  }
+  // The warnings acknowledged (mitcad#1935): not in the badge.
+  QStringList seen;
+  for (const DocumentSnapshot::Feature* feature : m_snapshot.acknowledgedWarnings()) {
+    seen << feature->name;
+  }
+  const QString acknowledged = seen.join(QStringLiteral(", "));
+  if (acknowledged != m_loggedAcknowledged) {
+    m_loggedAcknowledged = acknowledged;
+    qDebug().noquote() << QStringLiteral("Acknowledged warnings: %1")
+                              .arg(acknowledged.isEmpty() ? QStringLiteral("none") : acknowledged);
   }
   // The sketches' degrees of freedom the browser shows (P9).
   QStringList dofs;
@@ -3065,6 +3106,31 @@ void BrowserController::featureMenu(const QString& uid, const QPoint& at, const 
     menu.add(QStringLiteral("convert-mesh"), convertToFeaturesText(),
              [this, component, name] { convertToFeatures(m_host, m_window, component, name); });
   }
+  // Acknowledged warnings (mitcad#1935): the timeline's selection when the
+  // feature is in it, else the feature; its warned features acknowledged,
+  // or its acknowledged ones shown again. An error is never acknowledged.
+  {
+    QStringList chosen = row.isValid() ? QStringList() : m_timeline->selectedFeatures();
+    if (!chosen.contains(uid)) {
+      chosen = QStringList{uid};
+    }
+    QStringList warned;
+    QStringList seen;
+    for (const QString& member : std::as_const(chosen)) {
+      if (const DocumentSnapshot::Feature* f = m_snapshot.feature(member)) {
+        if (f->warned()) {
+          warned << member;
+        } else if (f->warningAcknowledged()) {
+          seen << member;
+        }
+      }
+    }
+    if (feature->warned()) {
+      menu.add(QStringLiteral("ok"), tr("Acknowledge Warning"), [this, warned] { acknowledgeWarnings(warned, true); });
+    } else if (feature->warningAcknowledged()) {
+      menu.add(QStringLiteral("warning"), tr("Show Warning Again"), [this, seen] { acknowledgeWarnings(seen, false); });
+    }
+  }
   menu.separator();
   // Timeline groups (P9): the selected run (Shift+click), or this feature.
   QStringList run = m_timeline->selectedFeatures();
@@ -3227,6 +3293,27 @@ void BrowserController::autoFix(const QStringList& uids) {
   const bool left = !result.value(QStringLiteral("left")).toArray().isEmpty();
   qDebug().noquote() << message;
   m_host.showStatus(message, left ? NoticeLevel::Warning : NoticeLevel::Success);
+}
+
+void BrowserController::acknowledgeWarnings(const QStringList& uids, bool acknowledged) {
+  if (uids.isEmpty() || !canChange()) {
+    return;
+  }
+  QStringList names;
+  for (const QString& uid : uids) {
+    const DocumentSnapshot::Feature* feature = m_snapshot.feature(uid);
+    names << (feature != nullptr ? feature->name : uid);
+  }
+  if (!m_host.runModelCommand(cmd("acknowledge_warnings", {{QStringLiteral("uids"), QJsonArray::fromStringList(uids)},
+                                                           {QStringLiteral("acknowledged"), acknowledged}}))) {
+    qDebug().noquote() << QStringLiteral("Acknowledge refused: %1").arg(m_host.lastError());
+    m_host.showStatus(mitcad::modelMessage(m_host.lastError()), NoticeLevel::Warning);
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("%1 %2")
+                            .arg(acknowledged ? QStringLiteral("Acknowledged warning of")
+                                              : QStringLiteral("Showing warning again of"),
+                                 names.join(QStringLiteral(", ")));
 }
 
 void BrowserController::projectAgain(const QString& sketch) {

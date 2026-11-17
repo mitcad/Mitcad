@@ -329,6 +329,9 @@ private:
   // longer follow their sources made anew (one undo step), what stays on
   // the old curves shown in the status bar.
   void projectAgain(const QString& sketch);
+  // Acknowledged warnings (mitcad#1935): the features' warnings marked seen
+  // (`acknowledged`), or shown again; one undo step, logged.
+  void acknowledgeWarnings(const QStringList& uids, bool acknowledged);
   // Show Dimensions of a sketch's row (mitcad#1772): its dimensions drawn
   // in the view outside sketch mode, or no longer; one undo step, display
   // state as a light bulb (in every mode, also in a read-only design).
@@ -485,6 +488,7 @@ private:
   QString m_loggedFailures;
   QString m_loggedWarnings;
   QString m_loggedBadge; // the warnings badge (mitcad#170)
+  QString m_loggedAcknowledged; // the acknowledged warnings (mitcad#1935)
   QString m_loggedDof;
   QString m_loggedJoints;
 

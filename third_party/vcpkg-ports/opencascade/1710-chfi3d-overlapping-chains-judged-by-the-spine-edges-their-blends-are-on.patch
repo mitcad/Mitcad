@@ -1,0 +1,112 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillet: two chains whose blends lie on one face are judged overlapping by
+the spine edges their blends are on, not by the first edges of their
+chains on that face (mitcad#1926).
+
+A U-shaped fin's top rounded with 0.5 along its outer and its inner
+edges: two chains, each running round the U along the top's boundary, so
+that eight and seven edges of each spine bound the top. OverlappingStripes
+took for each stripe the first edge of its spine that bounds the face
+(spineEdgeOf) and asked whether each blend's contact lies beyond the
+other's as seen from that edge (contactBeyond). The blend along one arm's
+outer edge was measured against the inner chain's first edge, on the
+other arm, and the blend along the other arm's inner edge against the
+outer chain's first edge: each contact lay nearer the other chain's edge
+than that chain's own contact did, both stripes were computed again
+overflowing the top, which failed (Failure_Overlap), although the two
+contacts are 14.5 apart.
+
+- spineEdgeOfData (new): the spine edge that bounds the face where the
+  surfdata lies: where several edges of the spine bound the face, the one
+  at the surfdata's middle spine parameter (else the one nearest its
+  contact on the face); spineEdgeOf's edge where one edge or none bounds
+  it.
+- OverlappingStripes and RollsInsteadOfOverflow measure each contact
+  against that edge.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 506e40f4..09f39919 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -449,6 +449,59 @@ static TopoDS_Edge spineEdgeOf(const occ::handle<ChFiDS_Spine>& Sp, const TopoDS
+   return TopoDS_Edge();
+ }
+ 
++// The edge of spine Sp that bounds face F where surfdata D lies (its side
++// OnS on F): where several edges of the spine bound F (a chain running
++// along F, as round a U-shaped face), the one at D's middle spine
++// parameter when it bounds F, else the one nearest D's contact on F;
++// spineEdgeOf where one edge or none bounds F.
++static TopoDS_Edge spineEdgeOfData(const occ::handle<ChFiDS_Spine>&    Sp,
++                                   const TopoDS_Face&                  F,
++                                   const occ::handle<ChFiDS_SurfData>& D,
++                                   const int                           OnS)
++{
++  NCollection_List<TopoDS_Shape> onF;
++  for (int i = 1; i <= Sp->NbEdges(); i++)
++  {
++    for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++    {
++      if (ex.Current().IsSame(Sp->Edges(i)))
++      {
++        onF.Append(Sp->Edges(i));
++        break;
++      }
++    }
++  }
++  if (onF.Extent() < 2 || D.IsNull())
++  {
++    return onF.IsEmpty() ? TopoDS_Edge() : TopoDS::Edge(onF.First());
++  }
++  const int iE = Sp->Index(0.5 * (D->FirstSpineParam() + D->LastSpineParam()));
++  if (iE >= 1 && iE <= Sp->NbEdges())
++  {
++    for (NCollection_List<TopoDS_Shape>::Iterator it(onF); it.More(); it.Next())
++    {
++      if (it.Value().IsSame(Sp->Edges(iE)))
++      {
++        return TopoDS::Edge(it.Value());
++      }
++    }
++  }
++  const gp_Pnt P = D->Vertex(true, OnS).Point().Translated(
++    0.5 * gp_Vec(D->Vertex(true, OnS).Point(), D->Vertex(false, OnS).Point()));
++  TopoDS_Edge aBest;
++  double      aBestD = RealLast();
++  for (NCollection_List<TopoDS_Shape>::Iterator it(onF); it.More(); it.Next())
++  {
++    const double d = distanceToEdge(P, TopoDS::Edge(it.Value()));
++    if (d < aBestD)
++    {
++      aBestD = d;
++      aBest  = TopoDS::Edge(it.Value());
++    }
++  }
++  return aBest.IsNull() ? TopoDS::Edge(onF.First()) : aBest;
++}
++
+ // Whether face F is a strip between edges EA and EB: its other edges each
+ // join a vertex of EA to one of EB.
+ static bool isStripBetween(const TopoDS_Face& F, const TopoDS_Edge& EA, const TopoDS_Edge& EB)
+@@ -890,8 +943,8 @@ NCollection_List<occ::handle<ChFiDS_Stripe>> ChFi3d_Builder::OverlappingStripes(
+                 continue;
+               }
+               const TopoDS_Face F  = TopoDS::Face(DStr.Shape(a->Index(ka)));
+-              const TopoDS_Edge EA = spineEdgeOf(A->Spine(), F);
+-              const TopoDS_Edge EB = spineEdgeOf(B->Spine(), F);
++              const TopoDS_Edge EA = spineEdgeOfData(A->Spine(), F, a, ka);
++              const TopoDS_Edge EB = spineEdgeOfData(B->Spine(), F, b, kb);
+               if (EA.IsNull() || EB.IsNull() || EA.IsSame(EB))
+               {
+                 continue;
+@@ -1010,7 +1063,7 @@ NCollection_List<occ::handle<ChFiDS_Stripe>> ChFi3d_Builder::RollsInsteadOfOverf
+               }
+               // B's edge: the one of its spine on F, else the one nearest to
+               // B's contact there.
+-              TopoDS_Edge EB = spineEdgeOf(B->Spine(), F);
++              TopoDS_Edge EB = spineEdgeOfData(B->Spine(), F, b, kb);
+               if (EB.IsNull())
+               {
+                 const gp_Pnt Pb = b->Vertex(true, kb).Point().Translated(

@@ -107,6 +107,21 @@ pub(crate) struct JunctionsQuery {
     components: Option<Vec<String>>,
 }
 
+/// The `build_end_meets` query (mitcad#1940).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EndMeetsQuery {
+    #[serde(default)]
+    component: Option<String>,
+    /// false: only where the ends are (the Ends command's labels).
+    #[serde(default = "yes")]
+    meets: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
 /// The `build_cut_list` query.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -207,6 +222,9 @@ pub(crate) trait BuildCrateOps<K: Kernel> {
 
     /// The `build_cut_list` query.
     fn build_cut_list_json(&self, query: &CutListQuery) -> Result<Value, ApiError>;
+
+    /// The `build_end_meets` query (mitcad#1940).
+    fn build_end_meets_json(&self, query: &EndMeetsQuery) -> Result<Value, ApiError>;
 }
 
 impl<K: Kernel> BuildCrateOps<K> for Document<K> {
@@ -801,6 +819,57 @@ impl<K: Kernel> BuildCrateOps<K> for Document<K> {
             })
             .collect();
         Ok(json!({"junctions": junctions}))
+    }
+
+    fn build_end_meets_json(&self, query: &EndMeetsQuery) -> Result<Value, ApiError> {
+        let only = match &query.component {
+            Some(c) => Some(self.component_ref(c)?),
+            None => None,
+        };
+        let active = self.host_placement();
+        let end_name = |b: bool| if b { "b" } else { "a" };
+        let ends: Vec<Value> = self
+            .build_end_meets(only, query.meets)
+            .iter()
+            .map(|e| {
+                let leans: Map<String, Value> = ["x", "-x", "y", "-y"]
+                    .iter()
+                    .zip(e.leans)
+                    .map(|(t, v)| ((*t).to_owned(), json!(active.apply_vector(v))))
+                    .collect();
+                let (meets, why) = match &e.meets {
+                    Ok(m) => (
+                        json!({
+                            "component": m.other,
+                            "occurrence": path_text(&m.other_path),
+                            "end": end_name(m.other_end_b),
+                            "angle": m.angle,
+                            "lengthen": m.lengthen[0],
+                            "other_lengthen": m.lengthen[1],
+                            "tilt": m.tilts[0].as_str(),
+                            "other_tilt": m.tilts[1].as_str(),
+                            "away": m.away.as_str(),
+                            "across": [m.across[0].as_str(), m.across[1].as_str()],
+                            "problem": m.problem,
+                        }),
+                        Value::Null,
+                    ),
+                    Err(why) if why.is_empty() => (Value::Null, Value::Null),
+                    Err(why) => (Value::Null, json!(why)),
+                };
+                json!({
+                    "component": e.component,
+                    "occurrence": path_text(&e.path),
+                    "end": end_name(e.end_b),
+                    "point": active.apply_point(e.point),
+                    "out": active.apply_vector(e.out),
+                    "leans": leans,
+                    "meets": meets,
+                    "why": why,
+                })
+            })
+            .collect();
+        Ok(json!({"ends": ends, "near": mitcad_model_build::NEAR}))
     }
 
     fn build_cut_list_json(&self, query: &CutListQuery) -> Result<Value, ApiError> {

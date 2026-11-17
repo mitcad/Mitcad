@@ -433,6 +433,67 @@ fn a_closed_table_refuses_a_combination_that_is_no_row() {
 }
 
 #[test]
+fn a_closed_table_s_open_option_is_chosen_beside_its_rows() {
+    // mitcad#1950: a board's sizes are rows, its length an open option
+    // within its limits.
+    let mut doc = doc();
+    add(&mut doc, "Size", "'22x100'");
+    add(&mut doc, "W", "100 mm");
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "L", "expression": "3000 mm",
+               "min": "100 mm", "max": "6000 mm"}),
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "options": ["Size", "L"], "open": ["L"], "closed": true, "parameters": ["W"],
+            "default": "22x100",
+            "rows": [{"name": "22x100", "values": {"Size": "'22x100'", "W": "100 mm"}},
+                     {"name": "22x150", "values": {"Size": "'22x150'", "W": "150 mm"}}]}}),
+    );
+    // A length of no row with a row's size: allowed, the row kept.
+    let answer = command(
+        &mut doc,
+        json!({"cmd": "configure", "values": {"Size": "22x150", "L": "2345 mm"}}),
+    );
+    assert_eq!(answer["refused"], Value::Null, "{answer}");
+    assert_eq!(answer["row"], "22x150");
+    assert_eq!(parameter(&doc, "L")["value"], 2345.0);
+    assert_eq!(parameter(&doc, "W")["value"], 150.0);
+    // The choosers: Size by the rows, L its range.
+    let report = query(&doc, json!({"query": "configure"}));
+    assert_eq!(report["options"][1]["name"], "L");
+    assert_eq!(report["options"][1]["allowed"]["kind"], "range");
+    assert_eq!(report["options"][1]["allowed"]["max"], 6000.0);
+    assert!(
+        report["options"][0]["restricted_by"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("Only these rows"))
+    );
+    // A size of no row is still refused.
+    let answer = command(
+        &mut doc,
+        json!({"cmd": "configure", "values": {"Size": "22x999"}}),
+    );
+    assert_eq!(answer["refused"]["rule"], "Only these rows", "{answer}");
+    // Kept in the file; an open option must be a closed table's option.
+    let reopened = reopened(&doc);
+    assert_eq!(reopened.configurations().open, ["L"]);
+    let e = refused(
+        &mut doc,
+        json!({"cmd": "set_configurations", "configurations": {
+            "options": ["Size"], "open": ["L"], "closed": true, "parameters": ["W"],
+            "rows": [{"name": "A", "values": {"Size": "'22x100'", "W": "100 mm"}}]}}),
+    );
+    assert!(
+        e.contains("the open option L is not an option of the table"),
+        "{e}"
+    );
+}
+
+#[test]
 fn an_open_table_allows_combinations_that_are_no_row() {
     let mut doc = screw(false);
     let answer = command(

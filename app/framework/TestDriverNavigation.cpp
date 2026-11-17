@@ -12,11 +12,13 @@
 #include <utility>
 
 #include <QApplication>
+#include <QGuiApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QPointer>
+#include <QPointingDevice>
 #include <QPushButton>
 #include <QSlider>
 #include <QWheelEvent>
@@ -888,6 +890,161 @@ void TestDriver::testDragZoom() {
                                         "the zoom, an upward drag with a sideways wobble came closer at every step "
                                         "(%1)")
                              .arg(input);
+  });
+}
+
+// Wheel steps with no phase and no pixel deltas, as Linux's xcb platform
+// gives a touchpad's two-finger scroll (GitHub mitcad/Mitcad#381), in the
+// Trackpad scheme: from a touchpad device they pan, both ways, and with Alt
+// a vertical move (its axes swapped, as xcb sends it) orbits vertically;
+// from a mouse, a whole and a partial notch zoom. Off xcb the view does not
+// look at the device, so there a touchpad's wheel steps keep zooming.
+// Application events, a frame after each case.
+void TestDriver::testDeviceScroll() {
+  auto* window = qobject_cast<MainWindow*>(m_main.data());
+  if (!window || window->modelBusy()) {
+    fail(m_line, QStringLiteral("device scroll requires an idle document"));
+    return;
+  }
+  struct State {
+    QPointer<OcctViewer> view;
+    NavigationSettings original;
+    CameraState camera;
+    CameraState before;
+    QPointer<QPointingDevice> touchpad;
+    QPointer<QPointingDevice> mouse;
+    gp_Vec verticalPan;
+  };
+  auto state = std::make_shared<State>();
+  state->view = &window->viewer();
+  state->view->settleCamera();
+  state->original = state->view->navigation();
+  state->camera = state->view->camera();
+  const QInputDevice::Capabilities caps = QInputDevice::Capability::Position | QInputDevice::Capability::Scroll;
+  state->touchpad = new QPointingDevice(QStringLiteral("Test touchpad"), 9381, QInputDevice::DeviceType::TouchPad,
+                                        QPointingDevice::PointerType::Finger, caps, 2, 0, QString(),
+                                        QPointingDeviceUniqueId(), window);
+  state->mouse = new QPointingDevice(QStringLiteral("Test mouse"), 9382, QInputDevice::DeviceType::Mouse,
+                                     QPointingDevice::PointerType::Generic, caps, 1, 3, QString(),
+                                     QPointingDeviceUniqueId(), window);
+  constexpr double kQuarterTurn = 1.57079632679489661923; // pi / 2
+  const bool xcb = QGuiApplication::platformName() == QLatin1String("xcb");
+  const auto use = [state] {
+    NavigationSettings settings = state->original;
+    settings.scheme = NavigationScheme::Trackpad;
+    settings.animate = false;
+    settings.zoomToCursor = false;
+    settings.constrainedOrbit = true; // a vertical orbit alone changes the elevation
+    settings.reverseZoom = false;
+    settings.reversePanHorizontal = false;
+    settings.reversePanVertical = false;
+    settings.reverseScrollOrbit = false;
+    settings.orbitSpeed = 1.0;
+    settings.panSpeed = 1.0;
+    settings.zoomSpeed = 1.0;
+    settings.trackpadSpeed = 1.0;
+    state->view->setNavigation(settings); // ends the last case's scroll drag
+    CameraState camera = state->camera;
+    camera.eye = gp_Pnt(200, -300, 200);
+    camera.target = gp_Pnt(0, 0, 0);
+    camera.up = gp_Dir(0, 0, 1);
+    camera.height = 200;
+    state->view->setCamera(camera);
+    state->view->settleCamera();
+    state->before = state->view->camera();
+  };
+  // Two wheel steps of a device, then a frame: OCCT applies them now.
+  const auto wheel = [state](const QPointingDevice* device, QPoint angle, Qt::KeyboardModifiers modifiers) {
+    const QPointF at(state->view->width() * 0.5, state->view->height() * 0.5);
+    for (int i = 0; i < 2; ++i) {
+      QWheelEvent event(at, QPointF(state->view->mapToGlobal(at.toPoint())), QPoint(), angle, Qt::NoButton,
+                        modifiers, Qt::NoScrollPhase, false, Qt::MouseEventNotSynthesized, device);
+      QCoreApplication::sendEvent(state->view, &event);
+    }
+    state->view->grabFramebuffer();
+    state->view->settleCamera();
+  };
+  const auto zoomed = [state] {
+    const CameraState after = state->view->camera();
+    return std::abs(std::log(after.height / state->before.height)) > 1e-4 &&
+           state->before.target.Distance(after.target) < 1e-6;
+  };
+  const auto check = [this](bool ok, const QString& why) {
+    if (!ok) fail(m_line, why);
+    return ok;
+  };
+  if (!xcb) {
+    queue([state, use, wheel, zoomed, check] {
+      if (!state->view || !state->touchpad) return;
+      use();
+      wheel(state->touchpad, QPoint(0, 120), Qt::NoModifier);
+      if (!check(zoomed(), QStringLiteral("off xcb, a touchpad's wheel steps did not zoom"))) return;
+      qInfo().noquote() << QStringLiteral("Device scroll: on %1 a touchpad's wheel steps zoom as before")
+                               .arg(QGuiApplication::platformName());
+    });
+  } else {
+    // A vertical and a horizontal two-finger move pan, without zooming.
+    for (const bool vertical : {true, false}) {
+      queue([state, use, wheel, check, vertical] {
+        if (!state->view || !state->touchpad) return;
+        use();
+        wheel(state->touchpad, vertical ? QPoint(0, 120) : QPoint(120, 0), Qt::NoModifier);
+        const CameraState after = state->view->camera();
+        const gp_Vec moved(state->before.target, after.target);
+        const QString which = vertical ? QStringLiteral("vertical") : QStringLiteral("horizontal");
+        if (!check(moved.Magnitude() > 1e-3 && std::abs(std::log(after.height / state->before.height)) < 1e-6,
+                   QStringLiteral("a touchpad's %1 wheel steps did not pan (moved %2 mm, height %3 to %4)")
+                       .arg(which).arg(moved.Magnitude()).arg(state->before.height).arg(after.height))) {
+          return;
+        }
+        if (vertical) {
+          state->verticalPan = moved;
+          return;
+        }
+        if (state->verticalPan.Magnitude() <= 1e-3) return; // its own failure was reported
+        const double angle = state->verticalPan.Angle(moved);
+        check(angle > kQuarterTurn / 2 && angle < 3 * kQuarterTurn / 2,
+              QStringLiteral("a touchpad's horizontal pan went the vertical pan's way (%1 rad apart)").arg(angle));
+      });
+    }
+    // Alt + a vertical two-finger move: xcb swaps the axes, so it arrives
+    // as a horizontal step; the view undoes that and orbits vertically.
+    queue([state, use, wheel, check] {
+      if (!state->view || !state->touchpad) return;
+      use();
+      wheel(state->touchpad, QPoint(120, 0), Qt::AltModifier);
+      const CameraState after = state->view->camera();
+      const gp_Vec from(state->before.eye, state->before.target);
+      const gp_Vec to(after.eye, after.target);
+      const double elevation = std::asin(to.Normalized().Z()) - std::asin(from.Normalized().Z());
+      const double azimuth = std::remainder(std::atan2(to.Y(), to.X()) - std::atan2(from.Y(), from.X()), 4 * kQuarterTurn);
+      check(std::abs(elevation) > 1e-3 && std::abs(elevation) > 3 * std::abs(azimuth),
+            QStringLiteral("Alt + a touchpad's vertical move did not orbit vertically (elevation %1, azimuth %2 rad)")
+                .arg(elevation).arg(azimuth));
+    });
+  }
+  // A mouse wheel zooms, a whole notch and a partial one (a high-resolution
+  // or free-spinning wheel).
+  for (const int notch : {120, 40}) {
+    queue([state, use, wheel, zoomed, check, notch] {
+      if (!state->view || !state->mouse) return;
+      use();
+      wheel(state->mouse, QPoint(0, notch), Qt::NoModifier);
+      check(zoomed(), QStringLiteral("a mouse wheel's %1 step did not zoom").arg(notch));
+    });
+  }
+  queue([state, xcb] {
+    if (state->view) {
+      state->view->setNavigation(state->original);
+      state->view->setCamera(state->camera);
+      state->view->settleCamera();
+    }
+    delete state->touchpad.data();
+    delete state->mouse.data();
+    if (xcb) {
+      qInfo() << "Device scroll: a touchpad's wheel steps panned both ways and Alt orbited vertically";
+    }
+    qInfo() << "Device scroll: a mouse wheel's whole and partial notches zoomed";
   });
 }
 

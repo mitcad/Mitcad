@@ -187,6 +187,7 @@ const StepSpec kSpecs[] = {
     {"type", 1, -1, kInputOfTarget},
     {"click", 2, 4, kInputOfMain},
     {"dblclick", 2, 4, kInputOfMain},
+    {"click-now", 2, 4, kPlain},
     {"drag", 4, 6, kInputOfMain},
     {"wheel", 3, 4, kInputOfMain},
     {"wheel-burst", 4, 5, kInputOfMain},
@@ -280,6 +281,7 @@ const StepSpec kSpecs[] = {
     {"view-context-menu", 3, 3, kInputOfMain},
     {"view-context-menu-logged", 2, 2, kInputOfMain},
     {"view-pointer", 4, 5, kInputOfMain},
+    {"pointer-logged", 3, 5, kInputOfMain},
     {"qt-pinch", 3, 3, kInputOfMain},
     {"capture-view-height", 1, 1, kIdle},
     {"expect-view-zoom", 2, 4, kIdle},
@@ -305,6 +307,7 @@ const StepSpec kSpecs[] = {
     {"expect-navigation-release", 0, 0, kIdle},
     {"expect-navigation-gesture-state", 0, 0, kIdle},
     {"expect-drag-zoom", 0, 0, kIdle},
+    {"expect-device-scroll", 0, 0, kIdle},
     {"view-navigation", 1, 1, kIdle},
     {"expect-assistant-setup", 1, 1, kIdle},
     {"agent-menu", 2, 2, kIdle},
@@ -1877,6 +1880,11 @@ bool TestDriver::saveScreenshot(const QString& path, bool viewOnly, QWidget* cro
         painter.drawPixmap(top->mapFromGlobal(card->geometry().topLeft()), card->grab());
       }
     }
+    // An open popup menu (the view's context menu, mitcad#1713's review
+    // shots): a window of its own over this one, drawn at its place.
+    if (QWidget* popup = QApplication::activePopupWidget(); popup != nullptr && popup->isVisible()) {
+      painter.drawPixmap(top->mapFromGlobal(popup->geometry().topLeft()), popup->grab());
+    }
   }
   if (crop != nullptr && !shot.isNull()) {
     // Cut to the widget, whatever window it is in (a card's or the main
@@ -3032,6 +3040,8 @@ void TestDriver::run(const Step& step) {
     testNavigationRelease();
   } else if (name == QLatin1String("expect-drag-zoom")) {
     testDragZoom();
+  } else if (name == QLatin1String("expect-device-scroll")) {
+    testDeviceScroll();
   } else if (name == QLatin1String("expect-navigation-gesture-state")) {
     testNavigationGestureState();
   } else if (name == QLatin1String("view-navigation")) {
@@ -3269,6 +3279,44 @@ void TestDriver::run(const Step& step) {
       sendMouse(type, at, phase == QStringLiteral("move") ? Qt::NoButton : button,
                 phase == QStringLiteral("release") ? Qt::NoButton : button, modifiers);
     });
+  } else if (name == QLatin1String("pointer-logged")) {
+    const QString phase = a.at(0);
+    const bool none = a.at(2) == QStringLiteral("none");
+    double dx = 0, dy = 0;
+    QRegularExpression re;
+    if ((phase != QStringLiteral("press") && phase != QStringLiteral("move") && phase != QStringLiteral("release")) ||
+        (!none && a.at(2) != QStringLiteral("left")) || (phase != QStringLiteral("move") && none) ||
+        a.size() == 4 || (a.size() == 5 && (!toNumber(a.at(3), dx) || !toNumber(a.at(4), dy)))) {
+      fail(line, QStringLiteral("pointer-logged press|move|release <regex> none|left [dx dy]")); return;
+    }
+    if (!regex(a.at(1), re)) return;
+    const Qt::MouseButton button = none ? Qt::NoButton : Qt::LeftButton;
+    const auto at = std::make_shared<QPoint>();
+    whenReady(
+        [this, re, at] {
+          if (m_pointerHeld) {
+            *at = *m_pointerHeld;
+            return true;
+          }
+          return loggedPoint(re, 0, *at);
+        },
+        6, QStringLiteral("no place logged for '%1'").arg(a.at(1)),
+        [this, phase, at, button, dx, dy] {
+          const QPoint to = *at + QPoint(qRound(dx), qRound(dy));
+          if (phase == QStringLiteral("press")) {
+            m_pointerHeld = to;
+          } else if (phase == QStringLiteral("release")) {
+            m_pointerHeld.reset();
+          }
+          queue([this, phase, to, button] {
+            const auto type = phase == QStringLiteral("press")     ? QEvent::MouseButtonPress
+                              : phase == QStringLiteral("release") ? QEvent::MouseButtonRelease
+                                                                   : QEvent::MouseMove;
+            sendMouse(type, to, phase == QStringLiteral("move") ? Qt::NoButton : button,
+                      phase == QStringLiteral("release") ? Qt::NoButton : button, Qt::NoModifier);
+          });
+        },
+        mainWindow);
   } else if (name == QLatin1String("expect-viewport")) {
     whenReady([this] {
       auto* view = qobject_cast<OcctViewer*>(viewer());
@@ -4630,7 +4678,7 @@ void TestDriver::run(const Step& step) {
   }
 
   // --- The mouse in the 3D view
-  if (name == QLatin1String("click") || name == QLatin1String("dblclick")) {
+  if (name == QLatin1String("click") || name == QLatin1String("dblclick") || name == QLatin1String("click-now")) {
     double x = 0;
     double y = 0;
     Qt::MouseButton button = Qt::LeftButton;
@@ -4649,7 +4697,7 @@ void TestDriver::run(const Step& step) {
       fail(line, QStringLiteral("no 3D view"));
       return;
     }
-    queueClick(at, button, modifiers, name == QLatin1String("click") ? 1 : 2);
+    queueClick(at, button, modifiers, name == QLatin1String("dblclick") ? 2 : 1);
   } else if (name == QLatin1String("drag")) {
     double c[4] = {0, 0, 0, 0};
     Qt::MouseButton button = Qt::LeftButton;
@@ -5052,8 +5100,10 @@ void TestDriver::run(const Step& step) {
           }
           int from = 0;
           if (pick) {
-            // The places of the newest "Pick places:" only; older ones may
-            // be stale.
+            auto* window = qobject_cast<MainWindow*>(m_main.data());
+            if (window == nullptr || !window->refreshLoggedPickPlaces()) {
+              return false;
+            }
             static const QRegularExpression places(QStringLiteral("^Pick places:"));
             from = std::max(findLastLine(places, 0), 0);
           }
@@ -5144,7 +5194,13 @@ void TestDriver::run(const Step& step) {
           if (findLastLine(re, 0, &logged) < 0) { return false; }
           const auto match = QRegularExpression(QStringLiteral(" input (\\S+) at ")).match(logged);
           if (match.hasMatch() && m_main) {
-            auto* input = m_main->findChild<QLineEdit*>(QStringLiteral("input_") + match.captured(1));
+            const QString name = QStringLiteral("input_") + match.captured(1);
+            auto* input = m_main->findChild<QLineEdit*>(name);
+            if (input == nullptr) {
+              // A field with a slider before it: the name is the row's (the
+              // slider and the field), the editor inside it.
+              if (auto* both = m_main->findChild<QWidget*>(name)) { input = both->findChild<QLineEdit*>(); }
+            }
             if (input && input->isVisible()) {
               // Validation hints can move a field after its logged position.
               // Reveal the actual editor and use its current position.
@@ -5512,6 +5568,18 @@ void TestDriver::run(const Step& step) {
                 action->isEnabled()) {
               m_found = action;
               return true;
+            }
+          }
+          // "Rim: *" chooses the first entry that starts with "Rim: " (an
+          // entry whose message the test cannot know whole, mitcad#1935).
+          if (entry.endsWith(QLatin1Char('*'))) {
+            const QString head = plainText(entry.chopped(1));
+            for (QAction* action : menu->actions()) {
+              if (action->isEnabled() && action->menu() == nullptr &&
+                  plainText(action->text()).startsWith(head, Qt::CaseInsensitive)) {
+                m_found = action;
+                return true;
+              }
             }
           }
           const int slash = entry.indexOf(QLatin1Char('/'));

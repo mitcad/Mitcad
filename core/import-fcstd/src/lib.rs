@@ -28,9 +28,13 @@
 //! - Visibility (hidden bodies and occurrences) and colours: FreeCAD's body
 //!   and face colours become document appearances on the bodies and faces,
 //!   also of the bodies the history makes ([`appearances`], mitcad#793).
-//! - The origin and objects without geometry are left out with the
-//!   reason; features inside a Body and consumed operands are part of
-//!   their result (and of the history).
+//! - Objects without geometry are left out with the reason; features
+//!   inside a Body and consumed operands are part of their result (and of
+//!   the history). What is no feature is not counted as skipped
+//!   (mitcad#1960): an origin and its planes (MitCad's own origin stands
+//!   for them), a coordinate system something is attached to and its
+//!   planes (the sketches on them carry it), a VarSet or spreadsheet whose
+//!   values became parameters.
 //! - Sketches come on the timeline, editable, with their constraints and
 //!   dimensions ([`sketch`] translates them).
 //! - Spreadsheets, VarSets, named constraints and the expressions bound to
@@ -315,6 +319,26 @@ impl Source {
         }
     }
 
+    /// Whether another object refers to `name` or to an object it holds (a
+    /// sketch on a coordinate system or on one of its planes), other than
+    /// as a container lists it.
+    fn attached_to(&self, name: &str) -> bool {
+        let named =
+            |object: &str| object == name || self.container.get(object).is_some_and(|c| c == name);
+        self.file.document.objects.iter().any(|o| {
+            o.name != name
+                && !named(&o.name)
+                && o.references().any(|(property, link)| {
+                    link.file.is_none()
+                        && !matches!(
+                            property,
+                            "Group" | "Origin" | "OriginFeatures" | "ElementList"
+                        )
+                        && named(&link.object)
+                })
+        })
+    }
+
     fn label(&self, name: &str) -> String {
         self.object(name)
             .map_or_else(|| name.to_owned(), |o| o.label().to_owned())
@@ -358,6 +382,20 @@ impl Source {
             return Role::Included(format!("in the body {}", self.label(body)));
         }
         if is_construction(t) {
+            // An origin and the planes, axes and point it or a coordinate
+            // system holds are no features (mitcad#1960): MitCad's own
+            // origin stands for an origin, the coordinate system's report
+            // says what became of it.
+            let holder = self.container.get(&o.name).and_then(|c| self.object(c));
+            if t == "App::Origin" || holder.is_some_and(|h| h.type_name == "App::Origin") {
+                return Role::Included("an origin: MitCad's own origin stands for it".to_owned());
+            }
+            if let Some(h) = holder.filter(|h| history::is_coordinate_system(&h.type_name)) {
+                return Role::Included(format!("a part of the coordinate system {}", h.label()));
+            }
+            if history::is_coordinate_system(t) && self.attached_to(&o.name) {
+                return Role::Included(history::CARRIED_COORDINATE_SYSTEM.to_owned());
+            }
             return Role::Skipped("construction geometry (origin, datum)".to_owned());
         }
         if is_sketch(t) {
@@ -1413,6 +1451,18 @@ impl<K: Kernel> Importer<'_, '_, K> {
                         Some("not reached from the document's top".to_owned()),
                     ),
                 });
+            // A VarSet or a spreadsheet is no feature: its numbers came in
+            // as parameters (mitcad#1960: it was counted as skipped).
+            let (outcome, note) = match self.made_parameters(o) {
+                n if n > 0 && outcome == ObjectOutcome::Skipped => (
+                    ObjectOutcome::Included,
+                    Some(format!(
+                        "its values: {}",
+                        mitcad_model::notice::count(n, "parameter", "parameters")
+                    )),
+                ),
+                _ => (outcome, note),
+            };
             let stale = o.state.is_stale() && outcome == ObjectOutcome::Body;
             if o.state.is_stale() {
                 self.report.stale.push(o.name.clone());

@@ -33,6 +33,7 @@
 #include <QScrollBar>
 #include <QStackedWidget>
 #include <QStyleOptionToolButton>
+#include <QStylePainter>
 #include <QTabBar>
 #include <QTimer>
 #include <QToolButton>
@@ -41,6 +42,7 @@
 
 #include "CommandRegistry.hpp"
 #include "PlaceWatcher.hpp"
+#include "RibbonLabels.hpp"
 #include "TestSync.hpp"
 #include "Theme.hpp"
 #include "WindowStyle.hpp"
@@ -520,22 +522,128 @@ private:
   QToolButton* m_next = nullptr;
 };
 
-QToolButton* commandButton(QAction* action, bool mac) {
+// A command button's short label (CommandDef::shortLabel, mitcad#1936),
+// empty for its name.
+const char* const kShortLabelProperty = "mitcadShortLabel";
+
+// The labels' font under the icons (mitcad#1936): the captions' 0.85 of the
+// ribbon's font, at Icon size.
+QFont ribbonLabelFont(const QFont& base) {
+  QFont font = base;
+  const double scale = ribbonLabelFontScale(ui_sizes_detail::iconPercent, ui_sizes_detail::textPercent);
+  if (font.pointSizeF() > 0) {
+    font.setPointSizeF(font.pointSizeF() * scale);
+  } else if (font.pixelSize() > 0) {
+    font.setPixelSize(std::max(1, qRound(font.pixelSize() * scale)));
+  }
+  return font;
+}
+
+// The label a command button shows under its icon, elided past two and a
+// half icons of `iconPixels`, in `font` (ribbonLabelFont).
+QString shownButtonLabel(const QToolButton* button, const QFont& font, int iconPixels) {
+  const QAction* action = button->defaultAction();
+  const QString label = ribbonButtonLabel(action != nullptr ? action->text() : button->text(),
+                                          button->property(kShortLabelProperty).toString());
+  return QFontMetrics(font).elidedText(label, Qt::ElideRight, ribbonLabelWidthLimit(iconPixels));
+}
+
+// A command button of the Classic presentation (Docked): Qt's tool button,
+// with its short label under the icon when the labels are shown
+// (Ribbon::setButtonLabels, mitcad#1936).
+class ClassicRibbonButton : public QToolButton {
+public:
+  void setLabelShown(bool shown) {
+    if (shown == m_labelShown) {
+      return;
+    }
+    m_labelShown = shown;
+    setToolButtonStyle(shown ? Qt::ToolButtonTextUnderIcon : Qt::ToolButtonIconOnly);
+    updateGeometry();
+    update();
+  }
+
+  // As QToolButton's, with the label's text and font.
+  QSize sizeHint() const override {
+    if (!m_labelShown) {
+      return QToolButton::sizeHint();
+    }
+    QStyleOptionToolButton option;
+    labelOption(&option);
+    const QFontMetrics metrics(option.font);
+    const QSize text = metrics.size(Qt::TextSingleLine | Qt::TextShowMnemonic, option.text);
+    int width = std::max(option.iconSize.width(), text.width() + metrics.horizontalAdvance(QLatin1Char(' ')) * 2);
+    const int height = option.iconSize.height() + 4 + text.height();
+    option.rect.setSize(QSize(width, height));
+    if (popupMode() == QToolButton::MenuButtonPopup) {
+      width += style()->pixelMetric(QStyle::PM_MenuButtonIndicator, &option, this);
+    }
+    return style()->sizeFromContents(QStyle::CT_ToolButton, &option, QSize(width, height), this);
+  }
+  QSize minimumSizeHint() const override { return sizeHint(); }
+
+protected:
+  void paintEvent(QPaintEvent* event) override {
+    if (!m_labelShown) {
+      QToolButton::paintEvent(event);
+      return;
+    }
+    QStylePainter painter(this);
+    QStyleOptionToolButton option;
+    labelOption(&option);
+    painter.drawComplexControl(QStyle::CC_ToolButton, option);
+  }
+
+private:
+  // The style's option with the shown label (an "&" in it doubled, not a
+  // mnemonic) in the labels' font.
+  void labelOption(QStyleOptionToolButton* option) const {
+    initStyleOption(option);
+    option->font = ribbonLabelFont(font());
+    QString label = shownButtonLabel(this, option->font, iconSize().width());
+    label.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    option->text = label;
+  }
+
+  bool m_labelShown = false;
+};
+
+QToolButton* commandButton(QAction* action, bool mac, bool labels, const QString& shortLabel) {
   QToolButton* button = nullptr;
   if (mac) {
-    button = new RibbonButton(action, uiIconSize(kMacIconSize));
+    auto* ribbonButton = new RibbonButton(action, uiIconSize(kMacIconSize));
+    ribbonButton->setProperty(kShortLabelProperty, shortLabel);
+    ribbonButton->setLabelShown(labels);
+    button = ribbonButton;
   } else {
-    button = new QToolButton;
-    button->setDefaultAction(action);
-    button->setIconSize(uiIconSize(kIconSize, kIconSize));
-    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    button->setAutoRaise(true);
+    auto* classic = new ClassicRibbonButton;
+    classic->setDefaultAction(action);
+    classic->setIconSize(uiIconSize(kIconSize, kIconSize));
+    classic->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    classic->setAutoRaise(true);
+    classic->setProperty(kShortLabelProperty, shortLabel);
+    classic->setLabelShown(labels);
+    button = classic;
   }
   button->setFocusPolicy(Qt::NoFocus);
   if (action->menu() != nullptr) {
     button->setPopupMode(QToolButton::InstantPopup);
   }
   return button;
+}
+
+// Shows or hides a command button's label, of either presentation.
+void setButtonLabelShown(QToolButton* button, bool shown) {
+  if (auto* mac = qobject_cast<RibbonButton*>(button)) {
+    mac->setLabelShown(shown);
+  } else if (auto* classic = dynamic_cast<ClassicRibbonButton*>(button)) {
+    classic->setLabelShown(shown);
+  }
+}
+
+// The label a command button shows under its icon, for the log.
+QString loggedButtonLabel(const QToolButton* button) {
+  return shownButtonLabel(button, ribbonLabelFont(button->font()), button->iconSize().width());
 }
 
 // A pinned command's button (mitcad#1001, in its own group since
@@ -833,7 +941,24 @@ RibbonButton::RibbonButton(QAction* action, int iconSize, QWidget* parent)
 
 QSize RibbonButton::sizeHint() const {
   const int arrow = popupMode() == QToolButton::MenuButtonPopup ? kSplitArrowWidth : 0;
-  return QSize(m_iconSize + 10 + arrow, m_iconSize + 10);
+  if (!m_labelShown) {
+    return QSize(m_iconSize + 10 + arrow, m_iconSize + 10);
+  }
+  // The label under the icon (mitcad#1936): as wide as its shown text with
+  // 4 pixels at either side, at least the icon's room.
+  const QFont font = ribbonLabelFont(this->font());
+  const QFontMetrics metrics(font);
+  const int label = metrics.horizontalAdvance(shownButtonLabel(this, font, m_iconSize)) + 8;
+  return QSize(std::max(m_iconSize + 10, label) + arrow, m_iconSize + 10 + metrics.height());
+}
+
+void RibbonButton::setLabelShown(bool shown) {
+  if (shown == m_labelShown) {
+    return;
+  }
+  m_labelShown = shown;
+  updateGeometry();
+  update();
 }
 
 void RibbonButton::mousePressEvent(QMouseEvent* event) {
@@ -881,9 +1006,12 @@ void RibbonButton::paintEvent(QPaintEvent*) {
   // A split button (mitcad#222): the icon left of the arrow part, a chevron
   // in it, divided from the icon while hovered.
   const int arrow = popupMode() == QToolButton::MenuButtonPopup ? kSplitArrowWidth : 0;
+  // The icon's room: the whole button, or its top with a label under it
+  // (mitcad#1936).
+  const int iconRoom = m_labelShown ? m_iconSize + 10 : height();
   if (arrow > 0) {
     const QColor color = textTint(pal, active ? 190 : 80);
-    drawChevron(painter, QPointF(width() - arrow / 2.0, height() / 2.0 + 0.5), color);
+    drawChevron(painter, QPointF(width() - arrow / 2.0, iconRoom / 2.0 + 0.5), color);
     if (underMouse() && active) {
       painter.setPen(QPen(textTint(pal, 40), 1));
       painter.drawLine(QPointF(width() - arrow + 0.5, 8), QPointF(width() - arrow + 0.5, height() - 8));
@@ -893,7 +1021,15 @@ void RibbonButton::paintEvent(QPaintEvent*) {
   const QPixmap pixmap = icon().pixmap(QSize(m_iconSize, m_iconSize), devicePixelRatioF(), mode,
                                        isChecked() ? QIcon::On : QIcon::Off);
   const QSizeF size = pixmap.deviceIndependentSize();
-  painter.drawPixmap(QPointF((width() - arrow - size.width()) / 2, (height() - size.height()) / 2), pixmap);
+  painter.drawPixmap(QPointF((width() - arrow - size.width()) / 2, (iconRoom - size.height()) / 2), pixmap);
+  if (m_labelShown) {
+    const QFont font = ribbonLabelFont(this->font());
+    painter.setFont(font);
+    painter.setPen(textTint(pal, active ? 230 : 90));
+    const QRect label(0, m_iconSize + 7, width() - arrow, QFontMetrics(font).height());
+    painter.drawText(label, Qt::AlignHCenter | Qt::AlignTop | Qt::TextSingleLine,
+                     shownButtonLabel(this, font, m_iconSize));
+  }
 }
 
 CapsuleFrame::CapsuleFrame(int radius, QWidget* parent) : QWidget(parent), m_radius(radius) {}
@@ -933,7 +1069,8 @@ void CapsuleFrame::paintEvent(QPaintEvent*) {
 }
 
 Ribbon::Ribbon(CommandRegistry& registry, Presentation presentation, QWidget* parent)
-    : QWidget(parent), m_registry(registry), m_presentation(presentation) {
+    : QWidget(parent), m_registry(registry), m_presentation(presentation),
+      m_labels(savedRibbonLabels() == RibbonLabels::UnderIcons) {
   setObjectName(QStringLiteral("ribbon"));
   auto* layout = new QVBoxLayout(this);
   layout->setSpacing(0);
@@ -1095,6 +1232,10 @@ void Ribbon::build() {
   m_pages->addWidget(createPage(kStart));
   addModelTabs();
   m_tabs->setCurrentIndex(tabOfPage(kSolidPage));
+  // The rows as high as the buttons with their labels (mitcad#1936).
+  if (m_labels) {
+    layoutButtonRows();
+  }
 }
 
 void Ribbon::addModelTabs() {
@@ -1253,7 +1394,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
       QAction* action = m_registry.action(def->id);
       menu->addAction(action);
       if (def->pinned) {
-        QToolButton* button = commandButton(action, mac);
+        QToolButton* button = commandButton(action, mac, m_labels, def->shortLabel);
         button->setObjectName(QStringLiteral("ribbon_") + def->id);
         buttons->addWidget(button);
         ++pinnedCount;
@@ -1285,7 +1426,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     }
     if (primary != nullptr) {
       QAction* action = m_registry.action(primary->id);
-      QToolButton* button = commandButton(action, mac);
+      QToolButton* button = commandButton(action, mac, m_labels, primary->shortLabel);
       button->setObjectName(QStringLiteral("ribbon_") + primary->id);
       button->setMenu(submenu);
       button->setPopupMode(QToolButton::MenuButtonPopup);
@@ -1316,7 +1457,7 @@ QWidget* Ribbon::createGroup(const QString& tab, const QString& group, GroupInfo
     menu->addActions(extras.menu);
   }
   for (QAction* action : extras.pinned) {
-    buttons->addWidget(commandButton(action, mac));
+    buttons->addWidget(commandButton(action, mac, m_labels, QString()));
     ++pinnedCount;
   }
   // The commands the user pinned in this group, after its own buttons
@@ -1523,7 +1664,8 @@ int Ribbon::addPinnedButtons(const QString& tab, const QString& group, QWidget* 
     if (action == nullptr || row->findChild<QToolButton*>(QStringLiteral("ribbon_") + id) != nullptr) {
       continue;
     }
-    QToolButton* button = commandButton(action, mac);
+    const CommandDef* def = m_registry.find(id);
+    QToolButton* button = commandButton(action, mac, m_labels, def != nullptr ? def->shortLabel : QString());
     button->setObjectName(QStringLiteral("ribbonPinned_") + id);
     button->setProperty(kPinTabProperty, tab);
     button->setProperty(kPinIdProperty, id);
@@ -1885,6 +2027,142 @@ void Ribbon::fitPage(QList<GroupInfo>& infos, int fixed, int available) {
                                      folded.isEmpty() ? QStringLiteral("none") : folded.join(QStringLiteral(", ")));
     }
   }
+  // The tab's groups collapsed to their names, left to right, when they
+  // change (mitcad#1936: the labels make the groups wider), also while the
+  // ribbon is not yet shown: "Ribbon collapsed SOLID: INSERT, RENDER,
+  // SELECT" ("... SOLID: none").
+  if (count > 0) {
+    QStringList names;
+    for (std::size_t i = 0; i < count; ++i) {
+      if (collapsed[i]) {
+        names << infos[static_cast<int>(i)].group;
+      }
+    }
+    const QString tab = infos.constFirst().tab;
+    const auto logged = m_loggedCollapsed.constFind(tab);
+    if (logged == m_loggedCollapsed.cend() || *logged != names) {
+      m_loggedCollapsed.insert(tab, names);
+      qDebug().noquote() << QStringLiteral("Ribbon collapsed %1: %2")
+                                .arg(tab, names.isEmpty() ? QStringLiteral("none") : names.join(QStringLiteral(", ")));
+    }
+  }
+}
+
+void Ribbon::setButtonLabels(bool labels) {
+  if (labels == m_labels) {
+    return;
+  }
+  m_labels = labels;
+  for (auto page = m_groupsOfPage.begin(); page != m_groupsOfPage.end(); ++page) {
+    for (const GroupInfo& info : std::as_const(page.value())) {
+      for (QToolButton* button : info.buttons->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+        setButtonLabelShown(button, labels);
+      }
+    }
+  }
+  layoutButtonRows();
+  const int height = buttonRowHeight();
+  const int iconsOnly = m_presentation == Presentation::Mac ? macButtonSize() : classicButtonSize();
+  qDebug().noquote() << (labels ? QStringLiteral("Ribbon labels: labels (rows %1 px high, %2 px for the labels)")
+                                      .arg(height)
+                                      .arg(height - iconsOnly)
+                                : QStringLiteral("Ribbon labels: icons (rows %1 px high)").arg(height));
+  // Every tab's collapsed groups as fitGroups left them, logged here
+  // whether or not they changed and whether or not the ribbon shows (the
+  // UI tests read the layout after a change of the labels).
+  for (auto page = m_groupsOfPage.cbegin(); page != m_groupsOfPage.cend(); ++page) {
+    if (page.value().isEmpty()) {
+      continue;
+    }
+    QStringList names;
+    for (const GroupInfo& info : page.value()) {
+      if (info.collapsible && info.buttons->isHidden()) {
+        names << info.group;
+      }
+    }
+    const QString tab = page.value().constFirst().tab;
+    m_loggedCollapsed.insert(tab, names);
+    qDebug().noquote() << QStringLiteral("Ribbon collapsed %1: %2")
+                              .arg(tab, names.isEmpty() ? QStringLiteral("none") : names.join(QStringLiteral(", ")));
+  }
+  // Each shown group's labels, in the row's order.
+  if (labels) {
+    for (auto page = m_groupsOfPage.cbegin(); page != m_groupsOfPage.cend(); ++page) {
+      for (const GroupInfo& info : page.value()) {
+        QStringList shown;
+        QLayout* row = info.buttons->layout();
+        for (int i = 0; i < row->count(); ++i) {
+          if (const auto* button = qobject_cast<QToolButton*>(row->itemAt(i)->widget())) {
+            shown << loggedButtonLabel(button);
+          }
+        }
+        if (!shown.isEmpty()) {
+          qDebug().noquote() << QStringLiteral("Ribbon group %1 labels: %2")
+                                    .arg(key(info.tab, info.group), shown.join(QStringLiteral(", ")));
+        }
+      }
+    }
+  }
+}
+
+int Ribbon::buttonRowHeight() const {
+  int height = m_presentation == Presentation::Mac ? macButtonSize() : classicButtonSize();
+  if (!m_labels) {
+    return height;
+  }
+  for (auto page = m_groupsOfPage.cbegin(); page != m_groupsOfPage.cend(); ++page) {
+    for (const GroupInfo& info : page.value()) {
+      for (const QToolButton* button : info.buttons->findChildren<QToolButton*>(QString(), Qt::FindDirectChildrenOnly)) {
+        height = std::max(height, button->sizeHint().height());
+      }
+    }
+  }
+  return height;
+}
+
+void Ribbon::layoutButtonRows() {
+  const bool mac = m_presentation == Presentation::Mac;
+  const int height = buttonRowHeight();
+  for (auto page = m_groupsOfPage.begin(); page != m_groupsOfPage.end(); ++page) {
+    for (GroupInfo& info : page.value()) {
+      info.buttons->setFixedHeight(height);
+      if (mac) {
+        info.capsule->setMinimumHeight(6 + height + macCaptionHeight(info.capsule->font()) + 5);
+      }
+      // Every pinned button in the row while it is measured (sizeGroup):
+      // fitGroups folds them again.
+      int pins = 0;
+      for (const QPointer<QToolButton>& pin : std::as_const(info.pinButtons)) {
+        if (!pin.isNull()) {
+          pin->setVisible(true);
+          ++pins;
+        }
+      }
+      info.buttons->layout()->invalidate();
+      sizeGroup(&info, info.ownButtons + pins);
+    }
+    if (QLayout* row = page.key()->layout()) {
+      row->invalidate();
+      row->activate();
+    }
+    page.key()->updateGeometry();
+    // Docked: the page's scroll area and its row take the new height.
+    if (QWidget* overflow = m_classicPages.value(page.key())) {
+      if (auto* scroll = overflow->findChild<QScrollArea*>()) {
+        scroll->updateGeometry();
+      }
+      overflow->updateGeometry();
+    }
+  }
+  m_pages->updateGeometry();
+  updateGeometry();
+  fitGroups();
+  updateGroupMask();
+  // Logged once the scroll area and the cards have followed the new size.
+  TestSync::singleShot(100, this, [this] {
+    updateGroupMask();
+    logLayoutIfChanged();
+  });
 }
 
 void Ribbon::setGroupCards(bool cards) {

@@ -324,6 +324,7 @@ enum StoredRead {
     Pieces(FeatureUid, Vec<Hex>),
     PrintBed(BodyUid, Option<String>),
     PrintLayer(Option<u64>),
+    Gravity(Option<[u64; 3]>),
     WallFlange(FeatureUid, Option<Hex>),
     Flexed(Vec<OccurrenceUid>, OccurrenceUid, Option<[u64; 12]>),
 }
@@ -354,6 +355,7 @@ impl StoredRead {
             Read::Pieces(uid, fits) => Self::Pieces(*uid, fits.iter().map(|f| Hex(*f)).collect()),
             Read::PrintBed(uid, face) => Self::PrintBed(*uid, face.clone()),
             Read::PrintLayer(bits) => Self::PrintLayer(*bits),
+            Read::Gravity(bits) => Self::Gravity(*bits),
             Read::WallFlange(plane, key) => Self::WallFlange(*plane, hex(key)),
             Read::Flexed((within, o), bits) => Self::Flexed(within.clone(), *o, *bits),
         }
@@ -386,6 +388,7 @@ impl StoredRead {
             Self::Pieces(uid, fits) => Read::Pieces(*uid, fits.iter().map(|f| f.0).collect()),
             Self::PrintBed(uid, face) => Read::PrintBed(*uid, face.clone()),
             Self::PrintLayer(bits) => Read::PrintLayer(*bits),
+            Self::Gravity(bits) => Read::Gravity(*bits),
             Self::WallFlange(plane, key) => Read::WallFlange(*plane, version(key)),
             Self::Flexed(within, o, bits) => Read::Flexed((within.clone(), *o), *bits),
         })
@@ -524,6 +527,8 @@ pub(crate) fn storable(def: &FeatureDef) -> bool {
         FeatureDef::HelixCurve(_) => false,
         // 3D sketches (mitcad#1521): solved again from their definitions.
         FeatureDef::SpatialSketch(_) => false,
+        // Flex items (mitcad#1713): routed again, with their nodes and route.
+        FeatureDef::Flex(_) => false,
         // Coordinate systems (mitcad#1775): a datum, as construction planes.
         FeatureDef::CoordinateSystem(_) => false,
         // Base features too, also those that only bring in bodies
@@ -1315,6 +1320,8 @@ fn restore<K: Kernel>(
         curve: None,
         // Not stored: a 3D sketch is not storable (mitcad#1521).
         spatial: None,
+        // Not stored: a Flex item is not storable (mitcad#1713).
+        flex: None,
         // Not stored: construction features are not storable (mitcad#1827).
         drawn: None,
     })

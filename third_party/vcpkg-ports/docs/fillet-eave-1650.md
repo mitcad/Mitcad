@@ -195,6 +195,10 @@ its width: one valid closed solid, the top face gone, the two long
 roundings meeting on one ridge edge, the volume the exact shape's (the
 round 1582.356927 at 2 wide: 1520 + 19 pi + 8/3).
 
+Contacts of no length (a cube rounded within a hair of half its side,
+every face a square 4e-4 wide) lie along any other within the tolerance;
+[1701](fillet-contact-of-no-length-1701.md) joins none of them.
+
 ### 1654-chfi3d-plate-of-a-corner-with-a-rider-oriented-from-a-stripe-riding-on-no-line
 
 Between r = 0.66 and 0.86 the tip's rounding does not roll yet, and the

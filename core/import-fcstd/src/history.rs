@@ -261,6 +261,12 @@ pub(super) fn is_datum(t: &str) -> bool {
     )
 }
 
+/// What became of a coordinate system something is attached to: it is no
+/// feature here (mitcad#1960).
+pub(super) const CARRIED_COORDINATE_SYSTEM: &str = "a coordinate system: carried by what is \
+    attached to it (a sketch on it or on one of its planes moves with its offset's expressions, \
+    other features take fixed geometry)";
+
 /// A coordinate system (a datum one or a local one, mitcad#1930).
 pub(super) fn is_coordinate_system(t: &str) -> bool {
     matches!(
@@ -1226,6 +1232,24 @@ impl<K: Kernel> Importer<'_, '_, K> {
         };
         let readings = match self.datum_def(object, &place) {
             Ok(d) => d,
+            // A coordinate system is no feature here: what is attached to
+            // it carries it (mitcad#1960: it was counted as skipped).
+            Err(_)
+                if is_coordinate_system(&object.type_name)
+                    && self.sources[0].attached_to(&object.name) =>
+            {
+                let report = FeatureReport {
+                    object: object.name.clone(),
+                    label: object.label().to_owned(),
+                    object_type: object.type_name.clone(),
+                    body,
+                    outcome: ObjectOutcome::Included,
+                    notes: vec![CARRIED_COORDINATE_SYSTEM.to_owned()],
+                    ..FeatureReport::default()
+                };
+                self.push_feature(object, report);
+                return;
+            }
             Err(why) => {
                 self.feature_skipped(object, body, &why);
                 return;

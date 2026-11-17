@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <limits>
 #include "framework/ModelMessages.hpp"
+#include "framework/UserText.hpp"
 
 #include <QDebug>
 #include <QJsonArray>
@@ -120,7 +121,7 @@ QJsonObject sheetPick(const SelectionItem& item, const CommandContext& context, 
   try {
     return context.queryObject(query);
   } catch (const std::exception& error) {
-    built = Built::failure(mitcad::modelMessage(error.what()), input);
+    built = Built::failure(mitcad::modelMessage(mitcad::userText(QString::fromUtf8(error.what()))), input);
     return {};
   }
 }
@@ -284,7 +285,7 @@ bool cornerEdges(const CommandState& row, const QString& rowKey, const QString& 
                     .value(QStringLiteral("corners"))
                     .toArray();
     } catch (const std::exception& error) {
-      built = Built::failure(mitcad::modelMessage(error.what()), rowKey);
+      built = Built::failure(mitcad::modelMessage(mitcad::userText(QString::fromUtf8(error.what()))), rowKey);
       return false;
     }
   }
@@ -1095,7 +1096,7 @@ CommandDef sheetBendCommand(const CommandContext& context) {
         stationaryRef = seam.value(QStringLiteral("stationary"));
         movingRef = seam.value(QStringLiteral("moving"));
       } catch (const std::exception& error) {
-        return Built::failure(mitcad::modelMessage(error.what()), QStringLiteral("moving"));
+        return Built::failure(mitcad::modelMessage(mitcad::userText(QString::fromUtf8(error.what()))), QStringLiteral("moving"));
       }
     } else {
       stationaryRef = sheetPick(fixed, context, result, QStringLiteral("stationary")).value(QStringLiteral("boundary"));
@@ -1522,7 +1523,7 @@ CommandDef sheetRefoldCommand(const CommandContext& context) {
                  .value(QStringLiteral("body"))
                  .toString();
     } catch (const std::exception& error) {
-      return Built::failure(mitcad::modelMessage(error.what()), QStringLiteral("unfold"));
+      return Built::failure(mitcad::modelMessage(mitcad::userText(QString::fromUtf8(error.what()))), QStringLiteral("unfold"));
     }
     result.def = {{QStringLiteral("type"), QStringLiteral("sheet_refold")},
                   {QStringLiteral("body"), body},

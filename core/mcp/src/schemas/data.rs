@@ -127,7 +127,8 @@ fn configurations() -> Value {
                 "required": ["name"],
                 "additionalProperties": false
             }},
-            "selectors": {"type": "array", "items": {"type": "string"}, "description": "An old table's cascaded choices; migrated to options"}
+            "selectors": {"type": "array", "items": {"type": "string"}, "description": "An old table's cascaded choices; migrated to options"},
+            "open": {"type": "array", "items": {"type": "string"}, "description": "A closed table's open options (mitcad#1950): options its rows leave out, chosen within their limits and the rules beside the rows (a length beside the sizes); listed in options too"}
         },
         "additionalProperties": false
     })

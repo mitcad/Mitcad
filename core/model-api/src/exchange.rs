@@ -449,6 +449,15 @@ pub(super) struct ExportSketchCommand {
     /// `construction` (mitcad#1445); left out by default.
     #[serde(default)]
     construction: bool,
+    /// Also write the sketch's free-standing points as POINT entities on
+    /// the layer `POINTS` (mitcad#1963: hole marks); written by default.
+    #[serde(default = "written")]
+    points: bool,
+}
+
+/// `points` of `export_sketch` when it is left out (mitcad#1963).
+fn written() -> bool {
+    true
 }
 
 /// The length unit a DXF export writes (mitcad#1408): its `units`, or the
@@ -990,12 +999,20 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 .map_err(|_| ApiError(format!("no feature is named {}", command.sketch)))?,
         };
         let unit = dxf_unit(self, command.units.as_deref())?;
-        let entities =
-            self.export_sketch_dxf(sketch, &command.path, unit, command.construction, &options)?;
+        let entities = self.export_sketch_dxf(
+            sketch,
+            &command.path,
+            unit,
+            command.construction,
+            command.points,
+            &options,
+        )?;
         let mut result =
             json!({"path": command.path, "entities": entities, "units": unit.symbol()});
-        // Whether construction geometry was written (mitcad#1445).
+        // Whether construction geometry was written (mitcad#1445), and the
+        // free-standing points (mitcad#1963).
         result["construction"] = json!(command.construction);
+        result["points"] = json!(command.points);
         Ok(result)
     }
 

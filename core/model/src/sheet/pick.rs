@@ -133,7 +133,7 @@ fn chart(state: &SheetState, domain: SheetDomainRef) -> Result<&SheetPatch, Stri
         .charts
         .iter()
         .find(|p| p.domain == domain)
-        .ok_or_else(|| format!("{} is not a domain of sheet {}", label(domain), state.body))
+        .ok_or_else(|| format!("{} is not a domain of this sheet", label(domain)))
 }
 
 fn label(domain: SheetDomainRef) -> String {
@@ -196,7 +196,7 @@ fn boundary(
         .collect();
     if pieces.is_empty() {
         return Err(format!(
-            "{} has no boundary along {curve} at the timeline marker",
+            "{} has no boundary along the picked wall at the timeline marker",
             label(domain)
         ));
     }
@@ -267,7 +267,7 @@ fn corner(
     let (incoming, outgoing) = match (found.len(), uv) {
         (0, _) => {
             return Err(format!(
-                "{a} and {b} do not meet at a corner of {}",
+                "the two picked walls do not meet at a corner of {}",
                 label(domain)
             ));
         }
@@ -415,7 +415,7 @@ pub fn reference(
     edge: Option<&str>,
     at: Option<[f64; 3]>,
 ) -> Result<Value, String> {
-    let not_sheet = |name: &str| format!("{name} is not a face or edge of sheet {}", state.body);
+    let not_sheet = |name: &str| format!("{name} is not a face or edge of this sheet");
     let mut answer = json!({"body": state.body});
     match (face, edge) {
         (Some(face), None) => {
@@ -585,12 +585,7 @@ pub fn seam(state: &SheetState, stationary: PanelId, moving: PanelId) -> Result<
         .collect();
     let [(a, b)] = found.as_slice() else {
         return Err(if found.is_empty() {
-            format!(
-                "{} and {} share no seam in sheet {}",
-                label(s),
-                label(m),
-                state.body
-            )
+            format!("{} and {} share no seam", label(s), label(m))
         } else {
             format!("{} and {} share several seams", label(s), label(m))
         });

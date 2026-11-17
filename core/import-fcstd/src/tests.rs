@@ -9026,6 +9026,14 @@ fn a_coordinate_system_s_driven_offset_moves_the_sketch_on_its_plane() {
     ]);
     let file = fcstd(&xml, None, &[]);
     let (mut doc, report) = import_with(file, Vec::new(), MockKernel::default(), false);
+    // Neither the VarSet (its value is a parameter) nor the coordinate
+    // system (the sketch on its plane carries it) is a skipped object
+    // (mitcad#1960).
+    for name in ["VarSet", "LCS"] {
+        let it = item(&report, name);
+        assert_eq!(it.outcome, ObjectOutcome::Included, "{it:?}");
+    }
+    assert_eq!(report.counts().get(&ObjectOutcome::Skipped), None);
     // The offset's expression is carried, by the sketch.
     let row = expression_row(&report, "LCS", ".AttachmentOffset.Base.x");
     assert_eq!(row.outcome, ExpressionOutcome::Expression, "{row:?}");
@@ -9070,4 +9078,48 @@ fn a_coordinate_system_s_driven_offset_moves_the_sketch_on_its_plane() {
     let frame = doc.sketch_output(uid).unwrap().frame;
     assert!(near(frame.origin, [-50.0, 0.0, 0.0]), "{frame:?}");
     assert!(near(frame.y_axis, [0.0, 0.0, 1.0]), "{frame:?}");
+}
+
+#[test]
+fn a_coordinate_system_nothing_uses_is_skipped_its_planes_are_not() {
+    // (mitcad#1960) A coordinate system nothing is attached to is not made
+    // (it stays a skipped object); its planes are part of it, and an origin
+    // is MitCad's own: neither is counted as skipped.
+    let xml = document(&[
+        (
+            "Part::LocalCoordinateSystem",
+            "LCS",
+            format!(
+                "{}{}",
+                links("OriginFeatures", "App::PropertyLinkList", &["XZ_Plane001"]),
+                placement([-45.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0)
+            ),
+        ),
+        (
+            "App::Plane",
+            "XZ_Plane001",
+            placement([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], 90.0),
+        ),
+        (
+            "App::Origin",
+            "Origin",
+            links("OriginFeatures", "App::PropertyLinkList", &["XY_Plane"]),
+        ),
+        (
+            "App::Plane",
+            "XY_Plane",
+            placement([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0),
+        ),
+    ]);
+    let (_, report) = import_with(
+        fcstd(&xml, None, &[]),
+        Vec::new(),
+        MockKernel::default(),
+        false,
+    );
+    assert_eq!(item(&report, "LCS").outcome, ObjectOutcome::Skipped);
+    for name in ["XZ_Plane001", "Origin", "XY_Plane"] {
+        let it = item(&report, name);
+        assert_eq!(it.outcome, ObjectOutcome::Included, "{it:?}");
+    }
 }

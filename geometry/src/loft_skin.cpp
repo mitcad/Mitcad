@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <stdexcept>
@@ -38,6 +40,7 @@
 #include <NCollection_Array2.hxx>
 #include <NCollection_Sequence.hxx>
 #include <Precision.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -47,6 +50,7 @@
 
 #include "face_select.hpp"
 #include "history.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "skin.hpp"
 #include "util.hpp"
 
@@ -182,6 +186,33 @@ struct Rail {
   int vertex = -1; // the sections' vertex it runs through
 };
 
+// A section in words: "the first profile", "the last profile" (of three or
+// more), "profile 12".
+std::string profile_words(std::size_t i, std::size_t count) {
+  static const char* const ordinals[] = {"first", "second",  "third",  "fourth", "fifth",
+                                         "sixth", "seventh", "eighth", "ninth",  "tenth"};
+  if (count > 2 && i + 1 == count) {
+    return "the last profile";
+  }
+  if (i < 10) {
+    return std::string("the ") + ordinals[i] + " profile";
+  }
+  return "profile " + std::to_string(i + 1);
+}
+
+// A distance in millimetres in words: three significant digits.
+std::string distance_words(double value) {
+  char text[32];
+  std::snprintf(text, sizeof text, "%.3g", value);
+  return text;
+}
+
+std::string point_words(const gp_Pnt& p) {
+  char text[96];
+  std::snprintf(text, sizeof text, "(%.6g, %.6g, %.6g)", p.X(), p.Y(), p.Z());
+  return text;
+}
+
 std::vector<Rail> meet_rails(const std::vector<Path>& paths, const std::vector<SkinSection>& sections,
                              double tolerance) {
   std::vector<Rail> rails;
@@ -190,8 +221,22 @@ std::vector<Rail> meet_rails(const std::vector<Path>& paths, const std::vector<S
     Rail rail{Spine(path_wire(paths[r])), {}, {}};
     for (std::size_t i = 0; i < sections.size(); ++i) {
       BRepExtrema_DistShapeShape distance(rail.spine.wire(), sections[i].shape);
-      if (!distance.IsDone() || distance.NbSolution() == 0 || distance.Value() > tolerance) {
-        throw std::invalid_argument(which + " does not meet section " + std::to_string(i + 1));
+      if (!distance.IsDone() || distance.NbSolution() == 0) {
+        throw std::invalid_argument(placed_error(which + " does not reach " + profile_words(i, sections.size()),
+                                                 which + " does not reach section " + std::to_string(i + 1)));
+      }
+      if (distance.Value() > tolerance) {
+        // How far it misses, in words; the nearest points on the rail and
+        // the section painted on hover (mitcad#1944).
+        const gp_Pnt on_rail = distance.PointOnShape1(1);
+        const gp_Pnt on_section = distance.PointOnShape2(1);
+        throw std::invalid_argument(placed_error(
+            which + " misses " + profile_words(i, sections.size()) + " by " + distance_words(distance.Value()) +
+                " mm",
+            which + " misses section " + std::to_string(i + 1) + " by " + distance_words(distance.Value()) +
+                " mm (the most allowed is " + distance_words(tolerance) + " mm): nearest points " +
+                point_words(on_rail) + " on the rail and " + point_words(on_section) + " on the section",
+            {point_place(on_rail), point_place(on_section)}));
       }
       rail.hits.push_back(distance.PointOnShape2(1));
       rail.lengths.push_back(rail.spine.nearest(distance.PointOnShape1(1)));
@@ -203,7 +248,7 @@ std::vector<Rail> meet_rails(const std::vector<Path>& paths, const std::vector<S
       down = down && rail.lengths[i] < rail.lengths[i - 1] - tolerance;
     }
     if (!up && !down) {
-      throw std::invalid_argument(which + " does not run through the sections in order");
+      throw std::invalid_argument(which + " does not run through the profiles in order");
     }
     rails.push_back(std::move(rail));
   }
@@ -952,6 +997,256 @@ void align_to_previous(std::vector<Matched>& matched) {
   }
 }
 
+// --- Matching from the rails (mitcad#1944)
+
+double curve_length(const Curve& curve) { return GCPnts_AbscissaPoint::Length(GeomAdaptor_Curve(curve)); }
+
+// The parameter `length` along the curve from its start.
+double at_length(const Curve& curve, double length) {
+  const GeomAdaptor_Curve adaptor(curve);
+  GCPnts_AbscissaPoint point(adaptor, length, curve->FirstParameter());
+  if (!point.IsDone()) {
+    throw std::runtime_error("the sections could not be matched along their rails");
+  }
+  return std::clamp(point.Parameter(), curve->FirstParameter(), curve->LastParameter());
+}
+
+// The sections matched from their rails, where OCCT's matching does not
+// keep the rails at corresponding vertices (a circle to a circle cut by a
+// chord, a circle to a rectangle with rails meeting its edges' middles):
+// every section runs the same way round the loft's axis and starts at rail
+// 1's hit point; between each pair of neighbouring rails the sections'
+// edges are cut by arc length until they have as many edges, each over the
+// same share of the way from one rail to the next. So the rails run
+// through corresponding vertices whatever the sections' own edges. `split`
+// are the sections' wires split at the rails' hits, `origins` their edges'
+// source edges; `wires` gets each section's wire of the matched edges (for
+// its cap), and each rail its vertex.
+std::vector<Matched> match_along_rails(const std::vector<SkinSection>& sections,
+                                       const NCollection_Sequence<TopoDS_Shape>& split,
+                                       const std::vector<std::vector<std::pair<TopoDS_Edge, TopoDS_Edge>>>& origins,
+                                       std::vector<Rail>& rails, double tolerance, std::vector<TopoDS_Wire>& wires) {
+  const std::size_t count = sections.size();
+  const std::size_t rail_count = rails.size();
+  struct Ring {
+    std::vector<Curve> curves;
+    std::vector<TopoDS_Edge> sources;
+    std::vector<std::size_t> at; // per rail, the curve it starts
+  };
+  gp_Vec axis(centre_of(sections.front().shape), centre_of(sections.back().shape));
+  if (axis.Magnitude() <= tolerance) {
+    axis = sections.front().normal ? gp_Vec(*sections.front().normal) : gp_Vec(0, 0, 1);
+  }
+  std::vector<Ring> rings(count);
+  std::vector<std::size_t> order; // the rails in their order round the first section
+  double sense = 0.0;
+  for (std::size_t i = 0; i < count; ++i) {
+    Ring& ring = rings[i];
+    for (const TopoDS_Edge& edge : wire_edges(TopoDS::Wire(split.Value(static_cast<int>(i) + 1)))) {
+      ring.curves.push_back(edge_curve(edge));
+      TopoDS_Edge source = edge;
+      for (const auto& [piece, before] : origins[i]) {
+        if (piece.IsSame(edge)) {
+          source = before;
+          break;
+        }
+      }
+      ring.sources.push_back(source);
+    }
+    // The same way round the axis as the first section.
+    const double turn = turning(ring.curves, axis, centre_of(sections[i].shape));
+    if (i == 0) {
+      sense = turn;
+    } else if (turn != sense) {
+      std::reverse(ring.curves.begin(), ring.curves.end());
+      std::reverse(ring.sources.begin(), ring.sources.end());
+      for (Curve& curve : ring.curves) {
+        curve->Reverse();
+      }
+    }
+    const auto find = [&](const gp_Pnt& hit) {
+      std::size_t found = ring.curves.size();
+      double nearest = 2 * tolerance;
+      for (std::size_t j = 0; j < ring.curves.size(); ++j) {
+        const Curve& curve = ring.curves[j];
+        const double d = curve->Value(curve->FirstParameter()).Distance(hit);
+        if (d <= nearest) {
+          nearest = d;
+          found = j;
+        }
+      }
+      if (found == ring.curves.size()) {
+        throw std::runtime_error("the sections could not be matched along their rails");
+      }
+      return found;
+    };
+    // From rail 1's hit.
+    const std::size_t start = find(rails.front().hits[i]);
+    std::rotate(ring.curves.begin(), ring.curves.begin() + static_cast<std::ptrdiff_t>(start), ring.curves.end());
+    std::rotate(ring.sources.begin(), ring.sources.begin() + static_cast<std::ptrdiff_t>(start),
+                ring.sources.end());
+    for (const Rail& rail : rails) {
+      ring.at.push_back(find(rail.hits[i]));
+    }
+    for (std::size_t r = 0; r < rail_count; ++r) {
+      for (std::size_t s = 0; s < r; ++s) {
+        if (ring.at[s] == ring.at[r]) {
+          throw std::invalid_argument("rails " + std::to_string(s + 1) + " and " + std::to_string(r + 1) +
+                                      " meet the sections at the same points");
+        }
+      }
+    }
+    std::vector<std::size_t> here(rail_count);
+    for (std::size_t r = 0; r < rail_count; ++r) {
+      here[r] = r;
+    }
+    std::sort(here.begin(), here.end(), [&](std::size_t a, std::size_t b) { return ring.at[a] < ring.at[b]; });
+    if (i == 0) {
+      order = here;
+    } else if (here != order) {
+      throw std::invalid_argument(placed_error(
+          "the rails meet " + profile_words(i, count) + " in another order round it than the first profile",
+          "the rails meet section " + std::to_string(i + 1) + " in another order round it than section 1"));
+    }
+  }
+
+  std::vector<Matched> matched(count);
+  for (std::size_t i = 0; i < count; ++i) {
+    matched[i].centre = centre_of(sections[i].shape);
+  }
+  // Between each pair of neighbouring rails (one rail: all the way round).
+  for (std::size_t s = 0; s < rail_count; ++s) {
+    rails[order[s]].vertex = static_cast<int>(matched.front().curves.size());
+    // Each section's edges there, their lengths, and where they end as
+    // shares of the way.
+    struct Break {
+      double share;
+      std::size_t section;
+      double length; // from the rail, along the section
+    };
+    std::vector<std::vector<double>> lengths(count);
+    std::vector<double> totals(count, 0.0);
+    std::vector<Break> breaks;
+    for (std::size_t i = 0; i < count; ++i) {
+      const Ring& ring = rings[i];
+      const std::size_t begin = ring.at[order[s]];
+      const std::size_t end = s + 1 < rail_count ? ring.at[order[s + 1]] : ring.curves.size();
+      for (std::size_t j = begin; j < end; ++j) {
+        lengths[i].push_back(curve_length(ring.curves[j]));
+        totals[i] += lengths[i].back();
+        if (j + 1 < end) {
+          breaks.push_back({0.0, i, totals[i]});
+        }
+      }
+      if (totals[i] <= 0.0) {
+        throw std::runtime_error("the sections could not be matched along their rails");
+      }
+    }
+    for (Break& b : breaks) {
+      b.share = b.length / totals[b.section];
+    }
+    std::sort(breaks.begin(), breaks.end(), [](const Break& a, const Break& b) { return a.share < b.share; });
+    // Breaks of different sections at nearly the same share are one vertex
+    // of the matched sections (no sliver faces between them).
+    std::vector<std::vector<Break>> clusters;
+    for (const Break& b : breaks) {
+      const bool joins = !clusters.empty() && b.share - clusters.back().front().share <= 1.0e-3 &&
+                         std::none_of(clusters.back().begin(), clusters.back().end(),
+                                      [&](const Break& c) { return c.section == b.section; });
+      if (joins) {
+        clusters.back().push_back(b);
+      } else {
+        clusters.push_back({b});
+      }
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+      const Ring& ring = rings[i];
+      const std::size_t begin = ring.at[order[s]];
+      // The cuts along this section: its own vertices, and the other
+      // sections' at their mean share.
+      std::vector<double> cuts;
+      for (const std::vector<Break>& cluster : clusters) {
+        const auto own =
+            std::find_if(cluster.begin(), cluster.end(), [&](const Break& b) { return b.section == i; });
+        if (own != cluster.end()) {
+          cuts.push_back(own->length);
+        } else {
+          double share = 0.0;
+          for (const Break& b : cluster) {
+            share += b.share;
+          }
+          cuts.push_back(share / static_cast<double>(cluster.size()) * totals[i]);
+        }
+      }
+      cuts.push_back(totals[i]);
+      const double slack = 1.0e-9 * totals[i];
+      double from = 0.0;
+      for (const double to : cuts) {
+        // The piece lies within one edge: every edge's end is a cut.
+        double edge_start = 0.0;
+        bool done = false;
+        for (std::size_t k = 0; k < lengths[i].size() && !done; ++k) {
+          const double edge_end = edge_start + lengths[i][k];
+          if (from >= edge_start - slack && to <= edge_end + slack) {
+            const Curve& curve = ring.curves[begin + k];
+            const double u0 =
+                from - edge_start <= slack ? curve->FirstParameter() : at_length(curve, from - edge_start);
+            const double u1 = edge_end - to <= slack ? curve->LastParameter() : at_length(curve, to - edge_start);
+            Curve piece = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+            if (u0 > curve->FirstParameter() || u1 < curve->LastParameter()) {
+              if (u1 - u0 <= Precision::PConfusion()) {
+                throw std::runtime_error("the sections could not be matched along their rails");
+              }
+              piece->Segment(u0, u1);
+            }
+            matched[i].curves.push_back(piece);
+            matched[i].origins.push_back(ring.sources[begin + k]);
+            done = true;
+          }
+          edge_start = edge_end;
+        }
+        if (!done) {
+          throw std::runtime_error("the sections could not be matched along their rails");
+        }
+        from = to;
+      }
+    }
+    for (std::size_t i = 1; i < count; ++i) {
+      if (matched[i].curves.size() != matched.front().curves.size()) {
+        throw std::runtime_error("the sections could not be matched edge for edge");
+      }
+    }
+  }
+
+  // Each section's edges, joined at shared vertices into its wire.
+  wires.assign(count, TopoDS_Wire());
+  BRep_Builder builder;
+  for (std::size_t i = 0; i < count; ++i) {
+    Matched& m = matched[i];
+    const std::size_t n = m.curves.size();
+    std::vector<TopoDS_Vertex> vertices(n);
+    for (std::size_t k = 0; k < n; ++k) {
+      const gp_Pnt p = m.curves[k]->Value(m.curves[k]->FirstParameter());
+      const Curve& before = m.curves[(k + n - 1) % n];
+      const double gap = before->Value(before->LastParameter()).Distance(p);
+      builder.MakeVertex(vertices[k], p, std::max(Precision::Confusion(), 2 * gap));
+    }
+    builder.MakeWire(wires[i]);
+    for (std::size_t k = 0; k < n; ++k) {
+      const Curve& curve = m.curves[k];
+      BRepBuilderAPI_MakeEdge edge(curve, vertices[k], vertices[(k + 1) % n], curve->FirstParameter(),
+                                   curve->LastParameter());
+      if (!edge.IsDone()) {
+        throw std::runtime_error("the sections could not be matched along their rails");
+      }
+      m.edges.push_back(edge.Edge());
+      builder.Add(wires[i], edge.Edge());
+    }
+    wires[i].Closed(true);
+  }
+  return matched;
+}
+
 // The side faces' surfaces at the loft's parameters `v`: each edge
 // index's curves made compatible (polynomial ones when `plain`), its pole
 // rows interpolated in homogeneous coordinates with the derivatives the
@@ -1135,72 +1430,98 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     wires.Append(split_at(TopoDS::Wire(sections[i].shape), hits, tolerance, origins[i]));
   }
 
-  // Edge for edge, from corresponding starts.
-  BRepFill_CompatibleWires compatible(wires);
-  compatible.Perform();
-  if (!compatible.IsDone()) {
-    throw std::runtime_error("the sections could not be matched edge for edge");
-  }
-  const auto& generated = compatible.Generated();
-  std::vector<Matched> matched(count);
+  // Edge for edge, from corresponding starts. With rails, where OCCT's
+  // matching does not keep them at corresponding vertices, the sections are
+  // matched from the rails instead (match_along_rails, mitcad#1944); lofts
+  // it keeps them for keep its matching and faces.
+  std::vector<Matched> matched;
+  std::vector<TopoDS_Wire> section_wires(count);
   std::size_t edge_count = 0;
-  for (std::size_t i = 0; i < count; ++i) {
-    Matched& m = matched[i];
-    m.centre = centre_of(sections[i].shape);
-    if (sections[i].point) {
-      m.point = true;
-      m.tip = BRep_Tool::Pnt(TopoDS::Vertex(sections[i].shape));
-      continue;
+  const auto compatible_matching = [&]() -> bool {
+    BRepFill_CompatibleWires compatible(wires);
+    try {
+      compatible.Perform();
+    } catch (const Standard_Failure&) {
+      if (rails.empty()) {
+        throw;
+      }
+      return false;
     }
-    m.edges = wire_edges(TopoDS::Wire(compatible.Shape().Value(static_cast<int>(i) + 1)));
-    for (const TopoDS_Edge& edge : m.edges) {
-      TopoDS_Edge source;
-      for (const auto& [piece, before] : origins[i]) {
-        bool same = piece.IsSame(edge);
-        if (!same && generated.IsBound(piece)) {
-          for (const TopoDS_Shape& g : generated.Find(piece)) {
-            same = same || g.IsSame(edge);
+    if (!compatible.IsDone()) {
+      if (rails.empty()) {
+        throw std::runtime_error("the sections could not be matched edge for edge");
+      }
+      return false;
+    }
+    const auto& generated = compatible.Generated();
+    matched.assign(count, Matched{});
+    edge_count = 0;
+    for (std::size_t i = 0; i < count; ++i) {
+      Matched& m = matched[i];
+      m.centre = centre_of(sections[i].shape);
+      if (sections[i].point) {
+        m.point = true;
+        m.tip = BRep_Tool::Pnt(TopoDS::Vertex(sections[i].shape));
+        continue;
+      }
+      section_wires[i] = TopoDS::Wire(compatible.Shape().Value(static_cast<int>(i) + 1));
+      m.edges = wire_edges(section_wires[i]);
+      for (const TopoDS_Edge& edge : m.edges) {
+        TopoDS_Edge source;
+        for (const auto& [piece, before] : origins[i]) {
+          bool same = piece.IsSame(edge);
+          if (!same && generated.IsBound(piece)) {
+            for (const TopoDS_Shape& g : generated.Find(piece)) {
+              same = same || g.IsSame(edge);
+            }
+          }
+          if (same) {
+            source = before;
+            break;
           }
         }
-        if (same) {
-          source = before;
-          break;
+        m.origins.push_back(source);
+        m.curves.push_back(edge_curve(edge));
+      }
+      if (edge_count == 0) {
+        edge_count = m.edges.size();
+      } else if (m.edges.size() != edge_count) {
+        if (rails.empty()) {
+          throw std::runtime_error("the sections could not be matched edge for edge");
+        }
+        return false;
+      }
+    }
+
+    align_to_previous(matched);
+
+    // The rails run through corresponding vertices.
+    for (std::size_t r = 0; r < rails.size(); ++r) {
+      for (std::size_t i = 0; i < count; ++i) {
+        int vertex = -1;
+        for (std::size_t j = 0; j < edge_count; ++j) {
+          const Curve& curve = matched[i].curves[j];
+          if (curve->Value(curve->FirstParameter()).Distance(rails[r].hits[i]) <= 2 * tolerance) {
+            vertex = static_cast<int>(j);
+          }
+        }
+        if (vertex < 0 || (i > 0 && vertex != rails[r].vertex)) {
+          return false;
+        }
+        rails[r].vertex = vertex;
+      }
+      for (std::size_t s = 0; s < r; ++s) {
+        if (rails[s].vertex == rails[r].vertex) {
+          throw std::invalid_argument("rails " + std::to_string(s + 1) + " and " + std::to_string(r + 1) +
+                                      " meet the sections at the same points");
         }
       }
-      m.origins.push_back(source);
-      m.curves.push_back(edge_curve(edge));
     }
-    if (edge_count == 0) {
-      edge_count = m.edges.size();
-    } else if (m.edges.size() != edge_count) {
-      throw std::runtime_error("the sections could not be matched edge for edge");
-    }
-  }
-
-  align_to_previous(matched);
-
-  // The rails run through corresponding vertices.
-  for (std::size_t r = 0; r < rails.size(); ++r) {
-    for (std::size_t i = 0; i < count; ++i) {
-      int vertex = -1;
-      for (std::size_t j = 0; j < edge_count; ++j) {
-        const Curve& curve = matched[i].curves[j];
-        if (curve->Value(curve->FirstParameter()).Distance(rails[r].hits[i]) <= 2 * tolerance) {
-          vertex = static_cast<int>(j);
-        }
-      }
-      if (vertex < 0 || (i > 0 && vertex != rails[r].vertex)) {
-        throw std::invalid_argument("unsupported: rail " + std::to_string(r + 1) +
-                                    " does not meet corresponding points of the sections");
-      }
-      rails[r].vertex = vertex;
-    }
-    for (std::size_t s = 0; s < r; ++s) {
-      if (rails[s].vertex == rails[r].vertex) {
-        throw std::invalid_argument("rails " + std::to_string(s + 1) + " and " + std::to_string(r + 1) +
-                                    " meet the sections at the same points");
-      }
-    }
+    return true;
+  };
+  if (!compatible_matching()) {
+    matched = match_along_rails(sections, wires, origins, rails, tolerance, section_wires);
+    edge_count = matched.front().curves.size();
   }
 
   // The loft's parameter: the chord length between the sections' centres.
@@ -1382,8 +1703,7 @@ ShapePtr skinned_loft(const std::vector<SkinSection>& sections, const LoftEnd& s
     if (sections[index].point || closed || !solid) {
       continue;
     }
-    const TopoDS_Wire wire = TopoDS::Wire(compatible.Shape().Value(static_cast<int>(index) + 1));
-    BRepBuilderAPI_MakeFace cap(wire, true);
+    BRepBuilderAPI_MakeFace cap(section_wires[index], true);
     if (cap.IsDone()) {
       faces.emplace_back(cap.Face(), *caps);
     } else if (!sections[index].face.IsNull()) {

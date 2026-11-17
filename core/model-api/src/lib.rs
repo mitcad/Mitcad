@@ -158,6 +158,15 @@ mod sketch3d;
 mod design_review;
 // Filament changes and pauses at print heights (mitcad#1596).
 mod filament_changes;
+// Flex items: the flex.* commands and the flex, flex_items and end_ports
+// queries (mitcad#1713).
+mod flex;
+// A Flex item let hang: the flex.hang* commands' fields and the flex_hang
+// query (mitcad#1713).
+mod flex_hang;
+// The direction of gravity: the gravity.* commands and the gravity query
+// (mitcad#1713, Part B).
+mod gravity;
 // CAM setups, operations, machines, toolpaths and G-code (mitcad#1013).
 mod cam;
 // The CNC spindle as a design, read into the CAM collision check's spindle
@@ -567,6 +576,14 @@ named_enum! {
             uid: FeatureUid,
             #[serde(default)]
             size: Option<f64>,
+        },
+        // Acknowledged warnings (mitcad#1935): features' warnings marked
+        // seen, or shown again (`acknowledged` false).
+        "acknowledge_warnings" => AcknowledgeWarnings {
+            uids: Vec<FeatureUid>,
+            /// True when left out; false shows them again.
+            #[serde(default)]
+            acknowledged: Option<bool>,
         },
         // Named views (U5).
         "add_named_view" => AddNamedView {
@@ -1036,6 +1053,8 @@ named_enum! {
         "build_parts" => BuildParts,
         "build_junctions" => BuildJunctions(build::JunctionsQuery),
         "build_cut_list" => BuildCutList(build::CutListQuery),
+        // The ends that meet another profile's end (mitcad#1940).
+        "build_end_meets" => BuildEndMeets(build::EndMeetsQuery),
         // The component BUILD places parts in (mitcad#394, `build.rs`).
         "build_host" => BuildHost,
         // The library parts the design uses, with their counts, for the part
@@ -1239,6 +1258,18 @@ named_enum! {
         },
         // Animate Joint's frames without a recompute (mitcad#1701, `joints.rs`).
         "joint_poses" => JointPoses(joints::JointPosesQuery),
+        // Flex items, their routes and the end ports of pipes and Flex
+        // items (mitcad#1713, `flex.rs`).
+        "flex" => Flex(flex::FlexQuery),
+        "flex_items" => FlexItems,
+        "end_ports" => EndPorts(flex::EndPortsQuery),
+        "flex_types" => FlexTypes(flex::FlexTypesQuery),
+        // The Flex item that hangs, its chain to draw (mitcad#1713,
+        // `flex_hang.rs`).
+        "flex_hang" => FlexHang,
+        // The direction of gravity and the Flex item that hangs (mitcad#1713,
+        // `gravity.rs`).
+        "gravity" => Gravity,
         // CAM (mitcad#1013, `cam.rs`): the setups with their operations'
         // states, a setup's operations, its toolpaths computed now, its
         // G-code, the design's machines, the dialects and the machine
@@ -1350,6 +1381,15 @@ pub trait DocumentApi<K: Kernel> {
 impl<K: Kernel> DocumentApi<K> for Document<K> {
     fn command(&mut self, json: &str) -> Result<String, ApiError> {
         let value = read_json(json)?;
+        // A hanging Flex item's runtime commands (mitcad#1713,
+        // `flex_hang.rs`): they change the hanging item only, never the
+        // design, and a step runs many times a second, so none of a design
+        // change's work (the policy, the warnings and failures before and
+        // after, the comments' places).
+        if flex_hang::is_runtime_command(&value) {
+            let command = parse(value, "flex command")?;
+            return Ok(flex::run_flex_command(self, command)?.to_string());
+        }
         let result = match value {
             Value::Array(commands) => {
                 let mut results = Vec::with_capacity(commands.len());
@@ -1813,6 +1853,7 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::BuildParts => self.build_parts_json(),
             Query::BuildJunctions(query) => self.build_junctions_json(&query)?,
             Query::BuildCutList(query) => self.build_cut_list_json(&query)?,
+            Query::BuildEndMeets(query) => self.build_end_meets_json(&query)?,
             Query::BuildHost => self.host_json(),
             // The library parts the design uses (mitcad#418).
             Query::LibraryUsage => self.library_usage_json(),
@@ -1972,6 +2013,15 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::PlaneGeometryKey { sketch } => self.plane_geometry_key_json(sketch)?,
             // Animate Joint's frames without a recompute (mitcad#1701).
             Query::JointPoses(query) => self.joint_poses_json(&query)?,
+            // Flex items and end ports (mitcad#1713).
+            Query::Flex(query) => flex::flex_json(self, &query)?,
+            Query::FlexItems => flex::flex_items_json(self),
+            Query::EndPorts(query) => flex::end_ports_json(self, &query)?,
+            Query::FlexTypes(query) => flex::flex_types_json(&query),
+            // The Flex item that hangs (mitcad#1713).
+            Query::FlexHang => flex_hang::query_json(self),
+            // The direction of gravity and the Flex item that hangs (mitcad#1713).
+            Query::Gravity => gravity::gravity_json(self),
             // CAM (mitcad#1013).
             Query::CamSetups => self.cam_setups_json(),
             Query::CamOperations(query) => cam::operations(self, &query)?,
@@ -2102,6 +2152,10 @@ trait DocumentLocal<K: Kernel> {
 
 impl<K: Kernel> DocumentLocal<K> for Document<K> {
     fn run_checked_command(&mut self, value: Value) -> Result<Value, ApiError> {
+        // A Flex definition's nodes picked in other components
+        // (mitcad#1713, `flex.rs`).
+        let mut value = value;
+        flex::place_definition(self, &mut value, false)?;
         // The family that runs the command (`dispatch.rs`); the document's
         // own commands take every other name.
         let families = Self::command_families();
@@ -2666,6 +2720,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 self.set_datum_display_size(uid, size)?;
                 json!({})
             }
+            Command::AcknowledgeWarnings { uids, acknowledged } => {
+                self.acknowledge_warnings(&uids, acknowledged.unwrap_or(true))?;
+                json!({})
+            }
             // Named views (U5).
             Command::AddNamedView {
                 name,
@@ -2867,7 +2925,10 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
     }
 
     fn checked_preview(&mut self, json: &str) -> Result<String, ApiError> {
-        let value = read_json(json)?;
+        let mut value = read_json(json)?;
+        // A Flex definition's nodes picked in other components
+        // (mitcad#1713, `flex.rs`).
+        flex::place_definition(self, &mut value, true)?;
         // Motions: a study's playback, a driven joint (mitcad#454).
         if let Some((report, outcome)) = self.motion_preview(&value)? {
             let mut value = preview_json(&report);
@@ -3016,6 +3077,11 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
                 });
                 if !notices.is_empty() {
                     value["notices"] = notice::to_json(&notices);
+                }
+                // Its warning acknowledged (mitcad#1935): not yellow, not
+                // counted in the warnings badge; still its notices.
+                if self.warning_acknowledged(item.entry.uid) {
+                    value["acknowledged"] = json!(true);
                 }
                 // Its remarks (mitcad#1914): among its notices too.
                 add_remarks(&mut value, &remark_notices(item.remarks, item.entry.uid));

@@ -18,6 +18,7 @@
 #include <limits>
 #include <optional>
 
+#include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeySequence>
@@ -2022,6 +2023,7 @@ CommandDef constraintCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("assemble.constraint");
   def.name = QObject::tr("Assembly Constraint");
+  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Constraint"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("constraint");
   def.tooltip = QObject::tr("Holds components against each other: align, angle, center, tangent, insert");
   def.group = QStringLiteral("ASSEMBLE");

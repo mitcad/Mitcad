@@ -122,3 +122,7 @@ mod body_scope_tests;
 
 // Mesh bodies the file stores, as base features (mitcad#1366).
 mod mesh_tests;
+
+// A design modelled with Y up stands on Z up, in its length unit
+// (mitcad#1937).
+mod upright_tests;

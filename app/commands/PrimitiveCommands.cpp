@@ -8,6 +8,7 @@
 #include <cmath>
 #include <initializer_list>
 
+#include <QCoreApplication>
 #include <QJsonArray>
 
 #include "CommandFactories.hpp"
@@ -210,6 +211,7 @@ CommandDef newComponentCommand(const CommandContext& context) {
   CommandDef def;
   def.id = QStringLiteral("solid.new_component");
   def.name = QObject::tr("New Component");
+  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Component"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("component");
   def.tooltip = QObject::tr("An empty component in the active one, or components made of bodies");
   // Registered with CREATE, so that it leads the ASSEMBLE group.

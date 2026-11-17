@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: MIT
+# Acknowledged warnings (mitcad#1935, GitHub mitcad/Mitcad#380) on
+# timeline-auto-fix.json: Extrude1's region was found as two pieces after
+# a change in Sketch1, and the extrusion warns.
+#   1. Acknowledge Warning in its timeline menu: one undo step; the
+#      warnings badge is gone and the cell is not yellow; its tooltip
+#      still tells the warning, marked acknowledged.
+#   2. Show Warning Again in the same menu: the badge and the yellow
+#      cell come back, one undo step.
+#   3. The warnings badge's menu offers Acknowledge Warning too; Undo
+#      brings the warning back.
+# The timeline cell's painted state (`Timeline cell Extrude1: ok,
+# acknowledged`) is logged when the strip paints, which the Windows build
+# VM's session 0 does not do reliably: the Linux wrapper checks it after
+# the run. Run by tools/ui-acknowledge-warning-test.sh (Linux),
+# tools/ui-windows-acknowledge-warning-test.ps1 (Windows) and
+# tools/ui-macos-acknowledge-warning-test.sh (macOS).
+wait-idle
+capture-undo-depth baseline
+expect-ever '^Warnings badge: Extrude1: ' 30
+expect-ever '^Timeline Extrude1 at ' 30
+
+# 1. Acknowledge Warning from the timeline's menu.
+mark
+context-menu-logged '^Timeline Extrude1 at ' 'Acknowledge Warning'
+wait-log '^Acknowledged warning of Extrude1$'
+wait-log '^Warnings badge: none$'
+wait-log '^Acknowledged warnings: Extrude1$'
+expect-undo-depth ${baseline} 1
+hover-logged '^Timeline Extrude1 at '
+expect-timeline-tooltip '(?s)Acknowledged warning: .*found as'
+timeline-leave
+
+# 2. Show Warning Again: the badge and the yellow cell come back.
+mark
+context-menu-logged '^Timeline Extrude1 at ' 'Show Warning Again'
+wait-log '^Showing warning again of Extrude1$'
+wait-log '^Warnings badge: Extrude1: '
+wait-log '^Acknowledged warnings: none$'
+expect-undo-depth ${baseline} 2
+
+# 3. The warnings badge's menu: Acknowledge Warning; Undo shows it again.
+mark
+click-logged '^Warnings button at '
+wait-log '^Context menu: Extrude1: .* [|] Acknowledge Warning [|] Auto Fix$'
+popup 'Acknowledge Warning'
+wait-log '^Warnings badge: none$'
+expect-undo-depth ${baseline} 3
+mark
+command edit.undo
+wait-log '^Warnings badge: Extrude1: '
+expect-undo-depth ${baseline} 2
+expect-never 'TestDriver: FAIL'

@@ -881,6 +881,10 @@ impl<K: Kernel> Document<K> {
         answer["default_row"] = table
             .default_row()
             .map_or(Value::Null, |row| Value::from(row.name.clone()));
+        // Whether its rows are the only combinations: a part's edit panel
+        // offers an open table's options beside its rows (mitcad#1950).
+        answer["closed"] = Value::from(table.closed);
+        answer["open"] = Value::from(table.open.clone());
         Ok(answer)
     }
 

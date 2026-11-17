@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MIT
+# Screenshots of laying a Flex item (mitcad#1713) on flex.json (an upright
+# pipe, a 40 x 40 x 20 block and a second pipe), for a reviewer: not a
+# test. Run by tools/ui-windows-flex-shots.ps1 in each layout; the files
+# are ${FLEX_SHOTS}/NN-${FLEX_LAYOUT}-what${FLEX_END}.
+#   01 the command just opened: the panel, its type picker
+#   02 the pointer over the pipe's end: its end port marked
+#   03 the route under the pointer on its way to the block's top
+#   04 the item added, from the pipe's end over the block's top and edge
+#   09 a warning: the bend radius raised beyond what the route allows
+expect-ever 'View area'
+wait-idle
+
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+command view.fit
+wait-log '^Fit: everything shown'
+wait-idle
+wheel 50 50 2
+wait-idle
+# (Started again, as flex.mitcad-ui does: the places a click picks are
+# logged as the command starts, and the view was zoomed since.)
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+wait-idle
+screenshot ${FLEX_SHOTS}/01-${FLEX_LAYOUT}-command-open${FLEX_END}
+
+mark
+hover-logged '^Pick face F2[.]b0/F2:(start|end) at '
+wait-idle
+sleep 500
+screenshot ${FLEX_SHOTS}/02-${FLEX_LAYOUT}-port-marker${FLEX_END}
+
+mark
+click-pick 'face F2[.]b0/F2:(start|end)'
+wait-log '^Flex: node 1 at an end port'
+wait-idle
+mark
+hover-logged '^Pick face F3[.]b0/F3:top'
+wait-log '^Flex route under the pointer: 2 node[(]s[)]' 30
+screenshot ${FLEX_SHOTS}/03-${FLEX_LAYOUT}-route-preview${FLEX_END}
+
+mark
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 2 on face F3:top'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:(?!top)'
+wait-log '^Flex: node 3 on face F3:'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+key Return
+wait-log '^Added flex item .* through 3 node[(]s[)]' 60
+wait-idle
+screenshot ${FLEX_SHOTS}/04-${FLEX_LAYOUT}-hose-added${FLEX_END}
+
+# A warning: from the second pipe's end over the block's top, with a bend
+# radius the route cannot keep.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+mark
+click-pick 'face F5[.]b0/F5:(start|end)'
+wait-log '^Flex: node 1 at an end port'
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 2 on face F3:top'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+type-in '^Panel Flex input bend_radius at ' '150'
+wait-log '^Preview Flex: ok, warning' 60
+wait-idle
+screenshot ${FLEX_SHOTS}/09-${FLEX_LAYOUT}-warning${FLEX_END}
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

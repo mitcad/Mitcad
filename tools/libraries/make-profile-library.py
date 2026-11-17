@@ -2372,12 +2372,207 @@ def make_model(ctx, mcp, entry, build):
         mcp.close(document)
 
 
+def length_limits(entry, length):
+    """A part cut to length's shortest and longest (mm): its build.length's
+    `min` and `max`, the shortest above 0 and below the longest."""
+    what = entry["id"]
+    if length.get("min") is None or length.get("max") is None:
+        fail(f"{what}: build.length gives its min and max")
+    try:
+        low = length_of(length["min"], f"{what}: build.length.min")
+        high = length_of(length["max"], f"{what}: build.length.max")
+    except PartError as e:
+        fail(str(e))
+    if not 0 < low < high:
+        fail(f"{what}: build.length's min {low:g} mm is above 0 and below its max {high:g} mm")
+    return low, high
+
+
+def closed_length_table(entry, name, rows):
+    """A closed table of standard sizes (a timber board's or a steel tube's
+    `sizes`) with the length `name` an open option beside its rows
+    (mitcad#1950: `open`): the rows chosen by their selectors (`select`,
+    made options by the model's migration, before the length) and setting
+    their other parameters, the length chosen within its limits. A row
+    never sets the length."""
+    what = entry["id"]
+    selectors, parameters, table_rows = [], [], []
+    for i, row in enumerate(rows):
+        if not isinstance(row, dict) or not row.get("name"):
+            fail(f"{what}: rows[{i}] has no name")
+        if name in (row.get("values") or {}) or name in (row.get("select") or {}):
+            fail(f"{what}: row {row['name']} sets the length {name}, which is an open option beside the rows")
+        for key in (row.get("select") or {}):
+            if key not in selectors:
+                selectors.append(key)
+        for key in (row.get("values") or {}):
+            if key not in parameters:
+                parameters.append(key)
+        table_row = {"name": row["name"], "values": row.get("values") or {}}
+        for key in ("select", "designation", "part_number", "supplier_url"):
+            if row.get(key):
+                table_row[key] = row[key]
+        table_rows.append(table_row)
+    return {"options": [name], "open": [name], "closed": True, "selectors": selectors, "parameters": parameters,
+            "default": entry.get("default", rows[0]["name"]), "rows": table_rows}
+
+
+def length_table(entry, length, default=None):
+    """The open configuration table of a part cut to length (mitcad#1950):
+    its length parameter (`build.length.parameter`, L) an option, so that
+    Insert from Library and Derived Component offer it within the part's
+    shortest and longest (the parameter's limits, length_limits), and its
+    stock lengths (`build.length.stock`) rows that set it, each named by its
+    length (`1980 mm`) unless a row of the group file sets it already.
+
+    - A part without rows: L its only option. With stock lengths, a row of
+      its length in the design (`default`, mm; None: none made), named so,
+      is its default, so that it is inserted at that length as before.
+    - A typed tube (typed_tube's open table): L after its size and wall.
+    - Rows that set only L (a rail's `Stock` rows, `values: {L}`): rows of
+      lengths; every such row sets L.
+    - Rows that each set one other size (a panel's widths, W): that size
+      an option too, limited to the rows' values by a rule, and L beside
+      it.
+
+    - Rows that set several other sizes (a timber board's or a steel
+      tube's `sizes`): a closed table of those rows with L an open option
+      beside them (closed_length_table); its stock lengths are no rows (a
+      closed table's rows give its sizes), the pickers offer them from
+      `build.length.stock`."""
+    what = entry["id"]
+    name = (length.get("parameter") or "L").strip()
+    low, high = length_limits(entry, length)
+
+    def millimetres(value, where):
+        try:
+            return length_of(value, f"{what}: {where}")
+        except PartError as e:
+            fail(str(e))
+
+    def within(value, where):
+        if not low - 1e-9 <= value <= high + 1e-9:
+            fail(f"{what}: {where} {value:g} mm is not within build.length's {low:g} to {high:g} mm")
+        return value
+
+    stock = [within(millimetres(v, "build.length.stock"), "the stock length") for v in length.get("stock") or []]
+
+    def own(row, values):
+        made = {"name": row["name"], "values": values}
+        for key in ("designation", "part_number", "supplier_url"):
+            if row.get(key):
+                made[key] = row[key]
+        return made
+
+    rules = []
+    default_name = None
+    if entry.get("_table"):
+        typed = copy.deepcopy(entry["_table"])
+        options = list(typed["options"]) + [name]
+        rows = list(typed["rows"])
+        rules = list(typed.get("rules") or [])
+        default_name = typed.get("default")
+    else:
+        given = entry.get("rows") or []
+        others = []
+        for row in given:
+            for key in row.get("values") or {}:
+                if key != name and key not in others:
+                    others.append(key)
+        options, rows = [name], []
+        if not given:
+            pass
+        elif not others:
+            for row in given:
+                value = (row.get("values") or {}).get(name)
+                if value is None:
+                    fail(f"{what}: row {row['name']} sets no length {name} (`values`: {{\"{name}\": …}}); a part "
+                         "cut to length has rows of lengths or of other sizes")
+                rows.append(own(row, {name: mm(within(millimetres(value, f"row {row['name']}"),
+                                                      f"row {row['name']}'s length"))}))
+            default_name = entry.get("default", rows[0]["name"])
+        elif len(others) == 1 and all(others[0] in (row.get("values") or {}) for row in given):
+            size = others[0]
+            options = [size, name]
+            listed = []
+            for row in given:
+                value = millimetres(row["values"][size], f"row {row['name']}'s {size}")
+                values = {size: mm(value)}
+                if name in row["values"]:
+                    values[name] = mm(within(millimetres(row["values"][name], f"row {row['name']}"),
+                                             f"row {row['name']}'s length"))
+                rows.append(own(row, values))
+                if mm(value) not in listed:
+                    listed.append(mm(value))
+            rules = [{"name": f"Listed {size}", "comment": f"{size} is one of the rows' sizes",
+                      "then": [{"option": size, "values": listed}]}]
+            default_name = entry.get("default", rows[0]["name"])
+        else:
+            return closed_length_table(entry, name, given)
+    names = {row["name"] for row in rows}
+
+    def free(text):
+        """A row name no row has: the length's own, else numbered."""
+        candidate, n = text, 2
+        while candidate in names:
+            candidate = f"{text} ({n})"
+            n += 1
+        names.add(candidate)
+        return candidate
+
+    def sets(row, value):
+        given = (row.get("values") or {}).get(name)
+        return given is not None and abs(length_of(given, what) - value) <= 1e-6
+
+    for value in stock:
+        if not any(sets(row, value) for row in rows):
+            rows.append({"name": free(mm(value)), "values": {name: mm(value)}})
+    if default_name is None and rows and default is not None:
+        if not low - 1e-9 <= default <= high + 1e-9:
+            raise PartError(f"its length in the design, {default:g} mm, is not within build.length's {low:g} to "
+                            f"{high:g} mm")
+        found = next((row for row in rows if sets(row, default)), None)
+        if found is None:
+            found = {"name": free(mm(default)), "values": {name: mm(default)}}
+            rows.insert(0, found)
+        default_name = found["name"]
+    table = {"options": options, "closed": False, "rows": rows, "rules": rules}
+    if default_name is not None:
+        table["default"] = default_name
+    return table
+
+
 def finish_design(mcp, document, entry, apply_default=False):
     """The configuration table of the rows (with `apply_default`, its
     default row applied), and a recompute's check. A typed tube's open
-    table (typed_tube) as it is made."""
+    table (typed_tube) as it is made. A part cut to length (build.length)
+    has its length an option with the part's shortest and longest as its
+    parameter's limits and its stock lengths as rows (length_table,
+    mitcad#1950); a closed table of sizes has it as an open option beside
+    its rows."""
     rows = entry.get("rows") or []
-    if entry.get("_table"):
+    table = None
+    length = (entry.get("build") or {}).get("length")
+    if isinstance(length, dict) and length:
+        name = (length.get("parameter") or "L").strip()
+        parameters = {p.get("name"): p for p in mcp.query(document, {"query": "parameters"}) or []}
+        if name not in parameters:
+            raise PartError(f"its length parameter {name} is not in the design")
+        default = parameters[name].get("value")
+        table = length_table(entry, length, default)
+        if table is not None:
+            low, high = length_limits(entry, length)
+            # The limits clamp a value outside them: the design's own length
+            # stays within them.
+            if not isinstance(default, (int, float)) or not low - 1e-9 <= default <= high + 1e-9:
+                raise PartError(f"its length in the design, {default} mm, is not within build.length's {low:g} "
+                                f"to {high:g} mm")
+            mcp.command(document, {"cmd": "set_parameter", "name": name, "min": mm(low), "max": mm(high)})
+    if table is not None:
+        mcp.command(document, {"cmd": "set_configurations", "configurations": table})
+        if apply_default and table.get("default"):
+            mcp.command(document, {"cmd": "apply_configuration", "name": table["default"]})
+    elif entry.get("_table"):
         mcp.command(document, {"cmd": "set_configurations", "configurations": entry["_table"]})
         if apply_default:
             mcp.command(document, {"cmd": "apply_configuration", "name": entry["_table"]["default"]})
@@ -2612,7 +2807,11 @@ def row_previews(ctx, mcp, design, entry):
         document = mcp.open(os.path.relpath(design, ctx.scratch).replace("\\", "/"))
         try:
             mcp.command(document, {"cmd": "apply_configuration", "name": row["name"]})
-            mcp.command(document, {"cmd": "set_parameter", "name": "L", "expression": f"{length} mm"})
+            # The preview's short piece below the shortest length the
+            # parameter's limits keep (mitcad#1950): the limits taken off in
+            # this copy.
+            mcp.command(document, {"cmd": "set_parameter", "name": "L", "expression": f"{length} mm", "min": "",
+                                   "max": ""})
             view = end_view(w, t, length)
             view.update({"cmd": "add_named_view", "name": "End", "replace": True})
             mcp.command(document, view)

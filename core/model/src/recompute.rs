@@ -366,6 +366,10 @@ pub struct Output<S> {
     /// points and lines and status, or its failure without geometry. Not
     /// kept in the result store.
     pub spatial: Option<Arc<crate::features::SpatialSketchOutput>>,
+    /// What a Flex item's evaluation found (mitcad#1713): its nodes where
+    /// they are, its route and the route's problems, also when its solid
+    /// failed. Not kept in the result store.
+    pub flex: Option<Arc<crate::features::FlexOutput>>,
     /// Where a construction plane or axis is drawn without a size of its
     /// own (mitcad#1827). Not kept in the result store (construction
     /// features are not storable).
@@ -478,6 +482,17 @@ pub enum Read {
     /// the joints' `flexed` placements and its matrix as bits, None when
     /// there is none (the occurrence's own placement then).
     Flexed(crate::joints::FlexKey, Option<[u64; 12]>),
+    /// The design's direction of gravity (as bits), None without one
+    /// (the hanging slack of Flex items, mitcad#1713).
+    Gravity(Option<[u64; 3]>),
+}
+
+/// The design's direction of gravity as bits, for [`Read::Gravity`].
+pub(crate) fn gravity_bits(state: &DocState) -> Option<[u64; 3]> {
+    state
+        .gravity
+        .as_ref()
+        .map(|g| g.direction.map(f64::to_bits))
 }
 
 /// A body's print bed face as it was assigned (mitcad#731), for
@@ -547,6 +562,7 @@ impl Read {
             )),
             Self::PrintBed(uid, face) => print_bed_of(env.body_attributes, *uid) == face.as_ref(),
             Self::PrintLayer(bits) => env.layer_height.map(f64::to_bits) == *bits,
+            Self::Gravity(bits) => env.gravity.map(|g| g.map(f64::to_bits)) == *bits,
             Self::WallFlange(plane, key) => {
                 crate::sheet::folded::wall_flange_key(env.features, env.index, env.params, *plane)
                     == *key
@@ -652,6 +668,13 @@ impl Read {
                 fingerprint.u32(o.0).option(*bits, |f, bits| {
                     for b in bits {
                         f.u64(b);
+                    }
+                });
+            }
+            Self::Gravity(bits) => {
+                fingerprint.u8(19).option(*bits, |f, b| {
+                    for v in b {
+                        f.u64(v);
                     }
                 });
             }
@@ -1892,6 +1915,7 @@ impl<'s, S> Walk<'s, S> {
             gone_pieces: &self.done.gone_pieces,
             body_attributes: &state.body_attributes,
             layer_height: state.design_layer_height(),
+            gravity: state.gravity.as_ref().map(|g| g.direction),
         }
     }
 }
@@ -2172,6 +2196,7 @@ fn resume_point<'b, S>(before: &'b Recomputed<S>, state: &DocState) -> Option<&'
                 print_bed_of(&state.body_attributes, *uid) == face.as_ref()
             }
             Read::PrintLayer(bits) => state.design_layer_height().map(f64::to_bits) == *bits,
+            Read::Gravity(bits) => gravity_bits(state) == *bits,
             // A flange appended after the features may name a profile on a
             // flange-wall plane among them (mitcad#1776).
             Read::WallFlange(plane, key) => {
@@ -2343,6 +2368,9 @@ fn evaluate<K: Kernel>(
     let elements = std::mem::take(&mut ctx.elements);
     // A 3D sketch's output, also of one that failed (mitcad#1521).
     let spatial = ctx.spatial.take().map(Arc::new);
+    // A Flex item's nodes and route, also of one whose solid failed
+    // (mitcad#1713).
+    let flex = ctx.flex.take().map(Arc::new);
     let version = output_version(entry.uid, def_fp, &reads, params);
     let output = match result {
         Ok(produced) => Output {
@@ -2402,6 +2430,7 @@ fn evaluate<K: Kernel>(
             inputs: produced.inputs,
             curve: produced.curve.map(Arc::new),
             spatial,
+            flex,
             drawn: produced.drawn,
         },
         Err(message) => Output {
@@ -2444,6 +2473,7 @@ fn evaluate<K: Kernel>(
             curve: None,
             // Its frame and failure, without geometry (mitcad#1521).
             spatial,
+            flex,
             drawn: None,
         },
     };

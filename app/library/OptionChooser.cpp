@@ -261,6 +261,7 @@ void OptionChooser::clear() {
   m_fields.clear();
   m_names.clear();
   m_kinds.clear();
+  m_stock = nullptr; // its row went with the others
   // The column for the rows left (the new rows align again).
   alignLabels();
 }
@@ -371,8 +372,16 @@ QJsonObject OptionChooser::parameters() const {
   if (!m_open) {
     return out;
   }
+  // A closed table with open options (mitcad#1950): its rows' options come
+  // with the row (`config`), so a part keeps only the open ones and changes
+  // its row freely later.
+  const bool closed = m_table.value(QStringLiteral("closed")).toBool();
+  QStringList open;
+  for (const QJsonValue& value : m_table.value(QStringLiteral("open")).toArray()) {
+    open << value.toString();
+  }
   for (const PartOption& option : m_answer.options) {
-    if (option.driven) {
+    if (option.driven || (closed && !open.contains(option.name))) {
       continue;
     }
     out.insert(option.name, isConstantExpression(option.expression) ? option.expression
@@ -385,6 +394,9 @@ QList<QWidget*> OptionChooser::fields() const {
   QList<QWidget*> out;
   if (!m_filters->isHidden()) {
     out << m_standardFilter << m_supplierFilter;
+  }
+  if (m_stock != nullptr) {
+    out << m_stock;
   }
   out << m_fields;
   return out;
@@ -692,7 +704,7 @@ bool OptionChooser::settle(const QJsonObject& wanted, int changed) {
       fixed.insert(order[i], wanted.value(order[i]));
     }
   }
-  OptionsAnswer answer = m_query(fixed);
+  OptionsAnswer answer = ask(fixed);
   if (!answer.ok() || !answer.refused.isEmpty()) {
     const QString why = answer.ok() ? answer.refused : answer.error;
     qInfo().noquote() << QStringLiteral("%1 option refused: %2").arg(m_logName, why);
@@ -738,7 +750,7 @@ bool OptionChooser::settle(const QJsonObject& wanted, int changed) {
     if (allowed) {
       QJsonObject tried = fixed;
       tried.insert(now.name, value);
-      const OptionsAnswer kept = m_query(tried);
+      const OptionsAnswer kept = ask(tried);
       if (kept.ok() && kept.refused.isEmpty()) {
         fixed = tried;
         answer = kept;
@@ -845,10 +857,34 @@ void OptionChooser::showAnswer(const OptionsAnswer& answer) {
       edit->setText(option.driven ? option.valueText : valueOfExpression(option.valueText));
     }
   }
+  showStock(shown);
   m_filling = filling;
 }
 
 void OptionChooser::build() {
+  // A part cut to length's stock lengths above its options (mitcad#1950).
+  const QList<std::pair<QString, QString>> stock = stockRows();
+  if (!stock.isEmpty() && m_names.contains(m_stockOption)) {
+    m_stock = new QComboBox;
+    m_stock->setObjectName(QStringLiteral("partOptionStock"));
+    m_stock->setToolTip(tr("A length the supplier stocks; Custom for any other length"));
+    m_stock->addItem(tr("Custom"), QString());
+    // The rows give a number in the option's unit without it ("600"): shown
+    // with it ("600 mm").
+    const PartOption* lengthOption = m_answer.option(m_stockOption);
+    const QString unit = lengthOption != nullptr ? lengthOption->unit : QString();
+    for (const auto& [row, length] : stock) {
+      bool bare = false;
+      length.toDouble(&bare);
+      m_stock->addItem(bare && !unit.isEmpty() ? length + QLatin1Char(' ') + unit : length, row);
+    }
+    connect(m_stock, &QComboBox::currentIndexChanged, this, [this] {
+      if (!m_filling) {
+        stockChosen();
+      }
+    });
+    m_form->addRow(tr("Stock length:"), m_stock);
+  }
   for (int i = 0; i < m_names.size(); ++i) {
     const QString kind = m_kinds[i];
     QWidget* field = nullptr;
@@ -912,6 +948,81 @@ void OptionChooser::optionEdited(int index, const QJsonValue& value) {
   QJsonObject wanted = m_wanted;
   wanted.insert(name, value);
   settle(wanted, index);
+}
+
+// --- Hidden options and a part's stock lengths (mitcad#1950)
+
+OptionsAnswer OptionChooser::ask(const QJsonObject& values) const {
+  OptionsAnswer answer = m_query(values);
+  if (!m_hidden.isEmpty()) {
+    answer.options.erase(std::remove_if(answer.options.begin(), answer.options.end(),
+                                        [this](const PartOption& option) { return m_hidden.contains(option.name); }),
+                         answer.options.end());
+  }
+  return answer;
+}
+
+QList<std::pair<QString, QString>> OptionChooser::stockRows() const {
+  QList<std::pair<QString, QString>> out;
+  if (m_stockOption.isEmpty() || !m_open) {
+    return out;
+  }
+  for (const QJsonValue& value : m_rows) {
+    const QJsonObject row = value.toObject();
+    const QJsonObject select = row.value(QStringLiteral("select")).toObject();
+    const QJsonObject values = row.value(QStringLiteral("values")).toObject();
+    // A row of a length only: its option values (library_show's `select`,
+    // else `values`) are the length's alone.
+    const QJsonObject set = select.isEmpty() ? values : select;
+    if (set.size() == 1 && set.contains(m_stockOption)) {
+      const QString length = rowOptionText(row, m_stockOption);
+      if (!length.isEmpty()) {
+        out.append({str(row, "name"), length});
+      }
+    }
+  }
+  // No row of a length alone (a closed table of sizes, mitcad#1950): the
+  // stock lengths as they are.
+  if (out.isEmpty()) {
+    for (const QString& length : m_stockLengths) {
+      if (!length.trimmed().isEmpty()) {
+        out.append({length.trimmed(), length.trimmed()});
+      }
+    }
+  }
+  return out;
+}
+
+void OptionChooser::showStock(const OptionsAnswer& shown) {
+  if (m_stock == nullptr) {
+    return;
+  }
+  const PartOption* option = shown.option(m_stockOption);
+  int index = 0;
+  if (option != nullptr) {
+    for (int i = 1; i < m_stock->count(); ++i) {
+      if (sameValue(*option, QJsonValue(m_stock->itemText(i)))) {
+        index = i;
+        break;
+      }
+    }
+  }
+  const QSignalBlocker blocker(m_stock);
+  m_stock->setCurrentIndex(index);
+}
+
+void OptionChooser::stockChosen() {
+  if (m_stock == nullptr) {
+    return;
+  }
+  const QString row = m_stock->currentData().toString();
+  if (row.isEmpty()) {
+    return; // Custom: the length as it is
+  }
+  const QString length = m_stock->currentText();
+  qInfo().noquote() << QStringLiteral("%1 stock length %2: %3").arg(m_logName, row, length);
+  const PartOption* option = m_answer.option(m_stockOption);
+  setOption(m_stockOption, option != nullptr ? queryValue(*option, length) : QJsonValue(length));
 }
 
 } // namespace mitcad

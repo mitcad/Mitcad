@@ -564,7 +564,15 @@ impl<K: Kernel> Evaluate<K> for DerivedPartDef {
                     format!("{label}: its length parameter {name} does not exist")
                 })?;
                 let length = state.parameters.value(id).unwrap_or(f64::NAN);
-                if let Some(problem) = meta.length.as_ref().and_then(|l| l.outside(length)) {
+                // A length its parameter's limits clamp (mitcad#1950: the
+                // shortest and longest of a library part cut to length) is
+                // still said: the value asked for, before the limits.
+                let asked = state
+                    .parameters
+                    .get(id)
+                    .filter(|p| p.limited().is_some())
+                    .map_or(length, |p| p.unclamped());
+                if let Some(problem) = meta.length.as_ref().and_then(|l| l.outside(asked)) {
                     ctx.warn(problem);
                 }
                 Some(length)

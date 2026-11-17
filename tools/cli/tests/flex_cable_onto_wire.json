@@ -1,0 +1,42 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A flat cable 10 x 2 onto a thin wire (mitcad#1713), as app.ui-windows-flex lays it in the Floating layout on tools/ui-scripts/flex.json: Flex1 from Pipe1's end (its 8 mm) over the block, Flex2 a 1 mm wire from the block's side through two points in the air, and Flex3 from the block's top through a point in the air to the seam of Flex2 at its bend. The route ran 0.4 mm past that node and came back; with its last sample's way, back against the route eased there, kept, the solid failed: the profile could not be swept along the path. It is built, with the warnings of its bends and of passing through a body."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xz", "entities": [
+    {"id": "p1", "type": "point", "at": [-40, 0]},
+    {"id": "p2", "type": "point", "at": [-40, -30]},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F1", "curves": ["c3"]},
+    "section": "circular", "size": 8, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, -20],
+    "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xz", "entities": [
+    {"id": "p1", "type": "point", "at": [80, 0]},
+    {"id": "p2", "type": "point", "at": [80, -30]},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F4", "curves": ["c3"]},
+    "section": "circular", "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok"}},
+  {"expect": {"feature": "Box1", "status": "ok"}},
+  {"expect": {"feature": "Pipe2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Wire 1 mm", "section": {"type": "round", "diameter": 8}, "bend_radius": 4},
+    "nodes": [
+      {"id": "n1", "at": [-40, 0, 30], "port": {"body": "F2.b0", "face": "F2:end"}},
+      {"id": "n2", "at": [20.33274831, -0.3327502169, 20], "on": {"body": "F3.b0", "face": "F3:top"}},
+      {"id": "n3", "at": [19.98268784, -20, 9.99134392], "on": {"body": "F3.b0", "face": "F3:side0"}}]}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Wire 1 mm", "section": {"type": "round", "diameter": 1}, "bend_radius": 4},
+    "nodes": [
+      {"id": "n1", "at": [40, 0.01730834554, 9.991345827], "on": {"body": "F3.b0", "face": "F3:side1"}},
+      {"id": "n2", "at": [55.81311694, -80.85206692, 9.991345827]},
+      {"id": "n3", "at": [103.7870476, -42.21263587, 9.991345827]}]}},
+  {"expect": {"feature": "Flex1", "status": "ok"}},
+  {"expect": {"feature": "Flex2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Wire 1 mm", "section": {"type": "rectangular", "width": 10, "height": 2, "corner_radius": 0}, "bend_radius": 4},
+    "nodes": [
+      {"id": "n1", "at": [27.000248, -7.000249907, 20], "on": {"body": "F3.b0", "face": "F3:top"}},
+      {"id": "n2", "at": [47.70526699, -104.3099754, 20]},
+      {"id": "n3", "at": [57.69207001, -80.62927246, 9.991345406], "on": {"body": "F7.b0", "edge": "E{F7:side0|F7:side0}"}}]}},
+  {"expect": {"feature": "Flex3", "status": "warning"}}
+]

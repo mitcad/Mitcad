@@ -3383,6 +3383,17 @@ impl Document {
                     appearance: Some(a),
                     ..Default::default()
                 }),
+            // The design's length unit and its named views (its up
+            // direction, mitcad#1937).
+            document: prepared
+                .dump
+                .as_ref()
+                .and_then(|d| d.document.as_ref())
+                .map(|d| mitcad_dump::Document {
+                    default_length_units: d.default_length_units.clone(),
+                    named_views: d.named_views.clone(),
+                    ..Default::default()
+                }),
             ..Dump::default()
         };
         let dump = match &prepared.dump {
@@ -3415,6 +3426,10 @@ impl Document {
                 .as_ref()
                 .and_then(|a| a.to_import().ok())
                 .unwrap_or_default(),
+            // The design opened stands on Z up; the documents it refers to
+            // keep their coordinates, which its placements of them assume
+            // (mitcad#1937).
+            upright: options.stack.is_empty(),
             learn: options
                 .learn
                 .clone()

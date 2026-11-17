@@ -151,6 +151,21 @@ record! {
         "root_component" => root_component: String,
         "component_count" => component_count: i64,
         "data_file" => data_file: Value,
+        /// The design's named views with their cameras (mitcad#1937): the
+        /// standard `TOP`, `FRONT`, `RIGHT` and `HOME` views tell the
+        /// design's modelling orientation (Y up or Z up).
+        "named_views" => named_views: Vec<NamedView>,
+    }
+}
+
+record! {
+    /// A named view of the design (SCHEMA.md §5.1, mitcad#1937): its camera
+    /// in model coordinates (cm), the up vector a unit vector.
+    pub struct NamedView {
+        "name" => name: String,
+        "eye" => eye: Vec3,
+        "target" => target: Vec3,
+        "up" => up: Vec3,
     }
 }
 

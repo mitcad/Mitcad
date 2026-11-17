@@ -1970,14 +1970,17 @@ void MainWindow::finishDesignImport(const QString& stopped, bool cancelled) {
 // ---------------------------------------------------------------------------
 // Export
 
-void MainWindow::exportFile() {
+void MainWindow::exportFile(const QString& given) {
   QVector<QPair<QString, QString>> sketches;
   for (const DocumentSnapshot::Feature& feature : std::as_const(m_snapshot.features)) {
     if (feature.isSketch() && feature.isActive()) {
       sketches.append({feature.uid, feature.name});
     }
   }
-  QString sketch = m_mode == Mode::Sketch ? m_sketch->uid() : QString();
+  QString sketch = given;
+  if (sketch.isEmpty() && m_mode == Mode::Sketch) {
+    sketch = m_sketch->uid();
+  }
   if (sketch.isEmpty() && !m_selection.isEmpty()) {
     sketch = sketchOf(m_selection.first());
   }
@@ -1986,7 +1989,9 @@ void MainWindow::exportFile() {
   // Named as Save As Mesh names its file (mitcad#1164): the selected body,
   // the selected component, else the design; askExport adds the extension
   // of the type it starts with (the last export's, or DXF for a sketch).
-  const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(safeFileName(exportName(m_selection)));
+  // A sketch's context-menu Export DXF… names it after the sketch.
+  const QString suggested = QDir(dialogFolder(DialogGroup::Export))
+                                .filePath(safeFileName(given.isEmpty() ? exportName(m_selection) : featureName(given)));
   // The design's print plates a 3MF file can carry (mitcad#1679), and the
   // slicer Send to Slicer would write them for: the design's.
   ExportPlates plates;
@@ -2099,7 +2104,8 @@ void MainWindow::exportFile() {
     command = cmd("export_sketch", {{QStringLiteral("sketch"), choice->sketch},
                                     {QStringLiteral("path"), choice->path},
                                     {QStringLiteral("units"), choice->dxfUnit},
-                                    {QStringLiteral("construction"), choice->dxfConstruction}});
+                                    {QStringLiteral("construction"), choice->dxfConstruction},
+                                    {QStringLiteral("points"), choice->dxfPoints}});
   } else {
     command = cmd("export", {{QStringLiteral("path"), choice->path}, {QStringLiteral("format"), choice->format}});
     if (choice->selectedOnly) {
@@ -2175,6 +2181,9 @@ void MainWindow::exportFile() {
     what += result.value(QStringLiteral("construction")).toBool(choice->dxfConstruction)
                 ? tr(", construction geometry included")
                 : tr(", construction geometry left out");
+    // And the sketch's free-standing points (mitcad#1963).
+    what += result.value(QStringLiteral("points")).toBool(choice->dxfPoints) ? tr(", points included")
+                                                                             : tr(", points left out");
   }
   if (choice->format != QStringLiteral("dxf") && !choice->coordinates.isEmpty()) {
     what += choice->coordinates == QStringLiteral("frame")
@@ -2215,32 +2224,9 @@ void MainWindow::exportFile() {
 }
 
 void MainWindow::exportSketch(const QString& sketch) {
-  const QString name = featureName(sketch);
-  const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
-  // In the design's length unit unless another is chosen (mitcad#1408).
-  QString unit = lengthUnit();
-  const QString path = dialogSaveDxf(this, tr("Export DXF"), suggested, unit);
-  if (path.isEmpty()) {
-    return;
-  }
-  rememberDialogFolder(DialogGroup::Export, path);
-  QJsonObject result;
-  if (!runCommand(cmd("export_sketch", {{QStringLiteral("sketch"), sketch},
-                                        {QStringLiteral("path"), path},
-                                        {QStringLiteral("units"), unit}}),
-                  &result)) {
-    sheetCritical(this, tr("Export DXF"), tr("Could not export:\n%1").arg(m_lastError));
-    return;
-  }
-  // Construction geometry is left out here (mitcad#1445); File > Export
-  // offers to include it.
-  qInfo().noquote() << QStringLiteral("Exported %1: dxf, %2 entities, in %3, construction geometry %4")
-                           .arg(path)
-                           .arg(result.value(QStringLiteral("entities")).toInt())
-                           .arg(result.value(QStringLiteral("units")).toString(unit),
-                                result.value(QStringLiteral("construction")).toBool()
-                                    ? QStringLiteral("included")
-                                    : QStringLiteral("left out"));
+  // The Export dialog on this sketch's DXF (mitcad#1963): its DXF unit,
+  // Include construction geometry and Include points, as File › Export.
+  exportFile(sketch);
 }
 
 // The top-level fields a newer MitCad wrote that this one did not read

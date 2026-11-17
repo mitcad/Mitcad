@@ -1592,3 +1592,347 @@ fn a_line_distance_between_turned_lines_is_listed() {
     assert!(solved.status.not_parallel.is_empty());
     assert!(solved.status.not_parallel_warning().is_none());
 }
+
+/// Texts on a path with the flips (mitcad#1946), laid out with box glyphs
+/// half an em wide and one high: each glyph's four corners in order, its
+/// baseline from the pen's corner, then up its right side to the top.
+mod text_on_a_path_flips {
+    use super::*;
+    use crate::geometry::{Curve2, P2, dot, sub};
+    use crate::kernel::{FontGlyphs, Glyph};
+    use std::collections::BTreeMap;
+
+    /// The corners of the two glyphs of "II", 2 mm high (the capitals an
+    /// em high), on the curve `c1`; `extra` (the path, the alignment and
+    /// the flips) is merged into the text.
+    fn corners(curve: Curve2, extra: serde_json::Value) -> Vec<P2> {
+        let square = vec![
+            vec![[0.0, 0.0], [0.5, 0.0]],
+            vec![[0.5, 0.0], [0.5, 1.0]],
+            vec![[0.5, 1.0], [0.0, 1.0]],
+            vec![[0.0, 1.0], [0.0, 0.0]],
+        ];
+        let glyph = Glyph {
+            advance: 0.5,
+            contours: vec![square],
+        };
+        let glyphs = FontGlyphs {
+            family: "Box".into(),
+            fallback: false,
+            ascender: 1.25,
+            descender: -0.25,
+            cap_height: 1.0,
+            line_spacing: 1.5,
+            glyphs: vec![glyph.clone(), glyph],
+        };
+        let mut json = serde_json::json!({
+            "id": "t1", "text": "II", "at": [0.0, 0.0], "height": 2.0,
+            "cap_height": true
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            json[key] = value.clone();
+        }
+        let text: SketchText = serde_json::from_value(json).unwrap();
+        let curves = BTreeMap::from([(EntityUid(1), curve)]);
+        let outline = text::layout(&text, &glyphs, &BTreeMap::new(), &curves).unwrap();
+        let at: Vec<P2> = outline
+            .contours
+            .iter()
+            .flat_map(|c| c.parts.iter())
+            .map(|p| match p {
+                Curve2::Line { a, .. } => *a,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(at.len(), 8);
+        at
+    }
+
+    /// What a glyph on a circle about the origin is expected to be: its
+    /// middle's angle, the radii its baseline and its top lie on (at their
+    /// middles), whether its baseline runs counter-clockwise (the reading
+    /// direction) and whether its up points out of the circle.
+    struct OnCircle {
+        angle: f64,
+        baseline: f64,
+        top: f64,
+        ccw: bool,
+        out: bool,
+    }
+
+    fn glyph(angle: f64, baseline: f64, top: f64, ccw: bool, out: bool) -> OnCircle {
+        OnCircle {
+            angle,
+            baseline,
+            top,
+            ccw,
+            out,
+        }
+    }
+
+    fn check(at: &[P2], expected: [OnCircle; 2]) {
+        let tol = 1e-6;
+        for (k, e) in expected.iter().enumerate() {
+            let c = &at[4 * k..4 * k + 4];
+            let mean = [
+                c.iter().map(|p| p[0]).sum::<f64>() / 4.0,
+                c.iter().map(|p| p[1]).sum::<f64>() / 4.0,
+            ];
+            let angle = mean[1].atan2(mean[0]);
+            assert!((angle - e.angle).abs() < tol, "glyph {k}: {angle} {at:?}");
+            // The corners lie half the advance (0.5 mm) off the glyph's
+            // middle along the tangent.
+            let radius = |p: &P2| p[0].hypot(p[1]);
+            let (base, top) = (e.baseline.hypot(0.5), e.top.hypot(0.5));
+            for p in &c[..2] {
+                assert!((radius(p) - base).abs() < tol, "glyph {k} baseline {at:?}");
+            }
+            for p in &c[2..] {
+                assert!((radius(p) - top).abs() < tol, "glyph {k} top {at:?}");
+            }
+            let radial = [e.angle.cos(), e.angle.sin()];
+            let tangent = [-radial[1], radial[0]];
+            let along = dot(sub(c[1], c[0]), tangent);
+            let up = dot(sub(c[2], c[1]), radial);
+            assert_eq!(along > 0.0, e.ccw, "glyph {k} reading {at:?}");
+            assert_eq!(up > 0.0, e.out, "glyph {k} up {at:?}");
+        }
+    }
+
+    /// An arc bulging upwards: counter-clockwise from 0 to 180 degrees, so
+    /// right to left over its top.
+    fn upper_arc() -> Curve2 {
+        Curve2::Arc {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            start: 0.0,
+            end: PI,
+        }
+    }
+
+    /// Centred on the arc's top, above the path: the glyphs' middles 0.5
+    /// mm either side of it (0.05 rad on a 10 mm radius).
+    #[test]
+    fn the_flips_mirror_a_text_on_an_arc_in_the_paths_frame() {
+        let (right, left) = (PI / 2.0 - 0.05, PI / 2.0 + 0.05);
+        let lay = |flip_x: bool, flip_y: bool| {
+            corners(
+                upper_arc(),
+                serde_json::json!({
+                    "align": "center", "path": {"curve": "c1"},
+                    "flip_x": flip_x, "flip_y": flip_y
+                }),
+            )
+        };
+        // No flips: along the arc from its right end, on its inner side,
+        // upside down and reading from right to left.
+        check(
+            &lay(false, false),
+            [
+                glyph(right, 10.0, 8.0, true, false),
+                glyph(left, 10.0, 8.0, true, false),
+            ],
+        );
+        // Flip Vertical: mirrored across the arc, the baseline still on
+        // it, the text on its outer side; the order along it unchanged.
+        check(
+            &lay(false, true),
+            [
+                glyph(right, 10.0, 12.0, true, true),
+                glyph(left, 10.0, 12.0, true, true),
+            ],
+        );
+        // Flip Horizontal: mirrored along the arc about the block's
+        // middle: the first glyph at the other end, each glyph facing
+        // back; still inside.
+        check(
+            &lay(true, false),
+            [
+                glyph(left, 10.0, 8.0, false, false),
+                glyph(right, 10.0, 8.0, false, false),
+            ],
+        );
+        // Both (the reported case, Above Path): on top of the arc, the
+        // baseline on it, upright, reading from left to right.
+        let both = lay(true, true);
+        check(
+            &both,
+            [
+                glyph(left, 10.0, 12.0, false, true),
+                glyph(right, 10.0, 12.0, false, true),
+            ],
+        );
+        assert!(both[0][0] < both[4][0], "{both:?}");
+        assert!(
+            both[1][0] > both[0][0] && both[2][1] > both[1][1],
+            "{both:?}"
+        );
+    }
+
+    /// A text hanging from the arc (below the path) keeps its top on the
+    /// arc when flipped vertically and moves to the arc's other side.
+    #[test]
+    fn a_hanging_text_flipped_vertically_keeps_its_top_on_the_arc() {
+        let (right, left) = (PI / 2.0 - 0.05, PI / 2.0 + 0.05);
+        let lay = |flip_y: bool| {
+            corners(
+                upper_arc(),
+                serde_json::json!({
+                    "align": "center", "path": {"curve": "c1", "above": false},
+                    "flip_y": flip_y
+                }),
+            )
+        };
+        check(
+            &lay(false),
+            [
+                glyph(right, 12.0, 10.0, true, false),
+                glyph(left, 12.0, 10.0, true, false),
+            ],
+        );
+        check(
+            &lay(true),
+            [
+                glyph(right, 8.0, 10.0, true, true),
+                glyph(left, 8.0, 10.0, true, true),
+            ],
+        );
+    }
+
+    /// On a line running right to left both flips put the text above it,
+    /// upright, reading from left to right about the block's middle.
+    #[test]
+    fn both_flips_turn_a_text_on_a_line_about_the_blocks_middle() {
+        let line = Curve2::Line {
+            a: [10.0, 0.0],
+            b: [-10.0, 0.0],
+        };
+        let lay = |flip: bool| {
+            corners(
+                line.clone(),
+                serde_json::json!({
+                    "align": "center", "path": {"curve": "c1"},
+                    "flip_x": flip, "flip_y": flip
+                }),
+            )
+        };
+        let same = |at: &[P2], expected: [P2; 8]| {
+            for (p, q) in at.iter().zip(expected) {
+                assert!(
+                    (p[0] - q[0]).abs() < 1e-9 && (p[1] - q[1]).abs() < 1e-9,
+                    "{at:?}"
+                );
+            }
+        };
+        // No flips: from x = 1 leftwards, upside down below the line.
+        same(
+            &lay(false),
+            [
+                [1.0, 0.0],
+                [0.0, 0.0],
+                [0.0, -2.0],
+                [1.0, -2.0],
+                [0.0, 0.0],
+                [-1.0, 0.0],
+                [-1.0, -2.0],
+                [0.0, -2.0],
+            ],
+        );
+        // Both: from x = -1 rightwards, upright above the line.
+        same(
+            &lay(true),
+            [
+                [-1.0, 0.0],
+                [0.0, 0.0],
+                [0.0, 2.0],
+                [-1.0, 2.0],
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 2.0],
+                [0.0, 2.0],
+            ],
+        );
+    }
+
+    /// On a whole circle that starts 0.1 rad before its top (its
+    /// `start_angle`), a left-aligned text's block is centred on the top;
+    /// both flips put it on the outside, upright, reading from left to
+    /// right, and Flip Horizontal alone keeps it inside.
+    #[test]
+    fn the_flips_on_a_whole_circle_from_its_start_angle() {
+        let circle = Curve2::Circle {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            start: PI / 2.0 - 0.1,
+        };
+        let (right, left) = (PI / 2.0 - 0.05, PI / 2.0 + 0.05);
+        let lay = |flip_x: bool, flip_y: bool| {
+            corners(
+                circle.clone(),
+                serde_json::json!({
+                    "path": {"curve": "c1"}, "flip_x": flip_x, "flip_y": flip_y
+                }),
+            )
+        };
+        check(
+            &lay(false, false),
+            [
+                glyph(right, 10.0, 8.0, true, false),
+                glyph(left, 10.0, 8.0, true, false),
+            ],
+        );
+        check(
+            &lay(true, true),
+            [
+                glyph(left, 10.0, 12.0, false, true),
+                glyph(right, 10.0, 12.0, false, true),
+            ],
+        );
+        check(
+            &lay(true, false),
+            [
+                glyph(left, 10.0, 8.0, false, false),
+                glyph(right, 10.0, 8.0, false, false),
+            ],
+        );
+    }
+
+    /// Fit on Path spreads the glyphs over the whole arc (from 45 to 135
+    /// degrees: their middles at a quarter and three quarters of it); both
+    /// flips swap their places about the arc's middle and turn them.
+    #[test]
+    fn the_flips_with_fit_on_path() {
+        let arc = Curve2::Arc {
+            center: [0.0, 0.0],
+            radius: 10.0,
+            start: PI / 4.0,
+            end: 3.0 * PI / 4.0,
+        };
+        let (right, left) = (3.0 * PI / 8.0, 5.0 * PI / 8.0);
+        let lay = |flip: bool| {
+            corners(
+                arc.clone(),
+                serde_json::json!({
+                    "path": {"curve": "c1", "fit": true},
+                    "flip_x": flip, "flip_y": flip
+                }),
+            )
+        };
+        check(
+            &lay(false),
+            [
+                glyph(right, 10.0, 8.0, true, false),
+                glyph(left, 10.0, 8.0, true, false),
+            ],
+        );
+        let both = lay(true);
+        check(
+            &both,
+            [
+                glyph(left, 10.0, 12.0, false, true),
+                glyph(right, 10.0, 12.0, false, true),
+            ],
+        );
+        assert!(both[0][0] < both[4][0], "{both:?}");
+    }
+}

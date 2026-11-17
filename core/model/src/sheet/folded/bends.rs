@@ -1823,7 +1823,7 @@ pub(crate) fn bend<K: Kernel>(
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
     // A bend moves material the straight cuts it keeps were made through.
-    state.overlay_refusal("sheet Bend")?;
+    super::overlay_refusal(ctx, &state, "sheet Bend")?;
     if d.resolved_mode() == BendPortMode::Double {
         return double_bend(d, ctx, state, rules);
     }
@@ -1861,7 +1861,7 @@ pub(crate) fn fold<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
-    state.overlay_refusal("sheet Fold")?;
+    super::overlay_refusal(ctx, &state, "sheet Fold")?;
     let metrics = BendMetrics::new(d.angle, d.radius, &rules)?;
     let sketch = ctx.sketch(d.line.sketch)?;
     let crate::sketch::geometry::Curve2::Line { a, b } =
@@ -2821,7 +2821,7 @@ fn double_bend<K: Kernel>(
         );
     }
     let (mut moving, moving_rules) = read(ctx, moving_body)?;
-    moving.overlay_refusal("sheet Bend")?;
+    super::overlay_refusal(ctx, &moving, "sheet Bend")?;
     if moving.owner != state.owner || moving.rules != state.rules || moving_rules != rules {
         return Err("sheet Bend bodies must have the same owner and rule reference".into());
     }

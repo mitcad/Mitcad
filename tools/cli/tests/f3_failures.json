@@ -47,7 +47,7 @@
   {"cmd": "edit_feature", "uid": "F7", "def": {"type": "loft", "sections": [
     {"type": "profile", "sketch": "F2", "region": "r{c3}"}, {"type": "profile", "sketch": "F6", "region": "r{c1}"}],
     "rails": [{"sketch": "F1", "curves": ["c1"]}], "operation": "new_body"}},
-  {"expect": {"feature": "Loft1", "status": "error", "error_contains": "rail 1 does not meet section 1"}},
+  {"expect": {"feature": "Loft1", "status": "error", "error_contains": "rail 1 misses section 1 by 2 mm"}},
   {"comment": "The 10 mm circle round the 4 mm one is a ring with a hole."},
   {"cmd": "edit_feature", "uid": "F7", "def": {"type": "loft", "sections": [
     {"type": "profile", "sketch": "F2", "region": "r{c1}"}, {"type": "profile", "sketch": "F6", "region": "r{c1}"}],

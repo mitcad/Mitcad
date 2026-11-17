@@ -2499,6 +2499,103 @@ regions and commands are unchanged.
   forms naming a 3D sketch outside Pipe, Sweep and Loft are refused by
   `path::not_spatial`.
 
+### Flex items
+
+A Flex item (`flex`, mitcad#1713) is a flexible item laid through the
+model: a wire, a cable, a hose, a flat cable, a strip. The command
+reference's section "Flex" (`core/model-api/src/commands.md`) is the
+contract of all its layers.
+
+- **Stored and derived.** The definition
+  (`core/model/src/features/flex.rs`, `FlexDef`) stores the item (a
+  `FlexType`, `core/model-base/src/flex.rs`: section, wall, bend radii,
+  twist limit, mass per length; a copy of a library type, so a design
+  needs no library to open), the nodes in order (each free in space, on a
+  face, an edge or a point through a `GeomRef`, or on an end port) and the
+  item's own values. The route between the nodes is never stored: every
+  evaluation asks the kernel for it.
+- **The kernel.** Three `Kernel` methods, unsupported by default:
+  `flex_route` (the obstacles, the nodes and the section's reaches in; the
+  route's curve, its samples with the section's orientation and its
+  problems out), `flex_solid` (a section that is not round swept along the
+  route; a round one is the existing `pipe`) and `end_port` (the position,
+  direction and orientation of a cap face of a Pipe or of a Flex item).
+  The obstacles are every solid of the design at the feature's point of
+  the timeline: the bodies of its component, and those of every other
+  component where its occurrences place them, moved into the feature's
+  component (shown or hidden alike). The OCCT side is
+  `core/ffi/src/kernel/flex.rs`, `core/cpp/bridge/flex.{hpp,cpp}` and
+  `geometry/include/mitcad/geometry/flex.hpp`, whose comments say what
+  each function must do; the mock kernel routes straight through the
+  nodes.
+- **Warnings, not failures.** A route that passes through a body, bends
+  too tightly or twists too much, and a node whose face, edge, point or
+  port is gone (it stays at its last place), are warnings with their
+  places; the item is still built. The messages are plain words
+  (`FlexProblemKind::message`); the detail for agents is the `flex`
+  query's `problems`.
+- **Results.** What the evaluation found (`FlexOutput`: the nodes where
+  they are, the route's curve and samples, its length, the faces it runs
+  on, its problems) is kept with the feature's result (`Output::flex`),
+  also when the solid then failed, so the nodes stay movable; it is not
+  kept in the result store. `Document::flex_output` and
+  `Document::preview_flex` read it; the `flex` query and the handles in
+  the view come from it.
+- **Edits.** `Document::edit_flex` (`core/model/src/document/flex.rs`)
+  runs one change of the definition as one `edit_feature`, so each
+  `flex.*` command (`core/model-api/src/flex.rs`: a node added, moved,
+  attached again, deleted or twisted, the item or its values set) is one
+  undo step and keeps the feature's parameters. A drag in the view
+  previews the edited definition and sends one command when it ends.
+- **End ports.** `Document::end_ports` lists the cap faces of pipes and
+  Flex items that a body still has, each with its port; a node's `port`
+  stores the cap face as a face reference, so an item that begins at a
+  pipe's end follows the pipe. `Document::end_ports_seen` gives those
+  of one body, and of a component picked at an occurrence in the
+  coordinates of the item's component.
+- **What the document keeps up to date.** After a recompute the places
+  of the attached nodes go into the definitions
+  (`DocState::take_flex_places`), so a node whose attachment is lost
+  later stays where it last was. The route's length is measured into
+  the item's own reference parameter (`FlexDef::length`,
+  `settle_length`, as a bound length's), and the item's material and
+  appearance go to its body when the item is made or names others
+  (`DocState::settle_flex_look`). The links of nodes on other
+  components' geometry (`links`, `datum_links`) are rewritten where a
+  construction plane's are: copies, moved features, reparented
+  components, components saved as designs.
+- **The library of types.** `core/model/src/flex_library.rs`: the
+  built-in types in code, the user's and the project's as files
+  (`flex-types/<id>.json`) beside the materials of those libraries;
+  the document's commands write them as undo steps that put the file
+  back (`Document::save_flex_type` and its siblings).
+- **Gravity and hanging cables.** The design's direction of gravity
+  (`core/model/src/gravity.rs`, stored in the design file) is for Flex
+  items only: a fixed length's slack hangs toward it in every evaluation
+  (`features/flex.rs`, `hang_slack`), and an item can be let hang
+  interactively (`core/model/src/document/flex_hang.rs`, the `flex.hang*`
+  commands in `core/model-api/src/flex_hang.rs`; contract: "Hanging
+  cables" in `commands.md`). While it hangs, its centre line is a chain
+  of short segments kept in the document's runtime state, beside the
+  design (as a preview is): position-based dynamics in the geometry
+  kernel (`Kernel::flex_drape_step`, `geometry/src/flex_drape.cpp`: the
+  segments' lengths, bending as stiff as the bend radius says and never
+  tighter, collisions with the router's triangles of the obstacles,
+  friction, pins, the pointer's grab), one step per frame of the view. A
+  lock turns the resting chain into the item's nodes
+  (`Kernel::flex_drape_nodes`: the fewest points through which the
+  router gives the chain's shape, on the faces they lie on) as one
+  `edit_feature`; no simulation ever runs in a recompute, so a design
+  recomputes the same on every platform. Any change of the design ends
+  the hanging but a new direction of gravity, toward which it settles
+  again: the app sets the direction in the Let It Hang panel while the
+  item hangs (its tool card; there is no gravity tool of its own), and
+  the panel's whole session is one undo step on OK. The rigid parts that
+  fell and were dragged under gravity (a Rapier engine in `core/physics`) were
+  taken out on 15.11.2026 (owner's decision: gravity is for cables only);
+  that code is kept on the branch `archive/flex-rigid-gravity` (at
+  60881670f) of the repository.
+
 ## Application
 
 Formula assistance lives in the Rust expression layer: its existing tokenizer
@@ -2553,7 +2650,7 @@ not recompute.
   A polygon's side count is its geometry, not a dimension.
   Tools use a custom cursor (`app/framework/Cursors`). Body edges and
   vertices in the sketch plane, which the Dimension tool picks and the
-  Point tool snaps to, come from the model's `plane_geometry` query (the
+  drawing tools snap to (mitcad#1967), come from the model's `plane_geometry` query (the
   coplanarity test is the model's, on the kernel's curves); they are
   projected, linked, only by the action that makes something from them
   (mitcad#256, mitcad#258). The same query with `out_of_plane` also gives
@@ -2699,7 +2796,16 @@ not recompute.
   Slicer's bed plan while its panel is open (mitcad#1121:
   `DocumentSession::commandTaskAsync`, the job `bed plan`): keys typed
   into the opening panel stay the panel's, and its Send waits for the
-  plan (`CommandDef::okWhileBusy`). The first pending input
+  plan (`CommandDef::okWhileBusy`). A command that changes only the
+  document's runtime state, never the design (a hanging Flex item's
+  step, `flex.hang_step`, many times a second; mitcad#1713), is a
+  runtime command (`DocumentSession::runtimeCommandAsync`,
+  `CommandHost::modelRuntimeCommandAsync`): a job on the worker with
+  nothing shown or done around it (no wait, progress, busy state shown,
+  meshing, refresh or document query; the model runs it without a design
+  change's checks). It gives way to any other job and to the UI thread's
+  reads by being waited for, a few milliseconds (`yieldRuntimeJob`),
+  never by a refusal. The first pending input
   starts a bounded 150 ms timer; further input does not restart it. While
   a job owns the document, numeric edits replace one pending action per
   field, evaluated only on idle. Structural edits form ordering barriers

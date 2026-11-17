@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# The sketch Selection Filter's Dimensions and Constraints rows (GitHub
+# #388), on sketch-filter-annotations.json's Sketch1: two parallel lines
+# 10 mm apart, the lower one from a fixed point off the origin (a Fix
+# symbol: a fixed point at the origin is the sketch origin, with none) and Horizontal, Parallel k7 between them, the dimension k8 of 10.
+#   1. Editing Sketch1 starts with both rows a square (a click only).
+#   2. Only Dimensions a cross: a window over the sketch takes the
+#      dimension and no constraints.
+#   3. Only Constraints a cross: the same window takes the Parallel and
+#      the Fix symbol, and no dimensions.
+#   4. A click follows its own row: Dimensions empty, a click on the
+#      dimension's text does not select it, a click on the Parallel's
+#      symbol still selects the Parallel.
+# The window runs from the lower right to the upper left (a crossing
+# window) inside the two fixed points that frame the view after the fit.
+# Run by tools/ui-sketch-filter-annotations-test.sh (Linux),
+# tools/ui-windows-sketch-filter-annotations-test.ps1 (Windows) and
+# tools/ui-macos-sketch-filter-annotations-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+expect-ever '^Timeline Sketch1 at '
+
+# 1. The defaults: both rows a square.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)' 30
+wait-log '^Selection filter sketch defaults: .*, dimensions=square, constraints=square, ' 10
+key F6
+wait-idle
+wait-log '^Dimension k8 text at [0-9]+,[0-9]+$' 10
+wait-log '^Constraint k7 glyph at [0-9]+,[0-9]+ \(parallel by c[36]\)$' 10
+
+# 2. Only Dimensions a cross: a window takes only the dimension.
+mark
+command select.filter.dimensions
+wait-log '^Selection filter sketch dimensions cross: .*, dimensions=cross, constraints=square, ' 10
+wait-idle
+mark
+sketch-drag 55 -20 -25 30
+wait-log '^Selected: .*\bdimension k8 of F1\b' 10
+wait-idle
+expect-no-log '^Selected: .*constraint'
+screenshot '${MITCAD_TEST_WORK}/sketch-filter-dimensions.png'
+
+# 3. Only Constraints a cross: a window takes only the constraints, the
+#    Fix symbol among them.
+mark
+command select.filter.reset
+wait-log '^Selection filter sketch reset: .*, dimensions=square, constraints=square, ' 10
+mark
+command select.filter.constraints
+wait-log '^Selection filter sketch constraints cross: .*, dimensions=square, constraints=cross, ' 10
+wait-idle
+mark
+sketch-drag 55 -20 -25 30
+wait-log '^Selected: .*\bconstraint k7 of F1\b' 10
+wait-log '^Selected: .*\bconstraint fix:p1 of F1\b' 10
+wait-idle
+expect-no-log '^Selected: .*dimension'
+screenshot '${MITCAD_TEST_WORK}/sketch-filter-constraints.png'
+
+# 4. A click follows its own row: Dimensions empty (square, cross, empty).
+mark
+command select.filter.reset
+wait-log '^Selection filter sketch reset: ' 10
+mark
+command select.filter.dimensions
+wait-log '^Selection filter sketch dimensions cross: ' 10
+mark
+command select.filter.dimensions
+wait-log '^Selection filter sketch dimensions empty: .*, dimensions=empty, constraints=square, ' 10
+wait-idle
+mark
+click-logged '^Constraint k7 glyph at [0-9]+,[0-9]+ \(parallel by c[36]\)$'
+wait-log '^Selected: 1 [a-z ]+ \[constraint k7 of F1\]$' 10
+wait-idle
+mark
+click-logged '^Dimension k8 text at [0-9]+,[0-9]+$'
+wait-idle
+expect-no-log '^Selected: .*\bdimension k8 of F1\b'
+expect-never 'TestDriver: FAIL'

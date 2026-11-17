@@ -131,12 +131,12 @@ impl FeatureInfo for SheetRefoldDef {
 
 impl<K: Kernel> Evaluate<K> for SheetUnfoldDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        crate::sheet::folded::unfold(self, ctx)
+        crate::sheet::folded::unfold(self, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 
 impl<K: Kernel> Evaluate<K> for SheetRefoldDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
-        crate::sheet::folded::refold(self, ctx)
+        crate::sheet::folded::refold(self, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

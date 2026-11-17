@@ -10,7 +10,7 @@
   {"cmd":"add_feature","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c1[c4,c2]"}},"angle":1.5707963267948966,"length":{"mode":"tangent","value":10},"position":"edge"}},
   {"expect":{"feature":"F5","status":"ok","body":"F3.b0","volume":1289.2477796076938}},
   {"cmd":"add_feature","def":{"type":"sheet_unfold","body":"F3.b0","stationary":{"feature":"F3","slot":0},"bends":[{"feature":"F5","slot":0}]}},
-  {"expect":{"feature":"F6","status":"error","error_contains":"a fillet or chamfer"}},
+  {"expect":{"feature":"F6","status":"error","error_contains":"but Chamfer1 bevels edges of the sheet's faces, which cannot be flattened"}},
   {"cmd":"undo"},
   {"cmd":"edit_feature","uid":"F1","def":{"type":"sheet_rules","thickness":0.5,"bend_radius":1,"allowance":{"type":"k_factor","k":0.4},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":1},"corner_relief":{"type":"round","width":2,"depth":2}}},
   {"expect":{"feature":"F5","status":"ok","body":"F3.b0","volume":634.2699081698724}}

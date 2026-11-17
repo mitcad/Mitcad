@@ -4,8 +4,8 @@
 // Body edges and vertices in the sketch plane (mitcad#256, mitcad#258), as
 // the model's `plane_geometry` query lists them in sketch coordinates
 // (core/model-api/src/commands.md, "Body geometry in a sketch's plane"):
-// what the Dimension and constraint tools pick (mitcad#1782) and the Point
-// tool snaps to. With them come the edges and vertices out of the plane
+// what the Dimension and constraint tools pick (mitcad#1782) and the drawing
+// tools snap to (mitcad#1967). With them come the edges and vertices out of the plane
 // (mitcad#866), as the curves and points they project to along its normal,
 // with where they are above or below it: the Dimension tool picks them where
 // the view shows them; the others take the ones in the plane only. Nothing is

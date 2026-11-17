@@ -32,7 +32,15 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 // wall1(<curve>), wall2(<curve>), tip0(<curve>), tip1(<curve>),
 // start(<curve>) in the sketch plane and end(<curve>) at the depth.
 //
-// With `extend_ends` (a rib's only, mitcad#1746) each open end of the chain
+// A web's curves are joined where their ends meet (mitcad#1968): two walls
+// whose curves share an end meet in a mitre, at any angle and for every
+// thickness location (at a sharp angle the mitre is cut off a thickness
+// past the walls' outer sides); a run of curves joined end to end keeps its
+// walls on the side its first curve gives. Three or more walls meeting at
+// one point are joined there by the convex hull of their square ends.
+//
+// With `extend_ends` (a rib's, mitcad#1746; a web's free ends, those
+// touching no other curve, mitcad#1968) each open end of the chain
 // is continued straight along its end tangent until the rib, across its
 // whole thickness and depth, meets the faces of `bodies`: the continuation
 // fills up to a curved or slanted face with no gap. `end_offset` moves the
@@ -43,7 +51,11 @@ enum class ThicknessLocation { Symmetric, Side1, Side2 };
 // fills that part: the points from which the tangent reaches a face, up to
 // it, and nothing of what passes; it says nothing (mitcad#1857). An end
 // whose continuation meets no face of the bodies within their bounds stays
-// as drawn, and the result carries a note saying so.
+// as drawn, and the result carries a note saying so. An end that lies past
+// a wall the curves cross (its tangent out of the curves meets no face) is
+// cut back to that wall instead: the piece beyond it is dropped
+// (mitcad#1968). A web's continuation faces are named after its curve:
+// extend0(<curve>), tip0(<curve>), ...
 //
 // With `direction` (a rib's, in the sketch plane) the rib grows along it
 // instead of at right angles to the chord (mitcad#1746); `flip` turns it.

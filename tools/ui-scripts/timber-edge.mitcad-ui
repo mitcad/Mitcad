@@ -33,8 +33,7 @@ wait-log '^View hint Timber: Click the straight edge the member runs along, or t
 mark
 click-logged '^Panel Timber input along_edge at '
 wait-log '^Pick places:' 20
-# Keep the requested geometry clear of the command card at this window size.
-command view.fit
+# The loaded view already leaves this long edge clear of the command card.
 wait-idle
 click-pick 'edge F1[.]b0/E[{](?:F1:side0[|]F1:top|F1:top[|]F1:side0)[}] at '
 wait-idle

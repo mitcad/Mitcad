@@ -113,7 +113,7 @@ if(BUILD_TESTING)
   # Sweeps, lofts, pipes, coils, ribs and webs (F3): the T0 models' volumes
   # and analytic ones, names through parameter edits, failures.
   foreach(script f3_sweep f3_loft f3_pipe_coil f3_rib_web f3_names_follow_parameters f3_failures
-                 f3_rib_extend_ends f3_rib_direction)
+                 f3_rib_extend_ends f3_rib_direction f3_web_corners f3_rib_web_pattern)
     add_test(NAME cli.${script} COMMAND mitcad-cli run "${scripts}/${script}.json")
   endforeach()
   # Plastic part features and plastic rules (mitcad#459): analytic volumes,
@@ -1267,6 +1267,13 @@ if(BUILD_TESTING)
     add_test(NAME cli.fastener-tables
       COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fastener-tables-test.py"
               --libraries "${PROJECT_SOURCE_DIR}/tools/libraries")
+    # The parts cut to length (mitcad#1950): the profile generator's length
+    # option and stock rows for every part of the group files with
+    # build.length; needs only Python.
+    add_test(NAME cli.profile-length-options
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/profile-length-options-test.py"
+              --libraries "${PROJECT_SOURCE_DIR}/tools/libraries")
+    set_tests_properties(cli.profile-length-options PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endif()
   # BUILD on the generated profile library (mitcad#376, mitcad#377): one
   # profile of each system and slot width with its frames and mass per
@@ -2336,6 +2343,17 @@ if(BUILD_TESTING)
   endif()
 endif()
 
+# A flat cable laid onto a thin wire's seam at its bend, as
+# app.ui-windows-flex lays it in the Floating layout (mitcad#1713): its route
+# runs past the node and back, and its solid is still built.
+if(BUILD_TESTING)
+  add_test(NAME cli.flex_cable_onto_wire COMMAND mitcad-cli run "${scripts}/flex_cable_onto_wire.json")
+  if(WIN32)
+    set_property(TEST cli.flex_cable_onto_wire APPEND PROPERTY ENVIRONMENT_MODIFICATION
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+  endif()
+endif()
+
 # Tapers on curves the draft cannot lean (mitcad#1749): an ellipse extruded
 # at +5 and -20 degrees with the volumes of its offsets (Steiner), and a
 # closed spline cut through it with a taper, its wall one face; lines and a
@@ -2398,7 +2416,8 @@ endif()
 # expectations beside it (unpacked into the build folder): every stored
 # body placed, named, in its body folder and shown as the file has it,
 # nothing suppressed in the file unsuppressed, every sketch hidden from its
-# light bulb (skipped without the report's folder).
+# light bulb, its inch unit kept and the Y-up design stood on Z up
+# (mitcad#1937) (skipped without the report's folder).
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)

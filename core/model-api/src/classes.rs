@@ -87,6 +87,7 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("clear_face_appearances", Model),
     ("set_feature_visible", Model),
     ("set_datum_display_size", Model),
+    ("acknowledge_warnings", Model),
     ("add_named_view", Model),
     ("delete_named_view", Model),
     ("rename_named_view", Model),
@@ -430,6 +431,30 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     // Several materials made from the bundled dataset at once
     // (mitcad#1706); into a library its files, see `command_class_with`.
     ("create_dataset_materials", Model),
+    // Flex items: a node added, moved, attached, deleted or twisted, the
+    // item set (mitcad#1713).
+    ("flex.add_node", Model),
+    ("flex.move_node", Model),
+    ("flex.attach_node", Model),
+    ("flex.delete_node", Model),
+    ("flex.set_twist", Model),
+    ("flex.set_item", Model),
+    // The library of Flex types: files of the user's or the project's
+    // library (mitcad#1713).
+    ("flex.save_type", FileIo),
+    ("flex.edit_type", FileIo),
+    ("flex.delete_type", FileIo),
+    // A Flex item let hang: let go, stepped, pinned, locked, put back
+    // (mitcad#1713).
+    ("flex.hang", Model),
+    ("flex.hang_step", Model),
+    ("flex.hang_set", Model),
+    ("flex.hang_lock", Model),
+    ("flex.hang_cancel", Model),
+    // The direction of gravity, which Flex items hang toward (mitcad#1713,
+    // Part B).
+    ("gravity.set", Model),
+    ("gravity.clear", Model),
     // CAM setups, operations, machines and their tools (mitcad#1013); the
     // machine library's files are read and written by path.
     ("cam_setup_add", Model),
@@ -457,6 +482,9 @@ const COMMANDS: &[(&str, ApiClass)] = &[
     ("form.insert_loop", Model),
     ("form.delete_loop", Model),
     ("form.delete_faces", Model),
+    // Openings filled and bridged (mitcad#1941).
+    ("form.fill_hole", Model),
+    ("form.bridge", Model),
     ("form.crease", Model),
     ("form.symmetry", Model),
     ("form.set_cage", Model),
@@ -544,6 +572,8 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("build_parts", Model),
     ("build_junctions", Model),
     ("build_cut_list", Model),
+    // The ends that meet another profile's end (mitcad#1940).
+    ("build_end_meets", Model),
     ("build_host", Model),
     // The library parts the design uses (mitcad#418).
     ("library_usage", Model),
@@ -694,6 +724,17 @@ const QUERIES: &[(&str, ApiClass)] = &[
     ("filament_change_preview", Model),
     // Animate Joint's frames without a recompute (mitcad#1701).
     ("joint_poses", Model),
+    // Flex items with their routes, and the end ports of pipes and Flex
+    // items (mitcad#1713).
+    ("flex", Model),
+    ("flex_items", Model),
+    ("end_ports", Model),
+    // The library of Flex types, read from its folders (mitcad#1713).
+    ("flex_types", FileIo),
+    // The Flex item that hangs (mitcad#1713).
+    ("flex_hang", Model),
+    // The direction of gravity and the Flex item that hangs (mitcad#1713).
+    ("gravity", Model),
     // CAM (mitcad#1013); the machine library reads its folders.
     ("cam_setups", Model),
     ("cam_operations", Model),
@@ -887,6 +928,16 @@ pub fn command_class_with(request: &serde_json::Value) -> Option<ApiClass> {
         || request
             .get("based_on")
             .is_some_and(serde_json::Value::is_object))
+    {
+        return Some(FileIo);
+    }
+    // A Flex item's type taken from a named library is read from its
+    // folder; a built-in type (no `library`) is the model's own
+    // (mitcad#1713).
+    if name == "flex.set_item"
+        && request
+            .get("library")
+            .is_some_and(serde_json::Value::is_string)
     {
         return Some(FileIo);
     }
@@ -1252,6 +1303,17 @@ mod tests {
         ] {
             assert_eq!(class_of(request.clone()), Some(Model), "{request}");
         }
+    }
+
+    #[test]
+    fn a_flex_type_of_a_named_library_is_file_io() {
+        let built_in = json!({"cmd": "flex.set_item", "flex": "F2", "type": "hose-10"});
+        assert_eq!(class_of(built_in), Some(Model));
+        let own = json!({"cmd": "flex.set_item", "flex": "F2", "type": "shop-hose",
+                         "library": "user"});
+        assert_eq!(class_of(own), Some(FileIo));
+        assert_eq!(command_class("flex.save_type"), Some(FileIo));
+        assert_eq!(query_class("flex_types"), Some(FileIo));
     }
 
     #[test]

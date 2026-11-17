@@ -1,0 +1,684 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillet: of two roundings whose contacts on a face between their edges
+cross once (the face narrower than the two roundings from the crossing to
+an end), the smaller ball rolls tangent on the larger rounding's blend
+from that end to the crossing and runs on the face beyond it, the larger
+blend cut by its contact there; roundings of either kind (mitcad#1926,
+after 1720).
+
+A wall whose top narrows from 3.5 to 2.5 along its length, its top's edges
+rounded with 2 and 1 (either edge slanting), and a step whose height falls
+from 2 to 1.3, its foot rounded with 1 (concave) and its top edge with 0.5:
+OCCT computed both roundings on the faces of their edges, their contacts on
+the face between crossing, and the blends running through each other past
+the crossing (a valid-looking result, the wall's with 0.45 mm3 more
+material than the shape the two roundings make one after the other).
+
+- ChFi3d_Builder::RideOnBlendPart, from Compute once the stripes are
+  computed (before the corners), for each pair of constant roundings of
+  one SurfData each, sharing a face F, as RideOnBlend takes them (of the
+  other kind, or the later one the smaller of one kind; open contours
+  whose ends meet no other stripe), whose contacts on F cross once inside
+  both: the ride's end is the end where the rider's contact lies nearer the
+  larger one's edge than the larger one's contact; the larger stripe's
+  contact there lies on an arc of F, beyond which the face at the end.
+  The rider's SurfData is split at the crossing (splitSurfDataAt) and its
+  piece beyond the ride kept. The support is the larger blend's surface as
+  a face (rideSupport), run on a quarter along its contact and its whole
+  width across it, so that the rider's ball, walked between its other face
+  and the support over its whole spine as 1720 does, rides on past the
+  crossing; its walk's piece through the crossing is split there and its
+  piece of the ride kept, its points at the crossing the other piece's.
+  Its contact on the support ends where it crosses the face at the end and
+  goes onto F with its curve projected there, as 1720's; the larger stripe
+  is split at the crossing, its piece of the ride holding that contact
+  (reversed, a curve of its own, where the rider runs against it), and F's
+  edge at the ride's end, between the two edges, is cut at its vertices.
+  ApplyRides then makes the two blends meet on that contact as a part ride
+  of 0016 (the larger stripe's piece not its first or last), the points at
+  the crossing one.
+- StartSolOverflow, for a tangent ride: the contact on F projected onto a
+  periodic support is put in the period of the support's bounds (a support
+  run on past the blend's contacts holds it one period off).
+
+Rides whose ends meet other stripes (corners of more blends), a face
+narrower than the two roundings in its middle only (two crossings) and
+pairs whose blends OCCT already finds overlapping on the face (the plate's
+back edge beside a tower's foot whose distance from it grows past the two
+radii) are not made so.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 475287d6..b225371a 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -2857,6 +2857,519 @@ static occ::handle<ChFiDS_SurfData> splitForPart(TopOpeBRepDS_DataStructure&
+   return aPieces[aPart];
+ }
+ 
++// A's blend surface as a face over the parameters of its contact lines on
++// SurfData SA (its side OnA on face F), run on a quarter past them both along
++// the contact and across it, within the surface's bounds, oriented as F
++// where the blend touches it: the support a tangent ride rolls on
++// (RideOnBlend, RideOnBlendPart). Null where it cannot be made.
++static TopoDS_Face rideSupport(const TopOpeBRepDS_DataStructure&   DStr,
++                               const occ::handle<ChFiDS_SurfData>& SA,
++                               const int                           OnA,
++                               const TopoDS_Face&                  F,
++                               const bool                          Across)
++{
++  const occ::handle<Geom_Surface>& SS = DStr.Surface(SA->Surf()).Surface();
++  if (SS.IsNull())
++  {
++    return TopoDS_Face();
++  }
++  double u1 = RealLast(), u2 = -RealLast(), v1 = RealLast(), v2 = -RealLast();
++  for (int k = 1; k <= 2; k++)
++  {
++    const ChFiDS_FaceInterference& FIk = SA->Interference(k);
++    if (FIk.PCurveOnSurf().IsNull())
++    {
++      return TopoDS_Face();
++    }
++    for (int i = 0; i <= 10; i++)
++    {
++      const double   t  = FIk.FirstParameter() + (FIk.LastParameter() - FIk.FirstParameter()) * i / 10.;
++      const gp_Pnt2d uv = FIk.PCurveOnSurf()->Value(t);
++      u1                = std::min(u1, uv.X());
++      u2                = std::max(u2, uv.X());
++      v1                = std::min(v1, uv.Y());
++      v2                = std::max(v2, uv.Y());
++    }
++  }
++  const ChFiDS_FaceInterference& FIA0 = SA->Interference(OnA);
++  const gp_Pnt2d a0 = FIA0.PCurveOnSurf()->Value(FIA0.FirstParameter());
++  const gp_Pnt2d a1 = FIA0.PCurveOnSurf()->Value(FIA0.LastParameter());
++  double         su1 = 0., su2 = 0., sv1 = 0., sv2 = 0.;
++  SS->Bounds(su1, su2, sv1, sv2);
++  const bool alongV = std::abs(a1.Y() - a0.Y()) >= std::abs(a1.X() - a0.X());
++  for (int d = 0; d < 2; d++)
++  {
++    // (d == 0: along the contact; d == 1: across it.)
++    if (d == 1 && !Across)
++    {
++      continue;
++    }
++    if ((d == 0) == alongV)
++    {
++      const double m = (d == 0 ? 0.25 : 1.) * (v2 - v1);
++      v1             = SS->IsVPeriodic() ? v1 - m : std::max(sv1, v1 - m);
++      v2             = SS->IsVPeriodic() ? v2 + m : std::min(sv2, v2 + m);
++    }
++    else
++    {
++      const double m = (d == 0 ? 0.25 : 1.) * (u2 - u1);
++      u1             = SS->IsUPeriodic() ? u1 - m : std::max(su1, u1 - m);
++      u2             = SS->IsUPeriodic() ? u2 + m : std::min(su2, u2 + m);
++    }
++  }
++  BRepLib_MakeFace aMakeFace(SS, u1, u2, v1, v2, Precision::Confusion());
++  if (!aMakeFace.IsDone())
++  {
++    return TopoDS_Face();
++  }
++  TopoDS_Face Support = aMakeFace.Face();
++  const ChFiDS_CommonPoint& CPA = SA->Vertex(true, OnA);
++  gp_Dir                    aNF, aNS;
++  Support.Orientation(TopAbs_FORWARD);
++  if (!outwardNormalAt(F, CPA.Point(), aNF) || !outwardNormalAt(Support, CPA.Point(), aNS))
++  {
++    return TopoDS_Face();
++  }
++  if (aNF.Dot(aNS) < 0.)
++  {
++    Support.Orientation(TopAbs_REVERSED);
++  }
++  return Support;
++}
++
++bool ChFi3d_Builder::RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
++                                     const occ::handle<ChFiDS_Stripe>& B,
++                                     const TopoDS_Face&                F)
++{
++  TopOpeBRepDS_DataStructure&        DStr = myDS->ChangeDS();
++  const occ::handle<ChFiDS_FilSpine> aFsA = occ::down_cast<ChFiDS_FilSpine>(A->Spine());
++  const occ::handle<ChFiDS_FilSpine> aFsB = occ::down_cast<ChFiDS_FilSpine>(B->Spine());
++  if (aFsA.IsNull() || aFsB.IsNull() || !aFsA->IsConstant() || !aFsB->IsConstant()
++      || A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull()
++      || A->SetOfSurfData()->Length() != 1 || B->SetOfSurfData()->Length() != 1)
++  {
++    return false;
++  }
++  ChFiDS_TypeOfConcavity aType[2] = {ChFiDS_Other, ChFiDS_Other};
++  for (int i = 0; i < 2; i++)
++  {
++    const TopoDS_Edge E = spineEdgeOf(i == 0 ? A->Spine() : B->Spine(), F);
++    if (E.IsNull() || !myEFMap.Contains(E) || myEFMap(E).Extent() != 2)
++    {
++      return false;
++    }
++    aType[i] = ChFi3d::DefineConnectType(E,
++                                         TopoDS::Face(myEFMap(E).First()),
++                                         TopoDS::Face(myEFMap(E).Last()),
++                                         1.e-6,
++                                         false);
++    if (aType[i] != ChFiDS_Convex && aType[i] != ChFiDS_Concave)
++    {
++      return false;
++    }
++  }
++  if (aType[0] == aType[1] && aFsB->Radius() >= aFsA->Radius() * (1. - 1.e-3))
++  {
++    return false;
++  }
++  for (const occ::handle<ChFiDS_Stripe>& S : {A, B})
++  {
++    const occ::handle<ChFiDS_Spine>& Sp = S->Spine();
++    if (Sp->IsPeriodic() || Sp->IsClosed())
++    {
++      return false;
++    }
++    for (const TopoDS_Vertex& V : {Sp->FirstVertex(), Sp->LastVertex()})
++    {
++      int aNb = 0;
++      for (int j = 1; j <= myVDataMap.Extent() && aNb == 0; j++)
++      {
++        aNb = myVDataMap.FindKey(j).IsSame(V) ? myVDataMap.FindFromIndex(j).Extent() : 0;
++      }
++      if (aNb != 1)
++      {
++        return false;
++      }
++    }
++  }
++  occ::handle<ChFiDS_SurfData> SA, SB;
++  int                          onA = 0, onB = 0;
++  if (!findRideSurfData(DStr, A, F, SA, onA) || !findRideSurfData(DStr, B, F, SB, onB)
++      || SA->IsOnCurve(onA) || SB->IsOnCurve(onB))
++  {
++    return false;
++  }
++  const ChFiDS_FaceInterference& FA0 = SA->Interference(onA);
++  const ChFiDS_FaceInterference& FB0 = SB->Interference(onB);
++  if (FA0.LineIndex() <= 0 || FB0.LineIndex() <= 0 || FA0.PCurveOnFace().IsNull()
++      || FB0.PCurveOnFace().IsNull())
++  {
++    return false;
++  }
++  const occ::handle<Geom_Curve> CAF = DStr.Curve(FA0.LineIndex()).Curve();
++  const occ::handle<Geom_Curve> CBF = DStr.Curve(FB0.LineIndex()).Curve();
++  if (CAF.IsNull() || CBF.IsNull())
++  {
++    return false;
++  }
++  const double aLo = std::min(FA0.FirstParameter(), FA0.LastParameter());
++  const double aHi = std::max(FA0.FirstParameter(), FA0.LastParameter());
++  const double bLo = std::min(FB0.FirstParameter(), FB0.LastParameter());
++  const double bHi = std::max(FB0.FirstParameter(), FB0.LastParameter());
++  // The contacts on F cross once, inside both.
++  Geom2dAdaptor_Curve aCA(FA0.PCurveOnFace(), aLo, aHi), aCB(FB0.PCurveOnFace(), bLo, bHi);
++  Geom2dInt_GInter    anInter(aCA, aCB, tol2d, Precision::PConfusion());
++  if (!anInter.IsDone() || anInter.NbPoints() != 1 || anInter.NbSegments() != 0)
++  {
++    return false;
++  }
++  const double tA = anInter.Point(1).ParamOnFirst(), tB = anInter.Point(1).ParamOnSecond();
++  if (tA <= aLo + 1.e-3 * (aHi - aLo) || tA >= aHi - 1.e-3 * (aHi - aLo) || tB <= bLo + 1.e-3 * (bHi - bLo)
++      || tB >= bHi - 1.e-3 * (bHi - bLo))
++  {
++    return false;
++  }
++  const gp_Pnt P = CAF->Value(tA);
++  if (P.Distance(CBF->Value(tB)) > 10. * tolapp3d)
++  {
++    return false;
++  }
++  // The end of each contact where the ride is: B's contact there lies
++  // nearer A's edge than A's contact (beyond it, as the two roundings
++  // overlap on F there).
++  const TopoDS_Edge EA = spineEdgeOf(A->Spine(), F);
++  // (The distance from A's edge's curve, run on past the edge's ends where
++  // the foot of the point lies beyond them.)
++  const auto fromEA = [&](const gp_Pnt& X) {
++    double                         f = 0., l = 0.;
++    const occ::handle<Geom_Curve>& C = BRep_Tool::Curve(EA, f, l);
++    if (C.IsNull())
++    {
++      return RealLast();
++    }
++    const double d = distanceToEdge(X, EA);
++    if (d < RealLast())
++    {
++      return d;
++    }
++    GeomAPI_ProjectPointOnCurve aPr(X, C);
++    return aPr.NbPoints() > 0 ? aPr.LowerDistance() : RealLast();
++  };
++  const auto beyond = [&](const gp_Pnt& Xb, const gp_Pnt& Ya) {
++    return fromEA(Xb) < fromEA(Ya) - 10. * tolapp3d;
++  };
++  const auto nearestOn = [](const occ::handle<Geom_Curve>& C, double t1, double t2, const gp_Pnt& X, gp_Pnt& Y) {
++    GeomAPI_ProjectPointOnCurve aPr(X, C, t1, t2);
++    if (aPr.NbPoints() == 0)
++    {
++      return false;
++    }
++    Y = aPr.NearestPoint();
++    return true;
++  };
++  bool bRide[2] = {false, false}, aRide[2] = {false, false};
++  for (int f = 0; f < 2; f++)
++  {
++    const gp_Pnt Xb = SB->Vertex(f == 0, onB).Point();
++    gp_Pnt       Ya;
++    if (!nearestOn(CAF, aLo, aHi, Xb, Ya))
++    {
++      return false;
++    }
++    bRide[f]        = beyond(Xb, Ya);
++    const gp_Pnt Y2 = SA->Vertex(f == 0, onA).Point();
++    gp_Pnt       X2;
++    if (!nearestOn(CBF, bLo, bHi, Y2, X2))
++    {
++      return false;
++    }
++    aRide[f] = beyond(X2, Y2);
++  }
++  if (bRide[0] == bRide[1] || aRide[0] == aRide[1])
++  {
++    return false;
++  }
++  const bool bFirst = bRide[0], aFirst = aRide[0];
++  // A's contact at the ride's end lies on an arc of F, the face at the end
++  // beyond it.
++  const ChFiDS_CommonPoint& CPAe = SA->Vertex(aFirst, onA);
++  if (!CPAe.IsOnArc() || CPAe.IsVertex())
++  {
++    return false;
++  }
++  const TopoDS_Edge anEndArc = CPAe.Arc();
++  const TopoDS_Face Fe       = otherFaceOf(myEFMap, anEndArc, F);
++  if (Fe.IsNull())
++  {
++    return false;
++  }
++  // B as computed on the faces of its edge, its piece beyond the ride.
++  occ::handle<ChFiDS_SurfData> aBN = new ChFiDS_SurfData();
++  aBN->Copy(SB);
++  occ::handle<ChFiDS_SurfData> aBN2 = splitSurfDataAt(DStr, aBN, onB, tB);
++  if (aBN2.IsNull())
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_SurfData> aBNorm = bFirst ? aBN2 : aBN;
++  // The support: A's blend, run on across its contact on F too, so that B's
++  // ball riding on it passes the crossing.
++  const TopoDS_Face Support = rideSupport(DStr, SA, onA, F, true);
++  if (Support.IsNull())
++  {
++    return false;
++  }
++  myRideStripes.Append(B);
++  myRideOn.Append(A);
++  myRideFaces.Append(F);
++  myRideEdges.Append(TopoDS_Edge());
++  myRideSupports.Append(Support);
++  myTangentRides.Append(B);
++  const auto undo = [&]() {
++    removeRideOf(B, myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
++    removeTangentRide(B, myTangentRides);
++    B->Reset();
++    B->Spine()->SetErrorStatus(ChFiDS_Ok);
++    try
++    {
++      OCC_CATCH_SIGNALS
++      occ::handle<ChFiDS_Stripe> aStripe = B;
++      PerformSetOfSurf(aStripe);
++    }
++    catch (Standard_Failure const&)
++    {
++    }
++  };
++  B->Reset();
++  B->Spine()->SetErrorStatus(ChFiDS_Ok);
++  try
++  {
++    OCC_CATCH_SIGNALS
++    occ::handle<ChFiDS_Stripe> aStripe = B;
++    PerformSetOfSurf(aStripe);
++  }
++  catch (Standard_Failure const&)
++  {
++    undo();
++    return false;
++  }
++  occ::handle<ChFiDS_SurfData> SB2;
++  int                          onB2 = 0;
++  // (The ride's piece from the crossing: where its walk ran on past the
++  // ride's end onto the face beyond, the piece beyond is not kept.)
++  if (B->Spine()->ErrorStatus() == ChFiDS_Ok && !B->SetOfSurfData().IsNull()
++      && B->SetOfSurfData()->Length() >= 1)
++  {
++    const occ::handle<ChFiDS_SurfData>& aNear =
++      bFirst ? B->SetOfSurfData()->Last() : B->SetOfSurfData()->First();
++    for (int k = 1; k <= 2; k++)
++    {
++      if (aNear->Index(k) > 0 && DStr.Shape(aNear->Index(k)).IsSame(Support))
++      {
++        SB2  = aNear;
++        onB2 = k;
++      }
++    }
++  }
++  if (B->Spine()->ErrorStatus() != ChFiDS_Ok || SB2.IsNull() || !SB2->Vertex(bFirst, 3 - onB2).IsOnArc())
++  {
++    undo();
++    return false;
++  }
++  const ChFiDS_FaceInterference& FR = SB2->Interference(onB2);
++  if (FR.LineIndex() <= 0 || FR.PCurveOnFace().IsNull() || FR.PCurveOnSurf().IsNull())
++  {
++    undo();
++    return false;
++  }
++  const occ::handle<Geom_Curve> CB = DStr.Curve(FR.LineIndex()).Curve();
++  const double rLo = std::min(FR.FirstParameter(), FR.LastParameter());
++  const double rHi = std::max(FR.FirstParameter(), FR.LastParameter());
++  GeomAPI_ProjectPointOnCurve aPrP(P, CB, rLo, rHi);
++  if (aPrP.NbPoints() == 0 || aPrP.LowerDistance() > 100. * tolapp3d)
++  {
++    undo();
++    return false;
++  }
++  const double tR = aPrP.LowerDistanceParameter();
++  // (The ride computed up to the crossing's section: its end there; else
++  // split there.)
++  occ::handle<ChFiDS_SurfData> aBRide = new ChFiDS_SurfData();
++  aBRide->Copy(SB2);
++  if (std::abs(tR - (bFirst ? FR.LastParameter() : FR.FirstParameter())) > 1.e-6 * (rHi - rLo))
++  {
++    occ::handle<ChFiDS_SurfData> aBR2 = splitSurfDataAt(DStr, aBRide, onB2, tR);
++    if (aBR2.IsNull())
++    {
++      undo();
++      return false;
++    }
++    if (!bFirst)
++    {
++      aBRide = aBR2;
++    }
++  }
++  // The two pieces of B meet at the crossing's section: the ride's points
++  // there are the other piece's.
++  {
++    ChFiDS_CommonPoint& CPr = aBRide->ChangeVertex(!bFirst, onB2);
++    ChFiDS_CommonPoint& CPn = aBNorm->ChangeVertex(bFirst, onB);
++    CPr.Reset();
++    CPr.SetPoint(P);
++    CPr.SetParameter(tR);
++    const double aPn = CPn.Parameter();
++    CPn.Reset();
++    CPn.SetPoint(P);
++    CPn.SetParameter(aPn);
++    ChFiDS_CommonPoint& COr = aBRide->ChangeVertex(!bFirst, 3 - onB2);
++    ChFiDS_CommonPoint& COn = aBNorm->ChangeVertex(bFirst, 3 - onB);
++    COn = COr;
++  }
++  // B's contact on the support: its end at the face at the end (where it
++  // crosses Fe), and at the crossing.
++  double aEndT = 0.;
++  {
++    GeomAPI_IntCS anIntCS(CB, BRep_Tool::Surface(Fe));
++    if (!anIntCS.IsDone())
++    {
++      undo();
++      return false;
++    }
++    double aBest = RealLast();
++    for (int i = 1; i <= anIntCS.NbPoints(); i++)
++    {
++      double u = 0., v = 0., t = 0.;
++      anIntCS.Parameters(i, u, v, t);
++      const double d = anIntCS.Point(i).Distance(CPAe.Point());
++      if (t >= rLo - Precision::PConfusion() && t <= rHi + Precision::PConfusion() && d < aBest)
++      {
++        aBest = d;
++        aEndT = t;
++      }
++    }
++    if (aBest == RealLast())
++    {
++      undo();
++      return false;
++    }
++  }
++  const double b1 = bFirst ? aEndT : tR, b2 = bFirst ? tR : aEndT;
++  if (b2 - b1 <= Precision::PConfusion())
++  {
++    undo();
++    return false;
++  }
++  ChFiDS_FaceInterference&        FIB = aBRide->ChangeInterference(onB2);
++  const occ::handle<Geom2d_Curve> PCF =
++    GeomProjLib::Curve2d(new Geom_TrimmedCurve(CB, b1, b2), b1, b2, BRep_Tool::Surface(F));
++  if (PCF.IsNull())
++  {
++    undo();
++    return false;
++  }
++  const int                       iF   = DStr.AddShape(F);
++  const occ::handle<Geom2d_Curve> PCA  = FIB.PCurveOnFace(); // on A's surface
++  const TopAbs_Orientation        aTra = DStr.Shape(iF).Orientation() != Support.Orientation()
++                                           ? TopAbs::Reverse(FIB.Transition())
++                                           : FIB.Transition();
++  FIB.SetInterference(FIB.LineIndex(), aTra, PCF, FIB.PCurveOnSurf());
++  if (onB2 == 1)
++  {
++    aBRide->ChangeIndexOfS1(iF);
++  }
++  else
++  {
++    aBRide->ChangeIndexOfS2(iF);
++  }
++  {
++    ChFiDS_CommonPoint& CP = aBRide->ChangeVertex(bFirst, onB2);
++    CP.Reset();
++    CP.SetPoint(CB->Value(aEndT));
++    CP.SetParameter(aEndT);
++    FIB.SetParameter(aEndT, bFirst);
++    FIB.SetParameter(tR, !bFirst);
++    aBRide->ChangeVertex(!bFirst, onB2).SetParameter(tR);
++  }
++  // (Whether B runs against A: its ride's end at the face at the end is
++  // A's last there.)
++  const bool against = aFirst != bFirst;
++  int                       iCA  = FIB.LineIndex();
++  occ::handle<Geom_Curve>   CA   = CB;
++  double                    a1   = b1, a2 = b2;
++  occ::handle<Geom2d_Curve> PCFA = PCF, PCAA = PCA;
++  if (against)
++  {
++    CA   = CB->Reversed();
++    a1   = CB->ReversedParameter(b2);
++    a2   = CB->ReversedParameter(b1);
++    iCA  = DStr.AddCurve(TopOpeBRepDS_Curve(CA, DStr.Curve(FIB.LineIndex()).Tolerance()));
++    PCFA = GeomProjLib::Curve2d(new Geom_TrimmedCurve(CA, a1, a2), a1, a2, BRep_Tool::Surface(F));
++    PCAA = GeomProjLib::Curve2d(new Geom_TrimmedCurve(CA, a1, a2),
++                                a1,
++                                a2,
++                                DStr.Surface(SA->Surf()).Surface());
++    if (PCFA.IsNull() || PCAA.IsNull())
++    {
++      undo();
++      return false;
++    }
++  }
++  // B: the ride, then the rest, in its spine's order.
++  {
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& aSeq = B->ChangeSetOfSurfData()->ChangeSequence();
++    aSeq.Clear();
++    aSeq.Append(bFirst ? aBRide : aBNorm);
++    aSeq.Append(bFirst ? aBNorm : aBRide);
++  }
++  // A split at the crossing, its piece of the ride holding B's contact on
++  // its blend instead of its contact on F.
++  int iSA = 0;
++  for (int j = 1; j <= A->SetOfSurfData()->Length() && iSA == 0; j++)
++  {
++    iSA = A->SetOfSurfData()->Value(j) == SA ? j : 0;
++  }
++  occ::handle<ChFiDS_SurfData> aA2 = splitSurfDataAt(DStr, SA, onA, tA);
++  if (aA2.IsNull())
++  {
++    undo();
++    return false;
++  }
++  A->ChangeSetOfSurfData()->ChangeSequence().InsertAfter(iSA, aA2);
++  const occ::handle<ChFiDS_SurfData> aARide = aFirst ? SA : aA2;
++  const occ::handle<ChFiDS_SurfData> aANorm = aFirst ? aA2 : SA;
++  aANorm->ChangeVertex(aFirst, onA).SetPoint(P);
++  for (int f = 0; f < 2; f++)
++  {
++    const double        t  = f == 0 ? a1 : a2;
++    ChFiDS_CommonPoint& CP = aARide->ChangeVertex(f == 0, onA);
++    CP.Reset();
++    // (At the crossing, the point B's pieces and A's other piece have.)
++    CP.SetPoint((f == 0) == aFirst ? CA->Value(t) : P);
++    CP.SetParameter(t);
++  }
++  ChFiDS_FaceInterference& FIA = aARide->ChangeInterference(onA);
++  FIA.SetInterference(iCA, FIA.Transition(), PCFA, PCAA);
++  FIA.SetFirstParameter(a1);
++  FIA.SetLastParameter(a2);
++  // F's edge at the ride's end, between A's edge and B's, goes with F there.
++  {
++    const int   Iarc  = DStr.AddShape(anEndArc);
++    TopoDS_Edge anArc = anEndArc;
++    anArc.Orientation(TopAbs_FORWARD);
++    for (TopExp_Explorer exv(anArc, TopAbs_VERTEX); exv.More(); exv.Next())
++    {
++      const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++      DStr.ChangeShapeInterferences(Iarc).Append(ChFi3d_FilVertexInDS(TopAbs::Reverse(vv.Orientation()),
++                                                                      Iarc,
++                                                                      DStr.AddShape(vv),
++                                                                      BRep_Tool::Parameter(vv, anArc)));
++    }
++  }
++  removeEntriesOf(A, myOverlapStripes, myOverlapFaces, myOverlapEdges);
++  removeEntriesOf(B, myOverlapStripes, myOverlapFaces, myOverlapEdges);
++  return true;
++}
++
+ // Whether the contacts of stripes A and B on a face they share cross each
+ // other twice inside both (the face narrowing between their edges to less
+ // than the two roundings' width, part of the way): the SurfData of each
+@@ -5422,6 +5935,60 @@ void ChFi3d_Builder::Compute()
+   // away by the other blend, the rest replaced by the rolling blend's side.)
+   NCollection_List<TopoDS_Shape> aWholeObstacles;
+   NCollection_List<int>          aWholePoints;
++  // Pairs whose contacts on a face cross once, inside both: the face
++  // narrower than the two roundings along a part of it, from the crossing to
++  // an end, where the smaller ball rolls tangent on the larger rounding's
++  // blend (RideOnBlendPart).
++  if (done)
++  {
++    NCollection_List<occ::handle<ChFiDS_Stripe>> aParted;
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it1(myListStripe); it1.More(); it1.Next())
++    {
++      const occ::handle<ChFiDS_Stripe>& S1 = it1.Value();
++      NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it2 = it1;
++      for (it2.Next(); it2.More(); it2.Next())
++      {
++        const occ::handle<ChFiDS_Stripe>& S2 = it2.Value();
++        bool aBusy = false;
++        for (const occ::handle<ChFiDS_Stripe>& S : {S1, S2})
++        {
++          aBusy = aBusy || aParted.Contains(S) || myDroppedStripes.Contains(S) || myRideStripes.Contains(S)
++                  || myRideOn.Contains(S) || S->SetOfSurfData().IsNull() || S->SetOfSurfData()->Length() != 1;
++        }
++        const occ::handle<ChFiDS_FilSpine> aF1 = occ::down_cast<ChFiDS_FilSpine>(S1->Spine());
++        const occ::handle<ChFiDS_FilSpine> aF2 = occ::down_cast<ChFiDS_FilSpine>(S2->Spine());
++        if (aBusy || aF1.IsNull() || aF2.IsNull() || !aF1->IsConstant() || !aF2->IsConstant())
++        {
++          continue;
++        }
++        const occ::handle<ChFiDS_SurfData>& D1 = S1->SetOfSurfData()->Value(1);
++        const occ::handle<ChFiDS_SurfData>& D2 = S2->SetOfSurfData()->Value(1);
++        int aCommon = 0;
++        for (int k1 = 1; k1 <= 2 && aCommon == 0; k1++)
++        {
++          for (int k2 = 1; k2 <= 2 && aCommon == 0; k2++)
++          {
++            if (D1->Index(k1) > 0 && D1->Index(k1) == D2->Index(k2) && !D1->IsOnCurve(k1) && !D2->IsOnCurve(k2))
++            {
++              aCommon = D1->Index(k1);
++            }
++          }
++        }
++        if (aCommon == 0)
++        {
++          continue;
++        }
++        const bool aOne = aF2->Radius() <= aF1->Radius();
++        const occ::handle<ChFiDS_Stripe> aOn    = aOne ? S1 : S2;
++        const occ::handle<ChFiDS_Stripe> aRider = aOne ? S2 : S1;
++        if (RideOnBlendPart(aOn, aRider, TopoDS::Face(myDS->DS().Shape(aCommon))))
++        {
++          aParted.Append(S1);
++          aParted.Append(S2);
++        }
++      }
++    }
++  }
+   // construct fillets on each vertex + feed the Ds
+   if (done)
+   {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index e12f856b..c6265024 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1110,6 +1110,16 @@ private:
+   //! Whether another stripe rolls tangent on stripe S's blend (RideOnBlend).
+   Standard_EXPORT bool IsTangentRideOn(const occ::handle<ChFiDS_Stripe>& S) const;
+ 
++  //! Two stripes A and B whose contacts on face F cross once, inside both
++  //! (F narrower than the two roundings from the crossing to an end), where
++  //! B's ball can roll tangent on A's blend (as RideOnBlend): B rides on A's
++  //! blend from that end to the crossing and runs on F beyond it; A is split
++  //! at the crossing, its piece of the ride cut by B's contact on its blend.
++  //! Returns false (the stripes as they were) where it is not made so.
++  Standard_EXPORT bool RideOnBlendPart(const occ::handle<ChFiDS_Stripe>& A,
++                                       const occ::handle<ChFiDS_Stripe>& B,
++                                       const TopoDS_Face&                F);
++
+   //! Finds the stripes whose side overflowed a narrow face of their edge
+   //! onto a face beyond and whose contact there lies across another
+   //! stripe's contact on that face (nearer to that stripe's edge than its
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 2c61c05f..bee1d48d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -2135,6 +2135,22 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
+       }
+       double us = 0., vs = 0.;
+       aProj.LowerDistanceParameters(us, vs);
++      // (On a periodic surface, in the period of the support's bounds: a
++      // support run on past the blend's contacts, RideOnBlendPart, may hold
++      // the point one period off.)
++      {
++        double aU1 = 0., aU2 = 0., aV1 = 0., aV2 = 0.;
++        BRepTools::UVBounds(rideSupport, aU1, aU2, aV1, aV2);
++        const occ::handle<Geom_Surface> aSS = BRep_Tool::Surface(rideSupport);
++        if (aSS->IsUPeriodic())
++        {
++          us = ElCLib::InPeriod(us, aU1 - Precision::PConfusion(), aU1 - Precision::PConfusion() + aSS->UPeriod());
++        }
++        if (aSS->IsVPeriodic())
++        {
++          vs = ElCLib::InPeriod(vs, aV1 - Precision::PConfusion(), aV1 - Precision::PConfusion() + aSS->VPeriod());
++        }
++      }
+       const occ::handle<BRepAdaptor_Surface> HSk = new BRepAdaptor_Surface(rideSupport, false);
+       const occ::handle<BRepAdaptor_Surface> HSo = k == 0 ? Sf2 : Sf1;
+       // (NextSide turned o1 and o2: the faces' own again, the support's for F.)

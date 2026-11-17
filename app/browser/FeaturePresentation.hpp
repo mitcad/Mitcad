@@ -34,7 +34,9 @@ inline QString featurePresentation(const DocumentSnapshot::Feature& feature,
         state.setText(input.id, input.defaultText);
       }
       definition.insert(QStringLiteral("uid"), feature.uid);
-      editor->load(definition, state, model);
+      // (Its own load where `load` would change state a running panel
+      // keeps, mitcad#1971.)
+      (editor->hoverLoad ? editor->hoverLoad : editor->load)(definition, state, model);
       if (editor->keyText) key = editor->keyText(state, model).trimmed();
       if (key.isEmpty()) {
         QStringList keys;

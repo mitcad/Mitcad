@@ -32,6 +32,7 @@
 
 #include <QAction>
 #include <QColor>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QDir>
 #include <QElapsedTimer>
@@ -507,6 +508,7 @@ CommandDef MainWindow::print3dCommand() {
   // tab's 3D Print group.
   def.id = QStringLiteral("make.print3d");
   def.name = tr("Send to Slicer");
+  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Slicer"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("print-3d");
   def.tooltip = tr("Sends bodies to a slicer as 3MF or STL"); // short, no rules (mitcad#655)
   def.tab = QStringLiteral("MAKE");

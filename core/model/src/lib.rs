@@ -115,6 +115,12 @@ pub use sweeps::HelixSpec;
 pub use sweeps::RailPoint;
 // Pipes' corners (mitcad#1448).
 pub use sweeps::PipeCorners;
+// Flex: flexible items routed through the model (mitcad#1713).
+pub use mitcad_model_base::flex;
+// Flex drape: a Flex item let hang (mitcad#1713).
+pub use mitcad_model_base::flex_drape;
+// The library of Flex types: built-in, the user's and the project's.
+pub mod flex_library;
 // Components and occurrences (F6).
 pub use document::{InsertOptions, InstanceView};
 pub use ids::{ComponentUid, OccurrenceUid};
@@ -396,6 +402,14 @@ mod spatial_plane_curves_tests;
 pub mod print_changes;
 // A thread's face fitted to the thread (mitcad#1632).
 pub use document::{AutoFixFit, NoFit, SharedChoice};
+// End ports of pipes and Flex items (mitcad#1713).
+pub use document::{EndPortView, FlexLength, FlexTypeWrite, PortsSeen};
+// The direction of gravity and the hanging slack of a Flex item, and a
+// Flex item let hang (mitcad#1713, Part B).
+pub mod gravity;
+pub use document::{
+    HANG_MOST_SECONDS, HANG_STEP_SECONDS, HangLocked, HangNode, HangState, hang_tolerance,
+};
 // CAM setups, operations and machines kept with the design, not on the
 // timeline; toolpaths by the crate mitcad-cam (mitcad#1013).
 pub mod cam;

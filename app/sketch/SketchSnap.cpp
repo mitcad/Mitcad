@@ -68,6 +68,8 @@ QString Snap::describe() const {
     return QStringLiteral("body vertex %1").arg(bodyItem.source);
   case Kind::BodyMidpoint:
     return QStringLiteral("midpoint of body edge %1").arg(bodyItem.source);
+  case Kind::BodyOnEdge:
+    return QStringLiteral("on body edge %1").arg(bodyItem.source);
   }
   return QString();
 }
@@ -217,9 +219,11 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
     }
   }
 
-  // Body vertices as points and the middles of body lines and arcs as
-  // midpoints (mitcad#258), a little further than they are: the sketch's
-  // own point or midpoint at the same place wins.
+  // Body vertices as points, the middles of body lines and arcs as
+  // midpoints (mitcad#258) and the body edges as curves to snap onto
+  // (mitcad#1967), a little further than they are: the sketch's own point,
+  // midpoint or curve at the same place wins, and so does an axis along
+  // the edge.
   if (settings.body != nullptr) {
     for (const BodyItem& item : settings.body->items()) {
       // Only what lies in the plane: the items out of it (mitcad#866) are
@@ -236,7 +240,12 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
           s.bodyItem = item;
           best.offer(0, d + kBodyTiePixels, s);
         }
-      } else if (item.hasMiddle()) {
+        continue;
+      }
+      if (item.isPoint() || item.type.isEmpty()) {
+        continue; // an edge seen end on (out of the plane only), or nothing read
+      }
+      if (item.hasMiddle()) {
         const V2 middle = item.curve.middle();
         const double d = screenDistance(toScreen(middle), screen);
         if (d <= kSpecialPixels) {
@@ -246,6 +255,15 @@ Snap snap(const SnapSettings& settings, const V2& raw, const QPointF& screen) {
           s.bodyItem = item;
           best.offer(1, d + kBodyTiePixels, s);
         }
+      }
+      const V2 onEdge = item.curve.nearest(raw);
+      const double d = screenDistance(toScreen(onEdge), screen);
+      if (d <= kCurvePixels) {
+        Snap s;
+        s.kind = Snap::Kind::BodyOnEdge;
+        s.at = onEdge;
+        s.bodyItem = item;
+        best.offer(2, d + kBodyTiePixels, s);
       }
     }
   }

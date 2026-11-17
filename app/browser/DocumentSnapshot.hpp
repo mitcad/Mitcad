@@ -64,6 +64,10 @@ struct DocumentSnapshot {
     // corner that folds, its farthest point), painted in the view while
     // the pointer is over the feature's notice; empty for none.
     QJsonArray places;
+    // Its warning acknowledged by the user (mitcad#1935: the timeline's
+    // `acknowledged`): still `warning` in status and level, but shown as
+    // ok (not yellow, not in the badge's count) while it reads the same.
+    bool acknowledged = false;
 
     // Whether it has something to tell as information: an import note, or
     // infos of a feature that built (mitcad#1106: a fillet built 0.1 %
@@ -103,6 +107,14 @@ struct DocumentSnapshot {
     bool isMotionLink() const { return type == QStringLiteral("motion_link"); }
     // Evaluated without an error (perhaps with warnings).
     bool succeeded() const { return status == QStringLiteral("ok") || status == QStringLiteral("warning"); }
+    // Built with a warning the user has not acknowledged (mitcad#1935):
+    // yellow, counted in the warnings badge.
+    bool warned() const { return status == QStringLiteral("warning") && !acknowledged; }
+    // Built with a warning the user acknowledged (mitcad#1935).
+    bool warningAcknowledged() const { return status == QStringLiteral("warning") && acknowledged; }
+    // The status as rows and cells paint it: an acknowledged warning as
+    // `ok` (mitcad#1935).
+    QString shownStatus() const { return warningAcknowledged() ? QStringLiteral("ok") : status; }
     // Its level for the UI (mitcad#1040): Error, Warning, Information, or
     // Hint when it has nothing to say.
     NoticeLevel noticeLevel() const { return noticeLevelFromModel(level, NoticeLevel::Hint); }
@@ -320,7 +332,11 @@ struct DocumentSnapshot {
   // Features with warnings that did not fail (mitcad#170): those that built
   // with warnings and those an importer left a note on (a fallback's base
   // feature, an item that came in partly, a placeholder of a skipped item).
+  // Not those whose warning the user acknowledged (mitcad#1935).
   QVector<const Feature*> warnings() const;
+  // Features whose warning the user acknowledged (mitcad#1935): not
+  // yellow, not counted in the warnings badge; its menu lists them dimmed.
+  QVector<const Feature*> acknowledgedWarnings() const;
   // The analysis shown (one at a time), or an empty object.
   QJsonObject shownAnalysis() const;
   // An analysis by name, or an empty object.

@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: MIT
+# A loft from a circle to a square through a rail tied to Intersect points,
+# and a loose rail's miss in words (mitcad#1944; docs/ui-conventions.md
+# "What a message says"), on loft-rail-intersect.json (Sketch1 F1: a 20 mm
+# circle; Sketch2 F3 40 mm up: a 20 mm square; Sketch3 F4 on XZ: the rail
+# c4 between the circle's and the square's Intersect points p1 and p3,
+# meeting the square in its side's middle, and the loose rail c5 ending
+# 0.3 mm outside the square):
+#   1. Loft through the circle and the square with the rail c4: the
+#      sections' edges do not line up at the rail, the loft is matched from
+#      it and builds (Loft1).
+#   2. A loft through the loose rail (Loft2, sent as a model command) fails;
+#      edited from the timeline, the panel says how far the rail misses the
+#      square in words, no names or coordinates, and the pointer over the
+#      message paints its two places (the nearest points on the rail and
+#      the square).
+#   3. Esc cancels the edit.
+# Run by tools/ui-loft-rail-intersect-test.sh (Linux),
+# tools/ui-windows-loft-rail-intersect-test.ps1 (Windows) and
+# tools/ui-macos-loft-rail-intersect-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+# Seen from the side and above: the square 40 mm up does not hide the
+# circle (as it does from the top), and the rail's sketch plane is not
+# edge on.
+command view.iso
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The loft through the rail tied to the Intersect points.
+mark
+command solid.loft
+wait-log '^Command Loft started'
+wait-idle
+click-pick 'profile F1/'
+wait-log '^Loft Profiles: 1 profile'
+wait-idle
+click-pick 'profile F3/'
+wait-log '^Loft Profiles: 2 profiles'
+wait-idle
+mark
+qt-choice input_guide 'Rails'
+wait-log '^Panel Loft input rails[.]0[.]path at ' 10
+wait-idle
+click-logged '^Panel Loft input rails[.]0[.]path at '
+wait-idle
+expect-ever '^Sketch entity F4/c4 at '
+click-logged '^Sketch entity F4/c4 at '
+wait-log '^Loft Rail: 1 sketch curve [[]sketch curve c4 of F4[]]' 10
+wait-log '^Preview Loft: ok' 60
+wait-idle
+expect-no-log '^Panel Loft error: '
+mark
+key Return
+wait-log '^Added loft [(]New Body[)] through 2 sections' 60
+wait-idle
+
+# 2. The loose rail: refused in words, its places on hover.
+mark
+model-command '{"cmd":"add_feature","def":{"type":"loft","sections":[{"type":"profile","sketch":"F1","region":"r{c1}"},{"type":"profile","sketch":"F3","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],"rails":[{"sketch":"F4","curves":["c5"]}],"operation":"new_body"}}'
+wait-log '^Timeline Loft2 at ' 30
+wait-idle
+mark
+dblclick-logged '^Timeline Loft2 at '
+wait-log '^Editing F[0-9]+ with Loft$'
+wait-log '^Panel Loft error: .*rail 1 misses the second profile by 0[.]3 mm$' 60
+wait-log '^Panel Loft message at ' 10
+wait-idle
+expect-never '^Panel Loft (error|message box): .*([EV][{]|r[{]|F[0-9]|section [0-9]|[(]-?[0-9.]+, )'
+mark
+hover-logged '^Panel Loft message at '
+wait-log '^Panel Loft message hovered: 2 places$' 10
+mark
+leave-widget commandMessage
+wait-log '^Notice hover highlighted: none$' 10
+wait-idle
+
+# 3. Esc cancels.
+mark
+key Escape
+wait-log '^Command Loft cancelled$'
+wait-idle

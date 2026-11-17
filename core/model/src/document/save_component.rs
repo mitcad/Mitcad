@@ -564,6 +564,51 @@ impl<K: Kernel> Document<K> {
                         }
                     }
                 }
+                // A Flex item's nodes on geometry outside (mitcad#1713):
+                // free nodes where they are.
+                FeatureDef::Flex(flex) => {
+                    let link = flex
+                        .links
+                        .values()
+                        .chain(flex.datum_links.values())
+                        .find(|l| outside(l))
+                        .cloned();
+                    if let Some(link) = link {
+                        let gone: BTreeSet<FeatureUid> = flex
+                            .links
+                            .iter()
+                            .filter(|(_, l)| outside(l))
+                            .map(|(body, _)| body.feature)
+                            .chain(
+                                flex.datum_links
+                                    .iter()
+                                    .filter(|(_, l)| outside(l))
+                                    .map(|(datum, _)| *datum),
+                            )
+                            .collect();
+                        for node in &mut flex.nodes {
+                            for reference in [&mut node.on, &mut node.port] {
+                                let outside_one = reference.as_ref().is_some_and(|r| {
+                                    let mut used = crate::features::References::default();
+                                    r.add_to(&mut used);
+                                    used.features.iter().any(|f| gone.contains(f))
+                                });
+                                if outside_one {
+                                    *reference = None;
+                                }
+                            }
+                        }
+                        flex.links.retain(|_, l| !outside(l));
+                        flex.datum_links.retain(|_, l| !outside(l));
+                        note(
+                            references,
+                            &entry,
+                            CutKind::Construction,
+                            a.path_name(&link.source.0),
+                            true,
+                        );
+                    }
+                }
                 _ => {}
             }
             self.freeze_points(&entry, &mut def, path, references);
@@ -1174,6 +1219,7 @@ impl<K: Kernel> Document<K> {
                 FeatureDef::ConstructionPlane(p) => &p.datum_links,
                 FeatureDef::ConstructionAxis(x) => &x.datum_links,
                 FeatureDef::ConstructionPoint(p) => &p.datum_links,
+                FeatureDef::Flex(f) => &f.datum_links,
                 _ => continue,
             };
             if let Some((datum, _)) = datum_links.iter().find(|&(_, link)| seen_in(link)) {
@@ -1588,6 +1634,11 @@ fn relink(
         FeatureDef::ConstructionPoint(p) => {
             let changed = rekey(&mut p.links);
             datums(&mut p.datum_links) || changed
+        }
+        // A Flex item's nodes on other components' geometry (mitcad#1713).
+        FeatureDef::Flex(f) => {
+            let changed = rekey(&mut f.links);
+            datums(&mut f.datum_links) || changed
         }
         FeatureDef::BodyTransfer(t) => shorten(&mut t.link),
         FeatureDef::Sketch(s) => {

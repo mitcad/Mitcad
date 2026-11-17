@@ -1871,16 +1871,25 @@ protected:
       op.constrain(center, snapOf(0));
     }
     // Clicks on the circle that snapped to points keep it through them
-    // (when the auto constraints left it there).
+    // (when the auto constraints left it there); through a body corner, its
+    // projection (mitcad#1967).
     const int first = m_mode == QStringLiteral("center") ? 1 : 0;
     if (!tangent()) {
       for (int i = first; i < clicked(); ++i) {
         const Snap& s = snapOf(i);
         const bool on = !placed || std::abs(dist(s.at, placed->center) - placed->radius) <= 1e-6;
-        if ((s.atPoint() || s.kind == Snap::Kind::Origin) && on) {
-          const QJsonValue point = op.pointInput(s);
+        if (!on) {
+          continue;
+        }
+        QString point;
+        if (s.atPoint() || s.kind == Snap::Kind::Origin) {
+          point = op.pointInput(s).toString();
+        } else if (s.kind == Snap::Kind::BodyVertex) {
+          point = op.projectBody(s.bodyItem).point;
+        }
+        if (!point.isEmpty()) {
           op.addConstraint({{QStringLiteral("type"), QStringLiteral("coincident")},
-                            {QStringLiteral("point"), point.toString()},
+                            {QStringLiteral("point"), point},
                             {QStringLiteral("entity"), circle}});
         }
       }
@@ -3069,10 +3078,6 @@ public:
 
   QString name() const override { return QObject::tr("Point"); }
   void start() override { m_c.hint(QObject::tr("Point: click where it goes.")); }
-  // Body corners and the middles of body edges in the sketch plane too
-  // (mitcad#258).
-  bool bodySnaps() const override { return true; }
-
   void move(const Snap& snap) override {
     // The hint says what a body snap does; the marker is a point's or a
     // midpoint's.
@@ -3087,6 +3092,8 @@ public:
     } else if (snap.kind == Snap::Kind::BodyMidpoint) {
       m_c.hint(QObject::tr("Point: at the middle of the body's edge; placing it projects the edge into the sketch "
                            "(linked)."));
+    } else if (snap.kind == Snap::Kind::BodyOnEdge) {
+      m_c.hint(QObject::tr("Point: on the body's edge; placing it projects the edge into the sketch (linked)."));
     } else {
       start();
     }
@@ -3150,13 +3157,14 @@ public:
     } else if (snap.kind == Snap::Kind::BodyMidpoint) {
       qDebug().noquote() << QStringLiteral("Point %1 at the midpoint of %2, the projected edge %3")
                                 .arg(point, projected.curve, snap.bodyItem.source);
+    } else if (snap.kind == Snap::Kind::BodyOnEdge) {
+      qDebug().noquote() << QStringLiteral("Point %1 on %2, the projected edge %3")
+                                .arg(point, projected.curve, snap.bodyItem.source);
     }
   }
 
 private:
-  static bool body(const Snap& snap) {
-    return snap.kind == Snap::Kind::BodyVertex || snap.kind == Snap::Kind::BodyMidpoint;
-  }
+  static bool body(const Snap& snap) { return snap.onBody(); }
 
   QString m_onBody; // the body snap the hint is about
 };

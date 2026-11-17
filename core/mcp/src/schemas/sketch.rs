@@ -717,6 +717,7 @@ fn planar(name: &str) -> Option<Value> {
                 "sketch": sketch(),
                 "entities": ids("The originals (p<n>, c<n>)"),
                 "direction": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "default": [1, 0], "description": "The first direction"},
+                "direction2": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "description": "The second direction, not parallel to the first; default a quarter turn from the first"},
                 "count": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "integer", "minimum": 1}, "description": "[n1, n2]"},
                 "spacing": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": ["number", "string"]}, "description": "[s1, s2]: values, signed, not zero"},
                 "symmetric": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "boolean"}, "description": "Per direction: the originals in the middle (an odd count)"}
@@ -733,6 +734,7 @@ fn planar(name: &str) -> Option<Value> {
                 "angle": value_input("A circular pattern's angle"),
                 "spacing": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": ["number", "string"]}, "description": "A rectangular pattern's spacing"},
                 "direction": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "description": "A rectangular pattern's first direction"},
+                "direction2": {"type": ["array", "null"], "minItems": 2, "maxItems": 2, "items": {"type": "number"}, "description": "A rectangular pattern's second direction; null: a quarter turn from the first"},
                 "center": point("A circular pattern's centre"),
                 "entities": ids("The originals")
             },

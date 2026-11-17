@@ -10,8 +10,9 @@ cmake_minimum_required(VERSION 3.24)
 # The document is imported as it is, then again with the bend radius set
 # 5 mm larger (mitcad-cli import-fcstd --set): the profile sketch's centre
 # moves 5 mm further along -x with the ribs (the coordinate system's offset
-# is the sketch's placement on its plane), no feature that rebuilt in the
-# first import fails after the change, and the body reaches 5 mm further
+# is the sketch's placement on its plane), every feature (the Fillet on the
+# ends too) rebuilds in both imports, which report no warning and no skipped
+# object (mitcad#1960), and the body reaches 5 mm further
 # along -x (within 0.01 mm: the ribs, which may reach furthest, start a
 # degree into the bend). Skipped when the folder or the archive is not
 # there.
@@ -158,13 +159,39 @@ profile_x("${before}" x_before)
 profile_x("${after}" x_after)
 near("${x_after}" "${x_before}" "-5" 1000 "the profile sketch's centre")
 
-# What rebuilt before still rebuilds.
-rebuilt("${before}" ok_before)
-rebuilt("${after}" ok_after)
-foreach(name IN LISTS ok_before)
-  if(NOT name IN_LIST ok_after)
-    message(FATAL_ERROR "${name} fails after the bend radius changed")
+# Every feature rebuilds, the Fillet on the ends included, before and
+# after the change (mitcad#1960).
+foreach(state before after)
+  rebuilt("${${state}}" ok)
+  string(JSON count LENGTH "${${state}}" document timeline features)
+  list(LENGTH ok rebuilt_count)
+  if(NOT rebuilt_count EQUAL count)
+    message(FATAL_ERROR "${state} the change: ${rebuilt_count} of ${count} features rebuild (${ok})")
   endif()
+  if(NOT "Fillet" IN_LIST ok)
+    message(FATAL_ERROR "${state} the change: the Fillet is not on the timeline (${ok})")
+  endif()
+endforeach()
+
+# The document opens without a warning and without skipped objects: the
+# VarSet's values are parameters, the coordinate system is carried by the
+# sketch on it (mitcad#1960).
+foreach(state before after)
+  string(JSON warnings LENGTH "${${state}}" import warnings)
+  if(NOT warnings EQUAL 0)
+    string(JSON first GET "${${state}}" import warnings 0)
+    message(FATAL_ERROR "${state} the change: ${warnings} import warnings, the first: ${first}")
+  endif()
+  string(JSON count LENGTH "${${state}}" import items)
+  math(EXPR last "${count} - 1")
+  foreach(i RANGE ${last})
+    string(JSON outcome GET "${${state}}" import items ${i} outcome)
+    if(outcome STREQUAL "skipped")
+      string(JSON name GET "${${state}}" import items ${i} name)
+      string(JSON note ERROR_VARIABLE none GET "${${state}}" import items ${i} note)
+      message(FATAL_ERROR "${state} the change: ${name} is skipped (${note})")
+    endif()
+  endforeach()
 endforeach()
 
 # The bend reaches 5 mm further.
@@ -172,4 +199,4 @@ reach("${before}" min_before)
 reach("${after}" min_after)
 near("${min_after}" "${min_before}" "-5" 10000 "the body's smallest x")
 
-message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, nothing fails")
+message(STATUS "ok   the bend follows its radius: the profile and the body move 5 mm, every feature rebuilds, nothing skipped")

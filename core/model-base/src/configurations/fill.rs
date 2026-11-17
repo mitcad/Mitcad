@@ -356,10 +356,11 @@ impl Configurations {
                 }
             }
         }
-        // A closed table's rows have a value of every option: a row without
-        // one takes the option's current value.
+        // A closed table's rows have a value of every option but the open
+        // ones (mitcad#1950): a row without one takes the option's current
+        // value.
         if self.closed {
-            for option in self.options.clone() {
+            for option in self.row_options() {
                 let Some(constant) = current_constant(parameters, &option, &created) else {
                     continue;
                 };

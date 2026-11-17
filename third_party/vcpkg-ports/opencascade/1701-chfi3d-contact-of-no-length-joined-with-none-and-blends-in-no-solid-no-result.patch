@@ -1,0 +1,175 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a contact of no length is joined with no other, and blends that
+come out in no solid of the body are no result (mitcad#1922).
+
+A cube of 10 with its twelve edges rounded by 4.9998: the corners' balls
+at both ends of each edge all but meet in its middle, and each face is left
+a square 4e-4 wide, its four contacts each 4e-4 long. 0950's
+joinEndsAlongContacts takes two contacts on a face for contacts along each
+other where each one's points lie within its tolerance (ten times the
+approximation tolerance, 1e-3 by default) of the other's: these all do,
+whichever two, and 1655 joins their ends inside the face (all its edges
+rounded). It then projected the one contact of no length onto the other
+blend's surface (GeomProjLib::Curve2d), and the projection walked with a
+step of 0: the fillet never returned. Where that projection was stopped,
+the builder put the blends into no solid and Compute gave back the cube
+itself as done (volume 1000, six faces).
+
+- contactAlong (0950): a contact no longer than ten times the tolerance
+  (along the polyline through nine of its points) lies along nothing.
+- ChFi3d_Builder::Compute: where blends were computed (the data structure
+  has surfaces) but no solid of the body came out of the builder merged
+  with them, every solid given back as it was, the computation is not
+  done, Failure() Failure_NoResult, with no result shape, and neither the
+  grown faces' continuation nor the regularities touch the input's faces
+  and edges.
+
+Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
+index 61f2eed8..bdd7d663 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
+@@ -417,7 +417,8 @@ public:
+   //! (no start, a walk between two faces or rolling on an edge, a twisted
+   //! surface, another failure), blends of contours overlapping or crossing
+   //! on a face computed again, blends of two contours intersecting each
+-  //! other, a corner, or a corner built in part only.
++  //! other, a corner, a corner built in part only, or blends that the
++  //! body could not be rebuilt with.
+   ChFi3d_Builder::FailureKind Failure() const { return myBuilder.Failure(); }
+ 
+   //! The contour (its index IC) the computation stopped at; 0 for none or
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 506e40f4..5af97609 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -1943,6 +1943,35 @@ static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, co
+   }
+ }
+ 
++// The length of the contact of SurfData S on its side onS, along the
++// polyline through nine points of its curve; 0 where it has no curve or its
++// range is of no length.
++static double contactLength(const TopOpeBRepDS_DataStructure&   DStr,
++                            const occ::handle<ChFiDS_SurfData>& S,
++                            const int                           onS)
++{
++  const ChFiDS_FaceInterference& I = S->Interference(onS);
++  if (I.LineIndex() <= 0)
++  {
++    return 0.;
++  }
++  const occ::handle<Geom_Curve>& C = DStr.Curve(I.LineIndex()).Curve();
++  const double                   f = I.FirstParameter(), l = I.LastParameter();
++  if (C.IsNull() || std::abs(l - f) <= Precision::PConfusion())
++  {
++    return 0.;
++  }
++  double aLength = 0.;
++  gp_Pnt aPrev   = C->Value(f);
++  for (int i = 1; i <= 8; i++)
++  {
++    const gp_Pnt aP = C->Value(f + (l - f) * i / 8.);
++    aLength += aPrev.Distance(aP);
++    aPrev = aP;
++  }
++  return aLength;
++}
++
+ // Whether the contact of SurfData A on its side onA lies along the contact
+ // of SurfData B on its side onB, within Tol at points all along A's.
+ static bool contactAlong(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -1964,6 +1993,16 @@ static bool contactAlong(const TopOpeBRepDS_DataStructure&   DStr,
+   {
+     return false;
+   }
++  // (A contact no longer than ten times Tol lies along nothing: every point
++  // of it is within Tol of any contact passing by, as on a cube rounded
++  // within 2e-4 of half its side, where every face is left a square 4e-4
++  // wide and its four contacts all "lie along" each other; joined, the
++  // projection of a contact of no length onto the other blend walked with
++  // a step of 0 and never returned, mitcad#1922.)
++  if (contactLength(DStr, A, onA) <= 10. * Tol || contactLength(DStr, B, onB) <= 10. * Tol)
++  {
++    return false;
++  }
+   const double ub1 = std::min(IB.FirstParameter(), IB.LastParameter());
+   const double ub2 = std::max(IB.FirstParameter(), IB.LastParameter());
+   for (int i = 0; i <= 4; i++)
+@@ -5321,9 +5360,13 @@ void ChFi3d_Builder::Compute()
+           }
+         }
+       }
++      // (Whether the blends computed came out in no solid: every solid given
++      // back as it was.)
++      bool aNoResult = false;
+       if (!hasresult)
+       {
+         B1.MakeCompound(TopoDS::Compound(myShapeResult));
++        bool aMerged = false;
+         for (It = NCollection_Map<int>::Iterator(MapIndSo); It.More(); It.Next())
+         {
+           int                                      indsol   = It.Key();
+@@ -5335,6 +5378,7 @@ void ChFi3d_Builder::Compute()
+           }
+           else
+           {
++            aMerged = true;
+             // If the old type of Shape is Shell, Shell is placed instead of Solid,
+             // However there is a problem for compound of open Shell.
+             while (its.More())
+@@ -5355,6 +5399,17 @@ void ChFi3d_Builder::Compute()
+             }
+           }
+         }
++        // Blends computed, but the builder put them into no solid: the
++        // result was the input given back as done (a cube rounded within
++        // 2e-4 of half its side, volume and faces the cube's, mitcad#1922).
++        // Not done.
++        if (!aMerged && DStr.NbSurfaces() > 0)
++        {
++          aNoResult = true;
++          done      = false;
++          myFailure = Failure_NoResult;
++          myShapeResult.Nullify();
++        }
+       }
+       else
+       {
+@@ -5386,13 +5441,17 @@ void ChFi3d_Builder::Compute()
+ #endif
+ 
+       // (Faces grown past their surfaces' bounds get them continued.)
+-      if (!hasresult)
++      if (!hasresult && !aNoResult)
+       {
+         ChFi3d_ContinueGrownFaces(myShapeResult);
+       }
+ 
+-      // Regularities are coded after cutting.
+-      SetRegul();
++      // Regularities are coded after cutting (not on the input's edges
++      // where there is no result).
++      if (!aNoResult)
++      {
++        SetRegul();
++      }
+ 
+ #ifdef OCCT_DEBUG // perf
+       ChFi3d_ResultChron(cl_setregul, t_setregul);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 73b8e75b..64959046 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -233,7 +233,8 @@ public:
+                           //!< to be cut by each other, fail
+     Failure_Intersecting, //!< the blends of two contours intersect each other
+     Failure_Corner,       //!< a corner at a vertex (FaultyVertex)
+-    Failure_PartialCorner //!< a corner built in part only (HasResult)
++    Failure_PartialCorner, //!< a corner built in part only (HasResult)
++    Failure_NoResult       //!< blends computed, but put into no solid of the body
+   };
+ 
+   //! Where the last computation stopped (Failure_None when it is done).

@@ -1518,6 +1518,136 @@ double steepness(const std::vector<ChamferSet>& sets) {
   return ratio;
 }
 
+// The distance from a point to the curve an edge lies on: a line's or a
+// circle's whole curve (a stripe's end past the edge's vertex stays within
+// the contact of it), else the edge itself.
+double distance_to_curve_of(const TopoDS_Edge& edge, const gp_Pnt& point) {
+  const BRepAdaptor_Curve curve(edge);
+  if (curve.GetType() == GeomAbs_Line) {
+    return curve.Line().Distance(point);
+  }
+  if (curve.GetType() == GeomAbs_Circle) {
+    const gp_Circ circle = curve.Circle();
+    const gp_Vec from(circle.Location(), point);
+    const double axial = from.Dot(gp_Vec(circle.Axis().Direction()));
+    const double radial = std::sqrt(std::max(0.0, from.SquareMagnitude() - axial * axial));
+    return std::hypot(axial, radial - circle.Radius());
+  }
+  BRepExtrema_DistShapeShape between(BRepBuilderAPI_MakeVertex(point).Vertex(), edge);
+  return between.IsDone() ? between.Value() : 0.0;
+}
+
+// A fillet or chamfer (`role`) that the geometry kernel built (`maker`
+// done) but that took away whole a face beyond its reach: a face of the
+// body that touches none of the contours' edges, not even at a vertex, and
+// reaches farther from all of them than the dressup touches its faces
+// (`contact` of a contour's edge: its size times what the angle between
+// its faces makes of it). A rounding or bevel takes away only faces within
+// its section, a narrow face beside its edge and what lies between it and
+// the contact lines; one that takes away a face beyond rode on faces past
+// the ones it was to dress, the material between gone with it (mitcad#1953:
+// a strip 2 wide closed off by a face at 45 degrees, rounded along its
+// outer wall with a radius between 2 and 3, came back valid with the wall
+// under the strip gone and the floor's edge beyond rounded instead). The
+// failure in words, the edge nearest the face and its faces as places,
+// the face and the distances in the detail; else empty. Never for an edge
+// whose faces fold back on each other (no finite contact).
+template <class Contact>
+std::string took_face_beyond_reach(BRepFilletAPI_LocalOperation& maker, const Shape& body, const char* role,
+                                   Contact&& contact) {
+  ShapeMap contour_edges;
+  ShapeMap contour_vertices;
+  double reach = 0.0;
+  for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+    for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+      const TopoDS_Edge& edge = maker.Edge(ic, ie);
+      const double c = contact(ic, edge);
+      if (!(c > 0.0) || !std::isfinite(c)) {
+        return {};
+      }
+      reach = std::max(reach, c);
+      contour_edges.Add(edge);
+      TopExp::MapShapes(edge, TopAbs_VERTEX, contour_vertices);
+    }
+  }
+  if (contour_edges.IsEmpty()) {
+    return {};
+  }
+  const double tolerance = 1.0e-6 * std::max(1.0, reach);
+  for (int f = 0; f < body.face_count(); ++f) {
+    const TopoDS_Face& face = body.face(f);
+    if (!maker.IsDeleted(face)) {
+      continue;
+    }
+    bool touches = false;
+    for (TopExp_Explorer v(face, TopAbs_VERTEX); v.More() && !touches; v.Next()) {
+      touches = contour_vertices.Contains(v.Current());
+    }
+    if (touches) {
+      continue;
+    }
+    double farthest = 0.0;
+    int nearest_edge = 0;
+    for (TopExp_Explorer x(face, TopAbs_EDGE); x.More(); x.Next()) {
+      const BRepAdaptor_Curve curve(TopoDS::Edge(x.Current()));
+      const double t0 = curve.FirstParameter();
+      const double t1 = curve.LastParameter();
+      if (!std::isfinite(t0) || !std::isfinite(t1)) {
+        continue;
+      }
+      for (const double t : {0.0, 0.25, 0.5, 0.75, 1.0}) {
+        const gp_Pnt point = curve.Value(t0 + t * (t1 - t0));
+        double nearest = -1.0;
+        int at = 0;
+        for (int i = 1; i <= contour_edges.Extent(); ++i) {
+          const double d = distance_to_curve_of(TopoDS::Edge(contour_edges(i)), point);
+          if (nearest < 0.0 || d < nearest) {
+            nearest = d;
+            at = i;
+          }
+        }
+        if (nearest > farthest) {
+          farthest = nearest;
+          nearest_edge = at;
+        }
+      }
+    }
+    if (!(farthest > reach + tolerance)) {
+      continue;
+    }
+    const int e = body.edge_index(TopoDS::Edge(contour_edges(nearest_edge)));
+    const std::string name = e >= 0 ? body.edge_name(e) : std::string();
+    std::vector<ErrorPlace> places;
+    if (!name.empty()) {
+      places.push_back(edge_place(name));
+      for (const int g : body.edge_faces(e)) {
+        if (g >= 0 && !body.face_names(g).empty()) {
+          places.push_back(face_place(body.face_names(g).front()));
+        }
+      }
+    }
+    const NameList& names = body.face_names(f);
+    if (!names.empty()) {
+      places.push_back(face_place(names.front()));
+    }
+    const std::string what = std::strcmp(role, "fillet") == 0 ? "rounding" : "bevel";
+    const std::string said = "the " + what + " is too large for the face beside its edge: the geometry kernel " +
+                             "runs it onto faces beyond and takes away a face out of its reach";
+    const auto number = [](double value) {
+      char text[32];
+      std::snprintf(text, sizeof text, "%.6g", value);
+      return std::string(text);
+    };
+    const std::string face_named = names.empty() ? std::string("an unnamed face") : "face " + names.front();
+    return placed_error(said,
+                        said + " (" + face_named + ", reaching " + number(farthest) + " mm from " +
+                            (name.empty() ? std::string("an unnamed edge") : "edge " + name) + ", while the " +
+                            what + " touches its faces at most " + number(reach) + " mm from its edges)",
+                        places);
+  }
+  return {};
+}
+
 // Why OCCT's fillet did not build the corner at its first faulty vertex
 // (port patch 0330, mitcad#323): which corner (a rounding's end, two or
 // more roundings meeting) and why, from the computation's exception. The
@@ -1660,6 +1790,8 @@ std::string fillet_failure_along(const BRepFilletAPI_MakeFillet& maker, const st
     return corner_failure(maker);
   case ChFi3d_Builder::Failure_PartialCorner:
     return "the geometry kernel builds the corner at a vertex where the roundings meet only in part";
+  case ChFi3d_Builder::Failure_NoResult:
+    return "the geometry kernel computes the roundings but cannot rebuild the body with them";
   case ChFi3d_Builder::Failure_None:
     break;
   }
@@ -1779,7 +1911,9 @@ std::vector<int> overlap_apart(const BRepFilletAPI_MakeFillet& maker, const Shap
 // fillet ran for good, its walk projecting a curve onto a face that has
 // none of it left, and a cancel does not reach it there; at 1e-3 mm it
 // builds). A refusal in words (the 0.1 % smaller retry follows), the edge
-// as its place; empty where there is no such edge.
+// as its place; empty where there is no such edge. (Port patch 1701 makes
+// the kernel return there, mitcad#1922; the refusal stays, so that the
+// retry builds the body.)
 std::string corners_meet(const Shape& body, const std::vector<FilletSet>& sets, const std::vector<int>& owner,
                          double scale) {
   try {
@@ -2027,6 +2161,41 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
       return round_edges(feature, *convex, sets, second, rolling_ball_corners, scale, tight);
     }
     throw std::runtime_error("fillet failed; " + fillet_failure(maker, body));
+  }
+  // (A rounding the kernel built away from its edges, a face between taken
+  // away whole: a failure, never a body with a wall missing, mitcad#1953.)
+  const detail::EdgeFaces contour_faces(body);
+  const std::string beyond = took_face_beyond_reach(maker, body, "fillet", [&](int ic, const TopoDS_Edge& edge) {
+    // (A contour the kernel's build split or added, or one carried across a
+    // notch: the largest size of the sets.)
+    const int e = body.edge_index(edge);
+    const std::size_t c = static_cast<std::size_t>(ic - 1);
+    const int s = c < contour_sets.size() ? contour_sets[c] : -1;
+    const double size =
+        (s < 0 ? largest_size(sets) : largest_radius(body, sets[static_cast<std::size_t>(s)], e)) * scale;
+    const std::vector<int> faces = e < 0 ? std::vector<int>() : contour_faces.at(e);
+    if (faces.size() != 2 || faces[0] == faces[1]) {
+      return 0.0;
+    }
+    double angle = 0.0;
+    try {
+      OCC_CATCH_SIGNALS
+      for (const double t : {0.0, 0.5, 1.0}) {
+        angle = std::max(angle, detail::normal_angle(edge, body.face(faces[0]), body.face(faces[1]), t));
+      }
+    } catch (const Standard_Failure&) {
+      return 0.0;
+    } catch (const std::runtime_error&) {
+      // (A normal undefined at an end of the edge.)
+      return 0.0;
+    }
+    if (!(angle < 2.0 * kHalfPi - 1.0e-3)) {
+      return 0.0;
+    }
+    return size * std::max(1.0, std::tan(angle / 2.0));
+  });
+  if (!beyond.empty()) {
+    throw std::runtime_error("fillet failed; " + beyond);
   }
   const ShapePtr rounded = join_at_turn_stops(name_result(maker, feature, "fillet", body), maker.ChainTurnStops());
   return setbacks.empty() ? rounded : detail::setback_corners(feature, "fillet", body, *rounded, setbacks);
@@ -2365,6 +2534,29 @@ ShapePtr round_and_blend(const std::string& feature, const Shape& body, const st
   if (!maker.IsDone()) {
     throw std::runtime_error("fillet failed; the distances may be too large for the edges");
   }
+  // (As round_edges': a bevel built away from its edges, mitcad#1953.)
+  const std::string beyond = took_face_beyond_reach(maker, start, "fillet", [&](int, const TopoDS_Edge& edge) {
+    const auto name = start.name_of_edge(edge);
+    const auto found = name ? set_of_edge.find(*name) : set_of_edge.end();
+    if (found == set_of_edge.end()) {
+      return 0.0;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(found->second)];
+    if (set.size == FilletSize::Asymmetric) {
+      return std::max(set.radius, set.radius2) * scale;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      return contact_distance(start, start.edge_index(edge), set) * scale;
+    } catch (const Standard_Failure&) {
+      return 0.0;
+    } catch (const std::exception&) {
+      return 0.0;
+    }
+  });
+  if (!beyond.empty()) {
+    throw std::runtime_error("fillet failed; " + beyond);
+  }
   const ShapePtr chamfered = name_result(maker, feature, "fillet", start);
   return detail::blend_bevels(feature, start, *chamfered, kinds);
 }
@@ -2626,6 +2818,15 @@ ShapePtr bevel(const std::string& feature, const Shape& body, const std::vector<
   detail::build(maker);
   if (!maker.IsDone()) {
     throw std::runtime_error("chamfer failed; the distance may be too large for the edges");
+  }
+  // (As the fillet's: a bevel built away from its edges, mitcad#1953.)
+  const std::string beyond = took_face_beyond_reach(maker, body, "chamfer", [&](int ic, const TopoDS_Edge&) {
+    const std::size_t c = static_cast<std::size_t>(ic - 1);
+    const int s = c < contour_sets.size() ? contour_sets[c] : -1;
+    return (s < 0 ? largest_size(sets) : largest_distance(sets[static_cast<std::size_t>(s)].spec)) * scale;
+  });
+  if (!beyond.empty()) {
+    throw std::runtime_error("chamfer failed; " + beyond);
   }
   ShapePtr result = join_at_turn_stops(name_result(maker, feature, "chamfer", body), maker.ChainTurnStops());
   result = join_at_turn_stops(result, piece_vertices(*result, body), true);

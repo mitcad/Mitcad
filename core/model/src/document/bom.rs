@@ -271,6 +271,11 @@ impl<K: Kernel> Document<K> {
                 if separate {
                     own.name = self.body_name(body);
                     own.designation = own.name.clone();
+                    // A Flex item is designated by its item: its type's name
+                    // (mitcad#1713).
+                    if let Some(flex) = self.flex_length(body.feature) {
+                        own.designation = flex.item;
+                    }
                 }
                 own.quantity = 0;
                 let mut by_material: Vec<(Vec<String>, BomRow)> = Vec::new();

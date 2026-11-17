@@ -542,6 +542,16 @@ fn relocate_links(
                     follow(link, &BTreeSet::from([body.feature]), own);
                 }
             }
+            // A Flex item's nodes on other components' geometry
+            // (mitcad#1713).
+            FeatureDef::Flex(flex) => {
+                for (body, link) in &mut flex.links {
+                    follow(link, &BTreeSet::from([body.feature]), own);
+                }
+                for (datum, link) in &mut flex.datum_links {
+                    follow(link, &BTreeSet::from([*datum]), own);
+                }
+            }
             _ => {}
         }
         if def != entry.def {

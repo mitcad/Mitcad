@@ -31,3 +31,5 @@ mod remove_placed_on_tests;
 mod side_lineup_tests;
 // Moving what a STEP import brought into a frame (mitcad#1647).
 mod move_imported_tests;
+// Ends that meet and their shared miter (mitcad#1940).
+mod end_meets_tests;

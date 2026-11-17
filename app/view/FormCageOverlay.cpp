@@ -158,6 +158,12 @@ bool FormCageOverlay::edgeSeen(const forms::EdgeIds& edge) const {
 FormCageOverlay::Hit FormCageOverlay::hitAt(const QPointF& position) const {
   Hit best;
   best.kind = m_kind;
+  // The orientation cube's area is the cube's: its clicks and its context
+  // menu (mitcad#1941: a right click there opened the cube's menu, not
+  // Edit Form's).
+  if (m_viewer.overlayCubeArea().contains(position.toPoint())) {
+    return best;
+  }
   switch (m_kind) {
   case forms::Kind::Vertices: {
     double nearest = kVertexReach;
@@ -451,7 +457,8 @@ void FormCageOverlay::logPlaces() {
   }
   QStringList lines;
   const auto add = [this, &lines](const QString& what, const QPointF& place) {
-    if (!finite(place) || !rect().contains(place.toPoint()) || m_viewer.isCovered(place)) {
+    if (!finite(place) || !rect().contains(place.toPoint()) || m_viewer.isCovered(place) ||
+        m_viewer.overlayCubeArea().contains(place.toPoint())) {
       return;
     }
     const QPoint at = mapTo(window(), place.toPoint());
@@ -476,12 +483,14 @@ void FormCageOverlay::logPlaces() {
       }
       const QPointF a = viewPoint(edge.vertices[0]);
       const QPointF b = viewPoint(edge.vertices[1]);
-      add(QStringLiteral("edge %1,%2%3")
+      // An edge of an opening says so (mitcad#1941: Fill Hole, Bridge).
+      add(QStringLiteral("edge %1,%2%3%4")
               .arg(edge.vertices[0])
               .arg(edge.vertices[1])
               .arg(!edge.creased     ? QString()
                    : edge.sharpness ? QStringLiteral(" (semi-sharp %1)").arg(*edge.sharpness)
-                                    : QStringLiteral(" (creased)")),
+                                    : QStringLiteral(" (creased)"))
+              .arg(edge.boundary ? QStringLiteral(" (boundary)") : QString()),
           (a + b) / 2.0);
     }
     break;

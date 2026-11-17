@@ -1,0 +1,24 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Flex items to edit in the view (mitcad#1713), tools/ui-windows-flex-shots.ps1: Box1 (F1, F1.b0) 40 x 30 x 20 at (20, 20) with Flex1 (F2), a 6 mm hose from a free node left of it over its top to a free node right of it; Cylinder1 (F3, F3.b0) of 30 mm, 40 high, at (40, -40), with Flex2 (F4), a 10 x 1 mm flat cable round half of its side, a half turn at its middle node."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [20, 20], "length": 40, "width": 30,
+    "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Hose 6", "section": {"type": "round", "diameter": 6}, "bend_radius": 10},
+    "nodes": [
+      {"id": "n1", "at": [-10, 35, 30]},
+      {"id": "n2", "at": [40, 35, 20], "on": {"body": "F1.b0", "face": "F1:top"}},
+      {"id": "n3", "at": [90, 35, 30]}]}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [40, -40], "diameter": 30,
+    "height": 40, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Flat cable 10", "section": {"type": "rectangular", "width": 10, "height": 1},
+      "bend_radius": 5},
+    "nodes": [
+      {"id": "n1", "at": [25, -40, 8], "on": {"body": "F3.b0", "face": "F3:side0"}},
+      {"id": "n2", "at": [40, -55, 20], "on": {"body": "F3.b0", "face": "F3:side0"}, "twist": 3.14159265},
+      {"id": "n3", "at": [55, -40, 32], "on": {"body": "F3.b0", "face": "F3:side0"}}]}},
+  {"expect": {"feature": "Box1", "status": "ok"}},
+  {"expect": {"feature": "Flex1", "status": "ok"}},
+  {"expect": {"feature": "Cylinder1", "status": "ok"}}
+]

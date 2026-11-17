@@ -576,3 +576,121 @@ fn chart_coordinates_go_on_past_half_a_turn() {
     let beyond = chart_point(&embedding, [1.75 * PI * c.neutral_radius, 0.0], 0.0, T);
     assert!(chart_coordinates(&embedding, beyond, T).is_none());
 }
+
+/// The features of the refusals below as the timeline names them.
+fn timeline_name(feature: FeatureUid) -> String {
+    match feature.0 {
+        3 => "SheetFace1".to_owned(),
+        4 => "SheetFlange2".to_owned(),
+        7 => "Fillet3".to_owned(),
+        8 => "SheetUnfold1".to_owned(),
+        _ => feature.to_string(),
+    }
+}
+
+/// A panel a cut isolated (mitcad#1942): Unfold's refusal says which wall
+/// by its feature's name, paints it, and keeps the ids for agents.
+#[test]
+fn a_panel_a_cut_isolates_is_refused_in_words() {
+    use crate::notice::{FeatureError, NoticePlace, user_text_leaks};
+    let mut cut = l_sheet();
+    cut.joins.pop();
+    let raw = reconfigure(&mut cut, T, panel(3), &open(&[bend_id(4)], true)).unwrap_err();
+    assert!(raw.starts_with("panel F4 slot 0 is not connected"), "{raw}");
+    let error = FeatureError::from_text(&crate::sheet::worded(&raw, &timeline_name));
+    assert_eq!(
+        error.message,
+        "SheetFlange2 is not connected to the fixed panel through the sheet's bends and \
+         seams; a cut may have separated it"
+    );
+    assert!(!error.message.contains("slot"), "{}", error.message);
+    assert_eq!(user_text_leaks(&error.message), None);
+    assert_eq!(error.agent_text(), raw);
+    assert!(
+        error
+            .places
+            .contains(&NoticePlace::face("F4:sheet_front(0)")),
+        "{:?}",
+        error.places
+    );
+    // Other features the refusal names, by their names too; a text without
+    // ids stays as it was.
+    let error = FeatureError::from_text(&crate::sheet::worded(
+        "bend F4 slot 1 is already open by F8",
+        &timeline_name,
+    ));
+    assert_eq!(
+        error.message,
+        "SheetFlange2 (bend 2) is already open by SheetUnfold1"
+    );
+    assert_eq!(error.agent_text(), "bend F4 slot 1 is already open by F8");
+    assert_eq!(
+        crate::sheet::worded(
+            "the refolded bends were opened against different panels",
+            &timeline_name
+        ),
+        "the refolded bends were opened against different panels"
+    );
+}
+
+/// A fillet on a surface edge kept as an overlay (mitcad#1942): Unfold,
+/// Refold, Bend, Fold and the Flat Pattern name the feature and say what it
+/// does; agents read its id.
+#[test]
+fn a_fillet_on_a_surface_edge_is_refused_by_its_name() {
+    use crate::notice::{FeatureError, user_text_leaks};
+    use crate::sheet::{EdgeChange, FeatureWords, SheetOverlay, SheetOverlayKind};
+    let mut state = l_sheet();
+    assert!(
+        state
+            .overlay_refusal(
+                "sheet Unfold",
+                &FeatureWords {
+                    name: &timeline_name,
+                    edges: &|_| EdgeChange::Rounds,
+                },
+            )
+            .is_ok()
+    );
+    state.overlays.push(SheetOverlay {
+        feature: FeatureUid(7),
+        kind: SheetOverlayKind::Change {
+            placement: crate::transform::Transform::IDENTITY,
+            source: None,
+        },
+        removed: 1.0,
+    });
+    let refused = |edges: EdgeChange| {
+        let text = state
+            .overlay_refusal(
+                "sheet Unfold",
+                &FeatureWords {
+                    name: &timeline_name,
+                    edges: &move |_| edges,
+                },
+            )
+            .unwrap_err();
+        FeatureError::from_text(&text)
+    };
+    let error = refused(EdgeChange::Rounds);
+    assert_eq!(
+        error.message,
+        "sheet Unfold needs the sheet's developed form, but Fillet3 rounds edges of the \
+         sheet's faces, which cannot be flattened; only corners through the thickness unfold"
+    );
+    assert_eq!(user_text_leaks(&error.message), None);
+    assert_eq!(
+        error.agent_text(),
+        format!("{} (the overlay of F7)", error.message)
+    );
+    assert!(
+        refused(EdgeChange::Bevels)
+            .message
+            .contains("but Fillet3 bevels edges of the sheet's faces")
+    );
+    assert!(
+        refused(EdgeChange::Other)
+            .message
+            .contains("but Fillet3 repeats a fillet or chamfer on edges")
+    );
+}

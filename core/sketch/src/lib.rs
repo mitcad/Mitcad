@@ -162,6 +162,9 @@ mod regions_tests;
 // Offsets add an independent set of constraints (mitcad#1171).
 #[cfg(test)]
 mod offset_tests;
+// Offsets past a short piece's radius of curvature (mitcad#1938).
+#[cfg(test)]
+mod offset_fold_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

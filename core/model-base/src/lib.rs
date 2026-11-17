@@ -91,3 +91,7 @@ pub mod design_preview;
 // Sketches on cylindrical and conical faces: the face's development and
 // the map between the sketch and the face (mitcad#1768).
 pub mod developed;
+// Flex: flexible items routed through the model (mitcad#1713).
+pub mod flex;
+// Flex drape: a Flex item let hang, the chain it hangs as (mitcad#1713).
+pub mod flex_drape;

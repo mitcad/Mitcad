@@ -260,6 +260,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
                                       settings.value(QStringLiteral("refinement"), QStringLiteral("medium")).toString())));
   const bool stlText = settings.value(QStringLiteral("stlText"), false).toBool();
   const bool dxfConstruction = settings.value(QStringLiteral("dxfConstruction"), false).toBool();
+  const bool dxfPoints = settings.value(QStringLiteral("dxfPoints"), true).toBool();
   settings.endGroup();
   const QString path = stem + QLatin1Char('.') + QLatin1String(kTypes[start].suffix);
 
@@ -339,6 +340,14 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
   construction->setToolTip(
       QObject::tr("Also write the sketch's construction curves and center lines, on the layer construction"));
   form->addRow(QString(), construction);
+  // The sketch's free-standing points (mitcad#1963): marks a cutting table
+  // or a drill takes as hole positions; on unless unchecked.
+  auto* pointsBox = new QCheckBox(QObject::tr("Include points"));
+  pointsBox->setObjectName(QStringLiteral("exportDxfPoints"));
+  pointsBox->setChecked(dxfPoints);
+  pointsBox->setToolTip(QObject::tr("Also write the sketch's points that stand alone, such as hole marks, "
+                                    "on the layer POINTS"));
+  form->addRow(QString(), pointsBox);
   // A 3MF file of the design's print plates (mitcad#1679), as Send to
   // Slicer writes them (mitcad#1050): every plate in one file, a file per
   // plate, one plate, or the bodies without plates.
@@ -417,6 +426,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     form->setRowVisible(sketchBox, format == QStringLiteral("dxf"));
     form->setRowVisible(dxfUnit, format == QStringLiteral("dxf"));
     form->setRowVisible(construction, format == QStringLiteral("dxf"));
+    form->setRowVisible(pointsBox, format == QStringLiteral("dxf"));
   };
   QObject::connect(type, &QComboBox::currentIndexChanged, &dialog, [=](int index) {
     QFileInfo info(file->text());
@@ -474,7 +484,9 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
                             .arg(unitOffer(unit),
                                  coordinatesOffer,
                                  exportTypeKey(start), kRefinements[refined], path, unitOffer(dxfUnit),
-                                 dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"),
+                                 QStringLiteral("%1, dxf points %2")
+                                     .arg(dxfConstruction ? QStringLiteral("on") : QStringLiteral("off"),
+                                          dxfPoints ? QStringLiteral("on") : QStringLiteral("off")),
                                  hasPlates ? QStringLiteral("%1 (%2)").arg(startPlates).arg(plates.plates.size())
                                            : QStringLiteral("none"),
                                  plates.dialect.isEmpty() ? QStringLiteral("none") : plates.dialect);
@@ -493,6 +505,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     choice.sketch = sketchBox->currentData().toString();
     choice.dxfUnit = dxfUnit->currentText();
     choice.dxfConstruction = construction->isChecked();
+    choice.dxfPoints = pointsBox->isChecked();
     if (chooseCoordinates) {
       choice.coordinates = coordinates->currentData().toString();
       // In a coordinate system's frame (mitcad#1775).
@@ -584,6 +597,7 @@ std::optional<ExportChoice> askExport(QWidget* parent, const QString& stem, int 
     settings.setValue(QStringLiteral("refinement"), choice.refinement);
     settings.setValue(QStringLiteral("stlText"), choice.ascii);
     settings.setValue(QStringLiteral("dxfConstruction"), choice.dxfConstruction);
+    settings.setValue(QStringLiteral("dxfPoints"), choice.dxfPoints);
     settings.endGroup();
     settings.sync();
     return choice;

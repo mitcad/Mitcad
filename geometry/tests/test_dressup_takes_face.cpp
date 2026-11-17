@@ -25,12 +25,19 @@
 // faces away at the exact size, its volume exact and no note (GitHub #353).
 // A bore's top rim chamfered from one end wall of a shelf standing out from
 // the bore's wall to the other ends on the end walls' planes (GitHub #353's
-// owner case of mitcad#1819).
+// owner case of mitcad#1819). A wall's top rounded along both its edges
+// with two radii that together are wider than the top: the smaller ball
+// rides tangent on the larger rounding and the top goes (mitcad#1926).
+// The same wall's top, a strip 2 wide closed off at its end by a face at 45
+// degrees, rounded along the outer wall with 3: the strip goes, the ball
+// rolling on the inner wall's edge, cut by the slope (mitcad#1926).
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <BRepAdaptor_Curve.hxx>
@@ -67,6 +74,7 @@
 #include "check.hpp"
 #include "mitcad/geometry/boolean.hpp"
 #include "mitcad/geometry/dressup.hpp"
+#include "mitcad/geometry/user_error.hpp"
 
 namespace test {
 namespace {
@@ -1019,6 +1027,154 @@ void test_bore_rim_rounded_against_a_shelf(double radius) {
 
 } // namespace
 
+// The wall's top (2 wide) rounded along both its edges in one fillet, with
+// 1.5 along the outer wall (x = 0) and 0.8 along the inner (x = 2): the top
+// is narrower than the two roundings together (mitcad#1926, port patch
+// 1720). The ball of 0.8 rolls tangent on the rounding of 1.5, inside its
+// circle, and on the inner wall; the top goes. The section above z = 3:
+// the two arcs, the inner wall up to the small ball's contact and the outer
+// wall up to the large one's. Valid, every face named, no top left, no
+// note; whichever order the sets come in.
+void test_wall_top_rounded_with_two_radii() {
+  const ShapePtr body = wall();
+  const double h = 7, w = 2, r2 = 1.5, r1 = 0.8;
+  const std::string outer = edge_at(*body, gp_Pnt(0, 10, h));
+  const std::string inner = edge_at(*body, gp_Pnt(w, 10, h));
+  CHECK(!outer.empty() && !inner.empty());
+  // (x, z) of the section; the small ball inside the large one's circle.
+  const double c2x = r2, c2z = h - r2;
+  const double dx = (w - r1) - c2x, dz = std::sqrt((r2 - r1) * (r2 - r1) - dx * dx);
+  const double c1x = w - r1, c1z = c2z + dz;
+  const double at = std::atan2(dz, dx);
+  std::vector<std::pair<double, double>> section{{0, 3}, {w, 3}};
+  const int n = 4000;
+  for (int i = 0; i <= n; ++i) {
+    const double a = at * i / n;
+    section.emplace_back(c1x + r1 * std::cos(a), c1z + r1 * std::sin(a));
+  }
+  for (int i = 0; i <= n; ++i) {
+    const double a = at + (kPi - at) * i / n;
+    section.emplace_back(c2x + r2 * std::cos(a), c2z + r2 * std::sin(a));
+  }
+  double area = 0;
+  for (std::size_t i = 0; i < section.size(); ++i) {
+    const auto& p = section[i];
+    const auto& q = section[(i + 1) % section.size()];
+    area += p.first * q.second - q.first * p.second;
+  }
+  const double expected = 30.0 * 20 * 3 + 20.0 * 0.5 * std::abs(area);
+  FilletSet large;
+  large.edges = {outer};
+  large.radius = r2;
+  FilletSet small;
+  small.edges = {inner};
+  small.radius = r1;
+  for (const bool large_first : {true, false}) {
+    const ShapePtr rounded =
+      fillet("F3", *body, large_first ? std::vector<FilletSet>{large, small} : std::vector<FilletSet>{small, large});
+    CHECK(valid(*rounded));
+    CHECK(all_faces_named(*rounded));
+    CHECK(rounded->notes().empty());
+    CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+    // No plane face is left at the top's height.
+    int tops = 0;
+    for (int f = 0; f < rounded->face_count(); ++f) {
+      const BRepAdaptor_Surface s(rounded->face(f));
+      tops += s.GetType() == GeomAbs_Plane && std::abs(s.Plane().Location().Z() - h) < 1e-9 &&
+                  s.Plane().Axis().Direction().IsParallel(gp_Dir(0, 0, 1), 1e-9)
+                ? 1
+                : 0;
+    }
+    CHECK(tops == 0);
+  }
+}
+
+// The wall's top, a strip 2 wide between the outer wall and the inner one
+// (a parallel plane 2 away), closed off at its end by a face at 45 degrees
+// (the end's top edge chamfered with 3), rounded along the outer wall with
+// a radius wider than the strip, 3 and 2.5 (mitcad#1926): the rounding
+// takes the strip away, its ball rolling on the inner wall's top edge (its
+// axis r from the outer wall and from that edge, at z = 7 - sqrt(r^2 -
+// (r - 2)^2)), and the face at 45 degrees cuts it at the end. The section:
+// the arc from the inner wall's top to the outer wall; the face at 45
+// degrees (z = 4 + y) cuts the wall above z = 4. Valid, every face named,
+// no top left; the volume within a millionth.
+// Until mitcad#1926 makes the geometry kernel build it, the fillet fails,
+// in words, the edge and its faces painted, and never comes back as a valid
+// body that is wrong: the kernel built roundings between 2 and 3 with the
+// ball riding on the floor beyond the wall and the outer wall, the wall
+// under the strip gone and the floor's edge rounded instead, and at 3 that
+// came back from the 0.1 % smaller retry (mitcad#1953). Either outcome
+// passes; a body with a wall missing does not.
+void test_strip_between_a_parallel_plane_and_a_slope() {
+  const ShapePtr body = wall();
+  ChamferSet bevel;
+  bevel.edges = {edge_at(*body, gp_Pnt(1, 0, 7))};
+  bevel.spec.distance = 3;
+  const ShapePtr sloped = chamfer("F3", *body, {bevel});
+  CHECK(valid(*sloped));
+  const std::string outer = edge_at(*sloped, gp_Pnt(0, 11.5, 7));
+  CHECK(!outer.empty());
+  for (const double r : {3.0, 2.5}) {
+    const double w = 2, h = 7;
+    const double cx = r, cz = h - std::sqrt(r * r - (cx - w) * (cx - w));
+    const double a0 = std::atan2(h - cz, w - cx);
+    // The section above z = 4 (the slope's foot) as a polygon: its area and
+    // the integral of z - 4 over it give what the slope takes away.
+    std::vector<std::pair<double, double>> upper{{0, 4}, {w, 4}};
+    const int n = 4000;
+    for (int i = 0; i <= n; ++i) {
+      const double a = a0 + (kPi - a0) * i / n;
+      upper.emplace_back(cx + r * std::cos(a), cz + r * std::sin(a));
+    }
+    double area = 0, moment = 0;
+    for (std::size_t i = 0; i < upper.size(); ++i) {
+      const auto& p = upper[i];
+      const auto& q = upper[(i + 1) % upper.size()];
+      const double cross = p.first * q.second - q.first * p.second;
+      area += 0.5 * cross;
+      moment += cross * (p.second + q.second) / 6.0;
+    }
+    area = std::abs(area);
+    moment = std::abs(moment);
+    const double expected = 30.0 * 20 * 3 + 20.0 * (w * 1 + area) - (moment - 4 * area);
+    ShapePtr rounded;
+    std::string error;
+    try {
+      rounded = fillet("F4", *sloped, {outer}, r);
+    } catch (const std::runtime_error& failed) {
+      error = failed.what();
+    }
+    if (!rounded) {
+      // In words: no names, ids or coordinates in what a person reads; the
+      // places say where.
+      const std::string said = error_message(error);
+      std::fprintf(stderr, "strip beside a slope, rounded with %g: %s\n", r, said.c_str());
+      CHECK(said.find("wider than the face beside its edge") != std::string::npos ||
+            said.find("too large for the face beside its edge") != std::string::npos);
+      CHECK(error.find(kPlacedTail) != std::string::npos);
+      const std::string message = error.substr(error.find("\"message\":"));
+      const std::string plain = message.substr(0, message.find("\"detail\":"));
+      CHECK(plain.find("E{") == std::string::npos && plain.find("F1:") == std::string::npos &&
+            plain.find("F2:") == std::string::npos && plain.find('(') == std::string::npos);
+      CHECK(error.find("\"kind\":\"edge\"") != std::string::npos);
+      continue;
+    }
+    CHECK(valid(*rounded));
+    CHECK(all_faces_named(*rounded));
+    CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+    int tops = 0;
+    for (int f = 0; f < rounded->face_count(); ++f) {
+      const BRepAdaptor_Surface s(rounded->face(f));
+      tops += s.GetType() == GeomAbs_Plane && std::abs(s.Plane().Location().Z() - h) < 1e-9 &&
+                  s.Plane().Axis().Direction().IsParallel(gp_Dir(0, 0, 1), 1e-9)
+                ? 1
+                : 0;
+    }
+    CHECK(tops == 0);
+  }
+}
+
 void dressup_takes_face_tests() {
   guarded("octagon on disc", test_octagon_on_disc);
   guarded("step", test_step);
@@ -1042,6 +1198,8 @@ void dressup_takes_face_tests() {
     test_bore_rim_rounded_against_a_shelf(1);
     test_bore_rim_rounded_against_a_shelf(2.7);
   });
+  guarded("wall top rounded with two radii", test_wall_top_rounded_with_two_radii);
+  guarded("strip between a parallel plane and a slope", test_strip_between_a_parallel_plane_and_a_slope);
 }
 
 } // namespace test

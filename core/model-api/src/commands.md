@@ -711,7 +711,13 @@ millimetres, angles radians. Build sketches with the
   `fit`; `above` puts its baseline on the curve, on the curve's left,
   `false` hangs it on the right from its top, the capitals' top with
   `cap_height`, else the ascender, mitcad#1177; `align` places it from the
-  curve's start, a circle's `start_angle`), `no_kerning` (the characters
+  curve's start, a circle's `start_angle`; on a path the flips act in
+  the curve's own frame, mitcad#1946: `flip_y` mirrors the text across
+  the curve, so its baseline, or a hanging text's top, stays on the curve
+  and the text moves to the curve's other side, `flip_x` mirrors it along
+  the curve about the middle of the text block, and both turn it half
+  round about that middle point, reading from the curve's other end,
+  with `fit`, `align` and closed curves alike), `no_kerning` (the characters
   advance by their own widths, without the font's kerning of pairs; the
   `.f3d` import sets it for a text on a path, mitcad#1177), `flip_x`, `flip_y`, `cap_height` (`height` is the capital letters' height, measured at the top of an A; a frame aligns the first line's capitals to its top and the last baseline to its bottom, a line aligns by its outlines, and lines are one ascender plus descender apart) and `wrap` (a text in a frame breaks its lines at spaces to the frame's width); the `.f3d` import sets both. `line_spacing` (mm from one baseline to the next; 0, the default, for the font's), `pen_align` (lines align by their pens, from the first pen to the end of the last advance, also with `cap_height`) and `ink_top` (the top of the lines, a frame's top or `valign` top or middle, is the first line's highest outline point instead of the capitals' top or the ascender); the `.ipt` import sets all three (mitcad#414). Multi-line text breaks at `\n`. Each glyph
   contour (`t9.g<k>.c<j>`, from the font's outlines through the kernel's
@@ -809,7 +815,9 @@ millimetres, angles radians. Build sketches with the
   [{"index": [1, 0], "entities": {"c2": "c9", "p7": "p10"}}, …]}` or
   `{"type": "rectangular", "direction": [1, 0], "count": [3, 2], "symmetric":
   [true, false],
-  "spacing": ["d5", "d6"], …}`. Each solve binds every copy to its
+  "spacing": ["d5", "d6"], …}`, with `"direction2": [0.5, 0.866]` when its
+  second direction is not a quarter turn counter-clockwise from the first
+  (mitcad#1969; left out otherwise, and in older files). Each solve binds every copy to its
   original with the pattern's transform (solver constraints `Translated`,
   `Rotated`, `TurnedDirection`, `EqualSize`; not stored as constraints),
   so the copies follow the originals and add no degrees of freedom. Each
@@ -961,6 +969,21 @@ millimetres, angles radians. Build sketches with the
     The command's result has `notes` (not `warnings`): `corner arcs c4
     and c7 vanish at this distance`, which the panel's preview shows as
     information.
+  - **Curves that fold over in places** (mitcad#1938, derived offsets,
+    `offset::split_folds`): a spline, ellipse or elliptical arc whose
+    radius of curvature on the offset's side is smaller than the distance
+    only in places (a tight bend of a short imported piece, an ellipse's
+    ends) is cut there: the stretches whose offset folds over vanish, and
+    the parts on either side meet where their offsets cross, or vanish in
+    turn when their offsets lie in the overlap, as whole curves do. What is
+    left of the curve is still its one result, a spline with a corner (a
+    triple knot) where its parts meet; a single closed curve so cut is
+    trimmed as a closed chain of its parts (an ellipse offset inward past
+    the radius at its ends is a lens). The offset fails only when nothing
+    is left, or where the parts of one curve fall into different outlines
+    (`the offset of a curve whose radius of curvature is smaller than the
+    distance falls apart where it folds over`), or a fold ends an open
+    chain, where nothing trims it.
   - **What vanishes changes**: when an edit leaves other curves vanishing
     at the distance (`sketch.edit_offset` with a distance, or any edit
     that moves or resizes the source), the offset is made again with the
@@ -2661,15 +2684,16 @@ form lists edge sets:
   foot, across the wall: the plate is no narrow face for a rounding of 3
   at the foot); in the failure's words a far edge that meets the edge
   where the face ends in a point there counts as in the path, not one with
-  the chain's next face. Two chains of a rounding that OCCT's fillet finds
-  overlapping on a face between them, sharing no vertex, are built one
-  after the other, the later one's ball rolling on the first one's faces
-  where they meet (a fin's top edges rounded with 0.5 along its outer and
-  inner sides, both taking the arms' sides away where the arms run down to
-  the plate; `cli.f3d_edit_reported`). The fin's foot rounded with 3,
-  higher than the arms' flat outer sides, is the kernel's own: it runs the
-  rounding on over those sides' planes and the fin's top cuts it and grows
-  out to meet it (OCCT port patch 1700).
+  the chain's next face. A fin's top edges rounded with 0.5 along its
+  outer and inner sides, two chains running round the top, are built
+  together by the kernel (OCCT port patch 1710: it judged them overlapping
+  on the top by the wrong edges; `cli.f3d_edit_reported`). Two chains of a
+  rounding that OCCT's fillet still finds overlapping on a face between
+  them, sharing no vertex, are built one after the other, the later one's
+  ball rolling on the first one's faces where they meet. The fin's foot
+  rounded with 3, higher than the arms' flat outer sides, is the kernel's
+  own: it runs the rounding on over those sides' planes and the fin's top
+  cuts it and grows out to meet it (OCCT port patch 1700).
 - Pieces left of a face the dressup takes away (mitcad#1821; chamfers
   too): a face of the result that is a new piece of one of the input's
   faces (its name the input face's with a piece's `#k`), beside a face the
@@ -3506,7 +3530,15 @@ these.
   closed section stays smooth along its rails. A single rail moves every
   section with it (circles through one bent rail give the cylinder
   shifted along it). With end conditions too, the rails decide where they
-  run.
+  run. The rails run through corresponding points of the sections
+  whatever their edges (mitcad#1944: a circle to a circle cut by a chord,
+  a circle to a rectangle with rails meeting its edges' middles): where
+  the kernel's matching of the sections' edges keeps the rails at
+  corresponding vertices, the loft keeps that matching; elsewhere every
+  section runs the same way round the loft's axis from rail 1's point,
+  and between each pair of neighbouring rails the sections' edges are cut
+  by arc length until they have as many, each over the same share of the
+  way from one rail to the next (one rail: all the way round).
 - With end conditions or rails the loft is MitCad's own surface
   interpolation (the sections matched edge for edge, each face's rows of
   poles interpolated with the ends' derivatives); without them the
@@ -3520,10 +3552,12 @@ these.
 - Errors: a condition that does not fit its section (`direction` at a
   sketch profile, `tangent` and `smooth` at a face, point conditions at a
   point); end conditions of a closed loft; end conditions or rails of a
-  ruled one; a centre line and rails; a rail that misses a section or
-  runs through them out of order. Unsupported (`unsupported: …`): end
-  conditions with a centre line, rails with a point section, rails the
-  matching of the sections' edges does not keep at corresponding points.
+  ruled one; a centre line and rails; a rail that misses a section (`rail
+  1 misses the first profile by 0.3 mm`, its nearest points on the rail
+  and the section as the error's places and in its detail) or runs
+  through them out of order; rails that meet a section in another order
+  round it than the first. Unsupported (`unsupported: …`): end
+  conditions with a centre line, rails with a point section.
 
 Faces: `side(<key>)` from the edges of the first section that is not a
 point, keyed by segment for a region and by edge name for a face
@@ -3888,7 +3922,7 @@ Faces: `side(<segment>)`, `start(<region>)` at the profile and
  "thickness_location": "symmetric", "extent": {"type": "to_next"}, "flip": false,
  "participants": [], "extend_ends": true, "end_offset": 0, "direction": "perpendicular"}
 {"type": "web", "curves": {"sketch": "F9", "curves": ["c1", "c4"]}, "thickness": 2,
- "extent": {"type": "depth", "depth": 10}}
+ "extent": {"type": "depth", "depth": 10}, "extend_ends": true}
 ```
 
 - A rib grows from one open chain of sketch curves in the sketch plane, at
@@ -3897,7 +3931,19 @@ Faces: `side(<segment>)`, `start(<region>)` at the profile and
   `symmetric`, `side1` (along the sketch normal) or `side2`.
 - A web grows from each curve (lines and arcs) along the sketch normal
   (against it with `flip`); its thickness is in the sketch plane, side 1
-  to the left of the curve.
+  to the left of the curve. Its walls are joined where the curves' ends
+  meet (mitcad#1968): two walls whose curves share an end meet in a
+  mitre with no notch, at any angle and for every `thickness_location`;
+  at an angle so sharp that the mitre would reach more than half the
+  thickness and a thickness past the corner (a thickness past the wall
+  for `side1`/`side2`) it is cut off there, square to the corner's
+  bisector. A run of curves joined end to end keeps its walls on one
+  side, the side its first curve (in `curves`) gives: a curve drawn the
+  other way round has its `side1` and `side2` turned. Where three or more
+  ends meet at one point (a Y, or a T whose bar is two curves) the walls
+  end square there and are joined by the convex hull of those ends. A
+  curve whose end touches another curve between its ends (a T's stem on
+  its bar) ends square on it, as drawn.
 - `extent`: `to_next` (up to the faces of the participant bodies it
   reaches first, which must close it off; otherwise it fails) or
   `{"type": "depth", "depth": d}`. The result joins the participants (all
@@ -3911,12 +3957,19 @@ Faces: `side(<segment>)`, `start(<region>)` at the profile and
   straight curve, or one with a point off the plane by more than the
   joining tolerance (1e-6 of its size), is refused with where; a web takes
   lines and circular arcs, as from a sketch.
-- `extend_ends` (a rib's, mitcad#1746; absent: false, so ribs saved before
-  it keep their ends as drawn; the Rib panel turns it on for a new rib):
-  each open end of the chain is continued straight along its end tangent
-  (a line straight on, an arc or spline by its tangent there) until the
-  rib, across its whole thickness and depth, meets the participants'
-  faces: the continuation fills from the end's tip up to a curved or
+- `extend_ends` (a rib's, mitcad#1746; a web's, mitcad#1968; absent:
+  false, so ribs and webs saved before it keep their ends as drawn; the
+  Rib and Web panels turn it on for a new one). A web's free ends take it:
+  an end that touches no other curve of the web (a T's stem is not free
+  at its bar, a corner's ends are not free); for a rib, the chain's two
+  ends. Each such end lying past a wall the curves cross (its tangent out
+  of the curves meets no face of the participants, and a wall lies
+  between it and the curves' middle) is cut back to that wall: the piece
+  beyond is dropped and the end is not continued (a copy of a pattern
+  where the room is narrower is so cut back to its walls). Any other such
+  end is continued straight along its end tangent (a line straight on, an
+  arc or spline by its tangent there) until the rib or the wall, across
+  its whole thickness and depth, meets the participants' faces: the continuation fills from the end's tip up to a curved or
   slanted face with no gap, whatever the extent. An end that the faces
   close off over only part of the rib (mitcad#1857: a line starting on a
   boss's top rim, whose continuation passes over the top while the wall
@@ -3939,9 +3992,10 @@ Faces: `side(<segment>)`, `start(<region>)` at the profile and
   next faces, is closed off by none of them) stays as drawn, and the rib warns
   in words: "the start of the rib's curves meets no face of the bodies when continued
   along its curve; it stays where it is drawn", the end's point as the
-  warning's place. An end already in the material adds nothing. A web
-  refuses it.
-- `end_offset` (a length, absent: 0; with `extend_ends` only): the faces
+  warning's place (a web's: "an end of the web's curves meets no face of
+  the bodies ..."). An end already in the material adds nothing.
+- `end_offset` (a length, absent: 0; with `extend_ends` only; a rib's and
+  a web's): the faces
   each continued end stops at are moved this much along its tangent,
   positive further into them (a rib sunk into a thin wall), negative short
   of them. It never shortens the drawn curves.
@@ -3960,8 +4014,18 @@ Faces of a rib: `side(<curve>)` along the curves, `wall1` and `wall2` (its
 sides along and against the sketch normal), `tip0` and `tip1` at the
 chain's start and end, `end` at the depth; a continued end adds
 `extend0` or `extend1` along its continuation, its tip `tip0` or `tip1`. Of a web, per curve:
-`wall1(<curve>)`, `wall2(<curve>)`, `tip0(<curve>)`, `tip1(<curve>)`,
-`start(<curve>)` in the sketch plane and `end(<curve>)` at the depth.
+`wall1(<curve>)`, `wall2(<curve>)`, `tip0(<curve>)`, `tip1(<curve>)` (also
+at a mitred or joined end, and on the piece joining three or more walls,
+named after the first curve's end there), `start(<curve>)` in the sketch
+plane and `end(<curve>)` at the depth; a continued free end adds
+`extend0(<curve>)` or `extend1(<curve>)` where its continuation is divided.
+
+In a pattern (mitcad#1968) with Adjust (the default), each copy of a rib or
+a web whose extent is `to_next` or which has `extend_ends` is built again
+where it lands, its curves and sketch plane moved: it runs to the faces
+there and its ends are continued or cut back to the walls there, as the
+original's. A web or rib by a depth without `extend_ends` is the tool
+moved.
 
 ### emboss
 
@@ -5446,6 +5510,33 @@ once.
     a display size over it, the file, an edit followed), the unit tests in
     `features/construction/drawn.rs`; `app.ui-*construction-size`.
 
+#### Acknowledged warnings (mitcad#1935)
+
+| Command | Fields | Result |
+|---|---|---|
+| `acknowledge_warnings` | `uids` (features that built with warnings), `acknowledged` (default true; false shows them again) | undo step `Acknowledge Fillet1` / `Acknowledge 3 Warnings` (`Unacknowledge …` when shown again) unless nothing changes; nothing recomputed |
+
+- A feature's warning the user has seen (GitHub mitcad/Mitcad#380): the
+  design keeps the warning's text as it was acknowledged (its warnings
+  joined with `; `). While the feature builds with that very text, the
+  `timeline` query gives it `"acknowledged": true` (left out otherwise);
+  its `status`, `level` and `notices` stay those of a warning, so agents
+  still read it. The application does not paint it yellow nor count it in
+  the warnings badge ([app/COMMANDS.md](../../../app/COMMANDS.md),
+  "Acknowledged warnings").
+- It lapses by itself: when the feature fails, or builds with another
+  warning text or none, it is no longer acknowledged, and the edit that
+  recomputed forgets it in its own undo step, so the same warning coming
+  back later shows again. Suppressed and rolled back features keep theirs.
+- Refused: a feature that failed (`Fillet1 failed: an error cannot be
+  acknowledged`), one without a warning (`Fillet1 has no warning to
+  acknowledge`), an unknown uid. One already acknowledged, or shown again
+  without an acknowledgement, is left as it is.
+- The design file keeps it on the feature (`"acknowledged_warning":
+  "<text>"`, left out when none); deleting the feature forgets it. Code:
+  `document/acknowledged_warnings.rs`. Tests:
+  `core/model-tests/api/src/acknowledged_warnings_tests.rs`.
+
 ### Named views
 
 | Command | Fields | Result |
@@ -5921,7 +6012,7 @@ timeline marker.
 | Query | Fields | Result |
 |---|---|---|
 | `document` | | `features`, `marker`, `bodies` (count), `undo`, `redo` (labels or null), `undo_depth`, `units` {`length`, `angle`}, `warnings` (what loading the file changed, such as renamed parameters), `revision`, `modified` (not the state last marked saved), `display` {`origin`, `isolated`}; with components `components`, `occurrences` (counts), `active_component` |
-| `timeline` | | `marker`, `groups` (when any: `name`, `features` in timeline order) and `features`: `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`, `pending` before the first recompute), `error` (only the error of a failed feature, mitcad#1040; null otherwise), `level` (`error`, `warning`, `info` for an import note alone, or null) and `notices` (when any: the error, the warnings and the import note with their levels; see [Notices](#notices)), `import` (what the importer said about it, when it did: a fallback, a partial item, a placeholder; see [The import's outcomes on the timeline](#the-imports-outcomes-on-the-timeline)), `component` (when not the root), for a sketch before the marker `dof` (0 when fully constrained) and `project_again` (how many of its linked projections [Project Again](#project-again) repairs; left out when none), for a sketch or construction feature `visible` and `visible_set` (its light bulb was set), for a feature that uses sketches `sketches` (their uids in timeline order: profiles, paths, guides, curves or points it refers to, also while it is suppressed or after the marker; the browser lists the feature under each, mitcad#177) |
+| `timeline` | | `marker`, `groups` (when any: `name`, `features` in timeline order) and `features`: `uid`, `name`, `type`, `suppressed`, `status` (`ok`, `warning`, `error`, `suppressed`, `rolled_back`, `pending` before the first recompute), `error` (only the error of a failed feature, mitcad#1040; null otherwise), `level` (`error`, `warning`, `info` for an import note alone, or null), `acknowledged` (true for a warning the user acknowledged, left out otherwise; see [Acknowledged warnings](#acknowledged-warnings-mitcad1935)) and `notices` (when any: the error, the warnings and the import note with their levels; see [Notices](#notices)), `import` (what the importer said about it, when it did: a fallback, a partial item, a placeholder; see [The import's outcomes on the timeline](#the-imports-outcomes-on-the-timeline)), `component` (when not the root), for a sketch before the marker `dof` (0 when fully constrained) and `project_again` (how many of its linked projections [Project Again](#project-again) repairs; left out when none), for a sketch or construction feature `visible` and `visible_set` (its light bulb was set), for a feature that uses sketches `sketches` (their uids in timeline order: profiles, paths, guides, curves or points it refers to, also while it is suppressed or after the marker; the browser lists the feature under each, mitcad#177) |
 | `feature` | `uid` | `uid`, `name`, `type`, `suppressed`, `status`, `error` (only a failure), `level`, `notices` (when any), `visible`, `visible_set`, `warnings` (when any; also as notices), `import` (the import note, when any), `missing_profiles` (when any: the `profiles` references of its definition that no region of their sketch shares a curve with any more, `{"sketch", "region"}`; an edit panel leaves them out, mitcad#1264), `def` (parameters by name) |
 | `parameters` | | `name`, `expression`, `unit` (`""` for unitless), `value` (mm or rad), `text` (the value in its unit, `"12.5 mm"`), `comment`, `kind` (`user`, `model`, `reference`: a driven dimension's, read-only), `owner` (the feature of a model or reference parameter), `dependencies` (names its expression and its limits use), `favorite`; with limits also `limits`, `unclamped`, `unclamped_text`, `limited`, `limit_message`, `limit_references`, and `intrinsic` for a feature's own limits ([Parameter limits](#parameter-limits)) |
 | `evaluate` | `expression`, `kind`: `length` (default), `angle` or `unitless`; `parameter` (optional, [Parameter limits](#parameter-limits)) | `value` (mm or rad), `text` (in the document's unit, `"40 mm"`), `references` (parameter names used), `expression` (with decimal points: `"d1 * 1,5"` gives `"d1 * 1.5"`); with `parameter` also `limited`, `limited_value`, `limited_text` |
@@ -6475,8 +6566,8 @@ coordinates as expressions](#point-coordinates-as-expressions-mitcad1897).
 | `sketch.edit_offset` | `offset` (`k8`), `distance` (value), `flip`, `corners` (`"sharp"` or `"round"`; left out, as they are) | the distance changes, `flip` moves it to the other side, other `corners` make it again with them (mitcad#1774); the curves keep their ids; when other curves vanish at the new distance the offset is made again, kept curves keeping their ids and a curve that comes back getting a new one (mitcad#1234) |
 | `sketch.mirror` | `entities`, `axis` (a line `c4`, or the sketch's own axis `"x"` or `"y"`, made in the same undo step when the sketch has none, see [The sketch's axes and origin as entities](#the-sketchs-axes-and-origin-as-entities); mitcad#876) | copies with symmetric constraints (an ellipse copy also keeps an equal minor radius); points on the axis are shared; the axis line among `entities` is left out (refused only when nothing else is left), and a point whose curve is mirrored too (a circle's centre picked with the circle) gets no symmetry of its own, which would be redundant (mitcad#876) |
 | `sketch.circular_pattern` | `entities`, `center` (point input; a new point is fixed, or, with a coordinate written as an expression, held by signed dimensions from the origin in both coordinates so that it follows the parameters, mitcad#1912), `count` (originals included), `angle` (value, default a full turn) | a `patterns` record; result `constraints` [the pattern's id] |
-| `sketch.rectangular_pattern` | `entities`, `direction` (default [1, 0]), `count` [n1, n2], `spacing` [s1, s2] (values, signed: a negative spacing goes against its direction, mitcad#447; not zero), `symmetric` ([bool, bool], default none: per direction the originals are the middle instance, an odd count, and the copies lie on both sides) | as above |
-| `sketch.edit_pattern` | `pattern` (`k5`), and any of `count` (n, or [n1, n2]), `angle`, `spacing`, `direction`, `center` (as `sketch.circular_pattern`'s), `entities` (the originals) | the copies follow |
+| `sketch.rectangular_pattern` | `entities`, `direction` (default [1, 0]), `direction2` (the second direction, at any angle to the first but parallel, refused then; left out: a quarter turn counter-clockwise from the first, mitcad#1969), `count` [n1, n2], `spacing` [s1, s2] (values, signed: a negative spacing goes against its direction, mitcad#447; not zero), `symmetric` ([bool, bool], default none: per direction the originals are the middle instance, an odd count, and the copies lie on both sides) | as above |
+| `sketch.edit_pattern` | `pattern` (`k5`), and any of `count` (n, or [n1, n2]), `angle`, `spacing`, `direction`, `direction2` (`null`: back to a quarter turn from the first; left out: kept), `center` (as `sketch.circular_pattern`'s), `entities` (the originals) | the copies follow |
 | `sketch.project` | `source`: an edge, a face (its outline seen along the sketch's normal: its boundary edges without the seams off the outline, and its silhouettes; see [Projecting a curved face](#projecting-a-curved-face), mitcad#1265) or a vertex of the bodies before the sketch (left out only for a section of a whole `body`, mitcad#736), or a curve or point of an earlier sketch, `{"sketch": "F1", "curve": "c4"}` / `{"point": "p3"}`, or `{"sketch": "F1"}` for all its curves (see [Projecting another sketch's curves and points](#projecting-another-sketchs-curves-and-points), mitcad#904), `body` (optional; none for a sketch's geometry), `linked` (default false), `occurrence` and `context` (optional: geometry of another component, see [Geometry of other components](#geometry-of-other-components)), `section` (default false: a face's or a body's section curves, or the crossing points of an edge or of another sketch's curves, instead; see [Section curves in sketches](#section-curves-in-sketches)) | fixed reference entities, a curve or point the same as another of the source once; a planar B-spline seen edge on is the line between its extreme points (mitcad#389), as a conic is; a linked projection follows its source when the model changes, each entity the fresh curve of its kind most like it (`by_geometry` in its record, since 0.4.1); a projection without it (files of earlier versions, imports) follows only a source whose curves come back of the same kinds, in the same order and joined the same way, or the same curves listed in another order or from another start, only moved or resized (each pairs with one of its kind, none is left over and nothing tears; mitcad#1303), and otherwise keeps its geometry and warns (mitcad#249); one that cannot follow is repaired by [Project Again](#project-again); joined to the projected geometry already in the sketch, see [Projected outlines and their offsets](#projected-outlines-and-their-offsets) |
 | `sketch.import_dxf` | `path` (.dxf), `unit` (of a drawing that names none: `mm` default, `cm`, `m`, `in`, `ft`), `at` (the sketch point the drawing's origin goes to, default [0, 0]), `layers` (only the entities on these layers; all when left out; a layer with nothing on it is refused) | as other edits, and `curves`, `points` (shared points made), `text_count`, `warnings`; undo step `Insert DXF into Sketch1`; see [DXF](#dxf-into-sketches) |
 | `sketch.import_svg` | `path` (.svg), `scale`, `at`, `stroke_outline` (mitcad#473) | see [SVG](#svg-into-sketches) |
@@ -8542,7 +8633,7 @@ constraints.
 |---|---|---|
 | `import_file` | `path` (.step/.stp, .iges/.igs, .brep/.brp, .stl, .obj, .glb/.gltf: [glTF import](#gltf-import)), `name` (of the feature, optional), `unit_mm` (STL and OBJ: mm per file unit, default 1), `structure` (STEP: `components` default, `base`; [STEP assemblies as components](#step-assemblies-as-components-mitcad1274)), `wrap` (into a new component named after the file; default true for STEP, IGES and BRep into a design with content, else false; [Imports into a component of their own](#imports-into-a-component-of-their-own-mitcad1629)) | `uid`, `name`, `bodies`: `uid`, `name`, `kind`; `warnings` when empty bodies were left out; a STEP assembly kept also `structure`, `components`, `occurrences`; wrapped also `component`: `uid`, `name`, `occurrence` |
 | `export` | `path`, `bodies` (uids or names; all at the marker when left out), `format` (by extension when left out: `step`, `iges`, `stl`, `obj`, `brep`, `3mf`, `usdz`), `schema` (`ap214` default, `ap242`), `unit` (STEP, IGES, STL, OBJ, 3MF: `mm` default, `cm`, `m`, `in`, `ft`; [Mesh files](#mesh-files-in-a-unit-with-a-longest-edge)), `refinement` (STL, OBJ, 3MF, USDZ: `low`, `medium` default, `high` or `{"deviation": mm, "angle": radians, "face_triangles": n, "max_edge": mm}`; see [Mesh refinement](#mesh-refinement)), `ascii` (STL), `colors` (body uid or name: sRGB in [0, 1]), `coordinates` (`design` default, `component`, or `{"frame": <coordinate system>}`: [Coordinate System](#coordinate-system-mitcad1775)), `occurrence` (a path), `design_folder` (USDZ: the folder relative texture paths are relative to, the design file's), `dialect` (3MF: the slicer whose print settings go with the bodies, [Print profiles](#print-profiles)), `on_bed` (3MF, STL, OBJ: on the print bed faces, [Print bed faces](#print-bed-faces)), `center`, `drop` and `auto_orient` (on the bed, each true by default: [Centered, dropped and oriented on the bed](#centered-dropped-and-oriented-on-the-bed)), `spacing` (on the bed: mm between neighbouring pieces beyond their brims, 5 default; [Spacing beyond the brims](#spacing-beyond-the-brims)), `occurrences` and `whole` (3MF: the placements written and the occurrences sent whole, [Export by occurrences](#export-by-occurrences)), `animation` (USDZ: time-sampled placements, [Animated USDZ](#animated-usdz)), `print_colors` (USDZ: the print colours by height, [Filament changes at print heights](#filament-changes-at-print-heights)) | `path`, `format`, `bodies` (uids); 3MF also `meshes`, `skipped`, and with `dialect` `dialect`, `filaments`, `warnings`, `printed` ([Print profiles](#print-profiles), mitcad#1052), `filament_changes` (the events written, mitcad#1596); USDZ also `materials`, `skipped`, `warnings`, and with `animation` `animation` (`fps`, `start`, `end`, `frames`, `moved`) |
-| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written) |
+| `export_sketch` | `sketch` (uid or name; of a shared name the only sketch, [Feature names are not unique](#feature-names-are-not-unique-mitcad1107)), `path` (.dxf), `version` (`r2000` default, `r12`), `units` (the file's length unit, `mm`, `in`, … as `set_units` reads them; the design's when left out, [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), `construction` (bool, default false: also the construction curves and center lines, on the layer `construction`; [construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)), `points` (bool, default true: the free-standing points as POINT entities on the layer `POINTS`; [points](#points-in-a-sketchs-dxf-mitcad1963)) | `path`, `entities`, `units` (the unit written), `construction` (whether construction geometry was written), `points` (whether the points were written) |
 
 - `import_file` adds one base feature: a body per STEP part or solid,
   IGES solid, BRep compound member or OBJ object, one mesh body for STL;
@@ -8585,7 +8676,9 @@ constraints.
   [DXF units](#the-length-unit-of-dxf-exports-mitcad1408)), each curve
   segment of its profiles once. Periodic splines are not written.
   Construction curves and center lines only with `construction`
-  ([construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445)).
+  ([construction geometry](#construction-geometry-in-a-sketchs-dxf-mitcad1445));
+  the free-standing points unless `points` is false
+  ([points](#points-in-a-sketchs-dxf-mitcad1963)).
 
 ### Construction geometry in a sketch's DXF (mitcad#1445)
 
@@ -8603,7 +8696,30 @@ are never written. The result's `construction` says which was done:
 The Export dialog's **Include construction geometry** (off unless chosen,
 remembered as `export/dxfConstruction`), the CLI's `export-sketch
 --construction` and MCP `model_export`'s `construction` (with `sketch`)
-set it; the sketch's context-menu Export DXF leaves it out.
+set it; the sketch's context-menu Export DXF opens the Export dialog on
+that sketch (mitcad#1963), with the same check.
+
+### Points in a sketch's DXF (mitcad#1963)
+
+`export_sketch` also writes the sketch's free-standing points, the
+points no curve refers to (not a line's end, an arc's or circle's centre
+or a spline's control point), as POINT entities on the layer `POINTS`:
+marks a cutting table or a drill takes as hole positions. Each is where
+the sketch solved it, in sketch coordinates and in the file's unit.
+Construction points are written only with `construction` too, on the
+layer `construction`; the sketch's origin point and the ends of its axes
+(mitcad#500) are never written. `"points": false` leaves every point out;
+the result's `points` says which was done:
+
+```json
+{"cmd": "export_sketch", "sketch": "Sketch1", "path": "plate.dxf", "points": false}
+```
+
+`entities` counts the points written. Insert DXF (`sketch.import_dxf`)
+reads the POINT entities back as sketch points, so a sketch's points come
+back in another sketch. The Export dialog's **Include points** (on unless
+unchecked, remembered as `export/dxfPoints`), the CLI's `export-sketch
+--no-points` and MCP `model_export`'s `points` (with `sketch`) set it.
 
 ### The length unit of DXF exports (mitcad#1408)
 
@@ -9283,7 +9399,27 @@ that placed copied occurrences, `items` per component), `joints`
 `kept_as_built`, `as_built` joints, joint `origins`, `grounded`
 occurrences, captured `positions`, `skipped` items), `references` (the
 documents the design refers to, below), `appearances` (below), `stopped`
-when the import was stopped and `low_memory` when it ran low on memory.
+when the import was stopped, `low_memory` when it ran low on memory, and
+`upright` for a design modelled with another up direction (below).
+
+#### The design's length unit and up direction (mitcad#1937)
+
+The design comes in with its length unit (`millimeter`, `centimeter`,
+`meter`, `inch` or `foot` in the file; `set_units`), its parameters with
+their own units. A design modelled with Y up (its Front view looking
+along -Z with +Y up) is turned after the replay so that it stands on Z
+up as MitCad models: Front shows its front and Top looks down on it. The
+turn is Reorient Design's ([Reorient Design](#reorient-design): 90
+degrees about X for Y up), part of the import's undo step, so the design
+stays parametric, its sketches on the turned origin planes, and its
+coordinates and exports are those of the turned design. The report's
+`upright`: `up` (the design's up direction, `+Y`), `matrix` (the turn's
+rows), `turned`, and `error` with a warning where Reorient Design refused
+the turn; the design then lies as modelled. A design modelled with Z up,
+or one without a Front view along the axes, is not turned; the documents
+a design refers to are never turned (its placements of them are in their
+own coordinates). How the file says it: `core/import/docs/f3d.md`, *Units
+and up direction*.
 
 #### Appearances and materials of the file (mitcad#228)
 
@@ -12507,6 +12643,28 @@ table, the rules and the cascade, without a kernel) and
   new form from then on; `set_configurations` reads the old form the same
   way (the new parameters and the table are one undo step).
 
+### Open options of a closed table
+
+`open` (mitcad#1950; a list of option names, default empty): the
+options of a **closed** table that its rows do not restrict, such as a
+timber board's or a steel tube's length L beside the rows of its sizes in
+the parts library. Each is listed in `options` too; migrating an old
+table's selectors puts them after the selectors' options.
+
+- A row leaves an open option out (a value it gives is a starting value
+  only); the rows' combinations, the closed table's restriction (`Only
+  these rows`), a combination that is no row and the row of a combination
+  count the other options only. An open option is chosen within its
+  domain (its limits) and the rules, like an open table's.
+- Problems: `open` in a table that is not closed (`option L is open, but
+  only a table with Only these rows (closed) has open options`), a name
+  that is no option (`the open option L is not an option of the table`)
+  or listed twice.
+- `library_show` gives `open`, and its `selectors` and `selector_values`
+  (for the pickers that choose by rows) leave the open options out; the
+  pickers offer them beside the rows (app/COMMANDS.md, "Options of
+  library components"). The component `configure` query gives `open`.
+
 ### Allowed values
 
 `values` is a parameter limit next to `min`, `max` and `step`
@@ -12797,6 +12955,11 @@ empty for a source without rows), `config` (the part's own row, null
 when it takes the source's default) and `default_row` (that default,
 null without rows). A BUILD part changes its row with `build_edit`'s
 `config`, another component with `set_component_parameters`' `config`.
+It also gives `closed` (mitcad#1950): whether the source's table is
+closed, so that the edit panel offers an open table's options beside its
+rows (a part cut to length's L beside its stock rows) and a closed
+table's by its rows only, but for its `open` options (mitcad#1950), which
+the answer lists and the panel offers beside the rows.
 
 **A library source's design (mitcad#1812).** The query `library_source`
 with `source` (`S1`, a derived part's `source`) answers `source`, `name`,
@@ -15075,8 +15238,8 @@ classified name the API no longer has.
 `{"query": "plane_geometry", "sketch": "F3"}` (mitcad#256,
 `document/plane_geometry.rs`) lists the edges and vertices of the visible
 bodies before the sketch that lie in its plane, in sketch coordinates:
-what the sketch Dimension tool picks and the Point tool snaps to
-(mitcad#258), each projected (`sketch.project`, linked) only when a
+what the sketch Dimension tool picks and the drawing tools snap to
+(mitcad#258, mitcad#1967), each projected (`sketch.project`, linked) only when a
 dimension or a point is made from it. The answer is an array:
 
 ```json
@@ -15752,7 +15915,7 @@ points*).
 | Command | Fields | Result |
 |---|---|---|
 | `build_place` | `part` (`{"library", "url", "rev", "component", "config"}`, or `{"source": "S1", "config"}` to reuse a source), `at` (below), `rotate` (an angle: 0, 90, 180 or 270 deg; a number is radians), `flip` (true: the other end first), `length` (a value, or `{"bind": {"occurrence", "geometry"}, "mode": "face"/"centre"/"through", "add"}`, or to a picked face `{"mode": "to_face", "face": {"occurrence", "geometry"}, "offset"}`, *Length to a face*; left out: the source's default), `mitre` (`{"angle", "cut": "new"/"existing"/"shared"/"none"}`; left out: none, also on a square corner; `shared` on a corner at another angle at offset 0, mitcad#427; every cut keeps the lengths as long points and a shared one makes the outer corners meet, mitcad#443), `tilt` (on a side, mitcad#444: an angle from -80 to 80 deg, positive towards the target's end B; *Tilt*), `parameters` (other source parameters), `name` | `component`, `occurrence`, `name`, `features` (everything it added), `joint`, `bound`, `adds`, `warnings`, `place` (`side`, `end`, `frame`, `geometry` or `grounded`); undo step `Place <designation>` |
-| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`); undo step `Edit <name>` |
+| `build_edit` | `component`, and any of `at.offset`, `at.from` (on a side or a rail, mitcad#417: `a`, `b` or `middle`, on a side `gap`, mitcad#1401; an offset alone is from the part's reference, a `from` alone keeps the part where it is and recomputes its offset), `rotate`, `flip` (true or false: which end meets), `length` (a value detaches, a `bind` binds), `ends` (`{"a": {"angle", "tilt"}, "b": ...}`; null squares an end; the length stays the long point, mitcad#443), `tilt` (a part on a side, mitcad#444: its tilt again, its ends recut; 0 squares it), `config`, `parameters`, `machining` (`[{"end": "a"/"b", "hole": {"diameter", "depth", "thread"}}]`: the part's own end machining, not a connector's; it replaces the whole list, an empty list takes it away), `shared_mitre` (`a` or `b`, on its own: the shared miter with the end this end meets, mitcad#1940, *Ends that meet*) | `changed` (`offset`, `from`, `rotate`, `flip`, `detached`, `length`, `bound`, `tilt`, `ends`, `config`, `parameters`, `machining`; a shared miter: `ends`, `length`, `moved`); undo step `Edit <name>`, a shared miter's `Shared miter of <name> and <name>` |
 | `build_connect` | `junction` (an id from `build_junctions`), `part` (as `build_place`'s), `fasteners` (default true), `machining` (default true), `name` | `component`, `occurrence`, `adds`, `warnings` (a fastener that cannot be read is left out with a warning); undo step `Connect <designation>` |
 | `build_panel` | `at` (`{"occurrence", "geometry", "point"}`: a face or a slot frame of one of the frame's profiles), `part`, `thickness` (for a part whose thickness is a parameter), `parameters`, `name` | `component`, `occurrence`, `bound`, `fits` (false, with `reason`, when a fixed-width sheet is too narrow or too wide), `adds` (the clamps of a surface panel); undo step `Place <designation>` |
 | `build_remove` | `component` | `removed`: `components` (it and what it `adds`), `features` (its bound lengths, its holes in other parts, and what depends on them), `detached` (the bound lengths of other parts that end on it or start from it, detached first, so those parts keep their lengths) and `freed` (mitcad#1811: the parts placed on it, not grounded, that stay where they are, freed of it: their joint to it goes, they keep their pose as a part placed without a joint, their bound lengths to it become typed lengths as `detached` says); the joints of what goes, also those of a part joined to it from outside (a shaft through its hole), go, and what they placed stays where it is, a move of it on the timeline taken into account; `notices`: one information per freed part in words ("<part> stays where it was, no longer placed on <removed>.", its occurrence its place) and the cut-scope exclusions it dropped (mitcad#1236); undo step `Remove <name>`, which brings all back |
@@ -16009,6 +16172,30 @@ continues it straight or turns 90° at a corner:
   length, and `build_cut_list`'s `length` is the length the body has on
   its long side. Designs made before simply rebuild with this rule.
 
+**Ends that meet** (mitcad#1940). Two profiles placed apart (one on the
+other's side near its end, a square corner on an end face, two parts
+placed on planes) meet in a corner when an end of each touches,
+overlaps or comes within 5 mm (`near`) of the other's section, their
+axes at an angle and less than 0.5 mm apart across the corner's plane
+(`build_end_meets`). `build_edit`'s `shared_mitre` (`a` or `b`) makes
+there the shared miter a corner placement makes: both ends cut on the
+bisector, each by half the angle between the axes and leaning towards the
+other part, and each end moved to the outer corner, its length the long
+point:
+
+- a part's free end moves by its length;
+- the end it is placed by moves by its joint's frame on the other side
+  (`frame_override.shift`, along that frame's axes) and its length, so
+  that its other end stays: a part on a side runs through to the other
+  part's outer side;
+- a grounded part's end A moves its occurrence and its length.
+
+It is refused, in words, for a part tilted on a side, a part whose length
+is bound or that is placed by two points or by a frame of its own, when
+an end would move, and for a length outside the part's limits. One undo
+step. A bound length refers only to parts placed before it, by design;
+its refusal says so and how to miter the corner instead.
+
 **Refusals.** The command changes nothing when:
 
 - the part has no `build`;
@@ -16037,6 +16224,7 @@ radians, as joints have them.
 | `build_preview` | `build_place`'s, `build_panel`'s or `build_connect`'s fields | what the command would do, without changing anything. A placing: `frame` (the new part's own axes at its end A, z running from A to B), `place` (`side`, `end`, `frame`, `geometry` or `grounded`, as `auto` decided), `length` (`value`: the length given, else what the part's ray gives in `mode`, else the source's default; `default`; `target`: what the ray meets first, `{occurrence, geometry}` with a frame of another BUILD part facing it, or the `bind` given, null when nothing; and `mode`), `ends` (`a`, `b`: `{angle, tilt}` or null; `target`: the target's end cut), `tilt` (radians, mitcad#444), `snaps` (on a side, mitcad#394: `{kind, offset, point}` for each place a click snaps to: `kind` `end_a`, `end_b`, `middle`, `gap` (mitcad#1401), `grid`, `inline` or `flush_face` (mitcad#1886, with `with`: `{component, occurrence, name}`, the profile it lines up with), `offset` the new part's near face from end A, `point` where its middle then stands on the slot, in the design), `side` (on a side: `{kind, from, offset, point, width, gap, with}`: the snap the click took (`end_a`, `end_b`, `middle`, `gap`, `grid`, `inline`, `flush_face`; `with` the profile of a line-up, else null), null between snaps, or `clamped` when the placement was kept within the target; the reference and the offset from it the click resolved to, or the typed ones, as `at.from` and `at.offset` take them (mitcad#417); where the part stands; its width along the slot; `foot`, where the part's frame meets the slot, a tilted part's foot long point, in the design; null elsewhere), `end` (on an end, mitcad#417: `{zone, direction, turns, offset, mitre}`: `zone` `straight` or `edge` (what the click chose) or `given` (`at.direction`); `direction` the new part's axis in the host's coordinates; `turns` the four unit vectors square to the target in the host's coordinates, +x, +y, -x, -y of its end frame; `offset` a corner's offset, null when straight; `mitre` `{cut, angle}` the placement will use, the default resolved (`cut` `none`, `new`, `existing` or `shared`, `angle` in radians or null); null elsewhere), `host` (as `build_host` answers), `designation`, `warnings`. A panel: `frame`, `fits`, `reason`, `width`, `height`, `bound`. A connector: `frame`, `junction`, `fasteners` (`{frame, at}`), `fastener_parts`, `machining` (`{component, at, point, diameter, depth, thread}`). All: `body` (`"see analysis_shape"`) and `problems` (the refusal the command would give, then nothing else) |
 | `build_parts` | | `parts`: for each BUILD component, `component`, `name`, `role`, `source`, `part`, `joint`, `designation`, `supplier`, `part_number`, `config`, `length`, `ends`, `bound` (`{feature, parameter, to: {occurrence, geometry}, mode, add}`, `add` the value in mm, a length to a face's offset, mitcad#1630; or null), `flip`, `rotate`, `tilt` (radians, 0 square, mitcad#444), `machining` (its own, as `build_edit` takes it), `added_by`, `adds`, `junction`, `from` (a part on a side or a rail: `a`, `b`, `middle` or `gap`, else null), `gap` (from `gap`, mitcad#1401: the two profiles it is centred between, `[a, b]`, null for an end; else null), `offset` (a part on a side or a rail: its offset from `from` in mm, as `build_edit`'s `at.offset` takes it, mitcad#1885; else null) |
 | `build_junctions` | `components` (optional: only the junctions of these) | `junctions`: `id` (`<a's component>:<a's at>\|<b's component>:<b's at>`, stable while the two parts and their meeting stay), `kind` (`L`, `T`, `cross`, `inline`), `a` and `b` (`component`, `occurrence`, `at` (`end_a`, `end_b`, the slot frame, or `side` on a closed side), `frame` (the part's own axes at its end A), `at_frame` (the `at` frame)), `angle` (between the axes), `systems` (`B8/30`), `space` (the free room in the inner corner: `{"x", "y", "z"}`: along a, along b to its farther end, across), `connectors` (components already there) |
+| `build_end_meets` | `component` (optional: the ends it meets of this part only), `meets` (false: where the ends are only, none met; default true) | `ends`: each end of a profile cut to length: `component`, `occurrence`, `end` (`a`, `b`), `point` (where its axis ends), `out` (its axis out of the part), `leans` (`x`, `-x`, `y`, `-y`: where each tilt leans the cut's outward normal), `meets` (null, or the end it meets in a corner: `component`, `occurrence`, `end`, `angle` (each end's cut, half the corner), `lengthen` and `other_lengthen` (how far each end moves out for the outer corners to meet, negative in), `tilt` and `other_tilt` (the shared miter's, each leaning towards the other part), `away`, `across` (this end's other tilts: away from the other part, across the corner one way and the other), `problem` (why `shared_mitre` would be refused, in words, else null)), `why` (why it meets none, in words); `near` (the gap still taken, mm). *Ends that meet* (mitcad#1940) |
 | `build_cut_list` | `kerf` (optional, default 3 mm) | `rows`, one per group of identical results (source, row, length, ends, machining and own features the same): `source`, `designation`, `supplier`, `part_number`, `config`, `length` (the part's length, its long point: the body's length on the long side of its angled ends, mitcad#443), `ends` (`a`, `b`: `{angle, tilt}` or null), `machining` (`{at, diameter, depth, thread, connector}`: holes from connectors, and the part's own, `connector` null), `features` (how many own features the part has: holes, cuts), `quantity`, `mass` (each, kg; a section of a typed size, mitcad#1328: the value of its build block's `area_parameter`, the source's parameter of its area in the part's combination, times the density and the length), `components`, and for a section of a typed size `size` (its options' values but the length, `B 76.2, T 4.8`: its rows and stock apart from its source's other sizes). `stock`: per source and row (and typed size, whose `designation` is the source's name with its `size` in parentheses), cut from its longest stock length, `{"source", "designation", "stock_length", "pieces": [lengths in cutting order], "bars" (where each stock piece's cuts end in `pieces`), "needed", "offcut", "too_long"}`, longest pieces first into the first stock piece they fit (a kerf after each). `kerf`. `other`: the parts list's rows for everything else |
 | `build_host` | | the BUILD host (mitcad#394, *Where parts go*): `component` (its uid), `name`, `path` (its first occurrence path from the root, uids joined by `/`, `""` for the root) and `active` (the active component); the app gives paths from it and points in its coordinates |
 
@@ -19443,8 +19631,9 @@ One undo step, `Reorient Design`:
     "normal": [0, -1, 0], "x_axis": [1, 0, 0]}`; the Z axis runs along
     -Y). Fixed planes, axes, points and paths turn, and so do the
     positions and directions definitions keep (a hole's points, a split's
-    direction, picks of surface features, a Move's matrix, construction
-    geometry given by coordinates, joint frame overrides);
+    direction, picks of surface features, a Move's and a Move Face's
+    matrix (a Move Face's since mitcad#1937), construction geometry given
+    by coordinates, joint frame overrides);
   - a Move's or a Move Component's x, y and z go with their axes; a
     value of an axis the turn reverses is negated (its own dimension
     parameter; one that other values or features use refuses the
@@ -19460,12 +19649,18 @@ One undo step, `Reorient Design`:
     construction plane keeps its plane; where the plane's frame follows
     the model axes (a face's x axis is the model's X projected) its own
     frame is set from the turned design's evaluation so that it stays
-    turned with the design;
+    turned with the design. A sketch that only solves in its turned frame
+    (a projected line that a constraint keeps vertical lies horizontal
+    while its plane's frame is not yet corrected) gives no frame to correct
+    by; its frame is then read from the turned design up to it with its
+    constraints and dimensions left out (mitcad#1937);
   - an imported body (a base feature) gets a Move right after it that
     turns its bodies about the origin, named by their own ids (a body
     kept after Find Repeated Parts took copies out keeps its number,
     `F1.b2` in the second place) (a base feature that joins, cuts or
-    intersects is refused); a body the kernel's checker finds invalid (an
+    intersects is refused; one without bodies, which only removes the
+    bodies it replaces, gets no Move, mitcad#1937); a body the kernel's
+    checker finds invalid (an
     imported shell that is not connected) turns as it is;
   - the pieces of split faces (`F2:side(c1[c4,c2])#1`) and the edges
     numbered between the same two faces (`E{…}#1`) are numbered by the
@@ -29493,6 +29688,664 @@ Code: `Document::body_last_features` (`core/model/src/document.rs`),
 the `bodies` query (`core/model-api/src/lib.rs`). Test:
 `core/model-tests/api/src/body_last_features_tests.rs`.
 
+## Flex (mitcad#1713)
+
+A Flex item is a flexible item laid through the model: a wire, a cable, a
+hose, a flat cable, a strip, a belt. It is a feature type of its own,
+`flex`, with its own commands (`flex.*`) and queries (`flex`,
+`flex_items`, `end_ports`, `flex_types`). What is stored is the item (its
+type's data), the nodes and the options; the **route** between the nodes
+is derived on every evaluation: the shortest one that passes through no
+body and stays within the item's bend radius, along the surfaces the
+nodes lie on. A route with problems still makes the solid, with warnings
+whose places show where. Code: `core/model-base/src/flex.rs` (the stored
+type and the kernel's inputs and results), `core/model/src/features/flex.rs`
+(the feature), `core/model/src/document/flex.rs` (its results and edits),
+`core/model-api/src/flex.rs` (commands and queries),
+`core/model/src/flex_library.rs` (the library of types),
+`geometry/include/mitcad/geometry/flex.hpp` (routing, the solid, end
+ports).
+
+### The `flex` feature
+
+```json
+{"type": "flex",
+ "item": {"name": "Hose 10", "section": {"type": "round", "diameter": 10},
+          "wall": 1.5, "bend_radius": 30},
+ "nodes": [
+   {"id": "n1", "at": [0, 0, 40], "port": {"body": "F2.b0", "face": "F2:end"}},
+   {"id": "n2", "at": [30, 10, 20], "on": {"body": "F3.b0", "face": "F3:top"}},
+   {"id": "n3", "at": [60, 10, 5], "on": {"body": "F3.b0", "face": "F3:side1"}, "twist": 0},
+   {"id": "n4", "at": [90, 40, 0]}]}
+```
+
+- `item`: the item itself, a copy of a [Flex type](#flex-types) or one
+  written here; the design keeps it whole, so it opens the same without
+  the library:
+  - `name`;
+  - `section`: `{"type": "round", "diameter": d}`, `{"type":
+    "rectangular", "width": w, "height": h, "corner_radius": r}`
+    (`corner_radius` 0 when left out) or `{"type": "outline", "loops":
+    [[<segment>, …], …]}`: closed loops of curves in section coordinates
+    (millimetres; the first loop the outside, the others holes; segments
+    as a sketch profile's: `line`, `arc`, `circle`, `ellipse`,
+    `ellipse_arc`, `bspline`). **Section coordinates:** the origin is on
+    the route, `x` is the section's width (it lies along the surface the
+    item rests on), `y` its height, away from that surface; the route's
+    direction is `x × y`. A rectangle is centred on the route; an outline
+    lies where it is drawn, and rests on the surface with its lowest
+    point (its least `y`);
+  - `wall`: makes a round or a rectangular section hollow, the wall
+    inside the section; less than half the diameter or half the smaller
+    side. An outline is hollow by its own inner loops, and takes no
+    `wall`;
+  - `bend_radius`: the smallest radius of the route's centre line. One
+    value for a round section. For another section it is the radius of
+    bending over its flat side (about the section's `x`), and
+    `bend_radius_edge` the radius of bending over its edge (about its
+    `y`); either left out (or `null`) says the item does not bend that
+    way. A round section must have a `bend_radius`;
+  - `max_twist`: the most the section may turn about the route, radians
+    per millimetre of length (a non-round section only; left out: no
+    limit);
+  - `appearance`, `material`: ids of an appearance and of a material:
+    the design's own or built-in ones. The item's body gets them when
+    the item is made, and again when an edit changes what the item
+    names (a look set on the body by hand stays through the item's
+    other edits); a material brings its own appearance unless the item
+    names one. Left out, or an id the design does not have: the
+    component's defaults;
+  - `mass_per_length`: grams per metre (reported with the length; the
+    hanging slack's shape does not depend on it);
+  - `origin`: `{"library": "built_in" | "user" | "project", "id": …,
+    "version": n}` where the copy came from; left out for an item written
+    in the design.
+- `profile`: `{"sketch": "F4", "region": "r{…}"}`, a closed region of a
+  sketch before the feature as the section instead of the item's
+  `section`, followed when the sketch changes. The sketch's own
+  coordinates are the section coordinates above (its origin on the route,
+  its y axis away from the surface); where the sketch lies in the model
+  does not matter. Saved as a type, its loops become an `outline`.
+- `bend_radius`, `bend_radius_edge`: this item's own bend radii in place
+  of its type's ([values](#values): a number, a parameter's name or an
+  expression; slots `bend_radius`, `bend_radius_edge`).
+- `fixed_length`: a value (slot `fixed_length`): the item is that long.
+  Longer than the route, with a [direction of gravity](#gravity-mitcad1713)
+  in the design, its slack hangs that way (*Hanging slack* below);
+  without one the route is not changed and the `flex` query reports
+  `slack`, the fixed length less the routed one. Shorter than the route,
+  the item warns `too_short`.
+- `length`: the item's own reference parameter (slot `length`), which
+  every evaluation sets to the route's length: a driven parameter
+  (`kind` `reference`, comment `Flex1 length (driven)`) that expressions
+  and later features use, and that nothing sets. Left out of a
+  definition, the item keeps the one it has or gets a new one with the
+  next free name; the `flex` query names it (`length_parameter`). A
+  parameter that is not the item's own is refused.
+- `nodes`: two or more, in order from the item's start to its end. Each:
+  - `id`: `n<k>`, unique in the item; the commands make them;
+  - `at`: `[x, y, z]` in the feature's component. For a free node (no
+    `on`, no `port`) it is the node's place. For an attached one it is
+    where the node was last put: the node is the point of what it is
+    attached to nearest to `at`, so it slides on its face or along its
+    edge; and it is where the node stays when what it was attached to is
+    gone. The model keeps it up to date: after every evaluation that
+    finds the node on what it is attached to, `at` is where the node
+    is then (also when its face or its pipe moved it), so a node whose
+    attachment is lost later stays where it last was;
+  - `on`: what the node is attached to, a [reference](#references-to-geometry):
+    a face of a body (`{"body", "face"}`: the node lies on the face and
+    the item rests on it there), an edge (`{"body", "edge"}`: the nearest
+    point of the edge), a vertex, a sketch point, a construction point or
+    the origin (that point);
+  - `port`: the cap face of a Pipe or of another Flex item
+    (`{"body", "face"}` with a face `F5:start` or `F5:end`, an
+    [end port](#end-ports)), only at the first or the last node: the item
+    begins at the middle of the cap, leaves along the cap's outward
+    normal, takes the port's section orientation there, and follows when
+    the pipe changes. A node has `on` or `port`, not both;
+  - `twist`: radians the section is turned about the route at the node,
+    right hand about the route's direction, beyond what the route gives
+    it (0 when left out; a half turn of a flat cable is `pi`).
+- `links`, `datum_links`: the occurrence links of bodies and of
+  construction features or sketches of other components that nodes are
+  attached to, as a construction plane's (a body's or a feature's uid
+  to `{"source", "target"}` paths). A caller need not write them: a
+  node's `on` or `port` may say where the geometry was picked, with
+  `occurrence` (the occurrence path to its component) and `context`
+  (optional: the path the item's component is seen at), as
+  `sketch.project` takes them ([Geometry of other
+  components](#geometry-of-other-components)); `add_feature`,
+  `edit_feature`, their previews and the node commands turn those into
+  the links, and the stored reference is the plain one. A link no node
+  uses any more is dropped by the `flex.*` commands.
+
+The feature makes one new body in its component, and nothing else: it
+joins and cuts no body.
+
+**Routing.** Between two neighbouring nodes that lie on faces of bodies
+that touch (or of one body) the route runs along the surfaces, held off
+them by the distance from the route to the section's resting side (a
+round section's radius, half a rectangle's height, an outline's lowest
+point), crossing from face to face; over a sharp edge it rounds with the
+bend radius and leaves the surface for that stretch. Any other stretch
+is a smooth curve through the air around the bodies in its way. Every
+solid of the design at the feature's point of the timeline is an
+obstacle: the bodies of the feature's component, and the bodies of
+every other component at each place its occurrences put it (moved
+into the feature's component as its first occurrence places that),
+other Flex items among them; the item's own earlier run is one too.
+Shown or hidden makes no difference: the route is the same whatever is
+on display. Items may touch.
+
+**Hanging slack** (mitcad#1713, Part B). With a `fixed_length` longer
+than the route and a direction of gravity in the design, the slack hangs:
+it is shared among the stretches between two neighbouring nodes that run
+mostly through the air, by their lengths, and each such stretch passes
+through points of a curve that hangs from its two nodes toward gravity
+(in the plane of the stretch's chord and gravity, its sag along the part
+of gravity square to the chord): a parabola while its bottom bends no
+tighter than the bend radius, else straight sides into an arc of the
+bend radius. A point of the curve whose way down meets a body rests on
+it, the section's reach above it. The route is then made through those
+points (by the same router: around bodies, within the bend radius), and
+again, up to three times, asking for what it lacked of the fixed length,
+until it is within 0.1 % of it or no longer grows (the slack lies on
+what is below; `slack` then says how much is left). Stretches on faces
+do not hang. The direction is the design's in the feature's component's
+coordinates; the item is evaluated again when it changes.
+
+**Orientation.** On a surface the section's resting side (`-y`) stays
+against the surface. Through the air the section goes from the
+orientation at one end of the stretch to that at the other with the
+least twist. A node's `twist` turns it there. At a port the orientation
+is the port's.
+
+**Faces** of the body: `start` and `end` (the caps, each an
+[end port](#end-ports)), `side0` for a round section and `inner0` for
+its bore; for a rectangle `side0` (the resting side) to `side3`
+counter-clockwise about the route's direction, `corner0` to `corner3`
+after each when the corners are rounded, and `inner<i>` likewise for the
+bore; for an outline `side<i>` in the order of its outer loop's segments
+and `inner<i>` in the order of the inner loops' segments.
+
+**Refused** (the feature fails, or the command is refused): fewer than
+two nodes; a node id used twice; a node with both `on` and `port`; a
+`port` at a node that is not the first or the last, or on a face that is
+not a cap of a Pipe or a Flex item before the feature; a section size,
+wall or bend radius that is not greater than zero; a wall that fills the
+section; a round section without a bend radius; an item whose nodes are
+all at one point.
+
+### Warnings, not failures
+
+A route that is not clean does not fail the feature: the item is made on
+the best route found, and the feature carries warnings (level `warning`,
+[Notices](#notices)) whose `places` are points and boxes along the route
+where the trouble is; the application paints them while the pointer is
+over the message. The messages are plain words, without names, ids or
+coordinates:
+
+| `kind` | Message |
+|---|---|
+| `passes_through` | `the item passes through a body` |
+| `bend_too_tight` | `the item bends more tightly than its bend radius allows` |
+| `edge_bend_too_tight` | `the item bends over its edge more tightly than its type allows` (a section that is not round; `bend_too_tight` is then its bends over the flat side) |
+| `twist_over_limit` | `the item twists more than its type allows` |
+| `no_clean_route` | `no route was found that passes through nothing within the bend radius; the item is drawn on the nearest one` |
+| `face_lost` | `a face a node was on no longer exists; the node stays where it was` |
+| `reference_lost` | `what a node was attached to no longer exists; the node stays where it was` |
+| `port_lost` | `the end the item was attached to no longer exists; the node stays where it was` |
+| `too_short` | `the item's fixed length is too short to reach between its ends` (places: the route's two ends; the route is the shortest one) |
+
+A lost node keeps its last place (`at`) as a free node until it is
+attached again (`flex.attach_node`). The `flex` query's `problems` give
+agents the detail the messages leave out: each problem's `kind`, the
+stretch of the route (`from` and `to`, millimetres along it), the node
+(`node`) and what it was attached to (`was`) for a lost one, the body it
+passes through (`body`), and its `places`.
+
+Only what leaves no item at all is an error: a definition refused as
+above, or a solid the kernel cannot build along the route; the route and
+its nodes are then still given by the `flex` query, so the nodes can be
+moved.
+
+### Commands
+
+The item is made with `add_feature` and a `flex` definition, and may be
+changed whole with `edit_feature`; both have their preview
+([Preview](#preview)), which the `flex` query reads with `"preview":
+true` for the route under the pointer. For pointer moves and node
+drags the previewed definition carries `"route_only": true`: the nodes
+are placed and the route is worked out (by the same router, with what
+it keeps between calls), and no solid is built, so the preview has no
+body and costs the route alone. That route is a quicker, rougher one:
+its points at the coarser steps only, with fewer of the passes that bend
+it within its limits (the item, and its preview without `route_only`,
+take the full route). The `flex` query's `preview` then gives
+the nodes, the polyline, the frames, the length and the problems with
+their places. `route_only` is refused in a command that is not a
+preview. The `flex.*` commands change one
+thing each, as one undo step (`Edit Flex1`), and answer with the item as
+it is now: `flex` (its uid), `node` (the node made or changed), `nodes`
+(the ids in order), `length` and `warnings`.
+
+| Command | Fields | Result |
+|---|---|---|
+| `flex.add_node` | `flex` (the feature's uid), `at` [x, y, z], `on` or `port` (optional, as a node's); with `occurrence` and `context` for geometry of another component, `twist` (optional), `place`: `"end"` (default: after the last node, the item grows), `"start"` (before the first) or `{"after": "n2"}` (between that node and the next) | `node` the new id |
+| `flex.move_node` | `flex`, `node`, `at` [x, y, z] | the node put there: a free node at the point, an attached one at the point of its face, edge or point nearest to it (its attachment stays) |
+| `flex.attach_node` | `flex`, `node`, one of `on` (a reference), `port` (a cap face) or `"free": true`; `at` (optional: where on the new face or edge; left out, where the node is now) | the node attached to that instead, or free in space where it is |
+| `flex.delete_node` | `flex`, `node` | the route goes straight from the node before to the node after; refused when two nodes would not be left |
+| `flex.set_twist` | `flex`, `node`, `twist` (radians) | |
+| `flex.set_item` | `flex`, and what changes: `item` (the whole item, as in the definition) or `type` (the id of a [Flex type](#flex-types), copied into the item: a built-in one, or with `library` (`user`, `project`; `project` then the project's folder) one of that library), `profile` (`null`: the item's own section again), `bend_radius`, `bend_radius_edge`, `fixed_length` (values; `null` takes one away) | |
+
+A node id or a feature that does not exist, or a feature that is not a
+Flex item, is refused in plain words; nothing changes then.
+
+**Through the design's changes.** A node on another component's
+geometry follows when its occurrence moves, and its links follow when
+features or components are moved, copied (Paste New), reparented or
+saved as a design of their own (nodes on geometry left outside become
+free nodes where they are). Reorient Design turns the nodes' places.
+An item before the timeline marker's position that is rolled back
+keeps its definition; the `flex` query then gives `status`
+`rolled_back` without a route.
+
+### Queries
+
+| Query | Fields | Result |
+|---|---|---|
+| `flex` | `uid`; `preview` (default false: true reads the previewed definition's evaluation instead, the uid left out for a previewed `add_feature`); `frames` (default false) | below |
+| `flex_items` | | every Flex item before the timeline marker, in timeline order: `{"uid", "name", "item" (its name), "type" (its origin's id, when it has one), "body", "length", "length_parameter" (the name of the parameter that holds it), "mass" (grams, when the item has a mass per length), "warnings" (how many)}`; the rows of a cut list. The `parts_list` query's row of an item's body has the item's name as its `designation`, and `flex` (the item's uid), `length` and `flex_type` (its origin's id) beside it; the body's computed properties have its `Length` |
+| `end_ports` | `feature` (optional: only that Pipe's or Flex item's), `body` (optional: only the ports of that body, the one under the pointer; only its faces are looked at), `occurrence` and `context` (optional: where the ports' component was picked, as a node's `on`), `component` (optional, with `occurrence`: the component of the item that will use the ports; the active one when left out) | [End ports](#end-ports) |
+| `flex_types` | `text` (optional: only the types whose name or id holds every word), `project` (optional: the project's folder, for the project's types) | [Flex types](#flex-types) |
+
+The `flex` query's answer, lengths in millimetres, points in the
+feature's component:
+
+```json
+{"uid": "F7", "name": "Flex1", "status": "ok",
+ "item": {"name": "Hose 10", "section": {"type": "round", "diameter": 10}, "wall": 1.5, "bend_radius": 30},
+ "bend_radius": 30, "bend_radius_edge": null,
+ "length": 143.2, "length_parameter": "d7", "fixed_length": null, "slack": null,
+ "nodes": [{"id": "n1", "point": [0, 0, 40], "normal": null, "along": 0,
+            "support": "port", "ref": {"body": "F2.b0", "face": "F2:end"},
+            "lost": false, "twist": 0}, …],
+ "smallest_bend": {"radius": 31.4, "along": 62.0, "point": [58, 10, 9]}, "smallest_bend_edge": null,
+ "polyline": [[0, 0, 40], …],
+ "frames": [{"along": 0, "point": […], "tangent": […], "normal": […]}, …],
+ "runs": [{"from": 21.5, "to": 58.0, "body": "F3.b0", "face": "F3:top"}, …],
+ "problems": [{"kind": "bend_too_tight", "message": "the item bends more tightly than its bend radius allows",
+               "from": 60.1, "to": 66.4, "places": [{"kind": "point", "at": […]}]}]}
+```
+
+- `status`: as a feature has it (`ok`, `error` with the `error` when no
+  item was made, `suppressed`, `rolled_back`), or `preview` for the
+  previewed definition; the fields below are given whenever the nodes
+  were placed, the route's when a route was found. The previewed one has
+  no `uid`, `name` or `item`, and its nodes no `ref` or `twist`: the
+  caller holds that definition.
+- `nodes`: each node where it is now (`point`), the surface's outward
+  normal there for a node on a face (`normal`), its length along the
+  route (`along`), its `support` (`free`, `face`, `edge`, `point` or
+  `port`), its reference as stored (`ref`), whether what it was attached
+  to is gone (`lost`) and its `twist`. The in-view handles are drawn at
+  `point`.
+- `polyline`: the route's centre line as points, close enough to draw;
+  `frames` (only when asked for) the samples behind it: the unit
+  `tangent` and the section's `y` direction (`normal`) at each.
+- `runs`: the stretches that lie on a face, for agents.
+- `bend_radius`, `bend_radius_edge`: the radii the route was held to
+  (the item's own or its type's); `slack`: with a `fixed_length`, that
+  length less the routed one (negative: too short).
+- `smallest_bend`: the route's tightest bend, to show beside the radius
+  it may not go below (`bend_radius`): the `radius` of the circle through
+  three neighbouring samples that is the smallest, where it is (`along`,
+  `point`); `null` for a straight route. Of a section that is not round
+  its bends over the flat side alone (about the section's `x`: the
+  circle's radius over its share along the sample's `normal`), and
+  `smallest_bend_edge` its bends over the edge (about `y`), beside
+  `bend_radius_edge` (`null` for a round section or a route that does not
+  bend that way). Estimates as close as the samples are; whether the
+  route is too tight is the `bend_too_tight` and `edge_bend_too_tight`
+  problems' to say.
+
+### End ports
+
+The ends of a Pipe and of a Flex item are **end ports**: where another
+item begins or ends. A port is the feature's cap face (`F5:start`,
+`F5:end`) in the body that holds it now (the pipe's own, or the body it
+was joined to). The `end_ports` query lists them:
+
+```json
+[{"feature": "F5", "name": "Pipe1", "kind": "pipe", "end": "end",
+  "ref": {"body": "F5.b0", "face": "F5:end"},
+  "position": [40, 0, 0], "direction": [1, 0, 0], "x_axis": [0, 1, 0],
+  "size": [8, 8]}, …]
+```
+
+`ref` is what a node's `port` stores. `position` is the middle of the
+cap (of its outer boundary, so also of a hollow one), `direction` the
+cap's outward normal: an item that begins there leaves along it. `x_axis`
+is the section's orientation: the direction of the cap's width, square
+to `direction` (for a round cap any such direction, the same on every
+evaluation), and `size` the cap's extent along `x_axis` and across it.
+`kind` is `pipe` or `flex`. A cap that a later feature removed (a pipe
+joined end to end with another body) is not listed.
+
+The points and directions are in the coordinates of the component the
+port's body is in. With `occurrence` (the path its component was picked
+at) they are the ports of that component, in the coordinates of
+`component` (the item's): where the item's node will be. The `ref` is
+the same either way; the node's `port` takes it with the same
+`occurrence` and `context`.
+
+### Flex types
+
+A Flex type is an `item` as above, kept apart from any design, with an
+id and a version. The `flex_types` query lists them, `{"types": [{"id",
+"library", "built_in", "version", …the item's fields}], "problems":
+[…]}` (`problems`: the files that could not be read): the built-in ones
+(`library` `built_in`: round wires, cables and hoses of common sizes,
+flat cables, strips), then the user's own (`user`) and the project's
+(`project`, given the project's folder as `project`), each library's by
+name. The user's and the project's live beside the materials of those
+libraries ([Print profiles](#print-profiles), *Items where they live*),
+one file for a type: `flex-types/<id>.json` in the library's folder,
+`{"format": "mitcad-flex-type", "version": n, "type": {…the item}}`. An
+item taken from a type is a copy with its `origin` (the library, the id
+and the version copied); a later change of the type does not change the
+design.
+
+The built-in types, by id: `wire-1`, `wire-1-5`, `wire-2`, `wire-3`,
+`wire-4` (single wires by their outer diameter), `cable-5`, `cable-6`,
+`cable-8`, `cable-10`, `cable-12` (sheathed cables), `hose-4`, `hose-6`,
+`hose-8`, `hose-10`, `hose-12`, `hose-16`, `hose-19`, `hose-25` (hollow,
+by their outer diameter), `flat-cable-12`, `flat-cable-25`, `strip-10`
+and `strip-10x5` (rectangular, bent over the flat side only). They are
+generic: a kind and a size, with a bend radius and a mass per length
+that are plausible for it; a design that needs a certain product's
+values sets them in its item or saves a type of its own.
+
+| Command | Fields | Result |
+|---|---|---|
+| `flex.save_type` | `library` (`user`, the default, or `project`), `project` (the project's folder, for its library), `id` (optional: the next free one from the name; lower-case letters, digits and hyphens), the type's fields (`name`, `section`, `wall`, `bend_radius`, `bend_radius_edge`, `max_twist`, `appearance`, `material`, `mass_per_length`) or `flex` (a Flex item of the design whose item is saved: its `profile` as an `outline`, its own bend radii as the type's; fields given beside it change the copy saved) | `id`, `library`, `version` (1), `path` (the file) |
+| `flex.edit_type` | `library`, `project`, `id`, and the fields that change (`null` takes away one that a type may leave out) | `id`, `library`, `version` (one more when something changed), `path`; a built-in type is refused |
+| `flex.delete_type` | `library`, `project`, `id` | `id`, `library`, `version`, `path`; a built-in type is refused; designs keep their copies |
+
+Each is one undo step of the design (`Save Flex Type …`, `Edit Flex Type
+…`, `Delete Flex Type …`) that puts the file back as it was, as a
+library's material does; the design itself does not change. They and the
+`flex_types` query read and write files (class file IO), so external
+clients (MCP) do not have them; `flex.set_item` with `library` likewise.
+An agent takes a built-in type by its id above, `{"cmd":
+"flex.set_item", "flex": "F7", "type": "hose-10"}`, or writes the item
+whole.
+
+### The kernel
+
+`core/model` reaches the geometry through three methods of the `Kernel`
+trait, each `Unsupported` by default (`core/model-base/src/kernel.rs`,
+"Flex"; the mock kernel has stand-ins for the model's tests):
+
+- `flex_route` (`FlexRouteSpec` to `FlexRoute`): the obstacles, the
+  nodes in order (each with its point, the face it lies on and the
+  normal there, a port's direction and orientation, its twist), the
+  section's reaches and the bend radii in; the route's curve, its
+  samples (point, tangent, the section's `y` direction, the face under
+  it) and its problems out. It never fails for a route that is not
+  clean: it gives the best one with its problems.
+- `flex_solid` (`FlexSolidSpec`): the solid of a section that is not
+  round along the route, turned as the samples say. A round section is
+  built by `pipe` (a circular section, rounded corners), hollow by its
+  `thickness`.
+- `end_port`: the position, direction, orientation and size of a cap
+  face of a Pipe's or a Flex item's body.
+
+Tests: `core/model/src/features/flex.rs` (the definition and its node
+edits), `core/model-tests/features-solid/src/flex_tests.rs` (create,
+add, move, attach and delete a node, twist, the item, a port, warnings
+that are not failures, a lost face; mock kernel).
+
+## Gravity (mitcad#1713)
+
+The design's direction of gravity. It is for flexible items only: a Flex
+item's fixed length hangs its slack toward it (*Hanging slack* in
+[Flex](#flex-mitcad1713)), and a Flex item can be let hang
+([Hanging cables](#hanging-cables-mitcad1713)). Code:
+`core/model/src/gravity.rs` (the stored direction, the hanging slack's
+curve), `core/model/src/document/gravity.rs`, `core/model-api/src/gravity.rs`.
+Tests: `core/model-tests/features-solid/src/gravity_tests.rs`. (Rigid
+parts that fell, tipped and were dragged under gravity were taken out on
+15.11.2026; that code is kept on the branch `archive/flex-rigid-gravity`.)
+
+### The direction of gravity
+
+Stored in the design file (`gravity`, left out without one) and undone
+as any change: a unit vector in the design's coordinates and what it was
+taken from.
+
+```json
+{"gravity": {"direction": [0, 0, -1],
+             "source": {"geometry": {"body": "F1.b0", "face": "F1:top"}, "occurrence": "O1",
+                        "reverse": false}}}
+```
+
+- From a planar face or a plane (an origin plane, a construction plane,
+  a fixed plane) gravity pulls against its normal; from an axis (an
+  origin axis, a construction axis, a straight edge, a sketch line, a
+  fixed axis) along it; `reverse` the other way. A face of another
+  component is picked where an occurrence shows it (`occurrence`, its
+  path from the root), as a joint origin is.
+- Recompute reads the vector only: what it was taken from may change
+  later without the design changing; the `gravity` query says what that
+  gives now (`source_direction`), and `gravity.set` with it again takes
+  it.
+
+### Commands
+
+| Command | Fields | Result |
+|---|---|---|
+| `gravity.set` | `direction` [x, y, z] (any length), or `geometry` (a [reference](#references-to-geometry)) with `occurrence` (optional, the path it was picked at) and `reverse` (default false) | the `gravity` query's answer; undo step `Set Gravity` |
+| `gravity.clear` | | the same; undo step `Clear Gravity` |
+
+| Query | Fields | Result |
+|---|---|---|
+| `gravity` | | `direction` (null without one), `source`, `source_direction` (what the source gives at the marker now), `hanging` (the uid of the Flex item that hangs, null when none does) |
+
+The app sets and clears the direction in the Let It Hang panel
+(`app/COMMANDS.md`, "Hanging cables"); there is no tool of its own.
+
+A Flex item that hangs while the direction changes (the Let It Hang
+panel's Direction From) goes on hanging and settles again toward the new
+direction, among the bodies as they are after the change; `gravity.clear`
+leaves no direction, so it is let go (put back as it was). The change is
+an undo step of its own all the same; undoing it, as any other change of
+the design, ends the hanging (*The session* in
+[Hanging cables](#hanging-cables-mitcad1713)).
+
+## Hanging cables (mitcad#1713)
+
+With a direction of gravity in the design, a Flex item can be let hang:
+it becomes a hose that falls toward gravity, lies limp on what is below
+it, wraps round curved faces and edges and never passes through a body;
+it can be grabbed by any point and dragged, and settles again when it is
+let go; then it is locked where it rests, an ordinary Flex item again.
+Code: `core/model/src/document/flex_hang.rs` (the session),
+`core/model-api/src/flex_hang.rs` (the commands' fields and answers),
+`core/model-base/src/flex_drape.rs` (the kernel's inputs and results),
+`geometry/include/mitcad/geometry/flex_drape.hpp` (the chain and its
+nodes). Tests: `geometry/tests/test_flex_drape.cpp` (the chain over a
+cylinder, hanging from one end, a pinned middle, stiff and limp, a swing
+that settles within seconds and its rest, the
+nodes of a drape, the work of a step in proportion to the time it
+simulates), `core/model-tests/features-solid/src/flex_hang_tests.rs`
+(the commands, with the mock kernel's stand-in of the chain).
+
+- **The chain.** Its centre line as points at even steps (a segment is
+  twice the section's resting distance, at most half its bend radius, and
+  there are at most 400 of them), as long as the item's route when it is
+  let hang. The length stays as it is unless `flex.hang_set` sets it.
+- **Pins.** Each node is a point of the chain (its ends the chain's
+  ends). By default (`flex.hang` without `pins`) both ends are pinned,
+  and so is every node attached to a face, an edge, a point or a port (a
+  clip: it stays attached to what it is attached to; one whose
+  attachment is lost stays where it was); only the nodes placed freely
+  in space are let go. Given `pins` replace the default; any node can be
+  pinned or let go (an end hangs free) with `flex.hang_set`. An end
+  pinned on a port also holds the next point, so the item leaves along
+  the port. Every other point is free.
+- **How it hangs.** Position-based dynamics: each step moves the free
+  points by their velocities and gravity (9810 mm/s²: it moves as it
+  would) in substeps of 1/360 s: a step simulates as many as its
+  `seconds` hold (12 for 1/30 s, 6 for 1/60 s) and carries what is left
+  of a substep over to the next step, so that its work is in proportion
+  to the time it simulates however often it is asked. Each substep holds
+  three times the segments' lengths and each point's reach from the
+  nearest pinned point on either side (it does not stretch) and its
+  bending (as stiff as the bend radius says: the length over which its
+  own weight bends it as much as its stiffness holds it straight is twice
+  the bend radius, so a thick hose bends more gently than a thin wire);
+  then, once, the obstacles (its points and segments' middles kept the
+  section's resting distance off them, sliding with friction 0.5; a point
+  asks the obstacles again only once it may have come that near them
+  since it last asked); then three times its bend radius (never tighter)
+  and lengths; then its own run (twice the resting distance apart) and
+  its pins. A point moves
+  at most half the resting distance per substep. A flat section's flat
+  side lies against what it lies on (its `normals` there are the
+  surface's).
+- **Damping.** It settles as a real hose does, with a slight swing: the
+  air holds every point back, as strongly as the session's `damping` says
+  (0 to 1, 0.5 by default; given with `flex.hang`, changed with
+  `flex.hang_set`, for a panel to set): its velocity falls by
+  e^-(damping × 12) each second while it swings, and by up to
+  e^-(damping × 48) as the whole chain slows below 30 times its rest speed
+  (below), so that its last small swings die out (the default: 6 per
+  second, a slight overshoot; it rests within about two seconds). 0 is no
+  air at all: it swings on. Besides, whatever the damping, the item's own
+  material damps its short wiggles (the rate of each joint's change of
+  bend, by e^-60 a second; nothing of the chain's swing as a whole), and a
+  push off an obstacle gives it no speed away from it (it does not
+  bounce). The bending's constraint is the joint's vector x0 + x2 - 2 x1
+  with a vector of multipliers, so that a nearly straight joint puts no
+  energy into the chain.
+- **The obstacles.** Every body of the design at the marker where its
+  occurrences place it, in the item's component's coordinates (hidden
+  ones too), but the item's own and those of features after it: the
+  bodies its route passes round. A step gives the kernel only those
+  whose boxes come within the item's reach of every pinned point (its
+  length, 2 % more, and twice its resting distance; a grabbed point is
+  no pin), all of them while none is pinned: the chain cannot come
+  nearer the others. They are meshed as the router meshes them but
+  coarser for a thicker item (a deflection of a twentieth of its
+  resting distance, 0.1 to 0.5 mm).
+- **Rest.** The chain rests once none of its points has moved faster than
+  0.5 % of its length per second (at least 0.5 mm/s; its mean speed over
+  each frame, so that a tremble within a frame is no motion) for 0.3 s;
+  its velocities are then zero. The time it has been still carries over
+  from step to step until something moves it. A step while it rests and
+  nothing holds it simulates nothing; a grab, a pin set or let go and a
+  new length wake it (a new damping alone does not), and so does a new
+  direction of gravity (*The session*).
+- **The session.** Runtime state of the document, as a preview is: the
+  design does not change until the lock, and any change of it (an edit,
+  an undo, another item let hang) ends the session, but `gravity.set`:
+  with a new direction the item goes on hanging, awake, its gravity the
+  new one and its obstacles the bodies as they are after the change
+  (`Document::hang_follow_gravity`), so that a panel can turn gravity
+  while the item hangs; `gravity.clear` lets it go. No simulation ever
+  runs in a recompute. `flex.hang_step`, `flex.hang_set` and
+  `flex.hang_cancel` change only the session: they run without a design
+  change's work (no policy, failures or warnings before and after, no
+  comments' places, no `recomputed` or `error` in their answers), so that
+  a step can run many times a second.
+
+| Command | Fields | Result |
+|---|---|---|
+| `flex.hang` | `flex` (the item's uid), `pins` (optional: the ids of the nodes that stay where they are; when left out, both ends and every node attached to a face, an edge, a point or a port: *Pins* above), `damping` (optional: 0 to 1, 0.5 when left out; *Damping* above) | the hanging item (below); refused without a direction of gravity (`set the direction of gravity first`), for a feature that is not a Flex item, or an item without a route |
+| `flex.hang_step` | `seconds` (default 1/30, at most 10), `grab` (optional: `{"point": [x, y, z], "target": [x, y, z]}`, the point of the chain where the pointer took it and where the pointer is now) | the hanging item after the step. With `grab`, the chain's point nearest to `point` at the first step that has one is pulled to `target` (no faster than half the resting distance per substep, and not into a body) at this step and every step after that has a `grab`, whatever its `point`; a step without one lets it go. A pinned point that is dragged stays pinned where it is left |
+| `flex.hang_set` | `pins` (the ids of the nodes pinned; the others let go), `length` (the item's length, mm), `damping` (0 to 1), one or more of them | the hanging item: a new length spreads the chain evenly along where it is now, its pinned points where they are; a new damping holds it back from the next step on. Refused with none of them (`flex.hang_set takes pins, a length, a damping or more of them`) and for a damping outside 0 to 1 (`the damping must be from 0 to 1, got 1.5`) |
+| `flex.hang_lock` | | as the `flex.*` commands (`flex`, `nodes`, `length`, `warnings`) and `deviation` (mm: the farthest the chain is from the route through the nodes); one undo step `Edit Flex1`. Refused (the item still hangs) when the kept nodes are not a valid item or the item is not made whole along them (*Lock* below) |
+| `flex.hang_cancel` | | `cancelled`: whether an item hung; the design is not changed |
+
+| Query | Fields | Result |
+|---|---|---|
+| `flex_hang` | | the hanging item (below), null when none hangs |
+
+The hanging item, points in the item's component's coordinates (as the
+`flex` query's):
+
+```json
+{"flex": "F7", "length": 300, "segment": 10, "at_rest": false, "time": 0.033,
+ "taut": false, "grabbed": 150.0, "damping": 0.5,
+ "polyline": [[0, 0, 40], …],
+ "normals": [[0, 0, 1], …],
+ "touching": [false, false, true, …],
+ "nodes": [{"id": "n1", "index": 0, "point": [0, 0, 40], "along": 0, "pinned": true,
+            "support": "port", "moved": false}, …]}
+```
+
+- `polyline`, `normals`: the chain's points and the section's `y` at
+  each (its direction and its length along the chain follow from the
+  points: nothing is given twice, a step answers many times a second);
+  `touching`: whether each point lies on a body.
+- `nodes`: the item's nodes as points of the chain (`index`), where they
+  are now, whether each is pinned, what it was attached to before
+  (`support`, as the `flex` query's) and whether it was dragged while
+  pinned (`moved`).
+- `grabbed`: the length along the chain of the point the pointer holds,
+  null when none; `time`: the seconds the step simulated (whole substeps); `taut`: the
+  chain is pulled longer than its length between its pins (more than 1 %);
+  `damping`: the session's (*Damping* above).
+
+**Lock.** The chain where it is becomes the item's nodes: the pinned
+nodes as they were (their attachments kept; one dragged while pinned a
+free node where it is), and between them the fewest points of the chain
+through which the item's route is the chain's shape: the points where it
+meets and leaves a surface (so that a stretch along the surfaces runs
+between nodes on faces, and one through the air between others), the
+points that hold the chain's polyline within the tolerance, then routed
+and, where the chain is farther from the route than the tolerance, the
+farthest point of each such stretch added, six times at most. No node
+is made where the item cannot lie (in a body, or nearer to one than its resting distance by more than
+a twentieth of it, at least 0.1 mm: a cable that hung down a bore
+narrower than itself) or where it only touches a face over its edge (the
+way from the face to the point more than 30 degrees off the face's
+normal): the route finds its own way past them. No two of these
+points, nor one of them and a pinned node, lie nearer along the chain
+than twice the resting distance or the bend radius, whichever is longer
+(a point right beside a pinned end, which lies on what it is attached
+to, made the route turn back between them). The tolerance is half
+the section's resting distance (at least 0.1 mm). A node at a point that
+lies on a face is on that face (`on`, at the surface below the centre
+line; a face of another component through the occurrence it is placed
+at); the others are free. Nodes that were let go are replaced by these.
+A `fixed_length` the item has becomes the session's length when that
+was set (its slack then hangs as *Hanging slack* says; the route
+through the nodes is about as long as the chain, so little is left to hang). The item's route is then worked out from its
+nodes as any item's (`Kernel::flex_route`). The lock is refused, the item
+still hanging, when no route goes through the nodes, when the item
+cannot be made along them, when its route turns back on itself (a step
+of it more than a right angle from the one before: no section is swept
+round that), or when its route is not about as long as the chain (half
+of it at most, or longer than half again and twice the resting
+distance): never an item kept in part.
+
+**The kernel.** Two methods, unsupported by default
+(`core/model-base/src/kernel.rs`, "Flex drape"):
+`flex_drape_step` (`DrapeStepSpec`: the obstacles, the points, their
+velocities and pins, the segment, the resting distance, the bend radius,
+gravity, the seconds, the grab, the time it has been still and the
+damping, to
+`DrapeStep`: the points, velocities, the section's `y`, what each point
+lies on, and rest) and `flex_drape_nodes` (`DrapeNodesSpec`: the chain,
+what it lies on, the points to keep, the ends' ports, the item as a route
+takes it and the tolerance, to `DrapeNodes`: the points that are nodes
+and the deviation). The mock kernel's stand-ins: free points fall 100 mm
+a second and stop on the top of a box below them; the nodes are every
+fourth point and the ends.
+
 ## CAM: setups, operations and machines
 
 mitcad#1013 (`core/model/src/cam/`, `document/cam.rs`, `api/cam.rs`;
@@ -30229,6 +31082,8 @@ without a gap.
 | `form.insert_loop` | `form`, `edge` [a, b], `at` (0 to 1 from a, default 0.5), `preview` | `vertices`, `faces` (the halves of the quads it split that got new ids), `edges` (the new edges across them); the loop runs across the quads on either side of the edge, from each to the one beyond its opposite edge, until it closes, meets the cage's boundary or a face that is not a quad (which takes the new vertex) |
 | `form.delete_loop` | `form`, `edge` [a, b], `preview` | `removed_vertices`, `removed_faces`: the edge loop through the edge (on along the edge across at each vertex of four quads) goes, the faces either side of it become one and its vertices between two edges go |
 | `form.delete_faces` | `form`, `faces`, `preview` | `removed_faces`, `removed_vertices` (those no face uses any more); the cage opens there |
+| `form.fill_hole` (mitcad#1941) | `form`, `edge` [a, b] (an edge of the opening: `boundary` in `form_cage`), `quads` (default false), `preview` | `faces`, `vertices` (the new ones), `closed` (whether the whole cage is closed now); undo step `Fill Hole in Form1`. The opening the edge lies on (the loop of boundary edges through it) is filled with one face, or with `quads` and an even number `n` of edges round it with a grid of `a` x `b` quads (`a + b = n / 2`, `a` = `n / 4` rounded down; the corners where the opening turns most; the inner vertices on the Coons patch of its sides), as edge loops across one face would leave; an odd number of edges takes one face. The new faces run as the faces round the opening do. On a symmetric cage the mirrored opening is filled too; an opening across the symmetry plane (a face beside the plane taken out) is refused (`the opening crosses the symmetry plane: take the symmetry away to fill it`), as is an edge with a face on both sides (`a picked edge is not on an opening of the cage: ...`) and an opening that meets another at a vertex |
+| `form.bridge` (mitcad#1941) | `form`, `edges` ([a, b]: boundary edges of both sides), `loops` (default false: each edge stands for the whole opening it lies on, one edge a side is enough), `segments` (rows of quads across, 1 to 100, default 1), `preview` | `faces`, `vertices` (the new ones), `closed`; undo step `Bridge in Form1`. The picked edges make two runs along the boundary (two openings, or two runs of open edges, of as many edges each), joined with a strip of quads: the second side runs the other way along the strip, so that its faces run as the faces beside both sides; two openings are turned to where the joins are shortest; the rows between are straight between the joined vertices. On a symmetric cage the mirror image is bridged too, unless the bridge joins a side with its own mirror image. Refused in words: an edge not on an opening, more or fewer than two runs (`a bridge joins two openings or two runs of open edges: the picked edges make 3 apart`), sides of different lengths or an opening with a run |
 | `form.crease` | `form`, `edges`, `vertices` (made corners), `sharpness` (left out or null: sharp for good; a number: that many steps; 0: smooth again, and the vertices no longer corners), `preview` | undo step `Crease in Form1` |
 | `form.symmetry` | `form`, `plane` (null: none, the mirrored half becomes the cage's own; `"x"`, `"y"`, `"z"` through `center`, default the middle of the cage's box; or `{"origin", "normal"}`: the half on the side the normal points to is kept, the other becomes its mirror image), `center`, `preview` | refused when a face crosses the plane (`a face of the cage crosses the symmetry plane: insert an edge loop on the plane first`) |
 | `form.set_cage` | `form`, `cage` (as the definition has it), `preview` | the cage replaced whole (an editor's own edit, an import), undo step `Edit Cage in Form1` |
@@ -30258,7 +31113,9 @@ edits, symmetry, the primitives), `core/model/src/features/form.rs` (the
 mock kernel: a box cage's body and its face names, refusals),
 `core/model-tests/api/src/form_tests.rs` (the commands and queries on the
 mock kernel: edits, symmetry keeping both halves equal, a crease kept,
-previews, undo and redo, saved and read back), `geometry/tests/test_form.cpp`
+previews, undo and redo, saved and read back; mitcad#1941: a box's top
+deleted and filled with one face or with quads, two tubes' open ends
+bridged, a symmetric Form filling both openings), `geometry/tests/test_form.cpp`
 (`geometry.form`: patches sewn into a valid solid, rounded and cut,
 written as STEP, an open set a sheet, a gap refused) and
 `tools/cli/tests/form.json` (`cli.form`: a box cage edited into a smooth

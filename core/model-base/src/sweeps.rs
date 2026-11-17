@@ -392,7 +392,11 @@ pub enum ThicknessLocation {
 /// and `tip1(<curve>)`, `start(<curve>)` in the sketch plane and
 /// `end(<curve>)` at the depth.
 ///
-/// With `extend_ends` (a rib's only, mitcad#1746) each open end of the
+/// A web's walls are joined where their curves' ends meet (mitcad#1968):
+/// mitred where two meet, by the hull of their ends where three or more do.
+///
+/// With `extend_ends` (a rib's, mitcad#1746; a web's free ends, those
+/// touching no other curve, mitcad#1968) each open end of the
 /// chain is continued straight along its end tangent until the rib, across
 /// its whole thickness and depth, meets the faces of `bodies`: the
 /// continuation fills up to a curved or slanted face with no gap, and
@@ -400,7 +404,8 @@ pub enum ThicknessLocation {
 /// further into them). Faces of a continuation: `extend0` or `extend1`
 /// along it, its tip `tip0` or `tip1`. An end whose continuation meets no
 /// face of the bodies within their bounds stays as drawn, and the shape
-/// carries a note saying so ([`crate::Kernel::notes`]).
+/// carries a note saying so ([`crate::Kernel::notes`]). An end past a wall
+/// the curves cross is cut back to that wall instead.
 ///
 /// With `direction` (a rib's, a unit vector in the sketch plane) the rib
 /// grows along it instead of at right angles to the chord (mitcad#1746);

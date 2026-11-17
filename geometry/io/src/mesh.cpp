@@ -995,6 +995,16 @@ constexpr double kHoldBarelyFewer = 0.9;
 constexpr double kHoldPerDeviationArea = 0.25;
 constexpr double kHoldLeast = 200.0;
 
+// A swept body's faces (MeshOptions::section): the deviation inside them and
+// the least step of their parameters, as fractions of the section's size.
+// Chosen with mitcad-cli mesh-compare on Flex items over a block (a wire of
+// 1 mm, a hose of 8 mm, a flat cable of 10 x 1 mm with a half twist): a
+// quarter of the section kept about 12 steps round a round section and the
+// area within 2 % (1.4 s, 0.4 s and 27 s before, 0.12 s, 0.05 s and 0.06 s
+// after); half of it left a wire of 1 mm in 7 steps round, 0.23 mm off.
+constexpr double kSectionDeviation = 0.02;
+constexpr double kSectionStep = 0.25;
+
 // A face's triangles on its triangulation, -1 for none.
 int triangles_of(const TopoDS_Face& face) {
   TopLoc_Location location;
@@ -1760,6 +1770,10 @@ IMeshTools_Parameters parameters_of(const MeshOptions& options, double deviation
   }
   parameters.Relative = options.relative;
   parameters.InParallel = true;
+  if (options.section > 0.0 && !options.relative) {
+    parameters.DeflectionInterior = std::max(parameters.Deflection, kSectionDeviation * options.section);
+    parameters.MinSize = kSectionStep * options.section;
+  }
   return parameters;
 }
 

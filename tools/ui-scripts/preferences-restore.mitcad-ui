@@ -63,7 +63,7 @@ focus-dialog '^(Preferences|Settings)$'
 button '^Restore Defaults$' preferencesRestoreDefaults
 popup 'Current Group (Display)'
 wait-log '^Preferences restore defaults asked: Restore the defaults of the Display settings[?] The settings on the Display page go back to their defaults[.] .*Kept: recent files, library sources and fetched libraries, favorites, window sizes and places, API keys, chat histories, and keyboard shortcuts'
-focus-dialog '^Restore Defaults$'
+focus-dialog '^(Restore Defaults|Restore the defaults of (the Display|all) settings[?])$'
 button '^Restore Defaults$'
 wait-log '^Preferences: restore defaults, current group: display$'
 focus-dialog '^(Preferences|Settings)$'
@@ -84,7 +84,7 @@ mark
 button '^Restore Defaults$' preferencesRestoreDefaults
 popup 'All Settings'
 wait-log '^Preferences restore defaults asked: Restore the defaults of all settings[?] Every setting in Preferences goes back to its default[.] .*Kept: recent files'
-focus-dialog '^Restore Defaults$'
+focus-dialog '^(Restore Defaults|Restore the defaults of (the Display|all) settings[?])$'
 button '^Restore Defaults$'
 wait-log '^Preferences: restore defaults, all settings: general, navigation, display, .*sketch, suppliers, assembly$'
 focus-dialog '^(Preferences|Settings)$'

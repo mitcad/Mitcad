@@ -1,0 +1,18 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"A loft from a circle to a square through a rail tied to Intersect points (mitcad#1944; tools/ui-loft-rail-intersect-test.sh and its Windows and macOS twins). Sketch1 F1 on XY: a 20 mm circle round the origin. Plane1 F2 40 mm up; Sketch2 F3 on it: a 20 mm square round the axis, its right side c2 at x = 10. Sketch3 F4 on XZ (x along X, y along -Z): Intersect of the circle (p1 at x = 10, p2 at x = -10, in the circle's order from its start at x = 10) and of the square's right side (p3 at x = 10, 40 up); the rail c4 from p1 to p3, meeting the square in its side's middle; the loose rail c5 from p2 to a new point p6 0.3 mm outside the square's left side (a sketch's points and curves share one numbering)."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_circle","sketch":"F1","center":[0,0],"diameter":20},
+  {"cmd":"add_feature","def":{"type":"construction_plane","definition":{"type":"offset","plane":"xy","distance":40}}},
+  {"cmd":"sketch.create","plane":"F2"},
+  {"cmd":"sketch.add_rectangle","sketch":"F3","corner":[-10,-10],"width":20,"height":20},
+  {"cmd":"sketch.create","plane":"xz"},
+  {"cmd":"sketch.project","sketch":"F4","source":{"sketch":"F1","curve":"c1"},"linked":true,"section":true},
+  {"cmd":"sketch.project","sketch":"F4","source":{"sketch":"F3","curve":"c2"},"linked":true,"section":true},
+  {"cmd":"sketch.add_line","sketch":"F4","start":"p1","end":"p3"},
+  {"cmd":"sketch.add_line","sketch":"F4","start":"p2","end":[-10.3,-40]},
+  {"comment":"Sketch3's Intersect points use Sketch1 and Sketch2, which hides them by default: shown again, for the loft to pick their profiles."},
+  {"cmd":"set_feature_visible","uid":"F1","visible":true},
+  {"cmd":"set_feature_visible","uid":"F3","visible":true}
+]
+

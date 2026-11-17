@@ -35,6 +35,9 @@ struct CellState {
   // An import note (mitcad#170), information since mitcad#1040: the
   // information badge, no status ring.
   bool noted = false;
+  // A warning the user acknowledged (mitcad#1935): shown as ok, no ring
+  // and no badge; told in the tooltip and the log only.
+  bool acknowledged = false;
   bool selected = false;
   bool found = false;      // a match of the search (mitcad#179)
   // The feature that made something selected in the view (mitcad#1704):
@@ -123,5 +126,10 @@ QString featureStatusLine(const QString& status, const QString& message, const Q
 // warnings. Plain text; empty when `fixable` is 0.
 QString autoFixHint(int fixable);
 QString autoFixBadgeHint(int fixable);
+
+// A warning the user acknowledged (mitcad#1935), as a feature's tooltip
+// (its timeline cell, its Browser row, a search result) tells it: marked
+// acknowledged, without the warning's word. Plain text.
+QString acknowledgedWarningText(const QString& message);
 
 } // namespace mitcad

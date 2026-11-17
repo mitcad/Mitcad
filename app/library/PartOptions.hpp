@@ -135,10 +135,19 @@ QJsonObject setComponentParametersCommand(const QString& component, const QJsonO
 // --- The table as library_show, library_search and library_build_candidates give it
 
 // An open table: options any combination of which the rules allow
-// (`options` and not `closed`). A closed table, or one of the old form
-// (`selectors`), allows only its rows and is chosen by its rows as before.
+// (`options` and not `closed`), or a closed table with `open` options
+// (mitcad#1950: a length beside the rows of sizes), whose choosers give its
+// rows' options the rows' values. A closed table without them, or one of
+// the old form (`selectors`), allows only its rows and is chosen by its rows
+// as before.
 bool isOpenTable(const QJsonObject& configurations);
-// The options in order (`options`), or the old form's `selectors`.
+// Such a table with an option chosen freely that is not in `hidden`: an open
+// table's, or a closed table's open option (BUILD's part picker hides a
+// part cut to length's length, which BUILD gives, and chooses a closed
+// table's rows as tiles: mitcad#1950).
+bool isOpenTable(const QJsonObject& configurations, const QStringList& hidden);
+// The options in order (`options`), or the old form's `selectors`; a closed
+// table's open options left out (they are no rows' choices).
 QStringList tableOptions(const QJsonObject& configurations);
 // A row's value of an option as text: its `values` ({option: expression},
 // a text without its quotes) or the old form's `select`.

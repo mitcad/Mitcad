@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: MIT
+# A Form's opening picked by Patch and filled by Fill Hole (mitcad#1941,
+# app/COMMANDS.md "Form") in an empty design:
+#   1. Form: a box cage of 2 x 2 x 2 faces (the defaults), OK.
+#   2. Edit Form from the timeline, Delete Faces: a face of the top picked
+#      in the view and deleted, Apply: the cage open (26 vertices, 48
+#      edges, 23 faces); Close.
+#   3. Patch: a free edge of the Form's body (on the opening) is a pick
+#      place of its own, named by its opening; a click on it takes the
+#      whole opening as one edge item (as for any open shell, mitcad#1927).
+#      Esc cancels it.
+#   4. Edit Form again: an edge of the opening (logged as a boundary edge)
+#      picked in the view, then Fill Hole from the view's context menu: the
+#      opening filled, one undo step, the cage closed again and the body a
+#      solid; Close keeps it.
+# Run by tools/ui-form-fill-hole-test.sh (Linux),
+# tools/ui-windows-form-fill-hole-test.ps1 (Windows) and
+# tools/ui-macos-form-fill-hole-test.sh (macOS).
+expect-ever 'Browser arrow Root/Origin at' 30
+wait-idle
+
+# 1. A new Form from a box cage.
+mark
+command solid.form
+expect-log '^Command Form started' 30
+wait-log '^Preview Form: ' 60
+wait-idle
+key Return
+wait-log '^Added Form$' 60
+wait-idle
+command view.fit
+wait-idle
+
+# 2. A face of the top deleted in Edit Form.
+mark
+dblclick-logged '^Timeline Form1 at '
+wait-log '^Editing Form F[0-9]+ [(]Form1[)]$' 30
+wait-log '^Command Edit Form started' 30
+wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 24 faces, closed$' 30
+wait-idle
+qt-choice input_action 'Delete Faces'
+wait-log '^Edit Form: Edit = Delete Faces$' 30
+wait-log '^Form cage face [0-9]+ [(][+]z[)] at ' 30
+wait-idle
+click-logged '^Form cage face [0-9]+ [(][+]z[)] at '
+wait-log '^Form edit picked: [{]"edges":[[][]],"faces":[[][0-9]+[]],"vertices":[[][]][}]$' 30
+wait-idle
+key Return
+wait-log '^Form edit Delete Faces in Form1: done: ' 60
+wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 23 faces, open$' 30
+wait-log '^Applied Edit Form [(]1[)]$' 30
+wait-idle
+mark
+key Escape
+wait-log '^Closed Edit Form after 1$' 30
+wait-idle
+
+# 3. Patch takes the Form body's opening by one of its free edges.
+mark
+command surface.patch
+wait-log '^Pick places:' 20
+wait-log '^Pick edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage' 30
+wait-idle
+hover-logged '^Pick edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage'
+wait-idle
+mark
+click-pick 'edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage[^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge' 20
+expect-no-log ' not taken: '
+wait-idle 30
+mark
+key Escape
+wait-log '^Command Patch cancelled' 30
+wait-idle
+
+# 4. Fill Hole from the view's context menu on a picked edge of the opening.
+mark
+dblclick-logged '^Timeline Form1 at '
+wait-log '^Command Edit Form started' 30
+wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 23 faces, open$' 30
+wait-idle
+qt-choice input_pick 'Edges'
+wait-log '^Edit Form: Select = Edges$' 30
+wait-log '^Form cage edge -?[0-9]+,-?[0-9]+ [(]boundary[)] at ' 30
+wait-idle
+click-logged '^Form cage edge -?[0-9]+,-?[0-9]+ [(]boundary[)] at '
+wait-log '^Form edit picked: [{]"edges":[[][[]-?[0-9]+,-?[0-9]+[]][]],"faces":[[][]],"vertices":[[][]][}]$' 30
+wait-idle
+mark
+click-logged '^Form cage edge -?[0-9]+,-?[0-9]+ [(]boundary[)] at ' right
+wait-log '^Context menu: Fill Hole [|] Bridge [|] OK [|] Cancel' 30
+popup 'Fill Hole'
+wait-log '^Form edit fill_hole asked for: ' 30
+wait-log '^Edit Form: Edit = Fill Hole$' 30
+wait-log '^Form edit Fill Hole in Form1: done: [{]"cmd":"form[.]fill_hole"' 60
+wait-log '^Form edit Form1: cage of 26 vertices, 48 edges, 24 faces, closed$' 30
+wait-log '^Form edit Form1: body F[0-9]+[.]b0 solid, volume ' 60
+wait-log '^Applied Edit Form [(]1[)]$' 30
+wait-idle
+mark
+key Escape
+wait-log '^Closed Edit Form after 1$' 30
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

@@ -24,9 +24,16 @@ mod thread_end_tests;
 mod same_surface_join_tests;
 // Circular Pattern about two axes; copies that add nothing (mitcad#1588).
 mod two_axis_pattern_tests;
+// Flex items: nodes, routes, end ports and warnings (mitcad#1713).
+mod flex_tests;
+// The direction of gravity and a Flex item's slack hanging toward it
+// (mitcad#1713, Part B).
+mod gravity_tests;
 // Coordinate System: frames at a point and exports in them (mitcad#1775).
 mod coordinate_system_tests;
 // Fill Cavity: a closed pocket filled up to a plane (mitcad#1818).
 mod fill_cavity_tests;
 // Press Pull continued Straight or Along the walls, tapered (mitcad#1850).
 mod press_pull_tests;
+// A Flex item let hang, pinned, dragged and locked (mitcad#1713).
+mod flex_hang_tests;

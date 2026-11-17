@@ -6,8 +6,10 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRepTools.hxx>
 #include <BRep_Tool.hxx>
@@ -613,6 +615,7 @@ void test_loft_rails() {
   tube.rails = {line_rail(gp_Pnt(10, 0, 0), gp_Pnt(10, 0, 40)), line_rail(gp_Pnt(-10, 0, 0), gp_Pnt(-10, 0, 40))};
   const ShapePtr cylinder = loft(tube);
   CHECK_NEAR_TOL(volume(*cylinder), kPi * 100 * 40, 1e-6);
+  CHECK(cylinder->face_count() == 4);
   CHECK(faces_named(*cylinder, "F5:side(c1)#0") == 1 && faces_named(*cylinder, "F5:side(c1)#1") == 1);
 
   // One bent rail through the circles' start points (the reference model
@@ -653,7 +656,7 @@ void test_loft_rails() {
   // Rails that miss a section, and with a point.
   LoftSpec missing = tube;
   missing.rails = {line_rail(gp_Pnt(10, 0, 0), gp_Pnt(12, 0, 40))};
-  CHECK(throws_with([&] { loft(missing); }, "rail 1 does not meet section 2"));
+  CHECK(throws_with([&] { loft(missing); }, "rail 1 misses the second profile by 2 mm"));
   LoftSpec pointed = tube;
   pointed.sections[1].kind = LoftSection::Kind::Point;
   pointed.sections[1].point = gp_Pnt(0, 0, 40);
@@ -692,6 +695,89 @@ Region with_hole(Region region, int curve, double radius) {
 }
 
 bool valid(const Shape& shape) { return BRepCheck_Analyzer(shape.occt()).IsValid(); }
+
+// A circle of `radius` round the origin cut by a chord `depth` below its
+// centre: the arc c<first> and the chord c<first + 1>.
+Region chord_cut(int first, double radius, double depth) {
+  const double half = std::asin(depth / radius);
+  Segment arc;
+  arc.kind = SegmentKind::Arc;
+  arc.center = gp_Pnt2d(0, 0);
+  arc.radius = radius;
+  arc.start_angle = -half;
+  arc.end_angle = kPi + half;
+  arc.name = "c" + std::to_string(first);
+  Segment chord;
+  chord.kind = SegmentKind::Line;
+  chord.start = gp_Pnt2d(radius * std::cos(kPi + half), -depth);
+  chord.end = gp_Pnt2d(radius * std::cos(-half), -depth);
+  chord.name = "c" + std::to_string(first + 1);
+  Region region;
+  region.loops.push_back(Loop{{arc, chord}});
+  region.name = "r{" + arc.name + "," + chord.name + "}";
+  return region;
+}
+
+// The largest distance of points along the straight rail a-b from the
+// body's boundary.
+double off_boundary(const Shape& body, const gp_Pnt& a, const gp_Pnt& b) {
+  TopoDS_Shape shell;
+  for (TopExp_Explorer s(body.occt(), TopAbs_SHELL); s.More(); s.Next()) {
+    shell = s.Current();
+  }
+  if (shell.IsNull()) {
+    return 1.0e9;
+  }
+  double worst = 0.0;
+  for (int k = 0; k <= 8; ++k) {
+    const gp_Pnt p(a.XYZ() + (b.XYZ() - a.XYZ()) * (k / 8.0));
+    BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), shell);
+    worst = std::max(worst, distance.IsDone() ? distance.Value() : 1.0e9);
+  }
+  return worst;
+}
+
+// Lofts whose sections' edges do not line up at the rails (mitcad#1944,
+// GitHub #387): matched from the rails, valid solids through them.
+void test_loft_rails_unmatched() {
+  const double depth = 10 * std::sqrt(3.0) / 2;
+  LoftSpec cut;
+  cut.feature = "F5";
+  cut.sections = {region_at(0, circle(1, 0, 0, 10)), region_at(40, chord_cut(3, 10, depth))};
+  const gp_Pnt top_a(0, 10, 0);
+  const gp_Pnt top_b(0, 10, 40);
+  const gp_Pnt bottom_a(0, -10, 0);
+  const gp_Pnt bottom_b(0, -depth, 40);
+  const double cut_area = kPi * 100 - 50 * (kPi / 3 - std::sin(kPi / 3));
+  // One rail over the top of both.
+  cut.rails = {line_rail(top_a, top_b)};
+  const ShapePtr one = loft(cut);
+  CHECK(valid(*one) && edge_names_unique(*one));
+  CHECK(off_boundary(*one, top_a, top_b) < 1e-4);
+  CHECK(volume(*one) > 0.9 * cut_area * 40 && volume(*one) < 1.1 * kPi * 100 * 40);
+  // And a second through the chord's middle.
+  cut.rails.push_back(line_rail(bottom_a, bottom_b));
+  const ShapePtr two = loft(cut);
+  CHECK(valid(*two) && edge_names_unique(*two));
+  CHECK(off_boundary(*two, top_a, top_b) < 1e-4 && off_boundary(*two, bottom_a, bottom_b) < 1e-4);
+  CHECK(volume(*two) > 0.9 * cut_area * 40 && volume(*two) < 1.1 * kPi * 100 * 40);
+
+  // A circle to a square with two rails meeting its sides' middles: each
+  // half of the circle against three pieces of the square's outline.
+  LoftSpec square;
+  square.feature = "F5";
+  square.sections = {region_at(0, circle(1, 0, 0, 10)), region_at(40, rectangle(5, -10, -10, 20, 20))};
+  const gp_Pnt right_a(10, 0, 0);
+  const gp_Pnt right_b(10, 0, 40);
+  const gp_Pnt left_a(-10, 0, 0);
+  const gp_Pnt left_b(-10, 0, 40);
+  square.rails = {line_rail(right_a, right_b), line_rail(left_a, left_b)};
+  const ShapePtr squared = loft(square);
+  CHECK(valid(*squared) && edge_names_unique(*squared));
+  CHECK(off_boundary(*squared, right_a, right_b) < 1e-4 && off_boundary(*squared, left_a, left_b) < 1e-4);
+  CHECK(volume(*squared) > 0.95 * kPi * 100 * 40 && volume(*squared) < 1.05 * 400 * 40);
+  CHECK(faces_named(*squared, "F5:start(r{c1})") == 1 && faces_named(*squared, end_cap("F5", 5)) == 1);
+}
 
 // The number of wires of the body's face `name`: its holes and its outer
 // boundary.
@@ -784,6 +870,7 @@ void skin_tests() {
   guarded("gordon surfaces", test_gordon);
   guarded("lofts with end conditions", test_loft_conditions);
   guarded("lofts with rails", test_loft_rails);
+  guarded("lofts with rails on unmatched sections", test_loft_rails_unmatched);
   guarded("lofts from faces with holes", test_loft_face_holes);
 }
 

@@ -352,11 +352,13 @@ const char* const kUsage = R"(usage:
       (STEP, IGES, BRep, OBJ, STL, 3MF), --occurrence (Arm:1/Pin:2) only
       what that occurrence places.
   mitcad-cli export-sketch <file.mitcad> <sketch> <out.dxf> [--unit mm|cm|m|in|ft] [--r12]
-                           [--construction]
+                           [--construction] [--no-points]
       Writes the geometry of a sketch (uid or name) to a DXF file (R2000,
       or R12 with --r12), in the design's length unit unless --unit says
       otherwise. Construction curves and center lines are left out unless
-      --construction writes them, on the layer construction.
+      --construction writes them, on the layer construction. The sketch's
+      free-standing points are written as POINT entities on the layer
+      POINTS unless --no-points leaves them out.
   mitcad-cli export-flat <file.mitcad> <body> <out.dxf> [--unit mm|cm|m|in|ft]
                          [--back] [--tangents] [--r12]
       Writes the Flat Pattern of a sheet-metal body (uid or name) to a DXF
@@ -886,7 +888,7 @@ int export_bodies(const std::vector<std::string>& args) {
 int export_sketch(const std::vector<std::string>& args) {
   Arguments a;
   std::string problem;
-  if (!parse_arguments(args, {"--unit"}, {"--r12", "--construction", "--json"}, a, problem)) {
+  if (!parse_arguments(args, {"--unit"}, {"--r12", "--construction", "--no-points", "--json"}, a, problem)) {
     return usage(problem);
   }
   if (a.positional.size() != 3) {
@@ -904,6 +906,10 @@ int export_sketch(const std::vector<std::string>& args) {
   // Construction geometry only when asked for (mitcad#1445).
   if (a.flag("--construction")) {
     command += R"(, "construction": true)";
+  }
+  // The free-standing points unless left out (mitcad#1963).
+  if (a.flag("--no-points")) {
+    command += R"(, "points": false)";
   }
   command += "}";
   rust::Box<mitcad::Document> document = open_document(a.positional[0]);

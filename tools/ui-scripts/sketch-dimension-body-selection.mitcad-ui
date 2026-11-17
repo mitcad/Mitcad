@@ -8,6 +8,8 @@ dblclick-logged 'Timeline Sketch2'
 expect-log 'Editing sketch F3 \(Sketch2\)'
 command view.fit
 expect-ever 'Sketch Sketch2: 0 linked projection\(s\)'
+# Keep the selected body's corner clear of the navigation cube.
+wheel 50 50 -3
 capture-undo-depth baseline
 
 # A body edge alone: D enters placement, and the fixed edge is dimensioned

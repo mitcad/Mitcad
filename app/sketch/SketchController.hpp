@@ -29,7 +29,9 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVector>
+#include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
+#include <gp_Vec.hxx>
 
 #include "../framework/CommandSession.hpp"
 #include "../framework/NoticeLevel.hpp"
@@ -188,12 +190,13 @@ public:
   // as a hint when the action ends (mitcad#287).
   bool attempt(const QJsonObject& command);
   // An existing point where the cursor snapped to one (made at the origin
-  // when it snapped there; a body vertex's projected point, mitcad#258), else
-  // the position.
+  // when it snapped there), else the position: at a body vertex too, where
+  // constrain then holds the new point on the projected vertex.
   QJsonValue pointInput(const Snap& snap);
-  // The constraints that keep `point` where it snapped (on a body vertex or
-  // at a body edge's middle: on the projected vertex or edge, projected
-  // first).
+  // The constraints that keep `point` where it snapped (on a body vertex,
+  // at a body edge's middle or along a body edge: on the projected vertex
+  // or edge, projected first, mitcad#258, mitcad#1967; logged "Held p9
+  // coincident with p8, the projected corner V{…}").
   void constrain(const QString& point, const Snap& snap);
   void addConstraint(const QJsonObject& constraint);
   // A constraint the drawn geometry already satisfies (mitcad#1024), added
@@ -260,6 +263,16 @@ private:
   // Logs a scale of the sketch to its first dimension (mitcad#860) and
   // keeps it for the hint at the end.
   void noteScaled(const QJsonObject& answer);
+  // Where the geometry a dimension command measures is in the sketch
+  // (mitcad#1948): the mean of the anchors (SketchModel::anchorAt) of its
+  // entities other than the sketch's axes and origin, which a scale does
+  // not move; none when `model` has no such entity.
+  static std::optional<V2> dimensionAnchor(const SketchModel& model, const QJsonObject& command);
+  // After a dimension scaled the sketch by `factor` about its origin
+  // (mitcad#1948): moves the view with the dimensioned geometry from
+  // `anchor` (dimensionAnchor before the command), so that it keeps its
+  // place on the screen; the zoom stays.
+  void followScale(const V2& anchor, double factor);
 
   SketchController& m_c;
   int m_depth = 0;
@@ -274,6 +287,9 @@ private:
   bool m_stale = false;
   QHash<QString, ProjectedItem> m_projected; // by source, body and occurrence
   QSet<QString> m_autoTried; // addAuto's constraints so far (constraintText)
+  // How far followScale moved the view in this action (design mm), moved
+  // back by rollback() with the scale it followed.
+  gp_Vec m_viewShift{0.0, 0.0, 0.0};
 };
 
 class SketchController : public QObject {

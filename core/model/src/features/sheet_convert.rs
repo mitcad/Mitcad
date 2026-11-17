@@ -93,6 +93,6 @@ impl FeatureInfo for SheetConvertDef {
 impl<K: Kernel> Evaluate<K> for SheetConvertDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
-        crate::sheet::folded::convert(&d, ctx)
+        crate::sheet::folded::convert(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

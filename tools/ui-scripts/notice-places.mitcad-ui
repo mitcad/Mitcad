@@ -6,7 +6,8 @@
 # the pointer over it paints its places (the rounding's face of the body,
 # a point) in the view until it leaves:
 #   1. the Timeline item, with its tooltip;
-#   2. the message band, the warnings badge's message about Rim; another
+#   2. the message band, the warnings badge's message about Rim (its
+#      menu's row); another
 #      message in its place under the pointer paints none (mitcad#1609);
 #   3. the command panel's message while Rim is edited (its preview's
 #      faces); its edges emptied, the hint hovered paints none
@@ -34,8 +35,10 @@ timeline-leave
 wait-log '^Notice hover highlighted: none$' 10
 
 # 2. The message band: the warnings badge says what is wrong with Rim.
+# Its menu (mitcad#1935: it offers Acknowledge Warning too) reveals Rim.
 mark
-button '.*' warningsBadge
+click-logged '^Warnings button at '
+popup 'Rim: *'
 wait-log '^Message band full: warning Rim: The fillet runs onto a face beside it and leaves an edge there' 10
 expect-never '^Message band full: .*[EV][{]'
 wait-log '^Message band text at ' 10

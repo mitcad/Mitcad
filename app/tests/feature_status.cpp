@@ -153,6 +153,15 @@ void lookTests() {
   CHECK(!look.statusRing.isValid() && look.badge && look.badgeLevel == NoticeLevel::Information &&
         !look.fill.isValid());
   CHECK(timeline::describeCell(state, look) == QStringLiteral("info, badge"));
+  // An acknowledged warning (mitcad#1935): painted as ok, no ring nor
+  // badge, told in the log.
+  state = cellState(FeatureState::Ok, false);
+  state.acknowledged = true;
+  look = timeline::cellLook(state, c);
+  CHECK(!look.statusRing.isValid() && !look.badge && !look.fill.isValid());
+  CHECK(timeline::describeCell(state, look) == QStringLiteral("ok, acknowledged"));
+  CHECK(acknowledgedWarningText(QStringLiteral("lost 2 edges")) ==
+        QStringLiteral("Acknowledged warning: lost 2 edges"));
   // The feature that made something selected in the view (mitcad#1704):
   // the selection's colour as a dashed ring, without its fill; the
   // selection's own ring and a search's match win over it.

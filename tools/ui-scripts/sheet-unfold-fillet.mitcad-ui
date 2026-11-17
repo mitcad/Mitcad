@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+# An Unfold refused by a fillet on a surface edge, its message in words
+# (mitcad#1942; docs/ui-conventions.md "What a message says"), on
+# sheet-unfold-fillet.json (the sheet F3.b0 with Fillet1 F4 on its back
+# edge y = 20, a Flange F5 and SheetUnfold1 F6 of its bend, failed):
+#   1. SheetUnfold1 edited from the timeline: the panel says why in words,
+#      the fillet by its name and what it does, with no feature id and no
+#      "panel ... slot".
+#   2. Esc cancels the command.
+# Run by tools/ui-sheet-unfold-fillet-test.sh (Linux),
+# tools/ui-windows-sheet-unfold-fillet-test.ps1 (Windows) and
+# tools/ui-macos-sheet-unfold-fillet-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+key F6
+wait-idle
+expect-ever '^Timeline SheetUnfold1 at '
+
+# 1. Edited: the refusal in words.
+mark
+dblclick-logged '^Timeline SheetUnfold1 at '
+wait-log '^Editing F6 with Unfold$'
+wait-log '^Panel Unfold error: sheet Unfold needs the sheet.s developed form, but Fillet1 rounds edges of the sheet.s faces, which cannot be flattened; only corners through the thickness unfold$' 30
+wait-idle
+expect-no-log '^Panel Unfold error: .*(F[0-9]|slot [0-9])'
+
+# 2. Esc cancels.
+mark
+key Escape
+wait-log '^Command Unfold cancelled$'
+wait-idle

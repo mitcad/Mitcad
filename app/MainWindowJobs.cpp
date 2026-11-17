@@ -178,6 +178,20 @@ bool MainWindow::modelPreviewAsync(const QByteArray& request, const QString& nam
   });
 }
 
+bool MainWindow::modelRuntimeCommandAsync(const QJsonObject& request, QObject* context, AsyncCompletion completion) {
+  Q_ASSERT(!m_viewer->isPainting());
+  const QString name = request.value(QStringLiteral("cmd")).toString();
+  // A read-only window: refused as command() refuses it, by the caller's
+  // command.
+  if (windowReadOnly() && !m_writeAnyway && !readOnlyModelCommand(name)) {
+    return false;
+  }
+  return m_documentSession->runtimeCommandAsync(request, context, [completion = std::move(completion)](
+                                                                       const DocumentSession::AsyncResult& result) {
+    completion({result.answer, result.error, result.cancelled});
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The wait cursor's idle recovery (mitcad#268)
 

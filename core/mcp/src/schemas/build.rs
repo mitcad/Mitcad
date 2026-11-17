@@ -126,7 +126,8 @@ pub(super) fn spec(name: &str) -> Option<Value> {
                 "to": object("A member by two points: its end again"),
                 "lie": object("A member by two points: its lie again"),
                 "frame": object("The timber frame it is in, laid out again with these fields"),
-                "along": object("A member along an edge: its edge, face and offsets")
+                "along": object("A member along an edge: its edge, face and offsets"),
+                "shared_mitre": {"type": "string", "enum": ["a", "b"], "description": "On its own: the shared miter at this end with the profile end it meets, as a corner placement makes"}
             },
             "required": ["component"],
             "examples": [

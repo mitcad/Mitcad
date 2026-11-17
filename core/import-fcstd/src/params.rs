@@ -1625,6 +1625,21 @@ impl<K: Kernel> Importer<'_, '_, K> {
         }
     }
 
+    /// How many parameters a VarSet's or a spreadsheet's values became (0
+    /// for any other object).
+    pub(super) fn made_parameters(&self, o: &Object) -> usize {
+        if o.type_name != "App::VarSet" && !is_sheet(&o.type_name) {
+            return 0;
+        }
+        self.report
+            .parameters
+            .iter()
+            .filter(|p| {
+                p.object == o.name && !p.name.is_empty() && p.outcome != ExpressionOutcome::Skipped
+            })
+            .count()
+    }
+
     /// A bound property's expression that its definition could not use
     /// after all: FreeCAD's value, and why.
     pub(super) fn left_out(&mut self, o: &Object, path: &str, why: &str) {

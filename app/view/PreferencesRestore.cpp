@@ -148,6 +148,7 @@ void ViewController::restorePreferenceDefaults(const QStringList& pages, bool al
     m_settings.activePickPriority = fresh.activePickPriority;
     m_settings.navigationBar = fresh.navigationBar;
     m_settings.sketchesThroughBodies = fresh.sketchesThroughBodies; // mitcad#1931
+    m_settings.selectionThroughBodies = fresh.selectionThroughBodies; // mitcad#1956
   }
   if (resets("navigation") || resets("display")) {
     m_settings.save();

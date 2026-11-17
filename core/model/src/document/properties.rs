@@ -604,6 +604,16 @@ impl<K: Kernel> Document<K> {
                     ),
                     Source::Computed,
                 );
+                // A Flex item's body has its routed length (mitcad#1713).
+                if let Some(flex) = self.flex_length(b.feature) {
+                    push(
+                        COMPUTED_SET,
+                        "Length",
+                        BaseType::Length,
+                        number(flex.length),
+                        Source::Computed,
+                    );
+                }
             }
             PropertyOwner::Component(c) => {
                 self.component_library_values(c, row, &mut push);

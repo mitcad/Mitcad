@@ -1303,6 +1303,17 @@ impl CopyReferences<'_> {
                     });
                 }
             }
+            // A Flex item's nodes on other components' geometry
+            // (mitcad#1713): as a construction plane's.
+            (FeatureDef::Flex(copy), FeatureDef::Flex(original)) => {
+                copy.links.clear();
+                for (body, link) in &original.links {
+                    let (link, internal) = self.link(link, component)?;
+                    let mapped = if internal { self.body(*body) } else { *body };
+                    copy.links.insert(mapped, link);
+                }
+                self.datum_links(&mut copy.datum_links, &original.datum_links, component)?;
+            }
             _ => {}
         }
         Ok(())

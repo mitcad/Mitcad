@@ -14,7 +14,7 @@ expect-never '^Hang watchdog: '
 
 # 1. The notice.
 wait-log '^Unexpected end notice shown: session-[0-9]{8}-[0-9]{6}-[0-9]+; MitCad ended unexpectedly the last time it ran' 30
-focus-dialog '^Last Session$'
+focus-dialog '^(Last Session|MitCad ended unexpectedly the last time it ran: it may have stopped responding and been closed, or crashed[.])$'
 
 # 2. Open Log Folder.
 mark

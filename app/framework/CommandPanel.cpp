@@ -2,6 +2,7 @@
 #include "CommandPanel.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iterator>
 #include <utility>
@@ -39,6 +40,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QSignalBlocker>
 #include <QStandardItem>
 #include <QStandardItemModel>
@@ -313,6 +315,8 @@ QString choiceLabel(const QString& label) {
     // Edit Form's crease type and its mirror plane (mitcad#1810).
     QT_TRANSLATE_NOOP("Choice", "Semi-Sharp"),
     QT_TRANSLATE_NOOP("Choice", "Picked Plane"),
+    // Edit Form's Fill Hole and Bridge (mitcad#1941).
+    QT_TRANSLATE_NOOP("Choice", "Fill Hole"), QT_TRANSLATE_NOOP("Choice", "Bridge"),
     // commands/FilletCommands.cpp: Press Pull's Continue and Taper Type (mitcad#1850).
     QT_TRANSLATE_NOOP("Choice", "Along the Walls (Face Turns)"), QT_TRANSLATE_NOOP("Choice", "Draft"),
     // commands/SheetCommands.cpp: a flange on several edges' Miter (mitcad#1872).
@@ -1120,6 +1124,33 @@ CommandPanel::Row* CommandPanel::createRow(const InputDef& input, const QString&
       row.edit->installEventFilter(this); // Tab to the next field (mitcad#1181)
     }
     field = row.edit;
+    if (input.hasSlider()) {
+      // A slider before the field (mitcad#1713: Let It Hang's Damping): a
+      // drag writes its value into the field, as typing it would; the field
+      // stays where a value is typed (placedWidget).
+      auto* slider = new QSlider(Qt::Horizontal);
+      slider->setObjectName(QStringLiteral("slider_") + key);
+      const double scale = std::pow(10.0, std::clamp(input.sliderDecimals, 0, 4));
+      slider->setRange(0, std::clamp(static_cast<int>(std::lround((input.sliderMaximum - input.sliderMinimum) * scale)),
+                                     1, 10000));
+      slider->setToolTip(input.tooltip);
+      row.slider = slider;
+      const InputDef* def = &input;
+      QLineEdit* edit = row.edit;
+      connect(slider, &QSlider::valueChanged, this, [this, key, def, edit, scale](int position) {
+        const double value = std::min(def->sliderMinimum + position / scale, def->sliderMaximum);
+        const QString text = QString::number(value, 'f', std::clamp(def->sliderDecimals, 0, 4));
+        edit->setText(text);
+        emit textEdited(key, text);
+      });
+      auto* both = new QWidget;
+      auto* line = new QHBoxLayout(both);
+      line->setContentsMargins(0, 0, 0, 0);
+      line->addWidget(slider, 1);
+      row.edit->setMaximumWidth(row.edit->fontMetrics().horizontalAdvance(QStringLiteral("00.000")) + 24);
+      line->addWidget(row.edit);
+      field = both;
+    }
     break;
   }
   case InputDef::Type::Choice: {
@@ -1727,6 +1758,16 @@ void CommandPanel::refreshRow(Row& row, const CommandState& scope, const Command
         // The start of a long expression in sight, not its end (mitcad#656:
         // "shaft_bore_clearance", not "aft_bore_clearance").
         row.edit->setCursorPosition(0);
+      }
+    }
+    // The slider beside it where its value is (InputDef::withSlider).
+    if (row.slider != nullptr && !row.slider->isSliderDown()) {
+      const double value = scope.value(id);
+      if (std::isfinite(value)) {
+        const double scale = std::pow(10.0, std::clamp(input.sliderDecimals, 0, 4));
+        const double clamped = std::clamp(value, input.sliderMinimum, input.sliderMaximum);
+        const QSignalBlocker blocker(row.slider);
+        row.slider->setValue(static_cast<int>(std::lround((clamped - input.sliderMinimum) * scale)));
       }
     }
     // A field that no longer follows what fills it (InputDef::markFor,

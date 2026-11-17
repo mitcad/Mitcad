@@ -347,6 +347,10 @@ pub struct DesignReport {
     /// with the primitive `kept_cage`) and, where it does not, why in words.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub form_cages: Vec<FormCageReport>,
+    /// A design modelled with another up direction, stood on Z up
+    /// (mitcad#1937): absent for a design modelled with Z up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upright: Option<crate::upright::UprightReport>,
 }
 
 /// A control cage kept with a Form body (mitcad#1757).

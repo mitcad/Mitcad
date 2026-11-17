@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# The sketch Rectangular Pattern's Direction 2 (mitcad#1969, GitHub
+# mitcad/Mitcad#406) on sketch-pattern-honeycomb.json's Sketch1 (two
+# framing points at (-40, -30) and (40, 30), a circle of radius 3 about
+# (-20, -15), and a construction line from (10, -20) at 60 degrees to the
+# x axis):
+#   1. The circle selected, Rectangular Pattern opens with Quantity 3 along
+#      Direction (the x axis) and Quantity 2 of 2 at right angles: the
+#      second row at y -5.
+#   2. Direction 2's row clicked and the line clicked at its middle: the
+#      second row runs at 60 degrees, its copies at (-15, -6.340),
+#      (-5, -6.340) and (5, -6.340), and the second arrow of the handle
+#      follows the line. OK adds the 3 x 2 pattern.
+#   3. Edit Pattern on the original circle loads the stored second
+#      direction: its preview keeps the 60 degree row. At Right Angles
+#      turns the row back to y -5; off again, Quantity 2 and OK keep the
+#      60 degree row with four instances.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows. Run by tools/ui-sketch-pattern-honeycomb-test.sh (Linux),
+# tools/ui-windows-sketch-pattern-honeycomb-test.ps1 (Windows) and
+# tools/ui-macos-sketch-pattern-honeycomb-test.sh (macOS).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The circle selected by its rim, the pattern from its defaults.
+mark
+sketch-click -17 -15
+expect-selection 1 0
+mark
+command sketch.rectangular_pattern
+wait-log '^Command Rectangular Pattern started'
+expect-log '^Rectangular Pattern Objects: 1 sketch curve'
+wait-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){4}$'
+expect-log '^Preview Rectangular Pattern copies: .*\(-20\.000, -5\.000\)'
+wait-idle
+
+# 2. The 60 degree line as Direction 2: the second row along it.
+mark
+click-logged '^Panel Rectangular Pattern input direction2 at '
+wait-idle
+sketch-click 15 -11.34
+wait-log '^Rectangular Pattern Direction 2: 1 sketch curve \[sketch curve c[0-9]+ of F1\]$'
+wait-log '^Preview Rectangular Pattern copies: .*\(-15\.000, -6\.340\)'
+expect-log '^Preview Rectangular Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){4}$'
+expect-log '^Preview Rectangular Pattern copies: .*\(0\.000, -15\.000\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(-5\.000, -6\.340\)'
+expect-log '^Preview Rectangular Pattern copies: .*\(5\.000, -6\.340\)'
+wait-log '^Sketch handle at \(-20\.000, -15\.000\), arrows distance1 from \(-10\.000, -15\.000\) along \(1\.000, 0\.000\), distance2 from \(-15\.000, -6\.340\) along \(0\.500, 0\.866\)$'
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-honeycomb.png'
+mark
+button '^OK$'
+wait-log '^Rectangular pattern of 1 object\(s\), 3 x 2$'
+wait-idle
+
+# 3. Edit Pattern keeps the stored second direction; At Right Angles
+# turns it back and off again restores it.
+mark
+sketch-click -17 -15
+expect-selection 1 0
+mark
+command sketch.edit_pattern
+wait-log '^Command Edit Pattern started'
+wait-log '^Preview Edit Pattern copies: .*\(-15\.000, -6\.340\)'
+wait-idle
+mark
+click-logged '^Panel Edit Pattern input square2 at '
+wait-log '^Preview Edit Pattern copies: .*\(-20\.000, -5\.000\)'
+wait-idle
+mark
+click-logged '^Panel Edit Pattern input square2 at '
+wait-log '^Preview Edit Pattern copies: .*\(-15\.000, -6\.340\)'
+wait-idle
+mark
+type-in '^Panel Edit Pattern input quantity at ' '2'
+wait-log '^Preview Edit Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){2}$'
+expect-log '^Preview Edit Pattern copies: .*\(-5\.000, -6\.340\)'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited pattern k[0-9]+: 4 in all$'
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -20,6 +20,7 @@ guide, not a replacement for the reference.
 | Thread geometry required in an exported mesh | Modeled `thread` | Set the modeled option after checking the reference and intended process. A cosmetic thread does not cut a mesh thread. |
 | A constant arbitrary section following a route | `sweep` | Section and path express the result; guides and orientation are explicit choices. |
 | A round tube following a route | `pipe` | Directly describes the path and circular section, including wall size when hollow. |
+| A hose, cable, wire, flat cable or strip laid through the model | `flex` | Stores the item and a few nodes; the route between them is found on every recompute, around the bodies and within the bend radius, and follows when the model changes. Use `pipe` for a rigid tube whose path is the design. |
 | A regular helix or spring | `coil` | Radius, pitch and turns express the helix. Use a sweep when the section or path needs its extra control. |
 | A changing section | `loft` | Several profiles describe the change; choose correspondence and rails deliberately. |
 | A screw post on a housing | `boss` | Combines a round post, hole and optional ribs/draft. A boss cannot itself be patterned or mirrored: use separate bosses or a construction from supported features for repetition. |
@@ -67,6 +68,21 @@ explain why the design structure needs an explicit policy decision.
 - **Tube or handle:** a dimensioned connected route, `pipe` for a round
   section or `sweep` for a custom one, referenced attachments, then
   finishing. A changing section calls for `loft`, not many cylinders.
+- **Hose or cable:** a `flex` feature with an `item` (its section,
+  wall and `bend_radius`; a built-in type is taken afterwards with
+  `flex.set_item` and its `type`, such as `hose-10`) and two or more
+  nodes in order. Start at a pipe's end where there is one: the
+  `end_ports` query gives its `ref`, which the first node takes as its
+  `port`. Put the nodes that must lie on the model on faces (`on`, with
+  `at` a point near where the item should touch) and leave the others
+  free; a few nodes are enough, the route between them is found. Then
+  read the `flex` query: `length`, the `runs` on faces, and `problems`
+  with their `places`. A problem is a warning, not a failure: move a
+  node (`flex.move_node`), add one where the route should go
+  (`flex.add_node`) or give the item more room, until none is left.
+  The `flex_items` query lists every item with its length for a cut
+  list; `length_parameter` names the driven parameter an expression
+  can use.
 - **Spring:** choose `coil` dimensions and section; check pitch, turns,
   axis and end requirements. Do not construct each turn independently.
 

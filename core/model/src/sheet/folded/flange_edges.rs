@@ -95,10 +95,7 @@ fn edge_place(edge: &BoundaryRef) -> NoticePlace {
 /// The front face of a panel or a bend of the input sheet: the wall of an
 /// existing flange that a refusal is about.
 fn domain_place(domain: SheetDomainRef) -> NoticePlace {
-    NoticePlace::face(match domain {
-        SheetDomainRef::Panel(p) => format!("{}:sheet_front({})", p.feature, p.slot),
-        SheetDomainRef::Bend(b) => format!("{}:sheet_bend_front({})", b.feature, b.slot),
-    })
+    crate::sheet::wall_place(domain)
 }
 
 /// A refusal at a corner (mitcad#1877): `message` in words, `places` (the

@@ -43,6 +43,7 @@
 namespace mitcad {
 
 class CommandState;
+class CommandHost;
 
 // What the model knows, for command definitions (implemented by the main
 // window on the document).
@@ -87,6 +88,9 @@ public:
   // The way from a point of the design towards the viewer (Place Part's
   // hole end, mitcad#525); none without a view.
   virtual std::optional<gp_Dir> towardViewer(const gp_Pnt& /*point*/) const { return std::nullopt; }
+  // The keys held with the mouse's last move or click over the 3D view
+  // (mitcad#1713: Flex's Shift and Alt); none without a view.
+  virtual Qt::KeyboardModifiers pointerModifiers() const { return Qt::NoModifier; }
 };
 
 enum class ValueKind { Length, Angle, Unitless };
@@ -500,6 +504,12 @@ struct InputDef {
   // size takes its coarse designation; a length typed in BUILD detaches it
   // from its auto length, a search text narrows its picker).
   std::function<void(CommandState&, const CommandContext&)> onChange;
+  // Value: called when the field is left or Enter is pressed in it (its
+  // value committed, as a spin box without keyboard tracking takes it),
+  // not at each key: what costs too much to follow the typing (Let It
+  // Hang's Length resamples the hanging item, mitcad#1713) reads what this
+  // keeps.
+  std::function<void(CommandState&, const CommandContext&)> onCommit;
   // Choice: Tab, while the main window has the keyboard and the input is
   // shown, steps the choice to the next of these values (BUILD's auto
   // length: face, centre, through; mitcad#375). Shift+Tab still moves the
@@ -687,6 +697,14 @@ struct InputDef {
   // radius above 0). What is typed is checked by the model as before.
   double stepMinimum = -std::numeric_limits<double>::infinity();
   bool stepAboveMinimum = false;
+  // A slider beside a value field (mitcad#1713: Let It Hang's Damping), for
+  // a unitless value: its range and the decimals a drag writes into the
+  // field, which it sets as typing would; it follows the field's value. None
+  // while the maximum is not above the minimum.
+  double sliderMinimum = 0.0;
+  double sliderMaximum = 0.0;
+  int sliderDecimals = 2;
+  bool hasSlider() const { return type == Type::Value && sliderMaximum > sliderMinimum; }
 
   InputDef& withTooltip(const QString& tip) {
     tooltip = tip;
@@ -810,6 +828,10 @@ struct InputDef {
     onChange = std::move(call);
     return *this;
   }
+  InputDef& withOnCommit(std::function<void(CommandState&, const CommandContext&)> call) {
+    onCommit = std::move(call);
+    return *this;
+  }
   InputDef& withTabCycle(const QStringList& values) {
     tabCycle = values;
     return *this;
@@ -825,6 +847,11 @@ struct InputDef {
   InputDef& withItemsText(
       std::function<QString(const Selection&, const CommandState&, const CommandContext&)> text) {
     itemsText = std::move(text);
+    return *this;
+  }
+  // What an empty selection row says (emptyShows, with the row's own color).
+  InputDef& withEmptyText(const QString& text) {
+    emptyShows = [text](const CommandState&) { return std::make_pair(text, QColor()); };
     return *this;
   }
   InputDef& withItemsWords(
@@ -946,6 +973,12 @@ struct InputDef {
                      std::function<void(CommandState&, const CommandContext&)> action) {
     markFor = std::move(mark);
     onMark = std::move(action);
+    return *this;
+  }
+  InputDef& withSlider(double least, double most, int decimals = 2) {
+    sliderMinimum = least;
+    sliderMaximum = most;
+    sliderDecimals = decimals;
     return *this;
   }
   InputDef& withStepMinimum(double least, bool above = false) {
@@ -1112,10 +1145,18 @@ struct Built {
   // face opens the fillet).
   QString edit;
   QString editInput;
+  // The error only says what the command waits for next (mitcad#1713: a
+  // route's first clicks): the panel shows it as a hint, not as a failure.
+  bool asks = false;
 
   static Built of(const QJsonObject& definition) { return {definition, QString(), QString(), QString(), QString()}; }
   static Built failure(const QString& message, const QString& input = QString()) {
     return {QJsonObject(), message, input, QString(), QString()};
+  }
+  static Built asking(const QString& message, const QString& input = QString()) {
+    Built built = failure(message, input);
+    built.asks = true;
+    return built;
   }
   static Built editing(const QString& feature, const QString& input) {
     return {QJsonObject(), QString(), QString(), feature, input};
@@ -1334,6 +1375,11 @@ struct CommandDef {
   bool okWhileBusy = false;
   // The OK button's text when it is not "OK" (3D Print: Send).
   QString okLabel;
+  // An application panel whose work needs no panel when the selection made
+  // before it completes it (mitcad#1963: Export Face as DXF… on a selected
+  // planar face writes at once): called when the command is run, before
+  // the panel opens; true when it did the work, and no panel opens.
+  std::function<bool()> runsAtOnce;
   // Commands that run model commands of their own (BUILD, mitcad#375),
   // with `inspect` as their preview: OK (Enter) calls `apply`, which runs
   // them through the main window (each its own undo step, or one step for
@@ -1410,6 +1456,50 @@ struct CommandDef {
   // where Esc ends the question, nothing sent): true when the command took
   // it (the inputs follow, as after a change); otherwise Esc cancels.
   std::function<bool(CommandState&, const CommandContext&)> escape;
+  // A route laid by clicks (mitcad#1713: Flex). Backspace while the pointer
+  // is over the view and no field is being typed in: true when the command
+  // took it (its last node taken back; the inputs, the highlights and the
+  // preview follow, as after a change).
+  std::function<bool(CommandState&, const CommandContext&)> backspace;
+  // An edit session with its own undo (mitcad#1713: a Flex item's, owner
+  // 14.11.2026, as in sketch editing): Ctrl+Z (the Undo key) while the panel
+  // is open and no field is being typed in takes the session's last change
+  // back; true when the command took it (the inputs, the highlights and the
+  // preview follow, as after Backspace). The model's history is not touched:
+  // OK still makes the whole session one undo step.
+  std::function<bool(CommandState&, const CommandContext&)> undo;
+  // OK is coming (Enter, the button, a click that confirms): the command
+  // drops what only follows the pointer; true when that changed the state,
+  // so that the preview is computed again before OK adds what it shows.
+  std::function<bool(CommandState&, const CommandContext&)> confirming;
+  // Asked after each click the command took (a pick of an input with
+  // onPick, a point on its cursor plane): true makes the click OK too, as
+  // Enter would (a double click, an end on an end port).
+  std::function<bool(CommandState&)> clickConfirms;
+  // A cheap preview while the pointer moves (mitcad#1713: Flex's route
+  // without its solid). When set, a hoverPreview or cursorPlaneMoved that
+  // returns true does not ask for the feature's preview: the feature's
+  // shown preview is taken away, this definition is previewed at once (as
+  // the command's add_feature or edit_feature; nothing of it is drawn by
+  // the session), `lightPreviewShown` is called while the model holds it
+  // (`ok` false with the model's `error` when it was refused or the
+  // definition is not complete), and the model's preview is dropped
+  // again. The command reads what it draws there (the host's queries, its
+  // viewer). The feature's own preview follows once the pointer has
+  // rested, or at the next change of the inputs.
+  std::function<Built(const CommandState&, const CommandContext&)> lightPreview;
+  std::function<void(bool ok, const QString& error, CommandState&, CommandHost&)> lightPreviewShown;
+  // With lightPreview, a preview of the pointer alone (mitcad#1713, owner
+  // 14.11.2026: Flex draws a dashed line to the pointer and works the route
+  // out only once the pointer rests on a place a node can take): a move
+  // neither takes the feature's shown preview away nor asks for it again
+  // (the feature's preview does not follow the pointer); `lightPreviewMoved`
+  // is called (the command draws what costs no model call), and the light
+  // preview runs at once when this returns true for the state after the
+  // move (a live route), else once the pointer has rested 300 ms. One model
+  // request at most: a move while the model computes waits for the rest.
+  std::function<bool(const CommandState&, const CommandContext&)> lightPreviewLive;
+  std::function<void(CommandState&, CommandHost&)> lightPreviewMoved;
   std::function<Built(const CommandState&, const CommandContext&)> build;
   std::function<std::vector<PreviewMarker>(const QJsonObject&)> previewMarkers;
   // As previewMarkers, with the inputs' state (in its place when set): the
@@ -1483,6 +1573,12 @@ struct CommandDef {
   // that asks the model much (mitcad#1812: Derived Component's four
   // queries), whose features keep the plain hover text.
   bool loadForHover = true;
+  // Fills the inputs for the feature's hover text and selection card only
+  // (featurePresentation), in place of `load`, for a command whose `load`
+  // reads the model into state that its panel keeps beside the inputs: a
+  // hover text is built also while the panel runs (Flex, mitcad#1971: its
+  // library's types and end ports, its edit session's Undo). Unset: `load`.
+  std::function<void(const QJsonObject&, CommandState&, const CommandContext&)> hoverLoad;
   // Whether the inputs can hold all of a definition of `featureType`, so
   // that editing loses nothing (every definition when unset).
   std::function<bool(const QJsonObject&)> canEdit;
@@ -1560,6 +1656,11 @@ struct CommandDef {
   // placed components, takenWholeByOneOf). It says on its own which items
   // the command takes.
   std::function<bool(const Selection&)> offeredAtTop;
+  // The ribbon's label under the command's button where its name is long
+  // (Preferences › Display › Toolbar labels, mitcad#1936): "Sketch" for
+  // Create Sketch, translated in the context RibbonLabel
+  // (QCoreApplication::translate); empty, the button shows the name.
+  QString shortLabel;
 
   int inputIndex(const QString& inputId) const;
   // The first selection input, which the context menu matches.

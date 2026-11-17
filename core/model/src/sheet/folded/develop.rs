@@ -507,7 +507,8 @@ pub(crate) fn reconfigure(
         .find(|p| !placements.contains_key(&p.domain))
     {
         return Err(format!(
-            "{} is not connected to the stationary panel through registered seams",
+            "{} is not connected to the fixed panel through the sheet's bends and seams; a cut may \
+             have separated it",
             domain_label(missing.domain)
         ));
     }
@@ -808,7 +809,7 @@ pub(crate) fn unfold<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
-    state.overlay_refusal("sheet Unfold")?;
+    super::overlay_refusal(ctx, &state, "sheet Unfold")?;
     if d.bends.is_empty() {
         return Err("sheet Unfold needs an explicit nonempty set of bends".into());
     }
@@ -847,7 +848,7 @@ pub(crate) fn refold<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
 ) -> Result<FeatureOutput<K::Shape>, String> {
     let (mut state, rules) = read(ctx, d.body)?;
-    state.overlay_refusal("sheet Refold")?;
+    super::overlay_refusal(ctx, &state, "sheet Refold")?;
     let owned: Vec<OpenedBend> = state
         .opened
         .iter()

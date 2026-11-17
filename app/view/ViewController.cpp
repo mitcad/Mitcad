@@ -83,6 +83,7 @@
 #include "../platform/MacChrome.hpp"
 #include "../framework/Numbers.hpp"
 #include "../framework/QuickAccess.hpp"
+#include "../framework/RibbonLabels.hpp"
 #include "../DocumentFrame.hpp"
 // 3D Print's slicer (mitcad#13).
 #include "../files/Print3d.hpp"
@@ -470,6 +471,7 @@ ViewSettings ViewSettings::load(const QSettings& store) {
   s.anaglyphFocalLength =
       std::clamp(number("anaglyphFocalLength", s.anaglyphFocalLength), kMinFocalLength, kMaxFocalLength);
   s.sketchesThroughBodies = flag("sketchesThroughBodies", s.sketchesThroughBodies); // mitcad#1931
+  s.selectionThroughBodies = flag("selectionThroughBodies", s.selectionThroughBodies); // mitcad#1956
   return s;
 }
 
@@ -501,6 +503,7 @@ void ViewSettings::save() const {
   store.setValue(kGroup + QStringLiteral("focalLength"), focalLength); // mitcad#1717
   store.setValue(kGroup + QStringLiteral("anaglyphFocalLength"), anaglyphFocalLength);
   store.setValue(kGroup + QStringLiteral("sketchesThroughBodies"), sketchesThroughBodies); // mitcad#1931
+  store.setValue(kGroup + QStringLiteral("selectionThroughBodies"), selectionThroughBodies); // mitcad#1956
 }
 
 void ViewSettings::colors(QColor& upper, QColor& lower, bool& gradient) const {
@@ -721,6 +724,18 @@ void ViewController::registerCommands() {
   }, {QStringLiteral("sketch"), QStringLiteral("sketches"), QStringLiteral("profile"), QStringLiteral("hidden"),
       QStringLiteral("behind"), QStringLiteral("through"), QStringLiteral("x-ray"), QStringLiteral("display")},
       tr("Shows the parts of the shown sketches that bodies hide, faint and dashed"));
+  // The selection through the bodies (mitcad#1956, GitHub mitcad/Mitcad#395):
+  // a preference, on by default.
+  add("view.selection_through", tr("Selection Through Bodies"), "select", [this] {
+    m_settings.selectionThroughBodies = !m_settings.selectionThroughBodies;
+    m_viewer.setSelectionThroughBodies(m_settings.selectionThroughBodies);
+    m_settings.save();
+    syncChecks();
+    qDebug().noquote() << QStringLiteral("View selection through bodies: %1")
+                              .arg(m_settings.selectionThroughBodies ? QStringLiteral("on") : QStringLiteral("off"));
+  }, {QStringLiteral("selection"), QStringLiteral("selected"), QStringLiteral("highlight"), QStringLiteral("hidden"),
+      QStringLiteral("behind"), QStringLiteral("through"), QStringLiteral("x-ray"), QStringLiteral("display")},
+      tr("Shows the parts of the selection that bodies hide, faint and dashed"));
   // The design printer's bed and height (mitcad#640, view/BuildVolume.cpp).
   add("view.build_volume", tr("Show Build Volume"), "print-3d", [this] { setBuildVolumeShown(!m_buildVolume); },
       {QStringLiteral("printer"), QStringLiteral("bed"), QStringLiteral("print"), QStringLiteral("3d print"),
@@ -865,6 +880,7 @@ void ViewController::createMenus(QMenu* view, QMenu* tools, QMenu* help) {
     }
   }
   view->addAction(checkable(QStringLiteral("view.sketches_through"))); // mitcad#1931
+  view->addAction(checkable(QStringLiteral("view.selection_through"))); // mitcad#1956
   view->addAction(checkable(QStringLiteral("view.component_colors")));
   view->addAction(checkable(QStringLiteral("view.build_volume")));
   auto* backgrounds = new QActionGroup(this);
@@ -951,6 +967,7 @@ void ViewController::apply() {
   m_viewer.setGhostInactive(m_settings.ghostInactive); // mitcad#420
   m_viewer.setActivePickPriority(m_settings.activePickPriority);
   m_viewer.setSketchesThroughBodies(m_settings.sketchesThroughBodies); // mitcad#1931
+  m_viewer.setSelectionThroughBodies(m_settings.selectionThroughBodies); // mitcad#1956
   syncChecks();
 }
 
@@ -972,6 +989,7 @@ void ViewController::syncChecks() {
   check(QStringLiteral("view.anaglyph"), m_settings.anaglyph);
   check(QStringLiteral("view.component_colors"), m_settings.componentColors);
   check(QStringLiteral("view.sketches_through"), m_settings.sketchesThroughBodies);
+  check(QStringLiteral("view.selection_through"), m_settings.selectionThroughBodies);
   check(QStringLiteral("view.grid"), m_settings.gridShown);
   check(QStringLiteral("view.snap_grid"), m_settings.snapToGrid);
   check(QStringLiteral("view.build_volume"), m_buildVolume);
@@ -2492,7 +2510,43 @@ void ViewController::showPreferences(const QString& page) {
   quickAccess->setObjectName(QStringLiteral("quickAccessVisible"));
   quickAccess->setChecked(QuickAccessSettings::loadVisible());
   quickAccess->setToolTip(tr("The buttons of the commands you chose, after the workspace tabs"));
-  control(display, quickAccess);
+  // Toolbar labels (mitcad#1936, GitHub mitcad/Mitcad#356) on the same row,
+  // both about the toolbar (Preferences fits a 768 px high screen): the
+  // icons only, or a short label under each icon, applied to every window's
+  // ribbon when the dialog is accepted, at once in the Settings window. No
+  // mnemonic: every letter of its label is taken on this page.
+  auto* ribbonLabels = new QComboBox;
+  ribbonLabels->setObjectName(QStringLiteral("ribbonLabels"));
+  ribbonLabels->addItem(tr("Icons only"), ribbonLabelsId(RibbonLabels::IconsOnly));
+  ribbonLabels->addItem(tr("Labels under icons"), ribbonLabelsId(RibbonLabels::UnderIcons));
+  ribbonLabels->setCurrentIndex(ribbonLabels->findData(ribbonLabelsId(savedRibbonLabels())));
+  ribbonLabels->setToolTip(tr("Shows a short name under the icon of each toolbar button"));
+  auto* ribbonLabelsLabel = new QLabel(tr("Toolbar labels:"));
+  ribbonLabelsLabel->setBuddy(ribbonLabels);
+  auto* toolbarRow = new QHBoxLayout;
+  toolbarRow->addWidget(quickAccess);
+  toolbarRow->addSpacing(12);
+  toolbarRow->addWidget(ribbonLabelsLabel);
+  toolbarRow->addWidget(ribbonLabels);
+  toolbarRow->addStretch(1);
+  if (window != nullptr) {
+    // macOS sizes a check box a few pixels short of its text (as control()).
+    quickAccess->ensurePolished();
+    quickAccess->setMinimumWidth(quickAccess->sizeHint().width() + 8);
+  }
+  control(display, toolbarRow);
+  const auto applyRibbonLabels = [ribbonLabels] {
+    const RibbonLabels chosen =
+        ribbonLabelsFromId(ribbonLabels->currentData().toString()).value_or(RibbonLabels::IconsOnly);
+    if (saveRibbonLabels(chosen)) {
+      qDebug().noquote() << QStringLiteral("Preferences: ribbon labels %1").arg(ribbonLabelsId(chosen));
+    }
+  };
+  if (window != nullptr) {
+    connect(ribbonLabels, &QComboBox::currentIndexChanged, host, saving(applyRibbonLabels));
+  } else {
+    connect(dialog.get(), &QDialog::accepted, ribbonLabels, applyRibbonLabels);
+  }
   const auto applyQuickAccess = [quickAccess] {
     if (QuickAccessSettings::saveVisible(quickAccess->isChecked())) {
       qDebug().noquote() << QStringLiteral("Preferences: quick-access toolbar %1")

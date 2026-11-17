@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The supplier's file of the cut-to-length library UI test's rail (mitcad#1950, tools/ui-cut-length-library-test.sh): a 15 x 12 bar, 100 long (section 180 mm2); nothing of a real supplier's."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-7.5, -6], "length": 15, "width": 12, "height": 100, "operation": "new_body"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"total_volume": 18000, "tolerance": 1e-6}}
+]

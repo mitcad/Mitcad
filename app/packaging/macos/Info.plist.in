@@ -108,6 +108,22 @@
     </dict>
     <dict>
       <key>CFBundleTypeName</key>
+      <string>SERP Model</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>@MITCAD_BUNDLE_ID@.serp</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>serp</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
       <string>STEP Model</string>
       <key>CFBundleTypeRole</key>
       <string>Viewer</string>
@@ -401,6 +417,24 @@
         <key>public.filename-extension</key>
         <array>
           <string>3dm</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>@MITCAD_BUNDLE_ID@.serp</string>
+      <key>UTTypeDescription</key>
+      <string>SERP Model</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.3d-content</string>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>serp</string>
         </array>
       </dict>
     </dict>

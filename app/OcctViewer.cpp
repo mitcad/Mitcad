@@ -67,6 +67,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QPainter>
+#include <QPointingDevice>
 #include <QScopedValueRollback>
 #include <QScreen>
 #include <QSet>
@@ -145,6 +146,7 @@
 #include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 
 namespace mitcad {
 namespace {
@@ -180,6 +182,12 @@ constexpr double kSketchHaloWidth = 6.0;
 // overlay's dimensions and symbols, blended by Qt in sRGB, take 0.35).
 constexpr double kSketchThroughOpacity = 0.5;
 constexpr double kSketchThroughWidth = 2.0;
+// The selection through the bodies (mitcad#1956): its lines and balls as
+// faint as the sketches' copies, the lines dashed at the sketch copies'
+// width; a whole body's faces fainter than its own highlight's.
+constexpr double kSelectionThroughOpacity = kSketchThroughOpacity;
+constexpr double kSelectionThroughWidth = kSketchThroughWidth;
+constexpr float kSelectionThroughFillTransparency = 0.88f;
 // A feature's input lines on a dark background (mitcad#957): the
 // selection blue lightened, over the dark halo, so that it stands out
 // (about 4.6:1 against the dark background, where the plain selection
@@ -571,18 +579,34 @@ Aspect_VKeyFlags toVKeyFlags(Qt::KeyboardModifiers modifiers) {
   return result;
 }
 
+// A touchpad's scroll on Linux's xcb platform (GitHub mitcad/Mitcad#381):
+// libinput gives a two-finger scroll as wheel steps, with no phase and no
+// pixel deltas, so only its device tells it from a wheel. Never guessed
+// from the steps' size: high-resolution and free-spinning mouse wheels send
+// partial notches too, and they zoom.
+bool isXcbTouchpadScroll(const QWheelEvent* event) {
+  static const bool xcb = QGuiApplication::platformName() == QLatin1String("xcb");
+  const QPointingDevice* device = event->pointingDevice();
+  return xcb && device != nullptr && device->type() == QInputDevice::DeviceType::TouchPad;
+}
+
 // A scroll of a trackpad or of a Magic Mouse: continuous, so with a phase or
-// pixel deltas. A mouse wheel has neither.
+// pixel deltas, or from a touchpad on xcb. A mouse wheel has none of these.
 bool isTrackpadScroll(const QWheelEvent* event) {
-  return event->phase() != Qt::NoScrollPhase || !event->pixelDelta().isNull();
+  return event->phase() != Qt::NoScrollPhase || !event->pixelDelta().isNull() || isXcbTouchpadScroll(event);
 }
 
 // How far a scroll moved the content, in pixels of the widget.
 QPointF scrollPixels(const QWheelEvent* event) {
-  if (!event->pixelDelta().isNull()) {
-    return QPointF(event->pixelDelta());
+  QPointF pixels = !event->pixelDelta().isNull() ? QPointF(event->pixelDelta())
+                                                 : QPointF(event->angleDelta()) / 6.0; // a notch (120): ~20 px
+  // xcb swaps a scroll's axes while Alt is held (a wheel then scrolls
+  // sideways); a touchpad's fingers keep their own directions, so Alt +
+  // scroll orbits the way they move.
+  if (isXcbTouchpadScroll(event) && event->modifiers().testFlag(Qt::AltModifier)) {
+    pixels = pixels.transposed();
   }
-  return QPointF(event->angleDelta()) / 6.0; // a wheel notch (120) is about 20 pixels
+  return pixels;
 }
 
 NCollection_Vec2<int> devicePixel(const QPointF& point) {
@@ -1549,6 +1573,18 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   sketchThrough.SetEnableDepthWrite(false);
   sketchThrough.SetClearDepth(false);
   m_viewer->InsertLayerAfter(m_sketchThroughLayer, sketchThrough, m_sketchPointLayer);
+  // The selection through the bodies (mitcad#1956, setSelectionThroughBodies):
+  // faint dashed copies of the selected items, after the sketches' copies,
+  // set up as their layer is (no depth test, no depth writes, immediate,
+  // nothing pickable), so that a body in front of a selected face, edge,
+  // profile or sketch entity no longer hides that it is selected.
+  Graphic3d_ZLayerSettings selectionThrough;
+  selectionThrough.SetName("selection, through the bodies");
+  selectionThrough.SetImmediate(true);
+  selectionThrough.SetEnableDepthTest(false);
+  selectionThrough.SetEnableDepthWrite(false);
+  selectionThrough.SetClearDepth(false);
+  m_viewer->InsertLayerAfter(m_selectionThroughLayer, selectionThrough, m_sketchThroughLayer);
   // Image references drawn through the bodies (mitcad#782): over the
   // bodies and their edges, without depth, before the sketches, their
   // halos, previews and highlights, so that what is traced stays on top.
@@ -1909,11 +1945,14 @@ OcctViewer::OcctViewer(QWidget* parent) : QOpenGLWidget(parent) {
   // The view reports picks and keeps no selection of its own, so every pick
   // replaces OCCT's selection; the owner of the view decides what a pick
   // with Ctrl or Shift does (in sketch mode Ctrl+Shift too, mitcad#217). A
-  // click on the orientation cube is a pick of it.
+  // click on the orientation cube is a pick of it. A click with Alt is a
+  // pick too (mitcad#1713: Flex's node free in space), reported with its
+  // keys; an Alt drag stays the navigation's where it binds one.
   auto& schemes = ChangeMouseSelectionSchemes();
   schemes.Clear();
-  for (const Aspect_VKeyFlags keys : std::initializer_list<Aspect_VKeyFlags>{
-           Aspect_VKeyFlags_NONE, Aspect_VKeyFlags_CTRL, Aspect_VKeyFlags_SHIFT, kCtrlShift, kCubeDrag}) {
+  for (const Aspect_VKeyFlags keys :
+       std::initializer_list<Aspect_VKeyFlags>{Aspect_VKeyFlags_NONE, Aspect_VKeyFlags_CTRL, Aspect_VKeyFlags_SHIFT,
+                                               kCtrlShift, kCubeDrag, Aspect_VKeyFlags_ALT}) {
     schemes.Bind(Aspect_VKeyMouse_LeftButton | keys, AIS_SelectionScheme_Replace);
   }
   // Object dragging is meant for manipulators, which the view does not have
@@ -4046,6 +4085,14 @@ std::vector<HighlightDisplay> mergedHighlights(const std::vector<HighlightDispla
   return units;
 }
 
+// A selected item as the log of the selection through the bodies names it
+// (mitcad#1956, for UI tests): "face F2.b0/F2:side(c1)", "body F2.b0".
+QString selectionThroughName(const SelectionItem& item) {
+  return QStringLiteral("%1 %2%3")
+      .arg(SelectionItem::kindName(item.kind), item.owner,
+           item.name.isEmpty() ? QString() : QStringLiteral("/") + item.name);
+}
+
 } // namespace
 
 void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) {
@@ -4068,6 +4115,8 @@ void OcctViewer::setHighlights(const std::vector<HighlightDisplay>& highlights) 
   m_profileHighlights.clear();
   m_drawnHighlightLine.clear();
   eraseSelectionShadows();
+  m_selectionThroughItems.clear(); // the copies went with the highlights (mitcad#1956)
+  m_selectionThroughCopies = 0;
   if (&highlights != &m_shownHighlights) {
     m_shownHighlights = highlights;
   }
@@ -4218,6 +4267,7 @@ void OcctViewer::drawHighlightSlice() {
     m_loggedHighlightPlaces = done.places;
     qDebug().noquote() << QStringLiteral("View highlight places: %1").arg(done.places);
   }
+  logSelectionThrough(); // mitcad#1956
   if (done.slices > 1) {
     // A large selection's highlights, drawn while the input was handled
     // (mitcad#1631): how many, as how many objects and shadows, how long.
@@ -4317,6 +4367,9 @@ bool OcctViewer::drawHighlightShadows(const HighlightDisplay& highlight) {
     m_selectionShadowSources.emplace_back(source.presentation.get(), source.presentation->Transformation().get());
   }
   m_shadowedHighlights.push_back(highlight);
+  if (wantsSelectionThrough(highlight)) {
+    drawSelectionThrough(highlight, nullptr); // its faces, faint (mitcad#1956)
+  }
   return true;
 }
 
@@ -4535,6 +4588,138 @@ void OcctViewer::drawHighlight(const HighlightDisplay& highlight) {
     }
   }
   m_highlights.push_back(object);
+  if (wantsSelectionThrough(highlight)) {
+    drawSelectionThrough(highlight, lines); // mitcad#1956
+  }
+}
+
+bool OcctViewer::wantsSelectionThrough(const HighlightDisplay& highlight) const {
+  // A light tint, a feature's input lines, a hover look and an item
+  // inspected through what hides it have their own look through the
+  // bodies, or none on purpose.
+  if (!m_selectionThroughBodies || highlight.shape.IsNull() || highlight.light || highlight.inputLines ||
+      highlight.hoverLook || highlight.throughSolid) {
+    return false;
+  }
+  switch (highlight.item.kind) {
+  case SelectKind::Face:
+  case SelectKind::Feature:
+  case SelectKind::Edge:
+  case SelectKind::Vertex:
+  case SelectKind::SketchCurve:
+  case SelectKind::SketchPoint:
+  case SelectKind::Body:
+  case SelectKind::Component:
+    return true;
+  case SelectKind::Profile:
+    // While an input takes profiles its highlight is drawn through the
+    // bodies itself (profileHighlightLayer).
+    return !m_profilesFirst;
+  default:
+    // Planes, axes and points of the origin and datums: drawn over the
+    // bodies' depth as before.
+    return false;
+  }
+}
+
+void OcctViewer::drawSelectionThrough(const HighlightDisplay& highlight, const ViewEdges* lines) {
+  const SelectKind kind = highlight.item.kind;
+  const bool whole = kind == SelectKind::Body || kind == SelectKind::Component;
+  if (whole && !BRepTools::Triangulation(highlight.shape, Precision::Infinite(), true)) {
+    // A whole body with a face no job meshed: no copy, rather than one
+    // meshed here.
+    return;
+  }
+  // From the same polylines as its highlight (fineShape), so that it lies
+  // on the highlight where nothing hides it.
+  occ::handle<AIS_Shape> through = whole ? new AIS_Shape(highlight.shape) : fineShape(highlight.shape, lines);
+  int mode = AIS_WireFrame;
+  if (whole) {
+    // A whole body: its faces only, faint, from the triangles its job
+    // made, blended in place; no lines, so that its own back edges do not
+    // show through it.
+    through->SetColor(occtColor(highlight.color));
+    through->SetMaterial(flatMaterial(0.0f));
+    through->SetTransparency(kSelectionThroughFillTransparency);
+    through->Attributes()->SetFaceBoundaryDraw(false);
+    through->Attributes()->ShadingAspect()->Aspect()->SetAlphaMode(Graphic3d_AlphaMode_MaskBlend, 0.01f);
+    mode = AIS_Shaded;
+  } else if (kind == SelectKind::SketchPoint || kind == SelectKind::Vertex) {
+    // A point: its selected ball, faint (as the sketches' copies fade
+    // their markers).
+    const double ratio = devicePixelRatioF();
+    QImage image = sketch::pointBallImage(highlight.color, ratio).convertToFormat(QImage::Format_ARGB32);
+    for (int row = 0; row < image.height(); ++row) {
+      auto* pixels = reinterpret_cast<QRgb*>(image.scanLine(row));
+      for (int column = 0; column < image.width(); ++column) {
+        const QRgb pixel = pixels[column];
+        pixels[column] = qRgba(qRed(pixel), qGreen(pixel), qBlue(pixel),
+                               static_cast<int>(std::lround(qAlpha(pixel) * kSelectionThroughOpacity)));
+      }
+    }
+    setPointImage(through, sketchMarkerImage(sketch::pointBallKey(highlight.color, ratio) +
+                                                 QStringLiteral(" through"),
+                                             image));
+  } else {
+    // A face's or a region's boundary, an edge, a curve: dashed in the
+    // selection's colour, faint, blended in place; no lines across the
+    // faces (drawHidden).
+    const Quantity_Color color = occtColor(highlight.color);
+    setEdgeStyle(through, color, kSelectionThroughWidth, Aspect_TOL_DASH);
+    setLineOpacity(through, kSelectionThroughOpacity);
+    const occ::handle<Prs3d_Drawer>& drawer = through->Attributes();
+    drawer->SetUIsoAspect(new Prs3d_IsoAspect(color, Aspect_TOL_DASH, 1.0, 0));
+    drawer->SetVIsoAspect(new Prs3d_IsoAspect(color, Aspect_TOL_DASH, 1.0, 0));
+  }
+  // Lines and points from the edges' polylines, a body's faces from its
+  // job's triangles: nothing is meshed for a copy (a wireframe needs no
+  // triangulation, a whole body has one on every face, checked above).
+  through->Attributes()->SetAutoTriangulation(false);
+  // What the section analysis or Hide Above Sketch cuts away has no copy;
+  // a sketch's own items are drawn whole, as the sketch is.
+  const bool sketchItem =
+      kind == SelectKind::Profile || kind == SelectKind::SketchCurve || kind == SelectKind::SketchPoint;
+  if (!m_sectionClip.IsNull() && !sketchItem) {
+    through->AddClipPlane(m_sectionClip);
+  }
+  display(through, mode, PickInfo(), false);
+  m_context->SetZLayer(through, m_selectionThroughLayer);
+  m_highlights.push_back(through);
+  ++m_selectionThroughCopies;
+  m_selectionThroughItems << selectionThroughName(highlight.item);
+}
+
+void OcctViewer::setSelectionThroughBodies(bool on) {
+  if (on == m_selectionThroughBodies) {
+    return;
+  }
+  m_selectionThroughBodies = on;
+  // The highlights drawn again, with their copies or without.
+  setHighlights(m_shownHighlights);
+}
+
+void OcctViewer::logSelectionThrough() {
+  QString line;
+  if (!m_selectionThroughBodies) {
+    line = QStringLiteral("off");
+  } else if (m_selectionThroughItems.isEmpty()) {
+    line = QStringLiteral("none");
+  } else {
+    // The first items by name, the rest counted (a large selection's).
+    constexpr qsizetype kNamed = 8;
+    QStringList named = m_selectionThroughItems.mid(0, kNamed);
+    if (m_selectionThroughItems.size() > kNamed) {
+      named << QStringLiteral("%1 more").arg(m_selectionThroughItems.size() - kNamed);
+    }
+    // Nothing is meshed for the copies (drawSelectionThrough).
+    line = QStringLiteral("%1; %2 copies, nothing meshed")
+               .arg(named.join(QStringLiteral(", ")))
+               .arg(m_selectionThroughCopies);
+  }
+  if (line != m_loggedSelectionThrough) {
+    m_loggedSelectionThrough = line;
+    qDebug().noquote() << QStringLiteral("Selection through the bodies: %1").arg(line);
+  }
 }
 
 void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
@@ -5798,11 +5983,13 @@ void OcctViewer::OnSelectionChanged(const occ::handle<AIS_InteractiveContext>& c
                               .arg(static_cast<double>(m_windowClock.nsecsElapsed()) / 1.0e6, 0, 'f', 2)
                               .arg(items.size());
   }
-  // Where the click was, before what it picked (mitcad#1196).
+  // Where the click was, before what it picked (mitcad#1196); both with the
+  // click's number (mitcad#1713).
+  const quint64 click = m_windowPick ? 0 : ++m_clickSerial;
   if (!m_windowPick && !isCovered(m_clickPosition)) {
-    emit clickedAt(m_clickPosition, m_pressModifiers);
+    emit clickedAt(m_clickPosition, m_pressModifiers, click, items);
   }
-  emit picked(items, m_pressModifiers, m_windowPick);
+  emit picked(items, m_pressModifiers, m_windowPick, click);
 }
 
 void OcctViewer::windowSelectionApplied() {
@@ -6056,6 +6243,22 @@ bool OcctViewer::bringClearOfPanels(const Bnd_Box& box, bool fit) {
                             .arg(qRound(shift.y()));
   moveCamera(moved);
   return true;
+}
+
+void OcctViewer::shiftView(const gp_Vec& move) {
+  if (!isFinite(move.XYZ()) || move.Magnitude() <= Precision::Confusion()) {
+    return;
+  }
+  // From where the view is going, so that the shift is not lost to an
+  // animation's end.
+  settleCamera();
+  occ::handle<Graphic3d_Camera> moved = new Graphic3d_Camera();
+  moved->Copy(m_view->Camera());
+  moved->SetEyeAndCenter(moved->Eye().Translated(move), moved->Center().Translated(move));
+  m_view->Camera()->Copy(moved);
+  m_view->Invalidate();
+  cameraMoved();
+  requestFrame();
 }
 
 bool OcctViewer::showInFreeArea(const Bnd_Box& box, const QString& what) {
@@ -7582,6 +7785,25 @@ void OcctViewer::setSectionCaps(const std::vector<SectionCap>& caps, const gp_Ax
   m_sectionCaps.clear();
   m_sectionHatches.clear();
   m_sectionLook.clear();
+  // The selection's copies through the bodies keep what the cut keeps
+  // (mitcad#1956): the side against the plane's normal, and the plane
+  // itself with a hundredth of a millimetre to spare (a selected face
+  // that the cut left on it). OCCT clips what lies against a clip plane's
+  // normal, so the plane is turned round. No caps: nothing is cut.
+  occ::handle<Graphic3d_ClipPlane> clip;
+  if (!caps.empty()) {
+    const gp_Dir normal = plane.Direction();
+    const gp_Pnt origin = plane.Location().Translated(gp_Vec(normal) * 0.01);
+    clip = new Graphic3d_ClipPlane(gp_Pln(origin, normal.Reversed()));
+  }
+  const bool clipChanged = clip.IsNull() != m_sectionClip.IsNull() ||
+                           (!clip.IsNull() && !clip->GetEquation().IsEqual(m_sectionClip->GetEquation()));
+  if (clipChanged) {
+    m_sectionClip = clip;
+    if (!m_shownHighlights.empty()) {
+      setHighlights(m_shownHighlights);
+    }
+  }
   for (std::size_t i = 0; i < caps.size(); ++i) {
     if (caps[i].faces.IsNull()) {
       continue;
@@ -7898,6 +8120,9 @@ std::optional<SelectionItem> OcctViewer::itemAt(const QPointF& position) {
   std::optional<SelectionItem> item;
   if (!owner.IsNull() && owner->Selectable() != m_orientationCube && accepts(owner)) {
     item = itemFor(owner);
+    if (item) {
+      item->at = pickedPoint(owner);
+    }
   }
   m_context->ClearDetected(false);
   return item;
@@ -8463,8 +8688,17 @@ void OcctViewer::setDragCursor(bool shown) {
   }
 }
 
+void OcctViewer::setHandCursor(HandCursor hand) {
+  if (hand != m_handCursor) {
+    m_handCursor = hand;
+    updateCursor(false);
+  }
+}
+
 void OcctViewer::updateCursor(bool log) {
-  if (!m_sketchInput) {
+  if (!m_sketchInput && m_handCursor != HandCursor::None) {
+    setCursor(m_handCursor == HandCursor::Closed ? Qt::ClosedHandCursor : Qt::OpenHandCursor);
+  } else if (!m_sketchInput) {
     setCursor(m_dragCursor ? Qt::SizeAllCursor : Qt::ArrowCursor);
   } else {
     setCursor(precisionCursor(m_sketchToolIcon, devicePixelRatioF(), m_sketchSnapping));
@@ -8625,6 +8859,7 @@ bool OcctViewer::event(QEvent* event) {
 
 void OcctViewer::mousePressEvent(QMouseEvent* event) {
   QOpenGLWidget::mousePressEvent(event);
+  m_pointerModifiers = event->modifiers();
   disarmPickList(); // another button too: a held left press lists nothing
   if (event->buttons() == event->button()) {
     resetOrbitWrap(); // the first button: a new drag
@@ -8781,6 +9016,7 @@ void OcctViewer::endOccurrenceDrag(const QPointF& position, bool cancelled) {
 
 void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseReleaseEvent(event);
+  m_pointerModifiers = event->modifiers();
   disarmPickList();
   if (m_pickListHeld && event->button() == Qt::LeftButton) {
     // The press that opened the pick list (mitcad#1703): its release is the
@@ -8901,6 +9137,7 @@ void OcctViewer::mouseReleaseEvent(QMouseEvent* event) {
 
 void OcctViewer::mouseMoveEvent(QMouseEvent* event) {
   QOpenGLWidget::mouseMoveEvent(event);
+  m_pointerModifiers = event->modifiers();
   // The pick list (mitcad#1703): a press that moves is a drag, not a hold;
   // the moves of the press that opened the list are the list's.
   if (m_pickListHeld) {

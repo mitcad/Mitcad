@@ -105,6 +105,9 @@ struct PickerPart {
   // Its configuration table as the library gives it: an open one is chosen
   // by its options under the grid (mitcad#810).
   QJsonObject table;
+  // A BUILD part cut to length: its length parameter, which BUILD gives, so
+  // the options under the grid leave it out (mitcad#1950); empty otherwise.
+  QString lengthParameter;
   QString refused;      // not choosable: why (greyed, the reason in the tooltip)
   // An index's library that is not fetched (Browse Components): a tile of
   // its own in the group "Libraries to get"; with `component`, one of the

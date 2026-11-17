@@ -166,4 +166,7 @@ CommandDef formCommand(const CommandContext& context);
 // up to a plane.
 CommandDef fillCavityCommand(const CommandContext& context);
 
+// FlexCommands.cpp (mitcad#1713): a flexible item laid through the model.
+CommandDef flexCommand(const CommandContext& context, DocumentHost& host);
+
 } // namespace mitcad::cmd

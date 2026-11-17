@@ -2,7 +2,7 @@
 // Sketch selection filters (mitcad#217; framework/SelectionScope.hpp):
 //   - While a sketch is edited, what a click and a window select is the
 //     sketch's three-state filter, per category: the sketch's ordinary,
-//     construction and projected geometry, its dimensions and constraints,
+//     construction and projected geometry, its dimensions, its constraints,
 //     its profiles, body edges in sight and behind faces, faces, vertices,
 //     bodies, components and planes, axes and points. Other sketches'
 //     geometry is never selectable. Every sketch edit starts with the
@@ -225,10 +225,15 @@ void MainWindow::dragSketchHandle(const SketchHandle& handle, double x, double y
 
 Selection MainWindow::sketchWindowItems(const Selection& items) const {
   Selection taken = items;
-  if (m_sketchScope.state(FilterRow::Annotations) == FilterState::Window) {
+  // Dimensions and constraints each by their own row (GitHub #388): a
+  // window takes only the kinds whose row is a cross.
+  const bool dimensions = m_sketchScope.state(FilterRow::Dimensions) == FilterState::Window;
+  const bool constraints = m_sketchScope.state(FilterRow::Constraints) == FilterState::Window;
+  if (dimensions || constraints) {
     for (const SelectionItem& item :
          m_sketch->annotationsIn(m_viewer->lastWindow(), m_viewer->lastWindowCrossing())) {
-      if (!taken.contains(item)) {
+      const bool wanted = item.kind == SelectKind::SketchDimension ? dimensions : constraints;
+      if (wanted && !taken.contains(item)) {
         taken.append(item);
       }
     }

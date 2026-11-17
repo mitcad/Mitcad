@@ -562,11 +562,14 @@ impl Configurations {
         i: usize,
     ) -> Result<Vec<Restriction>, String> {
         let mut out = Vec::new();
-        if self.closed && !self.rows.is_empty() {
+        // A closed table's open options (mitcad#1950) are no part of its
+        // rows' combinations: the rows restrict the others only.
+        if self.closed && !self.rows.is_empty() && !self.is_open(&opts[i].name) {
             let mut only: Vec<Val> = Vec::new();
             for row in &self.rows {
                 let earlier = opts[..i]
                     .iter()
+                    .filter(|o| !self.is_open(&o.name))
                     .all(|o| row_val(parameters, o, row).is_none_or(|v| v.same(&o.value)));
                 if !earlier {
                     continue;
@@ -641,13 +644,17 @@ impl Configurations {
             }
         }
         out.extend(self.rule_checks(parameters)?);
-        if self.closed && !self.rows.is_empty() && !opts.is_empty() {
+        // The rows' combination of the options but the open ones
+        // (mitcad#1950).
+        let chosen: Vec<&Opt> = opts.iter().filter(|o| !self.is_open(&o.name)).collect();
+        if self.closed && !self.rows.is_empty() && !chosen.is_empty() {
             let matches = self.rows.iter().any(|row| {
-                opts.iter()
+                chosen
+                    .iter()
                     .all(|o| row_val(parameters, o, row).is_some_and(|v| v.same(&o.value)))
             });
             if !matches {
-                let combination: Vec<String> = opts
+                let combination: Vec<String> = chosen
                     .iter()
                     .map(|o| format!("{} {}", o.name, o.value.text(o.unit)))
                     .collect();
@@ -1334,8 +1341,9 @@ impl Configurations {
                 continue;
             }
             let mut domain = Set::domain(parameters, opt);
-            // A closed table's values are its rows'.
-            if self.closed {
+            // A closed table's values are its rows' (an open option's,
+            // mitcad#1950, its own domain).
+            if self.closed && !self.is_open(&opt.name) {
                 let rows: Vec<Val> = self
                     .rows
                     .iter()

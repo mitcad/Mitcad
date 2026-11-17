@@ -226,6 +226,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>%n node(s)</source>
+        <translation>
+            <numerusform>%n node</numerusform>
+            <numerusform>%n nodes</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Import %n files into this design as components, or each as a new design?</source>
         <translation>
             <numerusform>Import %n file into this design as a component, or as a new design?</numerusform>

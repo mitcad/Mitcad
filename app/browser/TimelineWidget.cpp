@@ -449,6 +449,9 @@ public:
       const Group& group = m_groups[m_items[i].group];
       state = tr("<b>%1</b><br>%n feature(s); double-click to open", nullptr, group.last - group.first + 1)
                   .arg(group.name.toHtmlEscaped());
+    } else if (feature.warningAcknowledged()) {
+      // Acknowledged (mitcad#1935): told, marked so, not as a warning.
+      state = QStringLiteral("<br>%1").arg(acknowledgedWarningText(feature.error).toHtmlEscaped());
     } else if (feature.status == QStringLiteral("error") || feature.status == QStringLiteral("warning")) {
       // The level's word with the message (mitcad#1040).
       state = QStringLiteral("<br>%1").arg(
@@ -628,7 +631,9 @@ protected:
       const int last = head ? m_groups[item.group].last : i;
       for (int k = i; k <= last; ++k) {
         const DocumentSnapshot::Feature& member = m_items[k].feature;
-        state.state = std::max(state.state, featureState(member.status));
+        // An acknowledged warning is painted as ok (mitcad#1935).
+        state.state = std::max(state.state, featureState(member.shownStatus()));
+        state.acknowledged = state.acknowledged || member.warningAcknowledged();
         // An import note on a feature that is not built (mitcad#170), or
         // infos of one that is (mitcad#1106).
         state.noted = state.noted || member.noted();
@@ -644,7 +649,7 @@ protected:
       // The status ring stays inside the selection's (mitcad#961).
       const timeline::CellLook look = timeline::cellLook(state, cells);
       timeline::paintCellFrame(painter, QRectF(cell(i)), look);
-      if (state.state != FeatureState::Ok || state.noted) {
+      if (state.state != FeatureState::Ok || state.noted || state.acknowledged) {
         cellLines.insert(head ? m_groups[item.group].name : feature.name, timeline::describeCell(state, look));
       }
       if (item.colour >= 0) {
@@ -1892,7 +1897,8 @@ void TimelineWidget::updateMatches() {
     item.failed = feature.status == QStringLiteral("error");
     // As the warnings badge counts them; an import note is information
     // (mitcad#1040).
-    item.warned = !item.failed && feature.status == QStringLiteral("warning");
+    // An acknowledged one is not (mitcad#1935).
+    item.warned = !item.failed && feature.warned();
     item.noted = feature.noted();
     item.suppressed = feature.suppressed;
     item.rolledBack = i >= m_strip->marker();
@@ -2024,7 +2030,9 @@ QString TimelineWidget::searchResultToolTip(const QString& uid) const {
     return QString();
   }
   QString state;
-  if (feature->status == QStringLiteral("error") || feature->status == QStringLiteral("warning")) {
+  if (feature->warningAcknowledged()) {
+    state = acknowledgedWarningText(feature->error); // mitcad#1935
+  } else if (feature->status == QStringLiteral("error") || feature->status == QStringLiteral("warning")) {
     state = noticeLevelText(featureStateLevel(featureState(feature->status)), feature->error);
   } else if (feature->suppressed) {
     state = feature->error.isEmpty() ? tr("Suppressed") : tr("Suppressed: %1").arg(feature->error);

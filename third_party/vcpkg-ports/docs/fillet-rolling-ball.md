@@ -68,6 +68,21 @@ rim), the blend is walked on, still rolling on the edge, until the ball
 reaches that face, and cut by it (`RolledCutToEnd`); the stripe ends in a
 point on the edge. Before, the corner at the lens's tip was invalid.
 
+### 0173-chfi3d-stripe-computed-again-with-occt-inverse-where-rolling-walk-fails
+
+0170's inverse function ends a walk rolling on an edge where the surface's
+contact reaches an arc with the rolling ball's equations
+(`BRepBlend_SurfCurvConstRadInv`). In OCCT's blend/complex A6 at scale 10
+the walk on two edges that starts from that end took no step and the
+rounding failed (mitcad#1902); OCCT's equations there (both contacts in the
+guide's normal plane) make it at all five scales, but used alone they lose
+eight of MitCad's rounding tests. So they are the second solver: a stripe
+whose walk failed (a walking or start failure) after walks that used the
+rolling inverse function is reset and computed again with OCCT's equations
+in it (`ChFi3d_Builder::Compute`, `myOcctInverseStripes`), and kept where
+that succeeds; otherwise it stays failed as before. Every stripe whose walk
+succeeds with the rolling equations is computed exactly as before.
+
 ## 0390 and 0391: the next edge and two edges
 
 The patches 0390 and 0391 go on with 0170 to 0172 (mitcad#237): a ball
@@ -293,6 +308,9 @@ builds them: valid, 244 and 261 faces; 1230's bodies as before.
 - 0170 to 0179, 0390 to 0399 and 0500 to 0509: mitcad#237 (0503:
   mitcad#378) and `geometry/tests/test_fillet_rolling_ball.cpp`, which fails
   without them.
+- 0173: mitcad#1902 and OCCT's own case blend/complex A6 (OCCT's data,
+  run with the private suite of OCCT's tests, mitcad#1875): failing at
+  scale 10 without it, passing at all five scales with it.
 - 1230: mitcad#1215 and the cases `fillet-roll-over-blend` and
   `fillet-roll-over-blend-2` of `MITCAD_GEOMETRY_CASES` (`body.brep`, the
   reported design's body before the rounding in two versions;

@@ -14,6 +14,10 @@
 // height t a rectangle 2 s by (40 - w + 2 s), s = sqrt(r^2 - t^2) for the
 // round (pi r^2 / 2 (40 - w) + 8 r^3 / 3 kept of w 40 r) and s = r - t for
 // the bevel (r^2 (40 - w) + 4 r^3 / 3 kept). Below w / 2 nothing changes.
+//
+// And the join's contacts of no length (mitcad#1922, port patch 1701): a
+// cube rounded on all its edges within a hair of half its side returns,
+// and is never given back as done unrounded.
 
 #include <cmath>
 #include <cstdio>
@@ -24,6 +28,7 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
@@ -107,8 +112,8 @@ void check_full_round(const TopoDS_Shape& shape) {
   }
 }
 
-void check_volume(double got, double expected, const char* what) {
-  if (std::abs(got - expected) > 1e-6) {
+void check_volume(double got, double expected, const char* what, double tolerance = 1e-6) {
+  if (std::abs(got - expected) > tolerance) {
     std::fprintf(stderr, "check failed: %s: %.9f != %.9f\n", what, got, expected);
     ++failures;
   } else {
@@ -172,12 +177,63 @@ void test_full_bevel() {
   }
 }
 
+// A cube of 10 with its twelve edges rounded by 4.9998, within 2e-4 of half
+// its side (mitcad#1922, port patch 1701): each face is left a square 4e-4
+// wide, its four contacts each 4e-4 long, which 0950's and 1655's join took
+// for contacts along each other (each within the join's 1e-3 of the
+// others). The projection of such a contact of no length onto the other
+// blend walked with a step of 0 and the fillet never returned (the test's
+// time limit); with that projection stopped, OCCT gave back the cube itself
+// as done (volume 1000, six faces). Now the fillet returns and either is
+// not done or throws (MitCad says so in words) or builds the rounded cube:
+// one valid solid with more faces than the cube's six, its volume the exact
+// shape's, 1000 - 12 (10 - 2r) r^2 (1 - pi/4) - 8 r^3 (1 - pi/6) (within
+// 1e-3 mm3: the corners may be approximated). Never the cube as done.
+void test_cube_rounded_within_a_hair_of_half_its_side() {
+  const double r = 4.9998;
+  const TopoDS_Shape cube = BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape();
+  NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+  TopExp::MapShapes(cube, TopAbs_EDGE, edges);
+  CHECK(edges.Extent() == 12);
+  try {
+    OCC_CATCH_SIGNALS
+    BRepFilletAPI_MakeFillet fillet(cube);
+    for (int i = 1; i <= edges.Extent(); ++i) {
+      fillet.Add(r, TopoDS::Edge(edges(i)));
+    }
+    fillet.Build();
+    if (!fillet.IsDone()) {
+      std::printf("  not done (failure kind %d)\n", static_cast<int>(fillet.Failure()));
+      return;
+    }
+    const TopoDS_Shape& rounded = fillet.Shape();
+    int faces = 0;
+    for (TopExp_Explorer face(rounded, TopAbs_FACE); face.More(); face.Next()) {
+      ++faces;
+    }
+    int solids = 0;
+    for (TopExp_Explorer solid(rounded, TopAbs_SOLID); solid.More(); solid.Next()) {
+      ++solids;
+    }
+    CHECK(faces > 6);
+    CHECK(solids == 1);
+    CHECK(BRepCheck_Analyzer(rounded).IsValid());
+    const double expected =
+        1000.0 - 12.0 * (10.0 - 2.0 * r) * r * r * (1.0 - kPi / 4.0) - 8.0 * r * r * r * (1.0 - kPi / 6.0);
+    check_volume(volume_of(rounded), expected, "the cube rounded", 1e-3);
+  } catch (const Standard_Failure& failure) {
+    std::printf("  the rounding threw: %s\n", failure.what());
+  }
+}
+
 } // namespace
 } // namespace test
 
 int main() {
   test::guarded("test_full_round", test::test_full_round);
   test::guarded("test_full_bevel", test::test_full_bevel);
+  test::guarded("test_cube_rounded_within_a_hair_of_half_its_side",
+                test::test_cube_rounded_within_a_hair_of_half_its_side);
   if (test::failures == 0) {
     std::puts("test_fillet_rib_full_round: all checks passed");
   }

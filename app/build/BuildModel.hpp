@@ -160,6 +160,9 @@ double lengthOf(const QJsonValue& value);
 // A preview when the model gives no shape: the section along the frame's
 // z, from its origin.
 TopoDS_Shape boxAlong(const Frame& frame, double width, double height, double length);
+// An arrow `length` long from a point along a direction (Ends' tilt,
+// mitcad#1940); empty when OCCT cannot make it.
+TopoDS_Shape arrowAlong(const gp_Pnt& from, const gp_Dir& direction, double length);
 QJsonArray pointJson(const gp_Pnt& point);
 
 } // namespace mitcad::build

@@ -48,6 +48,7 @@
 #include "../framework/MenuBarReveal.hpp"
 #include "../framework/NoticeLevel.hpp"
 #include "../framework/QuickAccess.hpp"
+#include "../framework/RibbonLabels.hpp"
 #include "../framework/SettingsTransfer.hpp"
 #include "../print/MaterialProperties.hpp"
 #include "../render/RenderDevice.hpp"
@@ -389,6 +390,9 @@ void ViewController::applyImportedSettings(const SettingsBeforeImport& was, cons
     // The share of the view the Browser's rows take at most (mitcad#1932).
     through<int>(before, {QStringLiteral("appearance/browserRowsShare")}, [] { return savedBrowserRowsShare(); },
                  [](const int& percent) { saveBrowserRowsShare(percent); });
+    // The ribbon's labels under its icons (mitcad#1936).
+    through<RibbonLabels>(before, {ribbonLabelsKey()}, [] { return savedRibbonLabels(); },
+                          [](const RibbonLabels& labels) { saveRibbonLabels(labels); });
     const ThemeChoice themeNow = themePreference();
     if (themeNow != was.theme) {
       applyThemePreference(themeNow);

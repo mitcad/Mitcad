@@ -1,0 +1,15 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"An Unfold refused by a fillet on a surface edge (mitcad#1942; tools/ui-sheet-unfold-fillet-test.sh and its Windows and macOS twins), the design of tools/cli/tests/sheet_dressup_overlay.json with a fillet in place of its chamfer: sheet rules F1 (t = 1, r = 1, K = 0.4), Sketch1 F2 with a 40 x 20 rectangle, the sheet Face F3 (F3.b0), Fillet1 F4 of r = 0.5 on the back edge y = 20 of the panel's back face (a surface edge, not a corner through the thickness: the sheet keeps it as an overlay), a Flange F5 on the edge y = 0, and SheetUnfold1 F6 of that flange's bend, which fails: the sheet has no developed form with the fillet."},
+  {"cmd":"add_feature","def":{"type":"sheet_rules","thickness":1,"bend_radius":1,"allowance":{"type":"k_factor","k":0.4},"reference_side":"front","bend_relief":{"type":"rectangular","width":1,"depth":1},"corner_relief":{"type":"round","width":2,"depth":2}}},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_rectangle","sketch":"F2","corner":[0,0],"width":40,"height":20},
+  {"cmd":"add_feature","def":{"type":"sheet_face","rules":"F1","profiles":[{"sketch":"F2","region":"r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}]}},
+  {"cmd":"add_feature","def":{"type":"fillet","body":"F3.b0","edges":["E{F3:sheet_back(0)|F3:sheet_side0(F2:sheet_curve(c3[c2,c4]))}"],"radius":0.5}},
+  {"expect":{"feature":"F4","status":"ok","body":"F3.b0"}},
+  {"expect":{"query":{"query":"sheet_state","body":"F3.b0"},"result":{"status":"valid","overlays":[{"feature":"F4","type":"change"}]}}},
+  {"cmd":"add_feature","def":{"type":"sheet_flange","body":"F3.b0","boundary":{"panel":{"feature":"F3","slot":0},"curve":{"type":"sketch","sketch":"F2","segment":"c1[c4,c2]"}},"angle":1.5707963267948966,"length":{"mode":"tangent","value":10},"position":"edge"}},
+  {"expect":{"feature":"F5","status":"ok","body":"F3.b0"}},
+  {"cmd":"add_feature","def":{"type":"sheet_unfold","body":"F3.b0","stationary":{"feature":"F3","slot":0},"bends":[{"feature":"F5","slot":0}]}},
+  {"expect":{"feature":"F6","status":"error","error_contains":"but Fillet1 rounds edges of the sheet's faces, which cannot be flattened"}}
+]

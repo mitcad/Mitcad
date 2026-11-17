@@ -333,6 +333,25 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/pipe_folds.cpp
   src/pipe_folds.hpp)
+# Flex: the route of a flexible item past the bodies and the solid along it
+# (mitcad#1713; the bodies' triangles need TKMesh, linked for the drawings).
+target_sources(mitcad_geometry PRIVATE
+  src/flex_mesh.cpp
+  src/flex_mesh.hpp
+  src/flex_route.cpp
+  include/mitcad/geometry/flex_route.hpp)
+
+# Flex: routes of flexible items, the solids of their sections that are not
+# round and the end ports of pipes and Flex items (mitcad#1713).
+target_sources(mitcad_geometry PRIVATE
+  src/flex.cpp
+  include/mitcad/geometry/flex.hpp)
+
+# Flex drape: a Flex item let hang, a chain that falls, lies on and wraps
+# round the bodies, and the nodes it is kept by (mitcad#1713).
+target_sources(mitcad_geometry PRIVATE
+  src/flex_drape.cpp
+  include/mitcad/geometry/flex_drape.hpp)
 
 # Edges inside one smooth surface (seams, edges between pieces of one
 # face) that the views leave out (mitcad#1773).
@@ -1208,7 +1227,10 @@ endif()
 if(BUILD_TESTING)
   # A rib's four top edges rounded or bevelled by half its width (mitcad#1500,
   # the port's patch 1655): the long edges' contacts meet on one ridge edge,
-  # the top face gone, no face of no area, the exact shape's volume.
+  # the top face gone, no face of no area, the exact shape's volume. And a
+  # cube rounded on all its edges by 4.9998 (mitcad#1922, patch 1701): the
+  # join's contacts of no length no longer hang it, and it is never given
+  # back unrounded as done.
   add_executable(test_fillet_rib_full_round tests/test_fillet_rib_full_round.cpp)
   target_link_libraries(test_fillet_rib_full_round PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_rib_full_round COMMAND test_fillet_rib_full_round)
@@ -1267,6 +1289,25 @@ if(BUILD_TESTING)
 endif()
 
 if(BUILD_TESTING)
+  # Flex routes (mitcad#1713): a hose over the edge between two faces of a
+  # block and round the block between opposite faces, through the air round
+  # it, along a cylinder; a flat cable's flat side on the cylinder and a
+  # half turn at a node; a turn the item cannot make returned with its
+  # places; the solids' volumes; the ports of a route and of a pipe's end;
+  # a wire from a pipe's end over a block's top and edge to its side, and
+  # its hollow solid.
+  add_executable(test_flex_route tests/test_flex_route.cpp)
+  target_link_libraries(test_flex_route PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.flex_route COMMAND test_flex_route)
+  set_tests_properties(geometry.flex_route PROPERTIES TIMEOUT 300)
+  # Flex drape (mitcad#1713): a hose draped over a cylinder from its pinned
+  # ends, a wire hanging straight from one end, a pinned middle point that
+  # stays, a stiff hose hanging wider than a limp wire, and the nodes of
+  # the drape, through which the route is the chain's shape.
+  add_executable(test_flex_drape tests/test_flex_drape.cpp)
+  target_link_libraries(test_flex_drape PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.flex_drape COMMAND test_flex_drape)
+  set_tests_properties(geometry.flex_drape PROPERTIES TIMEOUT 300)
   # Edges inside one smooth surface (mitcad#1773): a cylinder's, a sphere's,
   # a hole's and a smooth extruded profile's seam, the edge between two faces
   # on one plane and between two named pieces of one face; never a box's
@@ -1354,4 +1395,19 @@ if(BUILD_TESTING)
   add_executable(test_fillet_wall_run_on tests/test_fillet_wall_run_on.cpp)
   target_link_libraries(test_fillet_wall_run_on PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_wall_run_on COMMAND test_fillet_wall_run_on)
+  # The same fin's top rounded along its outer and its inner edges, two
+  # chains whose blends lie on the one top face, with OCCT alone: not
+  # judged overlapping (port patch 1710); with the foot's rounding as well
+  # the fillet returns (1711) (mitcad#1926).
+  add_executable(test_fillet_top_chains tests/test_fillet_top_chains.cpp)
+  target_link_libraries(test_fillet_top_chains PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_top_chains COMMAND test_fillet_top_chains)
+  # Two roundings over a face narrower than both, the smaller ball rolling
+  # tangent on the larger rounding's blend, which its contact cuts, the face
+  # vanishing: convex with convex, concave with convex, on synthetic prisms
+  # (port patch 1720, mitcad#1926); and from an end to a crossing of their
+  # contacts only (port patch 1721).
+  add_executable(test_fillet_tangent_ride tests/test_fillet_tangent_ride.cpp)
+  target_link_libraries(test_fillet_tangent_ride PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_tangent_ride COMMAND test_fillet_tangent_ride)
 endif()

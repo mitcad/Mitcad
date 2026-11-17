@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: MIT
+# Another Flex item's hover text while an edit session runs (mitcad#1971,
+# app/COMMANDS.md "Flex editing"), on the design of tools/ui-flex-edit-test.sh
+# and tools/ui-windows-flex-edit-test.ps1, which run this script after their
+# own steps: Box1 (F1), Flex1 (F2) over the box's top and Flex2 (F3), a short
+# straight hose right of the box. A double-click on Flex1's Timeline cell
+# opens its edit session, which reads the library's types and the end
+# ports; the pointer over Flex2's cell (rolled back while the session runs)
+# shows its tooltip, whose hover text reads Flex2 into state of its own:
+# the session keeps the types and end ports it read, and reads none again.
+# Esc cancels the session.
+expect-ever 'View area'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Flex1 at '
+wait-log '^Editing F2 with Flex' 30
+wait-log '^Flex: editing an item of 3 node[(]s[)]'
+wait-log '^Flex edit shown: F2 ' 60
+wait-idle
+# What the session read: Flex1's two free ends at least.
+capture session '^Flex: ([0-9]+ type[(]s[)], ([2-9]|[1-9][0-9]+) end port[(]s[)])$'
+
+mark
+hover-logged '^Timeline Flex2 at '
+wait-log '^Timeline tooltip: Flex2: ' 10
+expect-timeline-tooltip '(?s)Flex2.*Hose 6'
+wait-log '^Flex: hover text of F3 read on its own; the panel keeps ${session:re}$'
+wait-idle
+expect-no-log '^Flex: [0-9]+ type[(]s[)], [0-9]+ end port[(]s[)]'
+timeline-leave
+
+mark
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+expect-never 'Recompute failed'

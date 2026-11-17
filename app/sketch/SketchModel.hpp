@@ -151,6 +151,10 @@ struct PatternData {
   QStringList values;
   QStringList entities; // originals
   QStringList copies;   // every copy
+  // A rectangular pattern's directions (unit vectors); without a second
+  // one the rows run at right angles to the first (mitcad#1969).
+  V2 direction{1.0, 0.0};
+  std::optional<V2> direction2;
 };
 
 // An offset of the sketch (commands.md, `sketch.offset`).

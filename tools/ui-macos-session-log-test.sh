@@ -25,7 +25,7 @@ unset MITCAD_SESSION_LOG MITCAD_DEBUG_LOG MITCAD_UNEXPECTED_END_NOTICE
 
 echo "--- The first run: its log, a few commands, a hang of 3 s, killed"
 MITCAD_HANG_WATCHDOG_MS=1000 MITCAD_TEST_INPUT=$here/ui-scripts/session-log.mitcad-ui \
-  ui_run_app session-log --ui=qt --no-recovery --no-mcp
+  ui_run_app session-log --ui=qt --no-native-dialogs --no-recovery --no-mcp
 ui_expect_log 'TestDriver: kill' 'the first run to its end'
 ui_expect_no_log 'TestDriver: FAIL' 'the first run: no failed driver assertion'
 first=$(ls "$logs"/session-*.log 2> /dev/null | head -1)
@@ -44,8 +44,9 @@ fi
 
 echo "--- The second run: the notice of the unexpected end, a clean end"
 MITCAD_UNEXPECTED_END_NOTICE=1 MITCAD_TEST_INPUT=$here/ui-scripts/session-log-ended.mitcad-ui \
-  ui_run_app session-log-ended --ui=qt --no-recovery --no-mcp
-ui_expect_log 'TestDriver: done' 'the second run to its end'
+  ui_run_app session-log-ended --ui=qt --no-native-dialogs --no-recovery --no-mcp
+# The shared second script ends with quit, which logs its completed step count.
+ui_expect_log '^TestDriver: quit [(]14 of 14 steps[)]$' 'the second run through all steps and its final quit'
 ui_expect_no_log 'TestDriver: FAIL' 'the second run: no failed driver assertion'
 if [ -n "$first" ]; then
   ui_expect_log "^Previous session ended unexpectedly: $(basename "${first%.log}")\$" \

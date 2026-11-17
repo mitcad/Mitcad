@@ -2,6 +2,7 @@
 #include "spine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <typeinfo>
 
 #include <BRepAdaptor_Curve.hxx>
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
@@ -67,6 +69,7 @@
 #include <TopoDS_Solid.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Elips.hxx>
+#include <gp_Pln.hxx>
 
 #include "history.hpp"
 #include "util.hpp"
@@ -1037,6 +1040,18 @@ PipeMode frame_mode(bool frenet, const Path& auxiliary, bool curvilinear,
 
 namespace {
 
+// The spans of the spine's B-spline curves.
+int spline_spans(const TopoDS_Wire& spine) {
+  int spans = 0;
+  for (TopExp_Explorer e(spine, TopAbs_EDGE); e.More(); e.Next()) {
+    const BRepAdaptor_Curve curve(TopoDS::Edge(e.Current()));
+    if (curve.GetType() == GeomAbs_BSplineCurve) {
+      spans += curve.NbKnots() - 1;
+    }
+  }
+  return spans;
+}
+
 // The loop swept along the spine (pipe_shell), with corners of the spine
 // made by `transition`.
 ShapePtr pipe_shell_with(const NamedWire& loop, const TopoDS_Wire& spine, const PipeMode& mode,
@@ -1045,6 +1060,12 @@ ShapePtr pipe_shell_with(const NamedWire& loop, const TopoDS_Wire& spine, const 
   BRepOffsetAPI_MakePipeShell pipe(spine);
   pipe.SetTolerance(tolerance, tolerance, 1.0e-2);
   set_mode(pipe, mode);
+  // (Along an auxiliary curve the frames' law is approximated in at most
+  // 30 pieces by default: along a spline of more spans, a Flex route's,
+  // the swept surface then lay up to 0.9 mm off the path, mitcad#1713.)
+  if (mode.kind == PipeMode::Kind::Auxiliary) {
+    pipe.SetMaxSegments(std::max(30, 4 * spline_spans(spine)));
+  }
   if (transition == BRepBuilderAPI_RightCorner) {
     // Mitred from a turn of 1e-4 rad on (port patch 1662): through a smaller
     // turn than OCCT's 1e-2 rad the section keeps its frame and leans by the
@@ -1434,6 +1455,177 @@ ShapePtr with_holes(const ShapePtr& outer, const std::vector<ShapePtr>& holes, c
     namer.carry(cut, *hole);
   }
   return namer.shape();
+}
+
+namespace {
+
+double area_of(const TopoDS_Shape& face) {
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  return props.Mass();
+}
+
+// The cap of the outer sweep with the holes' caps at the same end as its
+// holes: a new face on the cap's plane, its outer wire the cap's, each
+// hole cap's outer wire turned against it. Null when the face does not
+// come out with the area left between them.
+TopoDS_Face holed_cap(const TopoDS_Face& cap, const std::vector<TopoDS_Face>& hole_caps) {
+  const TopoDS_Face forward = TopoDS::Face(cap.Oriented(TopAbs_FORWARD));
+  const BRepAdaptor_Surface surface(forward);
+  if (surface.GetType() != GeomAbs_Plane) {
+    return {};
+  }
+  const gp_Dir normal = surface.Plane().Axis().Direction();
+  TopoDS_Face holed = TopoDS::Face(forward.EmptyCopied());
+  BRep_Builder builder;
+  for (TopoDS_Iterator w(forward); w.More(); w.Next()) {
+    builder.Add(holed, w.Value());
+  }
+  double expected = area_of(forward);
+  for (const TopoDS_Face& hole_cap : hole_caps) {
+    const TopoDS_Face hole_forward = TopoDS::Face(hole_cap.Oriented(TopAbs_FORWARD));
+    const BRepAdaptor_Surface hole_surface(hole_forward);
+    if (hole_surface.GetType() != GeomAbs_Plane) {
+      return {};
+    }
+    expected -= area_of(hole_forward);
+    // (A face's outer wire runs counter-clockwise about its surface's
+    // normal, a hole's clockwise.)
+    TopoDS_Wire wire = BRepTools::OuterWire(hole_forward);
+    if (hole_surface.Plane().Axis().Direction().Dot(normal) > 0.0) {
+      wire.Reverse();
+    }
+    NCollection_List<TopoDS_Shape> edges;
+    for (TopExp_Explorer e(wire, TopAbs_EDGE); e.More(); e.Next()) {
+      edges.Append(e.Current());
+    }
+    BRepLib::BuildPCurveForEdgesOnPlane(edges, holed);
+    builder.Add(holed, wire);
+  }
+  if (std::abs(area_of(holed) - expected) > 1.0e-6 * std::max(1.0, area_of(forward))) {
+    return {};
+  }
+  holed.Orientation(cap.Orientation());
+  return holed;
+}
+
+// with_holes without the boolean: the outer sweep's sides and the holes'
+// sides turned inwards closed by the outer caps with the holes' caps as
+// holes in them. The sides lie apart (a wall between them), so nothing is
+// cut; the boolean's intersections of the swept surfaces with each other
+// took minutes (mitcad#1713). Null where the faces do not close into a
+// valid solid.
+ShapePtr holes_joined(const Shape& outer, const std::vector<ShapePtr>& holes, const NameList& first,
+                      const NameList& last) {
+  if (first.empty() || last.empty()) {
+    return nullptr;
+  }
+  const auto named = [](const NameList& names, const std::string& name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+  };
+  std::vector<Shape::NamedFace> faces;
+  std::array<int, 2> caps{-1, -1};
+  for (int i = 0; i < outer.face_count(); ++i) {
+    const bool start = named(outer.face_names(i), first.front());
+    const bool end = named(outer.face_names(i), last.front());
+    if (start || end) {
+      int& cap = caps[start ? 0 : 1];
+      if (cap >= 0 || (start && end)) {
+        return nullptr;
+      }
+      cap = i;
+    } else {
+      faces.push_back({outer.face(i), outer.face_names(i)});
+    }
+  }
+  if (caps[0] < 0 || caps[1] < 0) {
+    return nullptr;
+  }
+  std::array<gp_Pln, 2> planes;
+  for (int k = 0; k < 2; ++k) {
+    const BRepAdaptor_Surface surface(outer.face(caps[static_cast<std::size_t>(k)]));
+    if (surface.GetType() != GeomAbs_Plane) {
+      return nullptr;
+    }
+    planes[static_cast<std::size_t>(k)] = surface.Plane();
+  }
+  std::array<std::vector<TopoDS_Face>, 2> hole_caps;
+  for (const ShapePtr& hole : holes) {
+    // (A hole's caps are its faces without a name.)
+    std::vector<TopoDS_Face> ends;
+    for (int i = 0; i < hole->face_count(); ++i) {
+      if (hole->face_names(i).empty()) {
+        ends.push_back(hole->face(i));
+      } else {
+        faces.push_back({hole->face(i).Reversed(), hole->face_names(i)});
+      }
+    }
+    if (ends.size() != 2) {
+      return nullptr;
+    }
+    for (const TopoDS_Face& end : ends) {
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(end, props);
+      const double to_start = planes[0].Distance(props.CentreOfMass());
+      const double to_end = planes[1].Distance(props.CentreOfMass());
+      const double off = std::min(to_start, to_end);
+      if (off > 1.0e-5 * std::max(1.0, std::sqrt(props.Mass()))) {
+        return nullptr;
+      }
+      hole_caps[to_start <= to_end ? 0 : 1].push_back(end);
+    }
+  }
+  if (hole_caps[0].size() != holes.size() || hole_caps[1].size() != holes.size()) {
+    return nullptr;
+  }
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  for (const Shape::NamedFace& face : faces) {
+    builder.Add(shell, face.face);
+  }
+  for (int k = 0; k < 2; ++k) {
+    const int cap = caps[static_cast<std::size_t>(k)];
+    const TopoDS_Face holed = holed_cap(outer.face(cap), hole_caps[static_cast<std::size_t>(k)]);
+    if (holed.IsNull()) {
+      return nullptr;
+    }
+    builder.Add(shell, holed);
+    faces.push_back({holed, outer.face_names(cap)});
+  }
+  shell.Closed(true);
+  TopoDS_Solid solid;
+  builder.MakeSolid(solid);
+  builder.Add(solid, shell);
+  BRepLib::OrientClosedSolid(solid);
+  if (!BRepCheck_Analyzer(solid).IsValid()) {
+    return nullptr;
+  }
+  ShapePtr joined = std::make_shared<Shape>(solid, faces);
+  joined->copy_notes(outer);
+  return joined;
+}
+
+} // namespace
+
+ShapePtr with_holes_joined(const ShapePtr& outer, const std::vector<ShapePtr>& holes, const NameList& first,
+                           const NameList& last, const char* what) {
+  if (holes.empty()) {
+    return outer;
+  }
+  try {
+    if (ShapePtr joined = holes_joined(*outer, holes, first, last)) {
+      return joined;
+    }
+  } catch (const Cancelled&) {
+    throw;
+  } catch (const Standard_Failure&) {
+    // (The boolean below.)
+  } catch (const std::exception&) {
+    // (Likewise.)
+  }
+  throw_if_cancelled();
+  return with_holes(outer, holes, what);
 }
 
 } // namespace mitcad::geometry::detail

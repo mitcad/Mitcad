@@ -1870,6 +1870,14 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
                              .arg(towards)
                              .arg(offset.toDouble(), 0, 'f', 1)
                              .arg(cut));
+    // A corner placement miters both components (mitcad#1940): said where
+    // the end is picked, so that a corner is not placed square and mitered
+    // later by hand.
+    result.viewHint = straight ? QObject::tr("Click near an edge of the end to turn a corner; Miter Shared then "
+                                             "miters both components")
+                      : cut == QStringLiteral("shared")
+                          ? QObject::tr("A corner: both components are mitered on the bisector")
+                          : QObject::tr("A corner: Miter Shared miters both components on the bisector");
     endLog = QStringLiteral("; end %1 towards %2, mitre %3%4")
                  .arg(str(end, "zone"), towards, cut,
                       offset.isDouble() ? QStringLiteral(", offset %1 mm").arg(offset.toDouble(), 0, 'f', 1)
@@ -7209,22 +7217,107 @@ QString endOfPick(const SelectionItem& item, const BuildPart& part) {
   return QStringLiteral("a");
 }
 
-// The part whose end meets this end (an L or inline junction), and that
-// end: for a shared mitre.
-std::optional<std::pair<QString, QString>> otherEnd(const QString& component, const QString& end,
-                                                    const CommandContext& context) {
-  const QString frame = QStringLiteral("end_") + end;
-  for (const QJsonValue& value : build::junctions(context)) {
-    const QJsonObject junction = value.toObject();
-    const QJsonObject a = junction.value(QStringLiteral("a")).toObject();
-    const QJsonObject b = junction.value(QStringLiteral("b")).toObject();
-    for (const auto& [mine, other] : {std::pair<QJsonObject, QJsonObject>(a, b), std::pair<QJsonObject, QJsonObject>(b, a)}) {
-      if (str(mine, "component") == component && str(mine, "at") == frame && str(other, "at").startsWith(QStringLiteral("end_"))) {
-        return std::make_pair(str(other, "component"), str(other, "at").mid(4));
-      }
+// The ends of the profiles and the ends they meet (mitcad#1940, the
+// build_end_meets query): of `component`'s ends the end each meets, of the
+// others where they are; every end where it is without `component`.
+const QString kEndMeets = QStringLiteral("end_meets");
+
+QJsonArray endMeets(const CommandContext& model, const QString& component) {
+  QJsonObject query{{QStringLiteral("query"), QStringLiteral("build_end_meets")}};
+  if (component.isEmpty()) {
+    query.insert(QStringLiteral("meets"), false);
+  } else {
+    query.insert(QStringLiteral("component"), component);
+  }
+  try {
+    return model.queryObject(query).value(QStringLiteral("ends")).toArray();
+  } catch (const std::exception&) {
+    return {};
+  }
+}
+
+// Keeps the picked part's ends in the state, so that the inputs that
+// follow them (About's turns, Also the Component It Meets) read no model.
+void keepEndMeets(CommandState& state, const CommandContext& model, const QString& component) {
+  state.setObject(kEndMeets, {{QStringLiteral("component"), component},
+                              {QStringLiteral("ends"), endMeets(model, component)}});
+}
+
+// The kept entry of the part's chosen end; empty when none is kept.
+QJsonObject chosenEnd(const CommandState& state) {
+  const QJsonObject kept = state.object(kEndMeets);
+  const QString component = str(kept, "component");
+  for (const QJsonValue& value : kept.value(QStringLiteral("ends")).toArray()) {
+    const QJsonObject end = value.toObject();
+    if (str(end, "component") == component && str(end, "end") == state.choice(QStringLiteral("end"))) {
+      return end;
     }
   }
-  return std::nullopt;
+  return {};
+}
+
+// The end the chosen end meets in a corner (its `meets`); empty: none.
+QJsonObject meetsOf(const CommandState& state) {
+  return chosenEnd(state).value(QStringLiteral("meets")).toObject();
+}
+
+// Whether Also the Component It Meets can be taken: an end meets this one
+// and its shared miter would not be refused.
+bool sharesMitre(const CommandState& state) {
+  const QJsonObject meets = meetsOf(state);
+  return !meets.isEmpty() && meets.value(QStringLiteral("problem")).toString().isEmpty();
+}
+
+// About's options: turns relative to what the end meets, the cut leaning
+// towards it first; the part's own axes for an end that meets nothing.
+QVector<QPair<QString, QString>> tiltChoices(const CommandState& state) {
+  const QJsonObject meets = meetsOf(state);
+  QVector<QPair<QString, QString>> options;
+  if (meets.isEmpty()) {
+    for (const auto& [value, label] : kTilts) {
+      options.append({value, QCoreApplication::translate("Choice", label.toUtf8().constData())});
+    }
+    return options;
+  }
+  const QJsonArray across = meets.value(QStringLiteral("across")).toArray();
+  const QVector<QPair<QString, QString>> turns = {
+      {str(meets, "tilt"), QObject::tr("Towards the component it meets")},
+      {str(meets, "away"), QObject::tr("Away from the component it meets")},
+      {across.at(0).toString(), QObject::tr("Across the corner, one way")},
+      {across.at(1).toString(), QObject::tr("Across the corner, the other way")}};
+  for (const auto& turn : turns) {
+    const bool listed = std::any_of(options.begin(), options.end(),
+                                    [&turn](const auto& option) { return option.first == turn.first; });
+    if (!turn.first.isEmpty() && !listed) {
+      options.append(turn);
+    }
+  }
+  return options;
+}
+
+// The chosen tilt's label as About shows it.
+QString tiltText(const CommandState& state) {
+  const QString tilt = state.choice(QStringLiteral("tilt"));
+  for (const auto& [value, label] : tiltChoices(state)) {
+    if (value == tilt) {
+      return label;
+    }
+  }
+  return tilt;
+}
+
+// About follows the chosen end: its cut's own tilt, else for an end that
+// meets another one the turn towards it.
+void followEnd(const BuildPart& part, CommandState& state) {
+  const QJsonObject cut = part.ends.value(state.choice(QStringLiteral("end"))).toObject();
+  if (!str(cut, "tilt").isEmpty()) {
+    state.setChoice(QStringLiteral("tilt"), str(cut, "tilt"));
+  } else if (!meetsOf(state).isEmpty()) {
+    state.setChoice(QStringLiteral("tilt"), str(meetsOf(state), "tilt"));
+  }
+  if (!sharesMitre(state)) {
+    state.setChecked(QStringLiteral("shared"), false);
+  }
 }
 
 CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
@@ -7242,26 +7335,46 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
                               {QStringLiteral("bore"), QObject::tr("A bore")},
                               {QStringLiteral("none"), QObject::tr("None")}};
   const auto bore = [](const CommandState& state) { return state.choice(QStringLiteral("machining")) == QStringLiteral("bore"); };
+  // The shared miter's angle and tilt are the corner's (mitcad#1940).
+  const auto ownCut = [](const CommandState& state) { return !state.checked(QStringLiteral("shared")); };
   def.inputs = {
-      selectionInput(kPart, QObject::tr("Component"), kPartKinds, 1, 1)
+      // None needed to inspect (mitcad#1940): the ends' labels and the
+      // view's hint show before the pick; Apply still asks for one.
+      selectionInput(kPart, QObject::tr("Component"), kPartKinds, 0, 1)
           .withOnPick([](const SelectionItem& item, CommandState& state, const CommandContext& model) {
             if (const std::optional<BuildPart> part = build::partOf(item, model)) {
+              // The end nearer the click (its A or B label in the view).
               const QString end = endOfPick(item, *part);
               state.setChoice(QStringLiteral("end"), end);
-              const QJsonObject cut = part->ends.value(end).toObject();
-              if (!str(cut, "tilt").isEmpty()) {
-                state.setChoice(QStringLiteral("tilt"), str(cut, "tilt"));
-              }
+              keepEndMeets(state, model, part->component);
+              followEnd(*part, state);
+              const QJsonObject meets = meetsOf(state);
+              qInfo().noquote() << QStringLiteral("BUILD ends of %1: end %2 picked, %3")
+                                       .arg(part->component, end,
+                                            meets.isEmpty() ? QStringLiteral("meets no end")
+                                                            : QStringLiteral("meets end %1 of %2")
+                                                                  .arg(str(meets, "end"), str(meets, "component")));
             }
           },
                       false)
-          .withTooltip(QObject::tr("Near the end to cut")),
-      choiceInput(QStringLiteral("end"), QObject::tr("End"), kEnds, QStringLiteral("a")),
+          .withTooltip(QObject::tr("Near the end to cut: the ends show A and B")),
+      choiceInput(QStringLiteral("end"), QObject::tr("End"), kEnds, QStringLiteral("a"))
+          .withOnChange([](CommandState& state, const CommandContext& model) {
+            const QVector<BuildPart> parts = build::partsOf(state.items(kPart), model);
+            if (!parts.isEmpty()) {
+              followEnd(parts.first(), state);
+            }
+          }),
       valueInput(QStringLiteral("angle"), QObject::tr("Angle"), ValueKind::Angle, QStringLiteral("45 deg"))
-          .withTooltip(QObject::tr("From square, 0 up to 90 degrees")),
-      choiceInput(QStringLiteral("tilt"), QObject::tr("About"), kTilts, QStringLiteral("x")),
+          .withTooltip(QObject::tr("From square, 0 up to 90 degrees"))
+          .withEnabled(ownCut),
+      choiceInput(QStringLiteral("tilt"), QObject::tr("About"), kTilts, QStringLiteral("x"))
+          .withChoices(tiltChoices)
+          .withTooltip(QObject::tr("Which way the cut leans; the arrow in the view shows it"))
+          .withEnabled(ownCut),
       checkInput(QStringLiteral("shared"), QObject::tr("Also the Component It Meets"), false)
-          .withTooltip(QObject::tr("A shared miter: the end of the component that meets this end is cut too")),
+          .withTooltip(QObject::tr("Both ends cut on the bisector, as a corner placement does"))
+          .withEnabled(sharesMitre),
       // End machining (build_edit's `machining`): a bore in this end.
       choiceInput(QStringLiteral("machining"), QObject::tr("End Machining"), kMachining, QStringLiteral("keep"))
           .withHeading(QObject::tr("End machining"))
@@ -7276,11 +7389,30 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
           .withTooltip(QObject::tr("Empty: a plain bore")),
   };
   def.enabled = [&context] { return build::hasBuildParts(context); };
+  // The ends' A and B labels (mitcad#1940): every profile's while the
+  // panel is open, the chosen end's marked.
+  def.previewMarkers = markersOf;
   def.inspect = [](const CommandState& state, const CommandContext& model) {
     Inspection result;
     const QVector<BuildPart> parts = build::partsOf(state.items(kPart), model);
+    const QString picked = parts.isEmpty() ? QString() : parts.first().component;
+    QJsonArray markers;
+    const QJsonArray ends = endMeets(model, QString());
+    for (const QJsonValue& value : ends) {
+      const QJsonObject end = value.toObject();
+      const std::optional<gp_Pnt> point = pointFrom(end.value(QStringLiteral("point")));
+      if (!point) {
+        continue;
+      }
+      const QString label = str(end, "end").toUpper();
+      const bool chosen = str(end, "component") == picked && str(end, "end") == state.choice(QStringLiteral("end"));
+      markers.append(marker(chosen ? QStringLiteral("> %1").arg(label) : label, *point));
+    }
+    result.report = {{QStringLiteral("markers"), markers}};
     if (parts.isEmpty()) {
+      result.viewHint = QObject::tr("Click a component near the end to cut: A or B");
       result.error = QObject::tr("Pick a component of the Build tab, near the end to cut.");
+      result.log = QStringLiteral("waiting for a component; %1 end labels").arg(markers.size());
       return result;
     }
     const BuildPart& part = parts.first();
@@ -7288,13 +7420,65 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     if (!part.machining.isEmpty()) {
       lines << QObject::tr("Machining: %1").arg(holesText(part.machining).toHtmlEscaped());
     }
-    if (state.checked(QStringLiteral("shared"))) {
-      const auto other = otherEnd(part.component, state.choice(QStringLiteral("end")), model);
-      lines << (other ? QObject::tr("Also %1, end %2").arg(cmd::componentName(other->first, model), other->second.toUpper())
-                      : QObject::tr("No component's end meets this end"));
+    const QJsonObject end = chosenEnd(state);
+    const QJsonObject meets = end.value(QStringLiteral("meets")).toObject();
+    QString meetLog;
+    if (meets.isEmpty()) {
+      // Why Also the Component It Meets is not offered, in words.
+      const QString why = str(end, "why");
+      if (!why.isEmpty()) {
+        lines << QObject::tr("Also the Component It Meets: %1").arg(mitcad::modelMessage(why).toHtmlEscaped());
+      }
+      meetLog = QStringLiteral("meets nothing (%1)").arg(why);
+    } else {
+      const QString other = cmd::componentName(str(meets, "component"), model);
+      const QString problem = str(meets, "problem");
+      if (!problem.isEmpty()) {
+        lines << QObject::tr("Meets end %1 of %2; Also the Component It Meets: %3")
+                     .arg(str(meets, "end").toUpper(), other.toHtmlEscaped(),
+                          mitcad::modelMessage(problem).toHtmlEscaped());
+      } else if (state.checked(QStringLiteral("shared"))) {
+        const double degrees = meets.value(QStringLiteral("angle")).toDouble() * 180.0 / kPi;
+        lines << QObject::tr("Shared miter with end %1 of %2: both cut at %3°, to the outer corner")
+                     .arg(str(meets, "end").toUpper(), other.toHtmlEscaped())
+                     .arg(degrees, 0, 'f', 1);
+        for (const auto& [name, key] : {std::pair<QString, const char*>(part.shownName(), "lengthen"),
+                                        std::pair<QString, const char*>(other, "other_lengthen")}) {
+          const double by = meets.value(QLatin1String(key)).toDouble();
+          if (std::abs(by) > 1e-6) {
+            lines << (by > 0.0 ? QObject::tr("%1: %2 mm longer") : QObject::tr("%1: %2 mm shorter"))
+                         .arg(name.toHtmlEscaped())
+                         .arg(std::abs(by), 0, 'f', 1);
+          }
+        }
+      } else {
+        lines << QObject::tr("Meets end %1 of %2").arg(str(meets, "end").toUpper(), other.toHtmlEscaped());
+      }
+      meetLog = QStringLiteral("meets end %1 of %2%3")
+                    .arg(str(meets, "end"), str(meets, "component"),
+                         problem.isEmpty() ? QString() : QStringLiteral(" (not shared: %1)").arg(problem));
+    }
+    // The arrow: where the cut's outward normal leans, from the end.
+    const std::optional<gp_Pnt> point = pointFrom(end.value(QStringLiteral("point")));
+    const QString tilt = state.checked(QStringLiteral("shared")) ? str(meets, "tilt") : state.choice(QStringLiteral("tilt"));
+    const QJsonArray lean = end.value(QStringLiteral("leans")).toObject().value(tilt).toArray();
+    const QJsonArray out = end.value(QStringLiteral("out")).toArray();
+    if (point && lean.size() == 3 && out.size() == 3) {
+      const gp_Vec along(lean.at(0).toDouble(), lean.at(1).toDouble(), lean.at(2).toDouble());
+      const gp_Vec beyond(out.at(0).toDouble(), out.at(1).toDouble(), out.at(2).toDouble());
+      if (along.Magnitude() > 1e-9) {
+        result.shape = build::arrowAlong(point->Translated(beyond * 3.0), gp_Dir(along), 40.0);
+      }
+    }
+    if (!state.checked(QStringLiteral("shared"))) {
+      lines << QObject::tr("Leans: %1").arg(tiltText(state).toHtmlEscaped());
     }
     result.text = lines.join(QStringLiteral("<br>"));
-    result.log = QStringLiteral("%1 end %2: %3").arg(part.component, state.choice(QStringLiteral("end")), endsText(part.ends));
+    result.log = QStringLiteral("%1 end %2: %3; %4; about %5%6; %7 end labels")
+                     .arg(part.component, state.choice(QStringLiteral("end")), endsText(part.ends), meetLog,
+                          state.choice(QStringLiteral("tilt")),
+                          state.checked(QStringLiteral("shared")) ? QStringLiteral(", shared") : QString())
+                     .arg(markers.size());
     return result;
   };
   def.apply = [&host](CommandState& state, const CommandContext& model) {
@@ -7305,11 +7489,21 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
     }
     const BuildPart& part = parts.first();
     const QString end = state.choice(QStringLiteral("end"));
-    const QJsonObject cut{{QStringLiteral("angle"), state.expression(QStringLiteral("angle"))},
-                          {QStringLiteral("tilt"), state.choice(QStringLiteral("tilt"))}};
-    QJsonObject edit{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
-                     {QStringLiteral("component"), part.component},
-                     {QStringLiteral("ends"), QJsonObject{{end, cut}}}};
+    const bool shared = state.checked(QStringLiteral("shared"));
+    QJsonArray commands;
+    if (shared) {
+      // The corner's shared miter (mitcad#1940): the model cuts and moves
+      // both ends as a corner placement does.
+      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
+                                  {QStringLiteral("component"), part.component},
+                                  {QStringLiteral("shared_mitre"), end}});
+    }
+    QJsonObject edit{{QStringLiteral("cmd"), QStringLiteral("build_edit")}, {QStringLiteral("component"), part.component}};
+    if (!shared) {
+      const QJsonObject cut{{QStringLiteral("angle"), state.expression(QStringLiteral("angle"))},
+                            {QStringLiteral("tilt"), state.choice(QStringLiteral("tilt"))}};
+      edit.insert(QStringLiteral("ends"), QJsonObject{{end, cut}});
+    }
     // `machining` is the part's whole list: the other end's entries stay,
     // this end's are replaced (a bore) or left out (none).
     const QString machining = state.choice(QStringLiteral("machining"));
@@ -7333,30 +7527,28 @@ CommandDef endsCommand(DocumentHost& host, const CommandContext& context) {
       }
       edit.insert(QStringLiteral("machining"), list);
     }
-    QJsonArray commands{edit};
-    if (state.checked(QStringLiteral("shared"))) {
-      const auto other = otherEnd(part.component, end, model);
-      if (!other) {
-        host.showStatus(QObject::tr("No component's end meets end %1 of %2.").arg(end.toUpper(), part.shownName()), NoticeLevel::Error);
-        return false;
-      }
-      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("build_edit")},
-                                  {QStringLiteral("component"), other->first},
-                                  {QStringLiteral("ends"), QJsonObject{{other->second, cut}}}});
+    if (edit.size() > 2) {
+      commands.append(edit);
     }
     if (!host.runModelCommands(commands, QObject::tr("Ends of %1").arg(part.shownName()))) {
       return false;
     }
-    qInfo().noquote() << QStringLiteral("Ends of %1: end %2 %3 about %4%5%6")
-                             .arg(part.shownName(), end, state.expression(QStringLiteral("angle")),
-                                  state.choice(QStringLiteral("tilt")),
-                                  state.checked(QStringLiteral("shared")) ? QStringLiteral(", shared") : QString(),
+    const QJsonObject meets = meetsOf(state);
+    qInfo().noquote() << QStringLiteral("Ends of %1: end %2 %3%4")
+                             .arg(part.shownName(), end,
+                                  shared ? QStringLiteral("shared miter with end %1 of %2")
+                                               .arg(str(meets, "end"), str(meets, "component"))
+                                         : QStringLiteral("%1 about %2")
+                                               .arg(state.expression(QStringLiteral("angle")),
+                                                    state.choice(QStringLiteral("tilt"))),
                                   machining == QStringLiteral("keep")
                                       ? QString()
                                       : QStringLiteral(", machining ") +
                                             (machining == QStringLiteral("none")
                                                  ? QStringLiteral("none at end ") + end
                                                  : holesText(added)));
+    // The ends moved: what they meet now.
+    keepEndMeets(state, model, part.component);
     return true;
   };
   return def;

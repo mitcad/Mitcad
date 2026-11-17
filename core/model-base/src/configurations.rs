@@ -59,6 +59,13 @@ pub struct Configurations {
     /// `parameters`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub closed: bool,
+    /// The options of a closed table its rows do not restrict
+    /// (mitcad#1950): chosen freely within their limits and the rules
+    /// beside the rows' combinations of the other options (a timber
+    /// board's length beside its sizes). A row leaves them out; they are
+    /// listed in `options` too, after the others.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open: Vec<String>,
     /// The other parameters the rows of a closed table set, by name.
     #[serde(default)]
     pub parameters: Vec<String>,
@@ -296,7 +303,12 @@ impl Configurations {
     /// avoid changing substrings of other parameter names, units or
     /// functions.
     pub fn rename_parameter(&mut self, old: &str, new: &str) -> Result<(), String> {
-        for name in self.options.iter_mut().chain(&mut self.parameters) {
+        for name in self
+            .options
+            .iter_mut()
+            .chain(&mut self.parameters)
+            .chain(&mut self.open)
+        {
             if name == old {
                 new.clone_into(name);
             }
@@ -354,6 +366,22 @@ impl Configurations {
     /// Whether `name` is an option of the table.
     pub fn is_option(&self, name: &str) -> bool {
         self.options.iter().any(|o| o == name)
+    }
+
+    /// Whether `name` is an open option of a closed table (mitcad#1950):
+    /// its rows do not restrict it.
+    pub fn is_open(&self, name: &str) -> bool {
+        self.closed && self.open.iter().any(|o| o == name)
+    }
+
+    /// The options its rows choose: all of them but a closed table's open
+    /// ones (mitcad#1950).
+    pub fn row_options(&self) -> Vec<String> {
+        self.options
+            .iter()
+            .filter(|o| !self.is_open(o))
+            .cloned()
+            .collect()
     }
 
     /// The names of the rules that use a parameter: in a condition, an
@@ -432,13 +460,17 @@ impl Configurations {
     /// ([`Configurations::row_option_texts`]) in natural order (`M2.5`,
     /// `M3`, `M10`): what the old tables' cascaded choices showed.
     pub fn selector_values(&self) -> BTreeMap<String, Vec<String>> {
+        // A closed table's open options (mitcad#1950) are no rows' choices.
         let mut out: BTreeMap<String, BTreeSet<String>> = self
-            .options
-            .iter()
-            .map(|o| (o.clone(), BTreeSet::new()))
+            .row_options()
+            .into_iter()
+            .map(|o| (o, BTreeSet::new()))
             .collect();
         for row in &self.rows {
             for (option, text) in self.row_option_texts(row) {
+                if self.is_open(&option) {
+                    continue;
+                }
                 out.entry(option).or_default().insert(text);
             }
         }
@@ -479,10 +511,14 @@ impl Configurations {
     /// values (every value of a table without options), compared by value
     /// (a text by its text). A row without such values matches nothing.
     pub fn row_matches(&self, row: &ConfigurationRow, parameters: &Parameters) -> bool {
+        // A closed table's open options (mitcad#1950) are no part of a row's
+        // combination; a table whose options are all open compares its rows
+        // as one without options.
+        let by_options = self.options.iter().any(|o| !self.is_open(o));
         let mut compared = row
             .values
             .iter()
-            .filter(|(name, _)| self.options.is_empty() || self.is_option(name))
+            .filter(|(name, _)| (!by_options || self.is_option(name)) && !self.is_open(name))
             .peekable();
         compared.peek().is_some()
             && compared.all(|(name, expression)| has_value(parameters, name, expression))
@@ -560,6 +596,9 @@ impl Configurations {
             row.select.clear();
         }
         self.closed = true;
+        // The open options (mitcad#1950) after the rows' ones.
+        let open = self.open.clone();
+        self.options.sort_by_key(|o| open.contains(o));
         out
     }
 
@@ -594,6 +633,22 @@ impl Configurations {
                     )),
                     Some(_) => {}
                 }
+            }
+        }
+        // Open options (mitcad#1950): a closed table's, each one of its
+        // options, once.
+        let mut open = BTreeSet::new();
+        for name in &self.open {
+            if !self.closed {
+                out.push(format!(
+                    "option {name} is open, but only a table with Only these rows (closed) has open options"
+                ));
+            } else if !options.contains(name.as_str()) {
+                out.push(format!(
+                    "the open option {name} is not an option of the table"
+                ));
+            } else if !open.insert(name.as_str()) {
+                out.push(format!("the open option {name} is in the table twice"));
             }
         }
         let mut seen = BTreeSet::new();
@@ -644,9 +699,11 @@ impl Configurations {
                     ));
                 }
             }
-            if self.closed && !self.options.is_empty() {
-                let missing: Vec<&str> = self
-                    .options
+            // A closed table's rows give its options but the open ones
+            // (mitcad#1950).
+            let chosen = self.row_options();
+            if self.closed && !chosen.is_empty() {
+                let missing: Vec<&str> = chosen
                     .iter()
                     .filter(|o| {
                         row.values
@@ -658,15 +715,12 @@ impl Configurations {
                 if !missing.is_empty() {
                     out.push(format!("{label}: no value for {}", missing.join(", ")));
                 } else {
-                    let combination: Vec<String> = self
-                        .options
-                        .iter()
-                        .map(|o| squeeze(&row.values[o]))
-                        .collect();
+                    let combination: Vec<String> =
+                        chosen.iter().map(|o| squeeze(&row.values[o])).collect();
                     if !combinations.insert(combination) {
                         out.push(format!(
                             "{label}: another row has the same {}",
-                            self.options.join(" and ")
+                            chosen.join(" and ")
                         ));
                     }
                 }

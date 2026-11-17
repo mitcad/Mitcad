@@ -292,13 +292,28 @@ sketch::V2 patternDirection(const CommandState& s, SketchController& c) {
   return sketch::V2{1.0, 0.0};
 }
 
-// The second direction's tooltip (mitcad#1640): it is never picked, it
-// runs at right angles to Direction.
-QString acrossDirection() { return QObject::tr("Across Direction, at right angles to it in the sketch"); }
+// A rectangular pattern's Direction 2 (mitcad#1969): the picked line's or
+// sketch axis's, as Direction's; none when nothing is picked, and the rows
+// then run at right angles to Direction.
+std::optional<sketch::V2> patternDirection2(const CommandState& s, SketchController& c) {
+  const Selection& line = s.items(QStringLiteral("direction2"));
+  return line.isEmpty() ? std::nullopt : c.model().lineDirection(line.first().name);
+}
+
+// Whether two pattern directions are parallel (the model refuses them: the
+// copies would fall on one row).
+bool parallelDirections(const sketch::V2& a, const sketch::V2& b) { return std::abs(sketch::cross(a, b)) < 1e-6; }
+
+// The second direction's tooltip (mitcad#1640, mitcad#1969): along
+// Direction 2, or at right angles to Direction when none is picked.
+QString acrossDirection() {
+  return QObject::tr("Along Direction 2, or at right angles to Direction when none is picked");
+}
 
 // Rectangular Pattern's handle (mitcad#1640): an arrow along Direction at
-// the originals' first copy, which drags Spacing, and one at right angles
-// to it at the first copy of the second direction, which drags Spacing 2;
+// the originals' first copy, which drags Spacing, and one along Direction 2
+// (or at right angles to Direction without it, mitcad#1969) at the first
+// copy of the second direction, which drags Spacing 2;
 // either against its direction while its Flip is on. An arrow whose
 // Quantity is 1 is faint, a hint of where those copies would go.
 std::optional<SketchHandle> patternHandle(const CommandState& s, SketchController& c) {
@@ -311,7 +326,7 @@ std::optional<SketchHandle> patternHandle(const CommandState& s, SketchControlle
     return std::nullopt;
   }
   const sketch::V2 first = patternDirection(s, c);
-  const std::array<sketch::V2, 2> directions{first, sketch::perp(first)};
+  const std::array<sketch::V2, 2> directions{first, patternDirection2(s, c).value_or(sketch::perp(first))};
   SketchHandle handle;
   handle.at = {middle->x, middle->y};
   handle.x = QStringLiteral("distance1");
@@ -359,12 +374,16 @@ void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
       flipInput(QStringLiteral("flip1"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(notSymmetric(QStringLiteral("direction_type1"))),
-      // The second direction is never picked: it runs across Direction, a
-      // quarter turn from it (mitcad#1640). Quantity 2 starts at 2, so the
-      // preview shows a grid at once; one row is a click on its step down.
+      // The second direction (mitcad#1969): a line or an axis at any angle
+      // to Direction but parallel, for rows of a honeycomb; none picked, it
+      // runs across Direction, a quarter turn from it (mitcad#1640).
+      // Quantity 2 starts at 2, so the preview shows a grid at once; one
+      // row is a click on its step down.
+      lineOrAxisInput(QStringLiteral("direction2"), QObject::tr("Direction 2"), 0, c)
+          .withTooltip(QObject::tr("A line or a sketch axis; at right angles to Direction when none is picked")),
       sketchDirectionType(QStringLiteral("direction_type2"), QObject::tr("Direction Type 2"))
-          .withTooltip(QObject::tr("Across Direction, at right angles to it in the sketch; Symmetric: on both "
-                                   "sides (an odd quantity)")),
+          .withTooltip(QObject::tr("Copies along the second direction; Symmetric: on both sides (an odd "
+                                   "quantity)")),
       valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("2"))
           .withStepMinimum(1)
           .withTooltip(acrossDirection()),
@@ -411,9 +430,17 @@ void addRectangularPattern(CommandRegistry& registry, SketchController& c) {
     }
     const sketch::V2 u = patternDirection(s, c);
     const QJsonArray direction{u.x, u.y};
+    const std::optional<sketch::V2> v = patternDirection2(s, c);
+    if (v && parallelDirections(u, *v)) {
+      return Built::failure(QObject::tr("Direction 2 runs along Direction: pick a line at an angle to it."),
+                            QStringLiteral("direction2"));
+    }
     QJsonObject cmd = base(c, "sketch.rectangular_pattern");
     cmd.insert(QStringLiteral("entities"), names(s.items(QStringLiteral("entities"))));
     cmd.insert(QStringLiteral("direction"), direction);
+    if (v) {
+      cmd.insert(QStringLiteral("direction2"), QJsonArray{v->x, v->y});
+    }
     cmd.insert(QStringLiteral("count"), QJsonArray{n1, n2});
     cmd.insert(QStringLiteral("spacing"), signedSpacings(s));
     if (symmetric[0] || symmetric[1]) {
@@ -1171,6 +1198,26 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
   const auto rectangular = [](const CommandState& s) {
     return s.choice(QStringLiteral("kind")) == QStringLiteral("rectangular");
   };
+  // The pattern's second direction as the panel opened (mitcad#1969):
+  // kept in the state, as the sketch shown during a preview already has the
+  // previewed one (none after At Right Angles).
+  const auto storedDirection2 = [](const CommandState& s) -> std::optional<sketch::V2> {
+    const QJsonArray v = s.object(QStringLiteral("stored")).value(QStringLiteral("direction2")).toArray();
+    if (v.size() != 2) {
+      return std::nullopt;
+    }
+    return sketch::V2{v.at(0).toDouble(), v.at(1).toDouble()};
+  };
+  InputDef direction2 = lineOrAxisInput(QStringLiteral("direction2"), QObject::tr("Direction 2"), 0, c)
+                            .withTooltip(QObject::tr("A line or a sketch axis; none picked: the pattern's own"))
+                            .withVisible([rectangular](const CommandState& s) {
+                              return rectangular(s) && !s.checked(QStringLiteral("square2"));
+                            });
+  // Loaded from the pattern (mitcad#1969): an empty row says the stored
+  // second direction stays.
+  direction2.emptyShows = [storedDirection2](const CommandState& s) {
+    return std::make_pair(storedDirection2(s) ? QObject::tr("As Stored") : QString(), QColor());
+  };
   def.inputs = {
       selectionInput(QStringLiteral("entity"), QObject::tr("Pattern"), SelectKind::SketchCurve | SelectKind::SketchPoint,
                      1, 1)
@@ -1183,6 +1230,13 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
       flipInput(QStringLiteral("flip1"), QObject::tr("Flip"))
           .withTooltip(QObject::tr("Copies against the direction"))
           .withVisible(rectangular),
+      // The second direction (mitcad#1969): at right angles to the
+      // pattern's direction, or along a picked line or axis; with none
+      // picked, the stored one is kept.
+      checkInput(QStringLiteral("square2"), QObject::tr("At Right Angles"), true)
+          .withTooltip(QObject::tr("The second direction at right angles to the first; off: along Direction 2"))
+          .withVisible(rectangular),
+      direction2,
       valueInput(QStringLiteral("quantity2"), QObject::tr("Quantity 2"), ValueKind::Unitless, QStringLiteral("1")).withStepMinimum(1)
           .withTooltip(acrossDirection())
           .withVisible(rectangular),
@@ -1205,18 +1259,26 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
       s.setText(QStringLiteral("angle"), p->values.value(0));
     } else {
       s.setText(QStringLiteral("quantity2"), QString::number(p->count2));
+      s.setChecked(QStringLiteral("square2"), !p->direction2.has_value());
+      s.setItems(QStringLiteral("direction2"), {});
+      QJsonObject stored{{QStringLiteral("direction"), QJsonArray{p->direction.x, p->direction.y}}};
+      if (p->direction2) {
+        stored.insert(QStringLiteral("direction2"), QJsonArray{p->direction2->x, p->direction2->y});
+      }
+      s.setObject(QStringLiteral("stored"), stored);
       s.setText(QStringLiteral("distance1"), p->values.value(0));
       s.setText(QStringLiteral("distance2"), p->values.value(1));
       s.setChecked(QStringLiteral("flip1"), false);
       s.setChecked(QStringLiteral("flip2"), false);
     }
   };
-  def.build = [&c](const CommandState& s, const CommandContext&) -> Built {
+  def.build = [&c, storedDirection2](const CommandState& s, const CommandContext&) -> Built {
     const Selection& picked = s.items(QStringLiteral("entity"));
     const sketch::PatternData* p = picked.isEmpty() ? nullptr : c.model().patternOf(picked.first().name);
     if (p == nullptr) {
       return Built::failure(QObject::tr("Pick a curve of a pattern."), QStringLiteral("entity"));
     }
+    const std::optional<sketch::V2> stored2 = storedDirection2(s);
     const int n1 = static_cast<int>(std::lround(s.value(QStringLiteral("quantity"))));
     QJsonObject cmd = base(c, "sketch.edit_pattern");
     cmd.insert(QStringLiteral("pattern"), p->id);
@@ -1233,6 +1295,24 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
       }
       cmd.insert(QStringLiteral("count"), QJsonArray{n1, n2});
       cmd.insert(QStringLiteral("spacing"), signedSpacings(s));
+      if (s.checked(QStringLiteral("square2"))) {
+        if (stored2) {
+          cmd.insert(QStringLiteral("direction2"), QJsonValue::Null);
+        }
+      } else if (const std::optional<sketch::V2> v = patternDirection2(s, c)) {
+        if (parallelDirections(p->direction, *v)) {
+          return Built::failure(QObject::tr("Direction 2 runs along the pattern's direction: pick a line at an angle "
+                                            "to it."),
+                                QStringLiteral("direction2"));
+        }
+        cmd.insert(QStringLiteral("direction2"), QJsonArray{v->x, v->y});
+      } else if (stored2) {
+        // As Stored: sent again, as a preview of At Right Angles may have
+        // taken it away from the sketch shown.
+        cmd.insert(QStringLiteral("direction2"), QJsonArray{stored2->x, stored2->y});
+      } else {
+        return Built::failure(QObject::tr("Pick a line or a sketch axis for Direction 2."), QStringLiteral("direction2"));
+      }
     }
     return Built::of(cmd);
   };
@@ -1245,6 +1325,19 @@ void addEditPattern(CommandRegistry& registry, SketchController& c) {
              (s.choice(QStringLiteral("kind")) == QStringLiteral("rectangular")
                   ? std::lround(s.value(QStringLiteral("quantity2")))
                   : 1));
+  };
+  // Where the copies are once a preview is shown, as Rectangular Pattern
+  // logs them (mitcad#1969: the stored second direction kept): "Preview
+  // Edit Pattern copies: p9 (-10.000, -15.000), …". The pattern is the one
+  // whose copies the answer lists (`made`).
+  const QString commandName = def.name;
+  def.sketchPreviewShown = [&c, commandName](const QJsonObject& answer) {
+    const QJsonArray made = answer.value(QStringLiteral("made")).toArray();
+    const sketch::PatternData* p = made.isEmpty() ? nullptr : c.model().patternOf(made.at(0).toString());
+    if (p == nullptr) {
+      return;
+    }
+    qDebug().noquote() << QStringLiteral("Preview %1 copies: %2").arg(commandName, pointPositions(c.model(), p->copies));
   };
   registry.add(def);
 }

@@ -113,7 +113,7 @@ impl FeatureInfo for SheetContourDef {
 impl<K: Kernel> Evaluate<K> for SheetContourDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
-        crate::sheet::folded::contour(&d, ctx)
+        crate::sheet::folded::contour(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 

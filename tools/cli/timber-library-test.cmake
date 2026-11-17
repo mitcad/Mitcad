@@ -154,7 +154,12 @@ frames(6 "mount;base;hole_a_1;hole_a_2;hole_a_3;hole_a_4")
 #    3000 by default; in the row 22x50 (48 wide) its body and the face
 #    frames follow (mount:face_xp is F7 after its plane, mount:face_yn
 #    F13); its bodies take the wood appearance, whose texture is embedded.
+#    Its length L is an open option beside its rows of sizes (mitcad#1950):
+#    a closed table whose rows leave it out.
 file(WRITE "${WORK}/board.json" "[
+  {\"expect\": {\"query\": {\"query\": \"configurations\"},
+               \"result\": {\"configurations\": {\"options\": [\"Thickness\", \"Width\", \"L\"], \"closed\": true,
+                                               \"open\": [\"L\"]}}}},
   {\"expect\": {\"total_volume\": 6600000, \"tolerance\": 1e-6}},
   {\"expect\": {\"query\": {\"query\": \"datum\", \"uid\": \"F7\"}, \"result\": {\"origin\": [50, 0, 0], \"normal\": [1, 0, 0], \"x_axis\": [0, 0, 1]}}},
   {\"expect\": {\"query\": {\"query\": \"datum\", \"uid\": \"F13\"}, \"result\": {\"origin\": [0, -11, 0], \"normal\": [0, -1, 0]}}},
@@ -523,10 +528,18 @@ cli(ok run "${WORK}/hss-rect.json" --open "${library}/steel-tubes/test-hss-rect.
 #    4.8, no row) gives the exact area with EN 10219-2's corners (2 T and
 #    T up to 6 mm) and its area parameter; a preset over 6 mm the wider
 #    corners (2.5 T and 1.5 T); a wall of a third of the side or more is
-#    refused and nothing changes.
+#    refused and nothing changes. Its length L is an option after them
+#    (mitcad#1950), its stock length 6000 mm a row that sets it.
 file(WRITE "${WORK}/typed.json" "[
   {\"expect\": {\"query\": {\"query\": \"configurations\"},
-               \"result\": {\"configurations\": {\"options\": [\"B\", \"T\"], \"default\": \"40x40x3\"}}}},
+               \"result\": {\"configurations\": {\"options\": [\"B\", \"T\", \"L\"], \"default\": \"40x40x3\"}}}},
+  {\"expect\": {\"parameter\": \"L\", \"value\": 1000}},
+  {\"cmd\": \"apply_configuration\", \"name\": \"6000 mm\"},
+  {\"expect\": {\"parameter\": \"L\", \"value\": 6000}},
+  {\"expect\": {\"parameter\": \"B\", \"value\": 40}},
+  {\"cmd\": \"apply_configuration\", \"name\": \"40x40x3\"},
+  {\"cmd\": \"set_parameter\", \"name\": \"L\", \"expression\": \"1000 mm\"},
+  {\"expect\": {\"parameter\": \"L\", \"value\": 1000}},
   {\"expect\": {\"total_volume\": 420823.00165, \"tolerance\": 1e-6}},
   {\"expect\": {\"query\": {\"query\": \"datum\", \"uid\": \"F9\"}, \"result\": {\"origin\": [20, 0, 0], \"normal\": [1, 0, 0]}}},
   {\"cmd\": \"configure\", \"values\": {\"B\": 76.2, \"T\": 4.8}},

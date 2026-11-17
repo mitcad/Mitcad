@@ -158,6 +158,7 @@ $solidCreate = 'Create Sketch | - | Extrude | Revolve | Sweep | Loft | Rib | Web
   ' | - | Pattern > [Rectangular Pattern | Circular Pattern | Pattern on Path | Pattern at Points] | Mirror' +
   ' | - | Envelope' +
   ' | - | Form' +
+  ' | - | Flex' +
   ' | - | Machine Elements > [Gear | Gear Pair | Pulley | Belt Drive | Bearing'
 Ui-Mark
 Ui-Step 'the CREATE menu'                { Ui-ClickLogged 'Ribbon SOLID/CREATE' }

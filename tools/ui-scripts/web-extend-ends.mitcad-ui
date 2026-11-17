@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: MIT
+# A Web's Extend Ends, on for a new web, and its mitred corner
+# (mitcad#1968), on web-extend-ends.json (a plate with four walls round
+# it, 122000 mm3, and on its top Sketch6 F12 with an L of two lines short
+# of the walls, c1 and c4):
+#   1. Web, both lines picked, Depth (10 mm): the panel shows Extend Ends,
+#      checked, and End Offset with it.
+#   2. OK: each free end reaches the wall ahead of it, and the corner is
+#      mitred: the wall along c1 from the left wall (x = 10) to the mitre,
+#      2 x (51 + 49) / 2, the one along c4 up to the top wall (y = 90),
+#      2 x (61 + 59) / 2, 10 deep: 2200 mm3 more, one body.
+#   3. Undo takes it away in one step.
+# Run by tools/ui-web-extend-ends-test.sh (Linux),
+# tools/ui-windows-web-extend-ends-test.ps1 (Windows) and
+# tools/ui-macos-web-extend-ends-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.fit
+wait-idle
+expect-model-bodies 1 122000
+capture-undo-depth baseline
+
+# 1. Web on the two lines, by a depth: Extend Ends on, End Offset shown.
+mark
+command solid.web
+wait-log '^Command Web started'
+wait-log '^Sketch entity F12/c1 at ' 20
+wait-log '^Sketch entity F12/c4 at ' 20
+wait-idle
+click-logged '^Sketch entity F12/c1 at '
+wait-log '^Web Curves: 1 sketch curve' 30
+click-logged '^Sketch entity F12/c4 at '
+wait-log '^Web Curves: 2 sketch curves' 30
+qt-choice input_depth_type 'Depth'
+wait-log '^Preview Web: ok' 60
+wait-idle 60
+wait-log '^Panel Web input extend_ends at (?!.*[(]hidden[)])' 20
+wait-log '^Panel Web input end_offset at (?!.*[(]hidden[)])' 20
+expect-widget-property input_extend_ends checked true
+
+# 2. OK: the ends reach the walls, the corner mitred.
+mark
+key Return
+wait-log '^Added web on 2 curve\(s\), thickness 2' 60
+wait-idle 60
+expect-model-bodies 1 124200
+expect-undo-depth ${baseline} 1
+
+# 3. Undo.
+mark
+command edit.undo
+wait-idle 60
+expect-model-bodies 1 122000
+expect-undo-depth ${baseline} 0

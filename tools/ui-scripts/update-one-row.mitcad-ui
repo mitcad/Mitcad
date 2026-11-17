@@ -66,7 +66,7 @@ wait-log '^Update download: the test.s fake offer of MitCad 999[.]0[.]0 in 40 s$
 mark
 command file.exit
 wait-log '^Update question: MitCad 999[.]0[.]0 is still downloading$' 20
-focus-dialog '^MitCad$'
+focus-dialog '^(MitCad|MitCad 999[.]0[.]0 is still downloading[.])$'
 screenshot-dialog '${MITCAD_TEST_WORK}/update-one-row-question.png'
 button '^Keep Downloading$'
 focus-main

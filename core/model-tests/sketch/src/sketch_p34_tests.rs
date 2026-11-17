@@ -729,14 +729,27 @@ fn ellipse_and_spline_offsets_follow_their_source() {
     let (lo, hi) = distances(&curve(&s, &result), &curve(&s, &spline));
     assert!(lo > 3.0 - 1e-4 && hi < 3.0 + 1e-4, "{lo} {hi}");
     assert_eq!(s["dof"].as_u64().unwrap(), 8, "the source's freedom only");
-    // Too far: the offset would fold over the bend.
-    assert!(
-        rejected(
-            &mut d,
-            json!({"cmd": "sketch.offset", "sketch": "F1", "curves": [spline], "distance": 40})
-        )
-        .contains("radius of curvature")
-    );
+    // Farther than the bend's radius of curvature: the stretch whose offset
+    // folds over is left out and the rest is trimmed where it crosses
+    // (mitcad#1938), so that what is made lies 40 from the spline; where
+    // nothing can be trimmed (a fold at the open spline's end) the offset
+    // says why.
+    let far = json!({"cmd": "sketch.offset", "sketch": "F1", "curves": [spline], "distance": 40});
+    match d.command(&far.to_string()) {
+        Ok(made) => {
+            let made: Value = serde_json::from_str(&made).unwrap();
+            let s = sketch(&d);
+            for result in made["made"].as_array().unwrap() {
+                let result = result.as_str().unwrap();
+                if entity(&s, result)["type"] != "spline" {
+                    continue;
+                }
+                let (lo, hi) = distances(&curve(&s, result), &curve(&s, &spline));
+                assert!(lo > 40.0 - 1e-3 && hi < 40.0 + 1e-3, "{lo} {hi}");
+            }
+        }
+        Err(e) => assert!(e.to_string().contains("radius of curvature"), "{e}"),
+    }
 }
 
 #[test]

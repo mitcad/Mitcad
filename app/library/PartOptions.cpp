@@ -339,19 +339,52 @@ QJsonObject setComponentParametersCommand(const QString& component, const QJsonO
           {QStringLiteral("parameters"), parameters}};
 }
 
+namespace {
+// A closed table's open options (mitcad#1950): chosen beside its rows.
+QStringList openOptions(const QJsonObject& configurations) {
+  if (!configurations.value(QStringLiteral("closed")).toBool()) {
+    return {};
+  }
+  QStringList out;
+  for (const QJsonValue& value : configurations.value(QStringLiteral("open")).toArray()) {
+    out << value.toString();
+  }
+  return out;
+}
+} // namespace
+
 bool isOpenTable(const QJsonObject& configurations) {
   // library_show gives `selectors` beside `options` for the pickers of
   // before mitcad#798; a table with `selectors` alone is of the old form,
-  // closed.
+  // closed. A closed table with open options (mitcad#1950) is chosen by its
+  // options too: its rows' options take the rows' values, the open ones any
+  // their limits allow.
   return !configurations.value(QStringLiteral("options")).toArray().isEmpty() &&
-         !configurations.value(QStringLiteral("closed")).toBool();
+         (!configurations.value(QStringLiteral("closed")).toBool() || !openOptions(configurations).isEmpty());
+}
+
+bool isOpenTable(const QJsonObject& configurations, const QStringList& hidden) {
+  if (!isOpenTable(configurations)) {
+    return false;
+  }
+  // An option shown and chosen freely: any of an open table's, a closed
+  // table's open ones only (its rows' options are its rows: tiles).
+  const bool closed = configurations.value(QStringLiteral("closed")).toBool();
+  const QStringList open = openOptions(configurations);
+  const QJsonArray options = configurations.value(QStringLiteral("options")).toArray();
+  return std::any_of(options.begin(), options.end(), [&](const QJsonValue& option) {
+    const QString name = option.toString();
+    return !hidden.contains(name) && (!closed || open.contains(name));
+  });
 }
 
 QStringList tableOptions(const QJsonObject& configurations) {
   QStringList out;
+  const QStringList open = openOptions(configurations);
   const QJsonValue options = configurations.value(QStringLiteral("options"));
   for (const QJsonValue& value : (options.isArray() ? options : configurations.value(QStringLiteral("selectors"))).toArray()) {
-    if (!value.toString().isEmpty()) {
+    // A closed table's rows choose all but its open options (mitcad#1950).
+    if (!value.toString().isEmpty() && !open.contains(value.toString())) {
       out << value.toString();
     }
   }

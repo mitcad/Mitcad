@@ -139,6 +139,20 @@ public:
   // the view. Mac presentation only; call it after build().
   void setGroupCards(bool cards);
   bool hasGroupCards() const { return m_groupCards; }
+
+  // Preferences › Display › Toolbar labels (mitcad#1936, framework/
+  // RibbonLabels): each command button with a short label under its icon
+  // (its command's CommandDef::shortLabel, else its name; one line, elided
+  // past two and a half icons), in a font at Icon size; or the icons only.
+  // The rows grow by the labels' height, the groups' widths count the
+  // labels, and the groups are fitted again (fitGroups folds them from the
+  // right as without labels). Read from the settings when the ribbon is
+  // made; a change is logged as "Ribbon labels: labels (rows 62 px high,
+  // 24 px for the labels)" or "Ribbon labels: icons (rows 38 px high)", then
+  // each group's labels as "Ribbon group SOLID/CREATE labels: Sketch,
+  // Extrude, Revolve, Hole".
+  void setButtonLabels(bool labels);
+  bool buttonLabels() const { return m_labels; }
   // The shown page's group cards in sight: their names
   // ("ribbonGroup_SOLID/SHEET_METAL": spaces as underscores) and rectangles
   // in the ribbon's coordinates, left to right (clipped to the ribbon).
@@ -264,6 +278,12 @@ private:
   static int groupWidth(const GroupInfo& info, int pins);
   // setGroupCards: the mask of the shown page's group cards.
   void updateGroupMask();
+  // The command rows' height: a button's, with its label's under it when
+  // the labels are shown (setButtonLabels).
+  int buttonRowHeight() const;
+  // Every group's row at buttonRowHeight and its widths measured again, the
+  // groups fitted and the places logged (setButtonLabels).
+  void layoutButtonRows();
 
   CommandRegistry& m_registry;
   Presentation m_presentation;
@@ -287,6 +307,8 @@ private:
   QPointer<QToolButton> m_pinDrag;             // the pinned button pressed
   QPoint m_pinDragStart;                       // where (global)
   bool m_pinDragging = false;                  // moved far enough to drag
+  bool m_labels = false;                       // setButtonLabels (mitcad#1936)
+  QHash<QString, QStringList> m_loggedCollapsed; // by tab: the groups logged as collapsed
 };
 
 // A command button of the Mac presentation (also the title bar's Undo and
@@ -301,6 +323,8 @@ public:
   explicit RibbonButton(QAction* action, int iconSize, QWidget* parent = nullptr);
 
   QSize sizeHint() const override;
+  // A short label under the icon (Ribbon::setButtonLabels, mitcad#1936).
+  void setLabelShown(bool shown);
 
 protected:
   void paintEvent(QPaintEvent* event) override;
@@ -309,6 +333,7 @@ protected:
 
 private:
   int m_iconSize;
+  bool m_labelShown = false;
 };
 
 // A rounded panel in the palette's material (the group capsules, the Undo and

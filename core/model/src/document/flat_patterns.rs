@@ -15,7 +15,7 @@ use crate::features::{FeatureDef, ValueInput};
 use crate::ids::{BodyUid, ComponentUid, FeatureUid};
 use crate::kernel::Kernel;
 use crate::sheet::flat::{self, FlatFailure, FlatPattern, FlatPatternDef};
-use crate::sheet::{PanelId, SheetDomainRef, SheetReferenceSide};
+use crate::sheet::{EdgeChange, FeatureWords, PanelId, SheetDomainRef, SheetReferenceSide};
 
 /// The last evaluation of each body's Flat Pattern, by its fingerprint. It
 /// is separate from modelling results: evaluating a pattern changes no state.
@@ -153,7 +153,12 @@ impl<K: Kernel> Document<K> {
         {
             return outcome.clone();
         }
-        let outcome = Arc::new(flat::evaluate(&self.kernel, result, body, def, &name));
+        let edges = |feature: FeatureUid| self.flat_feature_edges(feature);
+        let words = FeatureWords {
+            name: &name,
+            edges: &edges,
+        };
+        let outcome = Arc::new(flat::evaluate(&self.kernel, result, body, def, &words));
         if let Ok(mut cache) = self.flat_cache.lock() {
             cache.insert(body, (key, outcome.clone()));
         }
@@ -165,6 +170,13 @@ impl<K: Kernel> Document<K> {
     fn flat_feature_name(&self, feature: FeatureUid) -> String {
         self.feature(feature)
             .map_or_else(|| feature.to_string(), |f| f.name.clone())
+    }
+
+    /// What a fillet or chamfer the sheet keeps does to its edges, for the
+    /// reason of a Flat Pattern that cannot develop it (mitcad#1942).
+    fn flat_feature_edges(&self, feature: FeatureUid) -> EdgeChange {
+        self.feature(feature)
+            .map_or(EdgeChange::Other, |f| EdgeChange::of(&f.def))
     }
 
     /// A body as a Flat Pattern's message names it (mitcad#1639): its name
@@ -308,7 +320,10 @@ impl<K: Kernel> Document<K> {
                 self.last_result(),
                 body,
                 &def,
-                &|feature| self.flat_feature_name(feature),
+                &FeatureWords {
+                    name: &|feature| self.flat_feature_name(feature),
+                    edges: &|feature| self.flat_feature_edges(feature),
+                },
             ))
         };
         let pattern = match &*outcome {
@@ -411,7 +426,9 @@ impl<K: Kernel> Document<K> {
                 return Ok(corner);
             }
         }
-        answer
+        // The Sheet commands show the refusal of a pick in their panels
+        // (mitcad#1942): walls and features by their names.
+        answer.map_err(|e| crate::sheet::worded(&e, &|f| self.flat_feature_name(f)))
     }
 
     /// The `sheet_corner_edges` query (mitcad#1766): the thickness edge
@@ -476,7 +493,10 @@ impl<K: Kernel> Document<K> {
         moving: PanelId,
     ) -> Result<Value, String> {
         let (state, _) = self.sheet_at(body)?;
+        // Bend's panel shows the refusal (mitcad#1942): walls by their
+        // features' names.
         crate::sheet::pick::seam(state, stationary, moving)
+            .map_err(|e| crate::sheet::worded(&e, &|f| self.flat_feature_name(f)))
     }
 
     /// The `sheet_bodies` query (mitcad#210): each sheet-metal body at the

@@ -1862,6 +1862,7 @@ void SketchOverlay::paintSnap(QPainter& painter) const {
     painter.drawLine(QPointF(c.x() - r, c.y() + r), QPointF(c.x() + r, c.y() - r));
     break;
   case Snap::Kind::OnCurve:
+  case Snap::Kind::BodyOnEdge: // along a body edge as along a curve (mitcad#1967)
     painter.drawEllipse(c, 3.5, 3.5);
     break;
   default:

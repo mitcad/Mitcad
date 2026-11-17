@@ -3,6 +3,7 @@
 # check-all sources: app/commands
 # check-all sources: core/model/src/features/sweep.rs
 # check-all sources: core/model/src/features/pipe.rs
+# check-all sources: core/model/src/features/rib.rs geometry/src/rib.cpp
 # Sweep, Pipe, Loft, Coil, Rib and Web (U4) through the real UI, with the
 # volumes the model reports (tools/cli/tests/f3_*.json):
 #   - Sweep: a 10 mm circle on YZ along a 75 mm line through it, 50 mm
@@ -20,7 +21,8 @@
 #     weight 2; and through a rail along one corner.
 #   - Coil: 3 turns of pitch 10 round a 40 mm diameter, placed by a click.
 #   - Rib and Web on the bracket of ui_rib (the Rib panel with Extend Ends,
-#     End Offset and Direction, mitcad#1746); then a 2 mm square swept
+#     End Offset and Direction, mitcad#1746; the Web panel with Extend
+#     Ends, mitcad#1968); then a 2 mm square swept
 #     along a line on the base's top with that face as its guide surface
 #     (mitcad#157); its profile at the start of the path, Distance 2 stays
 #     hidden.
@@ -374,8 +376,15 @@ ui_step "pick the second line"             ui_click_logged "Sketch entity F8/c4"
 ui_expect_log "Web Curves: 2 sketch curves" "two lines picked"
 ui_step "Depth"                            ui_choose "Panel Web input depth_type" 1
 ui_expect_log "Preview Web: ok" "previewed"
+# Extend Ends (mitcad#1968), on for a new web, and End Offset with it.
+ui_sync
+expect_row Web extend_ends shown "Extend Ends shown"
+expect_row Web end_offset shown "End Offset shown while Extend Ends is on"
 ui_step "OK (Enter)"                       ui_key Return
-ui_expect_volume "Body Body1 (F2.b0): volume 21800.000 -> \([0-9.]*\) mm3" 22840 "webs 2 thick, 10 deep"
+# The lines' free ends continued: the long line's start reaches the plate
+# (x = 5), 10 x 2 x 10 more; its other end and the short line's meet
+# nothing and stay as drawn.
+ui_expect_volume "Body Body1 (F2.b0): volume 21800.000 -> \([0-9.]*\) mm3" 23040 "webs 2 thick, 10 deep, one reaching the plate"
 
 echo "--- Sweep along a guide surface: the 2 mm square along the base's top"
 ui_mark

@@ -420,6 +420,8 @@ fn turn_fields(
         FeatureDef::Sketch(sketch) => turn_sketch_plane(sketch, turn),
         FeatureDef::Move(m) => turn_move(&mut m.transform, turn, negated),
         FeatureDef::MoveOccurrence(m) => turn_move(&mut m.transform, turn, negated),
+        // A Move Face's motion turns as a Move's (mitcad#1937).
+        FeatureDef::MoveFace(m) => turn_move(&mut m.transform, turn, negated),
         FeatureDef::Scale(scale) => {
             if let ScaleSpec::NonUniform { x, y, z } = &mut scale.scale {
                 // Factors along the axes: each goes with its axis.
@@ -570,6 +572,12 @@ fn turn_fields(
                 .axis
                 .unwrap_or(crate::features::dogbone::DEFAULT_AXIS);
             dogbone.axis = Some(turn.vector(axis));
+        }
+        // A Flex item's nodes: where they are (mitcad#1713).
+        FeatureDef::Flex(flex) => {
+            for node in &mut flex.nodes {
+                v(&mut node.at);
+            }
         }
         _ => {}
     }

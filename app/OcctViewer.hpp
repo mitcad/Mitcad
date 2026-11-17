@@ -36,6 +36,7 @@
 #include <Aspect_TypeOfLine.hxx>
 #include <Bnd_Box.hxx>
 #include <Graphic3d_Camera.hxx>
+#include <Graphic3d_ClipPlane.hxx>
 #include <Graphic3d_Structure.hxx>
 #include <Graphic3d_Texture2D.hxx>
 #include <Graphic3d_ZLayerId.hxx>
@@ -795,6 +796,26 @@ public:
   // "off", "the edited sketch only") when it changes.
   void setSketchesThroughBodies(bool on);
   bool sketchesThroughBodies() const { return m_sketchesThroughBodies; }
+  // The selection through the bodies (mitcad#1956, GitHub #395, View ›
+  // Selection Through Bodies, a preference, on by default): every selected
+  // face, edge, profile, sketch curve and point gets a faint dashed copy in
+  // the selection's colour (a point a faint ball), and a selected body or
+  // component a faint copy of its faces (no lines, so its own hidden back
+  // edges get none), in a layer after the sketches' copies without a depth
+  // test, not pickable. Where nothing hides the item the copy lies on its
+  // own highlight; behind a body only the copy shows, so what is in front
+  // still reads as in front. The copies are drawn from the highlight's own
+  // lines and the triangles the body's job made: nothing is meshed for
+  // them (a body with a face left unmeshed gets no copy). None for a light tint, a feature's input lines and a
+  // hover look (each has its own), an item inspected through what hides it
+  // (its dashed copy, drawHidden) or a region while an input takes
+  // profiles (drawn through the bodies already). They follow the section
+  // analysis' or Hide Above Sketch's plane (setSectionCaps): what it cuts
+  // away has no copy. Logs "Selection through the bodies: <kind>
+  // <owner>/<name>, ... (the first eight, then "<k> more"); <n> copies,
+  // nothing meshed" ("none", "off") when it changes.
+  void setSelectionThroughBodies(bool on);
+  bool selectionThroughBodies() const { return m_selectionThroughBodies; }
   void setDatums(const std::vector<DatumDisplay>& datums);
   // The shapes the shown sketch profiles, sketch entities and datums are
   // drawn from, for UI tests (mitcad#1586): the view's own, built on the
@@ -899,6 +920,10 @@ public:
   using PickTest = std::function<bool(const SelectionItem&, const PickCase&)>;
   void setPickScope(SelectFilter kinds, SelectFilter expanded, PickTest test);
   bool shiftHeld() const { return m_shiftHeld; }
+  // The keys held with the mouse's last move, press or release over the
+  // view (mitcad#1713: Flex's Shift for a live route, Alt for a node free
+  // in space).
+  Qt::KeyboardModifiers pointerModifiers() const { return m_pointerModifiers; }
   // The last window selection in widget pixels, and whether it also took
   // what it crosses (dragged to the left).
   QRectF lastWindow() const { return m_windowRect; }
@@ -927,6 +952,11 @@ public:
   void setOccurrenceDrag(OccurrenceDrag drag) { m_occurrenceDrag = std::move(drag); }
   // The move cursor over a body a drag would move (mitcad#150).
   void setDragCursor(bool shown);
+  // A hand over a part taken in hand (the gravity tool, mitcad#1713): open
+  // over it, closed while it is held; before the move cursor.
+  enum class HandCursor { None, Open, Closed };
+  void setHandCursor(HandCursor hand);
+  HandCursor handCursor() const { return m_handCursor; }
   // The point under a widget position on the plane through `through` that
   // faces the viewer; none when the view looks along it.
   std::optional<gp_Pnt> viewPlanePoint(const QPointF& position, const gp_Pnt& through) const;
@@ -1066,6 +1096,12 @@ public:
   // With `fit`, a box larger than the free area is fitted into it
   // (frameBox: zoomed out).
   bool bringClearOfPanels(const Bnd_Box& box, bool fit = false);
+  // Moves the camera by `move` (model coordinates, mm) at once, its
+  // direction and zoom kept, so that a point moved by `move` keeps its
+  // place on the screen (mitcad#1948: the geometry a sketch's first
+  // dimension scaled stays where it was drawn). Ends a running camera
+  // animation first; nothing for a move of no length or not finite.
+  void shiftView(const gp_Vec& move);
   // Shows a box (model coordinates: what a feature command started from a
   // sketch works on, mitcad#1227) inside the free area and off the view
   // cube: one that reaches outside, under a card, the ribbon or the cube,
@@ -1148,8 +1184,12 @@ public:
   gp_Dir viewUp() const;
   // The direction the camera looks along, from the eye to the model.
   gp_Dir viewDirection() const;
-  // What a click at a widget position would pick now, if anything.
+  // What a click at a widget position would pick now, if anything, with
+  // where it hits.
   std::optional<SelectionItem> itemAt(const QPointF& position);
+  // Whether the last click picked nothing (the view's detection may have
+  // been cleared under a resting pointer, as while a preview is shown).
+  bool clickPickedNothing() const { return m_clickPickedNothing; }
   // Everything under a widget position that the filter takes, the item a
   // click picks first.
   std::vector<SelectionItem> itemsAt(const QPointF& position);
@@ -1214,8 +1254,10 @@ signals:
   // version watermark (mitcad#1209) follows.
   void overlayInsetsChanged();
   // A click (window false) or a window selection; empty when the click hit
-  // nothing. Emitted while the view paints: connect queued.
-  void picked(const mitcad::Selection& items, Qt::KeyboardModifiers modifiers, bool window);
+  // nothing. Emitted while the view paints: connect queued. `click` is the
+  // click's number (clickedAt's, 0 for a window): its two reports are one
+  // click (mitcad#1713).
+  void picked(const mitcad::Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click);
   // What a click would pick changed as the mouse moved (invalid when
   // nothing), for drawings over the view that show it more boldly than
   // OCCT's highlight, whose lines are one pixel wide on macOS. Emitted while
@@ -1237,8 +1279,11 @@ signals:
   // over the view) at a widget position, with the keys held, emitted just
   // before `picked` reports what it picked (mitcad#1196: a command that
   // takes the click on a plane). Emitted while the view paints: connect
-  // queued.
-  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers);
+  // queued. `click` numbers the clicks, and `picked` that follows carries
+  // the same number and `items` (mitcad#1713: a receiver of both takes the
+  // click once, in whatever order and after whatever wait they come).
+  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers, quint64 click,
+                 const mitcad::Selection& items);
   // A right click; `item` is what lies under the mouse (invalid if nothing).
   void contextMenuRequested(const QPoint& globalPosition, const mitcad::SelectionItem& item);
   // A right click on the orientation cube.
@@ -1754,6 +1799,22 @@ private:
   std::vector<occ::handle<Graphic3d_Structure>> m_selectionShadows;
   std::vector<std::pair<const void*, const void*>> m_selectionShadowSources;
   std::vector<HighlightDisplay> m_shadowedHighlights;
+  // The selection through the bodies (mitcad#1956, setSelectionThroughBodies):
+  // whether a highlight gets a copy, the copy of one drawn as an object
+  // (`lines`: the polylines its highlight was drawn from; null for a whole
+  // body), the setting, what was drawn (the items and the copies) and the
+  // log line last written.
+  bool wantsSelectionThrough(const HighlightDisplay& highlight) const;
+  void drawSelectionThrough(const HighlightDisplay& highlight, const ViewEdges* lines);
+  void logSelectionThrough();
+  bool m_selectionThroughBodies = true;
+  QStringList m_selectionThroughItems;
+  int m_selectionThroughCopies = 0;
+  QString m_loggedSelectionThrough;
+  // The section analysis' or Hide Above Sketch's plane as a clip plane that
+  // keeps what the cut keeps (setSectionCaps), for the selection's copies
+  // through the bodies; null without a cut.
+  occ::handle<Graphic3d_ClipPlane> m_sectionClip;
   // The whole bodies highlighted, as last logged ("View body highlights:",
   // for UI tests: the bodies a command's selection input holds).
   QString m_loggedBodyHighlights = QStringLiteral("none");
@@ -1788,6 +1849,7 @@ private:
   SelectFilter m_expandedFilter; // the kinds while Shift is held
   bool m_scoped = false;
   bool m_shiftHeld = false;
+  Qt::KeyboardModifiers m_pointerModifiers;
   bool m_contextPick = false; // a right click finds what a Shift+click would take
   // A window selection is being applied (from its release until the
   // selection is reported): its rectangle and direction.
@@ -1838,6 +1900,8 @@ private:
   // m_untestedPicks is set.
   QPointF m_clickPosition;
   bool m_clickPickedNothing = false;
+  // The last click's number (clickedAt, picked).
+  quint64 m_clickSerial = 0;
   // Diagnostic probes must not replace detection before queued pointer
   // input (especially release -> selection) has reached FlushViewEvents.
   bool m_pointerInputPending = false;
@@ -1866,6 +1930,7 @@ private:
   bool m_dragging = false;
   bool m_dragRefused = false; // the press is neither a drag nor a window selection
   bool m_dragCursor = false;
+  HandCursor m_handCursor = HandCursor::None;
   // What the scrolling of a trackpad does until it pauses; a pan or an orbit
   // is a drag of the left button that is passed to the view in steps, so
   // that it goes the way of a mouse drag (m_scrollPoint: device pixels).
@@ -1900,6 +1965,7 @@ private:
   // The edited sketch's faint copies through the bodies, just after the
   // points' layer (mitcad#1762).
   Graphic3d_ZLayerId m_sketchThroughLayer = Graphic3d_ZLayerId_UNKNOWN;
+  Graphic3d_ZLayerId m_selectionThroughLayer = Graphic3d_ZLayerId_UNKNOWN; // mitcad#1956
   occ::handle<Prs3d_Drawer> m_sketchPointHover;
   // Image references drawn through the bodies, just before the halos
   // (mitcad#782).

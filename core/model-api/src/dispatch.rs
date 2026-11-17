@@ -91,11 +91,11 @@ pub(super) trait DispatchOps<K: Kernel> {
     /// The families of commands besides the document's own (`Command`,
     /// which takes every other name, so that its error lists its commands
     /// for an unknown one). A new family is one row here.
-    fn command_families() -> [CommandFamily<K>; 32];
+    fn command_families() -> [CommandFamily<K>; 34];
 }
 
 impl<K: Kernel> DispatchOps<K> for Document<K> {
-    fn command_families() -> [CommandFamily<K>; 32] {
+    fn command_families() -> [CommandFamily<K>; 34] {
         [
             // Gears: the motion link of a mesh (mitcad#472, `gears.rs`),
             // run as the `add_motion_link` worked out from the gears. It has
@@ -360,6 +360,24 @@ impl<K: Kernel> DispatchOps<K> for Document<K> {
                         doc,
                         parse(value, "command")?,
                     )
+                },
+            },
+            // Flex items (mitcad#1713, `flex.rs`): a namespace of their own,
+            // so that the error of an unknown `flex.` command lists theirs.
+            CommandFamily {
+                names: super::flex::FlexCommand::NAMES,
+                prefix: Some("flex."),
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::flex::run_flex_command(doc, parse(value, "flex command")?)
+                },
+            },
+            // The gravity tool (mitcad#1713, Part B, `gravity.rs`): a
+            // namespace of its own, as Flex's.
+            CommandFamily {
+                names: super::gravity::GravityCommand::NAMES,
+                prefix: Some("gravity."),
+                run: |doc: &mut Self, value: Value| -> Result<Value, ApiError> {
+                    super::gravity::run_gravity_command(doc, parse(value, "gravity command")?)
                 },
             },
             // CAM setups, operations and machines (mitcad#1013, `cam.rs`).

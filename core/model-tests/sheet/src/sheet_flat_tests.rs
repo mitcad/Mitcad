@@ -531,3 +531,38 @@ fn flat_pattern_errors_name_the_body_in_words() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The refusals of the picks the Sheet commands ask about (`sheet_seam`,
+/// `sheet_reference`), which their panels show: walls by their features'
+/// names, no ids; agents read the ids in the detail (mitcad#1942).
+#[test]
+fn sheet_pick_refusals_name_the_walls_in_words() {
+    use mitcad_model::notice::{FeatureError, user_text_leaks};
+    let (doc, _, body) = fixture();
+    let panel = json!({"feature":body.feature,"slot":0});
+    let error = doc
+        .query(
+            &json!({"query":"sheet_seam","body":body,"stationary":panel,"moving":panel})
+                .to_string(),
+        )
+        .unwrap_err()
+        .to_string();
+    let said = shown(&error);
+    assert_eq!(said, "SheetFace1 and SheetFace1 share no seam");
+    assert_eq!(user_text_leaks(said), None, "{said}");
+    let face = body.feature;
+    assert_eq!(
+        FeatureError::from_text(&error).agent_text(),
+        format!("panel {face} slot 0 and panel {face} slot 0 share no seam")
+    );
+    let error = doc
+        .query(
+            &json!({"query":"sheet_reference","body":body,"face":format!("{face}:sheet_front(4)")})
+                .to_string(),
+        )
+        .unwrap_err()
+        .to_string();
+    let said = shown(&error);
+    assert_eq!(said, "SheetFace1 (wall 5) is not a domain of this sheet");
+    assert!(!has_feature_id(said), "{said}");
+}

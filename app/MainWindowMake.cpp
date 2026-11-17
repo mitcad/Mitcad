@@ -351,12 +351,50 @@ void MainWindow::registerMakeCommands() {
 
   // Export Face as DXF… (Laser): the selected planar face's body seen
   // along it, its outline written for a laser, waterjet or plasma cutter.
-  CommandDef face = action("make.export_face_dxf", tr("Export Face as DXF…"), "export-dxf", QStringLiteral("LASER"),
-                           [this] { exportFaceDxf(); });
+  // With a planar face selected it writes at once; otherwise its panel
+  // opens with a Face input that takes a planar face (mitcad#1963), and
+  // OK writes it.
+  const QString faceInput = QStringLiteral("face");
+  CommandDef face;
+  face.id = QStringLiteral("make.export_face_dxf");
+  face.name = tr("Export Face as DXF…");
+  face.icon = QStringLiteral("export-dxf");
+  face.tab = kMake;
+  face.group = QStringLiteral("LASER");
   face.pinned = true;
   face.tooltip = tr("Writes the body's outline seen along the selected planar face as DXF");
   face.keywords = {QStringLiteral("dxf"), QStringLiteral("laser"), QStringLiteral("waterjet"), QStringLiteral("plasma"),
                    QStringLiteral("cut"), QStringLiteral("outline"), QStringLiteral("face"), QStringLiteral("export")};
+  face.okLabel = tr("Export");
+  face.inputs = {selectionInput(faceInput, tr("Face"), SelectKind::Face, 1, 1)
+                     .withTooltip(tr("The planar face whose body's outline is written, seen along the face"))
+                     .withAccepts([](const SelectionItem& item) { return item.geometry == QStringLiteral("plane"); })
+                     .withoutMeshes()
+                     .withRefusedHint([](const SelectionItem&, const CommandState&) {
+                       return tr("Pick a planar face of a body.");
+                     })};
+  face.runsAtOnce = [this] {
+    if (m_selection.size() == 1 && m_selection.first().kind == SelectKind::Face &&
+        m_selection.first().geometry == QStringLiteral("plane")) {
+      const SelectionItem picked = m_selection.first();
+      exportFaceDxf(picked);
+      return true;
+    }
+    // The panel instead of a hint in the status bar alone (mitcad#1963).
+    qDebug().noquote() << QStringLiteral("Export Face as DXF: no planar face selected, the panel opens");
+    return false;
+  };
+  face.build = [faceInput](const CommandState& state, const CommandContext&) {
+    if (state.items(faceInput).isEmpty()) {
+      return Built::asking(tr("Pick a planar face of a body: its outline seen along the face is written as DXF."),
+                           faceInput);
+    }
+    return Built::of(QJsonObject());
+  };
+  face.accept = [this, faceInput](const CommandState& state, const CommandContext&) {
+    const Selection picked = state.items(faceInput);
+    return !picked.isEmpty() && exportFaceDxf(picked.first());
+  };
   m_registry->add(face);
 }
 
@@ -369,25 +407,17 @@ void MainWindow::assignMaterial() {
   }
 }
 
-void MainWindow::exportFaceDxf() {
-  const SelectionItem* face = m_selection.size() == 1 && m_selection.first().kind == SelectKind::Face &&
-                                      m_selection.first().geometry == QStringLiteral("plane")
-                                  ? &m_selection.first()
-                                  : nullptr;
-  if (face == nullptr) {
-    showHint(tr("Export Face as DXF: select a planar face of a body first."));
-    return;
-  }
-  const QString body = face->owner;
-  const QString faceName = face->name;
-  const QString occurrence = face->occurrence;
+bool MainWindow::exportFaceDxf(const SelectionItem& face) {
+  const QString body = face.owner;
+  const QString faceName = face.name;
+  const QString occurrence = face.occurrence;
   const QString name = bodyName(body);
   const QString suggested = QDir(dialogFolder(DialogGroup::Export)).filePath(name + QStringLiteral(".dxf"));
   // In the design's length unit unless another is chosen (mitcad#1408).
   QString unit = lengthUnit();
   const QString path = dialogSaveDxf(this, tr("Export Face as DXF"), suggested, unit);
   if (path.isEmpty()) {
-    return;
+    return false; // cancelled: a panel stays open
   }
   rememberDialogFolder(DialogGroup::Export, path);
   QJsonObject command{{QStringLiteral("cmd"), QStringLiteral("export_face_dxf")},
@@ -402,7 +432,7 @@ void MainWindow::exportFaceDxf() {
   if (!runCommand(command, &result)) {
     sheetWarning(this, tr("Export Face as DXF"), tr("Could not export:\n%1").arg(m_lastError));
     qInfo().noquote() << QStringLiteral("Export of the face of %1 refused: %2").arg(name, m_lastError);
-    return;
+    return false;
   }
   const QString written = result.value(QStringLiteral("units")).toString(unit);
   qInfo().noquote()
@@ -414,6 +444,7 @@ void MainWindow::exportFaceDxf() {
              .arg(result.value(QStringLiteral("height")).toDouble())
              .arg(written);
   showHint(tr("Exported the outline of %1 to %2 (in %3).").arg(name, QDir::toNativeSeparators(path), written));
+  return true;
 }
 
 MakeBodyCard* MainWindow::createMakeCard() {

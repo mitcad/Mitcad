@@ -371,6 +371,13 @@ impl Rewrite<'_> {
                     changed |= self.link(link)?;
                 }
             }
+            // A Flex item's nodes on other components' geometry
+            // (mitcad#1713).
+            FeatureDef::Flex(f) => {
+                for link in f.links.values_mut().chain(f.datum_links.values_mut()) {
+                    changed |= self.link(link)?;
+                }
+            }
             // A seat on another component's shaft (mitcad#578).
             seated @ (FeatureDef::Pulley(_)
             | FeatureDef::Gear(_)

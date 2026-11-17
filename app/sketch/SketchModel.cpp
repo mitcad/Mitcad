@@ -389,6 +389,15 @@ bool SketchModel::load(const QJsonObject& sketch) {
     for (const QJsonValue& e : k.value(QStringLiteral("entities")).toArray()) {
       p.entities << e.toString();
     }
+    const auto directionOf = [&k](const char* key) -> std::optional<V2> {
+      const QJsonArray v = k.value(QString::fromLatin1(key)).toArray();
+      if (v.size() != 2) {
+        return std::nullopt;
+      }
+      return V2{v.at(0).toDouble(), v.at(1).toDouble()};
+    };
+    p.direction = directionOf("direction").value_or(V2{1.0, 0.0});
+    p.direction2 = directionOf("direction2");
     for (const QJsonValue& c : k.value(QStringLiteral("copies")).toArray()) {
       const QJsonObject map = c.toObject().value(QStringLiteral("entities")).toObject();
       for (auto it = map.begin(); it != map.end(); ++it) {

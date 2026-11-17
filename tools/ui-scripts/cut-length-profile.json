@@ -1,0 +1,12 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The supplier's file of the cut-to-length library UI test (mitcad#1950, tools/ui-cut-length-library-test.sh): a 20 x 20 slot profile, 100 long, a 5.2 mm wide and 6 mm deep slot in each side and a 4.2 mm core bore (section 261.345576 mm2), as tools/cli/profile-library-test.cmake makes its p20x20; nothing of a real supplier's."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-10, -10], "length": 20, "width": 20, "height": 100, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [4, -2.6], "length": 6, "width": 5.2, "height": 100, "operation": "cut"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-10, -2.6], "length": 6, "width": 5.2, "height": 100, "operation": "cut"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-2.6, 4], "length": 5.2, "width": 6, "height": 100, "operation": "cut"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [-2.6, -10], "length": 5.2, "width": 6, "height": 100, "operation": "cut"}},
+  {"cmd": "add_feature", "def": {"type": "cylinder", "plane": "xy", "center": [0, 0], "diameter": 4.2, "height": 100, "operation": "cut"}},
+  {"expect": {"bodies": 1}},
+  {"expect": {"total_volume": 26134.5576397669, "tolerance": 1e-5}}
+]

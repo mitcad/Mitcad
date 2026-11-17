@@ -10,9 +10,9 @@
     "supplier_url": "https://www.motedis.com/en/Aluminium-hexagon-SW19-length-1980-mm",
     "designation": "Hexagon bar SW19 L={L}",
     "rows": [
-      {"name":"1980","select":{"Stock":"1980"},"values":{},"part_number":"AHSW19-1980"},
-      {"name":"1000","select":{"Stock":"1000"},"values":{},"part_number":"AHSW19-1000","supplier_url":"https://www.motedis.com/en/Aluminium-hexagon-SW19-length-1000-mm","source":"slot-profile-accessories/Aluminium-hexagon-SW19-length-1000-mm/Motedis-AHSW19-1000/Motedis_AHSW19-1000.stp"},
-      {"name":"250","select":{"Stock":"250"},"values":{},"part_number":"AHSW19-250","supplier_url":"https://www.motedis.com/en/Aluminium-hexagon-SW19-length-250mm","source":"slot-profile-accessories/Aluminium-hexagon-SW19-length-250mm/Motedis-AHSW19-250/Motedis_AHSW19-250.stp"}
+      {"name":"1980","select":{"Stock":"1980"},"values":{"L":"1980 mm"},"part_number":"AHSW19-1980"},
+      {"name":"1000","select":{"Stock":"1000"},"values":{"L":"1000 mm"},"part_number":"AHSW19-1000","supplier_url":"https://www.motedis.com/en/Aluminium-hexagon-SW19-length-1000-mm","source":"slot-profile-accessories/Aluminium-hexagon-SW19-length-1000-mm/Motedis-AHSW19-1000/Motedis_AHSW19-1000.stp"},
+      {"name":"250","select":{"Stock":"250"},"values":{"L":"250 mm"},"part_number":"AHSW19-250","supplier_url":"https://www.motedis.com/en/Aluminium-hexagon-SW19-length-250mm","source":"slot-profile-accessories/Aluminium-hexagon-SW19-length-250mm/Motedis-AHSW19-250/Motedis_AHSW19-250.stp"}
     ],
     "build": {
       "role": "linear",

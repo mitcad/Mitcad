@@ -26,6 +26,7 @@ CommandDef chamfer(const CommandContext& context) {
   def.subgroup = "";                   // a submenu of the group's menu, see below
   def.section = "";                    // a section of the group's menu, see below
   def.keywords = {"bevel"};            // the command search finds it by these too
+  def.shortLabel = "";                 // the label under its button where the name is long, see below
   def.featureType = "chamfer";         // the definition type it adds and edits
   def.inputs = {
       selectionInput("edges", tr("Edges"), SelectKind::Edge | SelectKind::Face, 1, 0),
@@ -86,6 +87,7 @@ then Gear, Pulley, Bearing, Gear Pair and Belt Drive from
 | `patterns` | the Pattern submenu (`subgroup` `"Pattern"`: Rectangular Pattern, Circular Pattern, Pattern on Path, Pattern at Points), then Mirror |
 | `envelope` | Envelope (mitcad#1276, [Envelope](#envelope)) |
 | `form` | Form (mitcad#1757, [Form](#form-mitcad1757)) |
+| `flex` | Flex (mitcad#1713, [Flex](#flex-mitcad1713)), registered by `registerFlexCommands` right after `registerCreateCommands` |
 | `machine` | the Machine Elements submenu (`subgroup` `"Machine Elements"`: Gear, Pulley, Bearing, Gear Pair, Belt Drive) |
 
 A new machine element sets `def.group = "CREATE"`, `def.section =
@@ -296,6 +298,12 @@ Modifiers:
   hidden with it: the first input of a group (Thread's and Hole's Extra
   clearance: Radial clearance and Flank clearance, shown for modeled
   threads only).
+- `withSlider(minimum, maximum, decimals)` (mitcad#1713): a unitless value
+  input gets a `QSlider` before its field (`slider_<key>`; the field stays
+  where a value is typed, its logged place). A drag writes its value, with
+  so many decimals, into the field as typing would (`textEdited`); the
+  slider follows the field's value. Let It Hang's Damping (0 to 1). The
+  AppKit inspector shows the field only.
 - `withRemembered()` (mitcad#1028): a value input that starts a new
   feature's panel with what was given in it on the command's last OK
   (["Remembered values"](#remembered-values)): Fillet's Radius,
@@ -368,6 +376,10 @@ Modifiers:
   or a text's `onChange` runs when it is typed (a value's also when its
   handle drags it): BUILD's typed length detaches the auto length, its
   search narrows the picker.
+  `withOnCommit(call)` (mitcad#1713): a value's call when its field is
+  left or Enter is pressed in it (`valueCommitted`), not at each key:
+  what costs too much to follow the typing reads what it keeps (Let It
+  Hang's Length, which resamples the hanging item).
 - `withTabCycle(values)`: a choice that Tab steps through these values
   while the main window has the keyboard and the choice is shown (BUILD's
   auto length: face, center, through); the session filters the
@@ -1006,7 +1018,13 @@ Three other kinds of panels:
   `cursorPlaneClicked(point, state, context)` on a click anywhere in the
   view (`OcctViewer::clickedAt`, emitted before `picked`); true computes
   the preview again, and a Shift + click is also OK. The pick input
-  should take no click meanwhile. BUILD's first part on a chosen plane
+  should take no click meanwhile. Both reports carry the click's number,
+  and the session takes each click once: when the click itself picked an
+  item the active input takes, `picked` has it and the plane does not;
+  when the plane (or the item under the click) took it, the click's own
+  `picked` is left (`CommandSession::m_clickTaken`, mitcad#1713: either
+  may wait for the model, so their order and the time between them say
+  nothing). BUILD's first part on a chosen plane
   ("BUILD").
   `CommandContext::pixelSize(point)` is the size of a view pixel in mm
   at a point of the design (NaN on the model's worker), for snap
@@ -2178,6 +2196,54 @@ and pinned again from its row in SOLID › MODIFY) and
 the same by the keys where a menu is involved, without Keyboard Shortcuts
 and Edit Parameters' row); `tools/ui-sketch-create-menu-test.sh` checks
 Pin to Navigation Bar in a row's and a pinned toolbar button's menu.
+
+### Toolbar labels
+
+Preferences › Display › **Toolbar labels** (mitcad#1936, GitHub
+mitcad/Mitcad#356; `framework/RibbonLabels`): **Icons only** (the
+default) or **Labels under icons**, on the row of Show quick-access
+toolbar (the page grows no higher; no mnemonic: every letter of the label
+is taken on the page). The setting `appearance/ribbonLabels` (`icons` or
+`labels`; no key is Icons only) is saved when the dialog is accepted, at
+once in the Settings window, and applies at once in every window
+(`RibbonLabelsNotifier::labelsChanged`, `Ribbon::setButtonLabels`), in the
+Floating and the Docked layout on every platform; Import Settings applies
+it too.
+
+With labels every command button of a group's row (its own, its split
+buttons, its extras and the user's pins) shows a label under its icon:
+the command's `CommandDef::shortLabel` where its name is long (Create
+Sketch: Sketch; Section Analysis: Section; Assembly Constraint:
+Constraint; New Component: Component; Send to Slicer: Slicer; translated
+in the context `RibbonLabel`), else its name without the mnemonic and a
+trailing ellipsis. One line, elided past two and a half icons
+(`ribbonLabelWidthLimit`), in the captions' 0.85 of the ribbon's font at
+Icon size rather than Text size (`ribbonLabelFontScale`), so that a label
+grows with its icon. Docked draws them with Qt's
+`Qt::ToolButtonTextUnderIcon` (`ClassicRibbonButton`), Floating's
+`RibbonButton` under its icon. Every group's row is as high as the
+highest button with its label (`Ribbon::buttonRowHeight`); the groups'
+widths are measured again with the labels (`sizeGroup`) and
+`Ribbon::fitGroups` folds them from the right as without labels (pinned
+buttons first, Create last; `framework/RibbonFit` collapses a group only
+where its name alone is narrower than its row, so a group of one or two
+buttons, such as Select or Render, may stay whole while groups left of it
+collapse). The tooltips, menus and the command search
+are unchanged.
+
+Logged: `Preferences: ribbon labels labels` (`icons`), `Ribbon labels:
+labels (rows 62 px high, 24 px for the labels)` or `Ribbon labels: icons
+(rows 38 px high)`, then each group's labels, `Ribbon group SOLID/CREATE
+labels: Sketch, Extrude, Revolve, Hole`; and, whenever a tab's collapsed
+groups change and after each change of the labels (also when they stay the same), `Ribbon collapsed
+SOLID: INSERT, RENDER, SELECT` (`... SOLID: none`). Tests:
+`ribbonLabelsTests` (app.unit: the setting, its notifier, the labels'
+text, font and limit) and `tools/ui-ribbon-labels-test.sh`
+(`app.ui-windows-ribbon-labels`, `app.ui-macos-ribbon-labels`; the shared
+`tools/ui-scripts/ribbon-labels.mitcad-ui` in both layouts: the Create
+group's labels, the rows higher, the collapsed groups logged again,
+Insert collapsed in a narrow one, Create never before Modify, and back to
+Icons only).
 
 ### The quick-access group
 
@@ -3495,8 +3561,8 @@ show the Lines split button and Midpoint Line without code of their own.
 - `move(snap)`, `press(snap)`, `release`, `doubleClick` get the cursor
   snapped (`SketchSnap`: points, origin, midpoints, centers, quadrants,
   intersections, onto curves, onto the sketch's x and y axes, the grid;
-  with `bodySnaps()` also body vertices and edge midpoints in the plane,
-  below; tolerances in pixels).
+  with `bodySnaps()` also body vertices, edge midpoints and edges in the
+  plane, below; tolerances in pixels).
   Picking tools return `snaps() == false` and use
   `controller.entityAt(screen)`.
 - The pointer is the precision cursor (`framework/Cursors.hpp`): a cross
@@ -3737,6 +3803,30 @@ show the Lines split button and Midpoint Line without code of their own.
   says `The sketch was scaled by 10 to its first dimension`. The UI test
   libraries set `MITCAD_SKETCH_FIRST_DIMENSION_SCALE=0`, which makes the
   unsaved preference off, so that their drawn sketches keep their sizes.
+- The view follows the scale (mitcad#1948, GitHub #400): the scale is
+  about the sketch origin, so geometry drawn far from it (a sketch on a
+  face whose plane's origin is hundreds of millimeters away) would jump
+  away from where it was drawn. Before a dimension that asks for the rule,
+  `SketchOp::run` notes where the dimensioned geometry is in the sketch as
+  last read (`SketchOp::dimensionAnchor`: the mean of
+  `SketchModel::anchorAt` of the dimension's entities other than the axes
+  and the origin, e.g. a circle's center, a line's midpoint; not read
+  again, so that what a tool holds of the sketch stays valid). When the
+  answer has `scaled`, that point went to `scaled` times where it was, and
+  `SketchOp::followScale` moves the camera at once by as much in the
+  design (`OcctViewer::shiftView`: eye and target together, direction and
+  zoom kept), so that the point keeps its place in the window. Geometry
+  made earlier in the same action is not in the sketch as last read; the
+  view then stays. Logged `Sketch
+  view moved with the scaled sketch by 150.000 mm: the dimensioned
+  geometry at 700.0,480.0 px stays at 700.0,480.0 px`. A rollback of the
+  action moves the view back; Undo afterwards leaves it where it is. UI
+  test: `tools/ui-sketch-scale-view-test.sh`,
+  `app.ui-windows-sketch-scale-view`, `app.ui-macos-sketch-scale-view`
+  (shared steps `tools/ui-scripts/sketch-scale-view.mitcad-ui`, which turn
+  the preference on with `set-setting`): a diameter that scales the sketch
+  by 1.25 and one that scales it by 0.8, the circle's center within a
+  pixel of its place and the zoom unchanged.
 
 Body edges and vertices in the sketch plane (mitcad#256,
 `sketch/BodyGeometry.hpp`): `controller.bodyGeometry()` reads the model's
@@ -3766,7 +3856,7 @@ tool answers at once with the items in the plane, and once the others are
 there it looks again where the pointer is. A selection the tool takes as
 it starts is read at once (`bodyGeometry(true, true)`). The read is logged
 `Sketch body geometry out of the plane: 12 item(s)`; the counts above stay
-those in the plane. The Point tool snaps to the items in the plane only.
+those in the plane. The drawing tools snap to the items in the plane only.
 The
 items have ids of their own that never clash with the sketch's: `body:3`
 an edge or a vertex, `body:3:start`, `body:3:end` and `body:3:center` a
@@ -4080,25 +4170,38 @@ one undo step, named after what the action makes.
   other commands' inputs leave it out, `isAxisSelection`). Delete,
   Construction, Convert to Sketch Geometry, Fix/Unfix, Copy and Cut leave
   the axes and origin out.
-- **Snapping to bodies** (mitcad#258): a tool whose `bodySnaps()` is true
-  gives the snapper the body geometry (`SnapSettings::body`), which then
-  offers body vertices as `Snap::Kind::BodyVertex` (with the points' rank
-  and tolerance) and the middles of body lines and arcs as
-  `Snap::Kind::BodyMidpoint` (the midpoints'), the item in
-  `Snap::bodyItem`; the sketch's own point or midpoint at the same place
-  wins (a body target counts one pixel further). The marker is a point's
-  square or a midpoint's triangle, the cursor shows the snap. Only the
-  **Point** tool turns it on now; the other drawing tools can opt in
-  without changes of their own, as `op.pointInput(snap)` gives a body
-  vertex's projected point and `op.constrain(point, snap)` holds a point
-  on the projected vertex (coincident) or at the projected edge's middle
-  (midpoint), projecting the vertex or edge first (`projectBody`).
+- **Snapping to bodies** (mitcad#258, mitcad#1967): a tool whose
+  `bodySnaps()` is true (the default: every tool whose `snaps()` is, so
+  every drawing tool, Point, Text and Paste included) gives the snapper
+  the body geometry (`SnapSettings::body`), which then offers body
+  vertices as `Snap::Kind::BodyVertex` (with the points' rank and
+  tolerance), the middles of body lines and arcs as
+  `Snap::Kind::BodyMidpoint` (the midpoints'), and the nearest point of
+  any body edge as `Snap::Kind::BodyOnEdge` (the curves'), the item in
+  `Snap::bodyItem`; the sketch's own point, midpoint or curve at the same
+  place wins (a body target counts one pixel further), and so does an
+  axis along a body edge. The marker is a point's square, a midpoint's
+  triangle or a curve's circle, the cursor shows the snap.
+  `op.pointInput(snap)` gives a body target's position (a new point);
+  `op.constrain(point, snap)` projects the vertex or edge first
+  (`projectBody`: linked, or an existing projection taken) and holds the
+  point on the projected vertex (coincident), at the projected edge's
+  middle (midpoint) or on the projected edge (coincident), logged `Held p9
+  coincident with p8, the projected corner V{…}`, `Held p9 at the
+  midpoint of c7, the projected edge E{…}` or `Held p9 on c7, the
+  projected edge E{…}`. So the tools hold their clicked points with
+  `constrain` (or `holdPoint`) as at any snap, without code of their own:
+  a line from a body corner starts on a new point coincident with the
+  projected corner. UI test: `tools/ui-sketch-body-snaps-test.sh`
+  (shared steps `tools/ui-scripts/sketch-body-snaps.mitcad-ui`; ctests
+  `app.ui-windows-sketch-body-snaps`, `app.ui-macos-sketch-body-snaps`).
 - **Point** (`PointTool`): on a body target its hint says what a click
   does; the click is one `SketchOp`: the vertex or the edge projected
   (linked, or an existing projection taken), `sketch.add_point`, and the
   coincident or midpoint constraint. Logged `Point p9 coincident with p8,
-  the projected corner V{…}` or `Point p9 at the midpoint of c7, the
-  projected edge E{…}` after `Added point p9 at (x, y)`. A point already
+  the projected corner V{…}`, `Point p9 at the midpoint of c7, the
+  projected edge E{…}` or `Point p9 on c7, the projected edge E{…}` after
+  `Added point p9 at (x, y)`. A point already
   coincident with the corner's existing projection makes the click do
   nothing, as at a point of the sketch.
 
@@ -4273,7 +4376,8 @@ shared by Qt and AppKit (its word, icon, color role and lifetime).
   in the tooltip; logged `Browser level <path>: <level>` when it changes),
   the selection card (`Selection card level <feature>: <level>`), the
   tooltips (`Warning: …`, `Failed: …`) and the status line of the issue
-  buttons' reveal all use it. The warnings badge counts warnings only;
+  buttons' reveal all use it. The warnings badge counts warnings only,
+  not those the user acknowledged ([Acknowledged warnings](#acknowledged-warnings-mitcad1935));
   the timeline search's `is:info` (`is:note`) finds the import notes.
 - **Exports and imports** report their warnings the same way: a status
   line warning `Imported part.step. 2 warnings: <the first>` (or
@@ -4458,6 +4562,71 @@ again; Sketches Through Bodies off takes the copies away and is saved, on
 brings them back; Hide All Sketches from the root's menu hides it, Undo
 takes the one step back, and the command search's Hide All Sketches hides
 it again.
+
+### The selection through the bodies
+
+Every selected item shows where a body hides it (mitcad#1956, GitHub
+mitcad/Mitcad#395: a selected profile buried in a body, or a face turned
+away, gave no sign that it was selected; the highlights are in the top
+layer, which keeps the scene's depth):
+
+- **Copies** (`OcctViewer::drawSelectionThrough`, from `drawHighlight` and
+  `drawHighlightShadows`): a selected face's (a feature's faces', a
+  region's) boundary, edge and sketch curve gets a dashed copy in the
+  selection's color at the sketches' copies' width, faint
+  (`kSelectionThroughOpacity`, blended in place as the sketches' copies
+  are), without lines across the faces; a vertex and a sketch point a
+  faint copy of the selected ball; a whole body or component a faint copy
+  of its faces (`kSelectionThroughFillTransparency`) without lines, so
+  that its own hidden back edges get none. They are drawn in the layer
+  `selection, through the bodies`, right after the sketches' copies: no
+  depth test, no depth writes, immediate, not pickable; the picking
+  groups do not change. Where nothing hides the item the copy lies on its
+  own highlight, so what is in front still reads as in front.
+- **Nothing meshed:** the lines and balls come from the polylines the
+  highlight was drawn from (`fineShape`) with automatic triangulation
+  off; a whole body's faces from the triangles its job made (a body with
+  a face left unmeshed gets no copy rather than one meshed on the UI
+  thread). A large selection's copies are drawn with its highlights'
+  slices (mitcad#1631).
+- **None** for a light tint, a feature's input lines (their own dashed
+  copies, mitcad#957), a hover look, an item inspected through what hides
+  it (`throughSolid`, its own dashed copy), the origin's and datums'
+  planes, axes and points, and a region while an input takes profiles (it
+  is then drawn through the bodies itself, `setProfilesFirst`).
+- **Section analysis and Hide Above Sketch:** the copies of body items
+  are clipped at the cut's plane (`setSectionCaps`, a `Graphic3d_ClipPlane`
+  that keeps what the cut keeps), so what the cut takes away has none; a
+  sketch's own items are drawn whole, as the sketch is. A Transparent body
+  in front shows them as an opaque one does; the rendered view draws them
+  over its image, as the other copies.
+- **View › Selection Through Bodies** (`view.selection_through`, a
+  checkable action of mode Any without a ribbon place, after Sketches
+  Through Bodies in the View menu of both layouts and in the command
+  search): on by default; off, the selection is drawn as before. Its state
+  is a preference (`view/selectionThroughBodies`,
+  `ViewSettings::selectionThroughBodies`, reset by Preferences › Restore
+  Defaults with the Display page). Logged `View selection through bodies:
+  on|off`.
+
+Log: `Selection through the bodies: profile F2/r{…}, face F1.b0/F1:…; 2
+copies, nothing meshed` (the first eight items, then `<k> more`; `none`,
+`off`) when it changes. Tests: `tools/ui-selection-through-bodies-test.sh`,
+`app.ui-windows-selection-through-bodies` and
+`app.ui-macos-selection-through-bodies`, the shared steps
+`tools/ui-scripts/selection-through-bodies.mitcad-ui` on
+`tools/ui-scripts/selection-through-bodies.json` (a block and a sketch on
+the XZ plane through it whose rectangle's lower part lies inside the
+block): Selection Through Bodies off logs `off` and is saved, and with no
+command active a click on the profile's part above the block selects it
+without a copy; on again, the copy of the profile the block hides is
+logged; a face of the block selected and seen from the back (turned away)
+is logged; off again, no copy, and on again, its copy is back. The
+profile is clicked in the first view only, where a middle of one of its
+triangles lies above the block (`click-visible-item` tries those). `tools/ui-large-selection-test.sh` checks that the
+copies of every edge of 256 bodies are counted and nothing is meshed for
+them, and that 255 bodies selected with their feature in the timeline
+(inspected through what hides them) get none.
 
 ### Sketch commands with panels
 
@@ -4668,18 +4837,18 @@ point; the saved design keeps their centers on the points when the
 points move (see "Placements held where the snap marker showed").
 
 The sketch **Rectangular Pattern**'s second direction (mitcad#1640,
-GitHub mitcad/Mitcad#243) is never picked: it runs across Direction, a
-quarter turn counter-clockwise from it (`sketch.rectangular_pattern`
-copies along `direction` and its perpendicular). Quantity 2, Spacing 2
-and Direction Type 2 say so in their tooltips (`Across Direction, at
-right angles to it in the sketch`; Edit Pattern's Quantity 2 and Spacing
-2 too), and Quantity 2 starts at 2, so the preview shows a grid at once
+GitHub mitcad/Mitcad#243) runs across Direction, a quarter turn
+counter-clockwise from it, unless Direction 2 picks another (mitcad#1969,
+below). Quantity 2 and Spacing 2 say so in their tooltips (`Along
+Direction 2, or at right angles to Direction when none is picked`; Edit
+Pattern's Quantity 2 and Spacing 2 too), and Quantity 2 starts at 2, so the preview shows a grid at once
 (3 x 2 from the defaults). Its handle (`CommandDef::sketchHandle`,
 `patternHandle` in `SketchCommands.cpp`) is two arrows without a square
 (`SketchHandle::axes`, `starts`, `square`): one along Direction at the
 originals' first copy (their middle plus Spacing along it), which drags
-Spacing, and one across it at the first copy of the second direction,
-which drags Spacing 2; each against its direction while its Flip is on.
+Spacing, and one along the second direction (across Direction, or
+along Direction 2) at the first copy of the second direction, which
+drags Spacing 2; each against its direction while its Flip is on.
 A drag sets only the value of the arrow dragged (an expression in the
 other field stays as typed; Move/Copy's arrows alike) and steps by the
 grid only (`snapsToGeometry` off: not onto the copies it moves); Shift
@@ -4721,6 +4890,31 @@ Direction is only for Along a Line).
 `sketch-pattern-dir2.json`) pick the y axis as Direction for a circle
 (copies along y), then the x axis (copies along x), then the y axis
 again and OK; `test_app`'s `sketch_axes.cpp` checks `lineDirection`.
+
+The sketch **Rectangular Pattern**'s **Direction 2** (mitcad#1969, GitHub
+mitcad/Mitcad#406) is optional, a line or the sketch's x or y axis as
+Direction is (`lineOrAxisInput`, `patternDirection2`), so the rows can
+run at any angle: a line at 60 degrees to Direction lays a honeycomb.
+Empty, the rows run at right angles to Direction as before (its tooltip:
+`A line or a sketch axis; at right angles to Direction when none is
+picked`). `build` sends its vector as `direction2`; one parallel to
+Direction fails the preview in words on the row (`Direction 2 runs along
+Direction: pick a line at an angle to it.`), as the model refuses it.
+The handle's second arrow runs along it. **Edit Pattern** loads it
+(`PatternData::direction2` from the sketch query): At Right Angles
+(`square2`) is off for a pattern with a second direction, and Direction
+2's empty row then says `As Stored` and keeps it; a line or axis picked
+there replaces it (refused when parallel to the pattern's direction), At
+Right Angles on takes it away (`direction2: null`). Edit Pattern logs the
+copies' points once a preview is shown, as Rectangular Pattern does
+(`Preview Edit Pattern copies: …`). `tools/ui-sketch-pattern-honeycomb-test.sh`,
+`app.ui-windows-sketch-pattern-honeycomb` and
+`app.ui-macos-sketch-pattern-honeycomb` (the shared script
+`tools/ui-scripts/sketch-pattern-honeycomb.mitcad-ui`, the fixture
+`sketch-pattern-honeycomb.json`) pick a 60 degree line as Direction 2 for
+a circle (the second row along it, the second arrow along (0.5, 0.866)),
+OK, and open Edit Pattern: the row stays at 60 degrees, At Right Angles
+turns it back, and off again with Quantity 2 it is kept.
 
 **Sketch Fillet** (mitcad#867) has one selection, Curves or Corners
 (`corners`: lines and circular arcs of the sketch, and points where
@@ -6453,6 +6647,16 @@ rail and surface, orientation, Flip); `SweepCommands.cpp` and
   sketch's curves (reference curves refused with why); it is enabled by a
   3D sketch too. Profile inputs take a 3D sketch's regions of closed loops
   in its sketch plane, shown and picked as a 2D sketch's.
+- **Loft's Rails between sections whose edges do not line up**
+  (mitcad#1944): a circle to a square through a rail tied to Intersect
+  points meeting the square in a side's middle builds (the model matches
+  the sections from the rails); a rail that misses a section is refused
+  in words, `rail 1 misses the second profile by 0.3 mm`, its nearest
+  points on the rail and the section painted while the pointer is over
+  the message. Tests: `tools/ui-loft-rail-intersect-test.sh`,
+  `tools/ui-windows-loft-rail-intersect-test.ps1`,
+  `tools/ui-macos-loft-rail-intersect-test.sh` (ctests
+  `app.ui-windows-loft-rail-intersect`, `app.ui-macos-loft-rail-intersect`).
 - **Walls and surfaces from a 3D sketch's curves** (mitcad#1550). Rib and
   Web (Curves), Extrude's Thin Extrude (Profiles: its sketch curves) and
   Surface Extrude, Surface Revolve and Surface Sweep (Profiles) take a 3D
@@ -9603,6 +9807,15 @@ between two walls), so an edit highlights what the feature uses.
   faces, the face held, one next to either bend; mitcad#125), Own Corner
   Relief (shape, size; a tear has none).
 - **Unfold** (`sheet.unfold`): the Fixed Face and faces of the bends to open.
+  Its refusals, as those of Refold, Bend, Fold and the other sheet features,
+  name walls and features as the timeline does (`SheetFlange2 (wall 2)`,
+  `Fillet3 rounds edges of the sheet's faces, which cannot be flattened`;
+  mitcad#1942), the walls painted on hover, the ids in the error's detail
+  for agents.
+  Tests: `tools/ui-sheet-unfold-fillet-test.sh`,
+  `tools/ui-windows-sheet-unfold-fillet-test.ps1`,
+  `tools/ui-macos-sheet-unfold-fillet-test.sh` (ctests
+  `app.ui-windows-sheet-unfold-fillet`, `app.ui-macos-sheet-unfold-fillet`).
   **Refold** (`sheet.refold`): the Unfold (a choice of the design's, the newest
   at the start) and the bends to close, none for all.
 - **Flat Pattern** (`sheet.flat_pattern`, a model command): the fixed face (or
@@ -9775,7 +9988,7 @@ places one and closes it.
 
 | Command | Panel | Model |
 |---|---|---|
-| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, three icon buttons X, Y, Z (`withChoiceIcons`, default Z: standing; `at.direction`). Length's mode as five icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length, Auto: to a face you pick, plus an offset (mitcad#1630); their labels the tooltips; in a ground placement only the last two are offered, `withChoiceOffered`); to a face adds To Face (a face, a plane or a profile's end, picked anywhere, beside the part too; shown empty, it takes the next click, and it stays for the next part placed) and Face Offset (default 0, signed along the part) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
+| `build.profile` Profile | grows as the placement needs it (mitcad#394). At first: Part, a tile with the chosen part's picture, name, supplier and part number (`withChoiceTile`, mitcad#427); a click on it, or Enter or Space, opens the component picker with the role's parts, filtered to the system chosen last (mitcad#418); Search and System are hidden inputs (for live MCP); Place On (none needed for the first part); Length (the part's stock length, else 500 mm; also a box at the cursor, `withCursorBox`, and a handle at the free end while the length is a number); for a ground placement Direction, three icon buttons X, Y, Z (`withChoiceIcons`, default Z: standing; `at.direction`). Length's mode as five icon buttons (mitcad#427, `withChoiceIcons`: Auto: to the face it meets, Auto: to its center, Auto: through it, Typed length, Auto: to a face you pick, plus an offset (mitcad#1630); their labels the tooltips; in a ground placement only the last two are offered, `withChoiceOffered`); to a face adds To Face (a face, a plane or a profile's end, picked anywhere, beside the part too; shown empty, it takes the next click, and it stays for the next part placed) and Face Offset (default 0, signed along the part) and, by the pick: an **end pick** adds Direction (mitcad#417: Auto, the click's zone of the end face, `Auto: by the click (+X)`; Straight; the four turns square to the part it meets, `end.turns`, named by the host axis they run along, `+X`, else `Side 1`..`Side 4`), on a corner Offset (the new part's end from the outer side, positive towards the turn, default 0) and Miter (Auto, `Auto (none)`: the panel's turns are square, and a square corner lies on the end face, mitcad#427; `Auto (<cut>)` when the click's preview says another; None; Shared, not offered at a corner offset other than 0; Cut the new part; Cut the existing part) with Miter Angle; the end pick's view hint says that Miter Shared miters both components (mitcad#1940, *Mitering two profiles*); a **side pick** adds Offset and From (End A, End B, Middle, Middle of Gap, mitcad#1401), which the click fills; either adds Rotate (0, 90, 180, 270 deg) and Flip, and a side pick of a profile Tilt below Rotate (mitcad#444: 0 deg, the lean along the part it stands on, positive towards its end B, up to 80 deg; an arc handle at the foot, a ring about the slot's cross axis, drags it, the angle in the box at the cursor while it is dragged; the foot is cut to lie on the side, an auto length ends flush on the face it meets; Offset and From then refer to the foot's long point; sent as `tilt` when not 0). Placement, last, once the design has a part to go on: four icon buttons (mitcad#427, no More; Automatic: where the click is, the default; On a profile's side; On a profile's end; On a plane (as the first part): a ground placement again; their labels the tooltips). The result names where the part goes (`Adds to: Root`, the `build_host` query). **Place** (Enter) places it, also without a pick in a ground placement (at the origin), and the panel stays for the next one; **Shift + click** (mitcad#451, [Selection inputs](#selection-inputs)) on a place Place On takes picks it and places the part at once with the panel's values, then the next one follows as after Place (a plain click still only previews; one that cannot be placed makes nothing and the panel says why); the view's hint says `Shift+click places at once`; **Close** (Esc) keeps what was placed | `build_host`, `build_preview` while the inputs change, `build_place` on Place |
 | `build.timber` Timber | [Timber](#timber), TIMBER group (mitcad#478, mitcad#520): Part (the picker of timber only, `timber`), Mode (four icon buttons: On a member, Spacing, Two points, Along an edge, mitcad#1814), then Mode's inputs; On a member with Profile's Length (Auto: face, center, through, Tab; typed, the box at the cursor, the handle); Place (Enter) repeats, Close keeps what was placed | `build_preview`, `build_place` with `to`, `lie`, `length`, `spacing`, `along` |
 | `build.wall` Wall | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Start, End, Length (Auto or Typed, on another wall) and Length, Direction, From and Offset (on another wall), Height, Spacing, Top Plates, Corner, Openings (a tile that opens the Openings window, mitcad#519), Fasteners with Fastener, Size and Count; the members previewed as boxes; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: wall`) |
 | `build.floor_roof` Floor / Roof | [Timber](#timber), TIMBER group (mitcad#479, mitcad#520): Part, Kind (two icon buttons: Floor or ceiling, Roof), then only that kind's inputs: a floor's Start, End, Length, Width, Direction, Spacing, Openings (the Openings window), Blocking; a roof's Walls, Roof, Pitch from Walls, Pitch, Overhang; Fasteners with Fastener, Size and Count; Place (Enter) repeats | `build_preview` with `frame`, `build_frame` (`kind: floor`, `roof`) |
@@ -9787,7 +10000,7 @@ places one and closes it.
 | `build.spacing` Spacing Set | Member (a member of a spacing set, mitcad#478; its set's values fill the panel), Spacing (Center distance, Gap), Distance, Last Board (gap: cut, spread), Count (0: from the distance), Size (the rows of the set's source); enabled while the design has a set | `build_edit` of the set's lead with `spacing` (and `config`): the members laid out again in one undo step |
 | `build.frame` Timber Frame | Member (a member of a timber frame, mitcad#479; its frame's values fill the panel), by its kind the inputs Wall or Floor / Roof shows for it (mitcad#520): a wall's Length, Height, Spacing, Top Plates, Corner, Openings (the Openings window, mitcad#519); a floor's Length, Width, Spacing, Openings, Blocking; a roof's Spacing, Pitch, Overhang; Size (the members' row); the members previewed as boxes | `build_preview` with `frame` and `component`, `build_edit` with `frame` (one undo step) |
 | `build.length` Length | Part, Length (Detached: this length, Bound: to the face, to the center, through, Bound: to a face, plus an offset, mitcad#1630), Value, Bound To (none: the face it is bound to now; to a face also a plane), Face Offset (to a face: the part's offset, read from `build_parts`' `bound.add`); the bound target highlighted, a length to a face's offset shown | `build_edit` with `length` (a value detaches, a `bind` binds, to a face `{"mode": "to_face", "face", "offset"}`) |
-| `build.ends` Ends | Part (the end nearer the click; an end face by its name), End, Angle, About (x, -x, y, -y), Also the Part It Meets (a shared miter: the end that meets this one in an `L` or `inline` junction); End Machining (As it is, A bore: Diameter, Depth, Thread; None takes the part's end machining away) | `build_edit` with `ends` and `machining`, the part's whole list (`[{end, hole: {diameter, depth, thread}}]`): `build_parts`' list with this end's entries replaced by the bore, or left out for None; one undo step for both parts |
+| `build.ends` Ends | Part (the end nearer the click; an end face by its name; while the panel is open every profile's ends show `A` and `B` in the view, the chosen one `> A`, and the view's hint says to click near the end), End, Angle, About (for an end that meets another profile's end: Towards the component it meets, Away from it, Across the corner one way and the other, the cut's lean drawn as an arrow from the end; the part's own x, -x, y, -y only for an end that meets nothing), Also the Component It Meets (mitcad#1940: offered for an end that touches, overlaps or comes within 5 mm of another profile's end in a corner, `build_end_meets`; taken, the shared miter a corner placement makes: both ends cut on the bisector and run on to the outer corner, Angle and About then the corner's; not offered, the panel says why in words); End Machining (As it is, A bore: Diameter, Depth, Thread; None takes the part's end machining away) | `build_end_meets` (the ends' labels with `meets: false`; the picked part's ends and what they meet), `build_edit` with `ends` and `machining`, the part's whole list (`[{end, hole: {diameter, depth, thread}}]`): `build_parts`' list with this end's entries replaced by the bore, or left out for None; with Also the Component It Meets `build_edit`'s `shared_mitre` first; one undo step for both parts |
 | `build.flip` Flip, `build.rotate` Rotate 90° | Parts (any number); Rotate repeats (Enter turns them again) | `build_edit` with `flip` / `rotate`, one undo step |
 | `build.placement` Placement | Component (a part on a side or a rail, mitcad#1885, GitHub mitcad/Mitcad#354: its From and Offset fill the panel, `build_parts`' `from` and `offset`), Offset, From (End A, End B, Middle, Middle of Gap); a part placed otherwise is refused in words (its place is its joint's, which Joint edits) | `build_edit` with `at`: a new From with the Offset as loaded sends `from` alone (the part stays where it is, measured from the new reference), a typed Offset `offset` and `from`; one undo step. Logged `BUILD placement of <component>: from <from>, offset <text>` on the pick and `Placement of <component>: from <from>, kept in place` or `... offset <text>` after OK. Test: `tools/ui-scripts/joint-placement-edit.mitcad-ui` |
 | `build.cut_list` Cut List, `build.parts_list` Bill of Materials | an action: `BuildListsDialog` (`build/BuildLists.cpp`) with the tabs Cut List (Kerf; the cut parts grouped as the model groups them: quantity, part, length, end A and B, machining, own features, supplier, part number, mass each; the stock: pieces in cutting order, stock pieces, offcut; the other parts) and Bill of Materials (`parts_list`: quantity, part, supplier, part number, supplier part numbers (the row's suppliers' articles, `supplier_parts_text`, mitcad#949), library, version, license); **Copy as CSV** (Alt+C) copies the shown tab's tables (rows ending in CRLF on every platform, mitcad#1641), **Copy as Text** (Alt+T) and **Save as Text…** copy and save them as an aligned plain-text table (`textTableOf`, `build/ListTables.cpp`: each table's heading when there are several, a header row, columns padded with spaces to their widest cell, numbers right-aligned, a blank line between tables, CRLF line ends, UTF-8; mitcad#1641), **Save as PDF...** (Alt+P) writes them with `QPdfWriter` (Qt Gui; A4 landscape) under the list's title and the design's name with the date. A design with timber (the cut list's `timber`, mitcad#478) adds columns after these: the cut parts' material, grade, finish, nominal and actual section (thickness first, `48x148`), running meters and volume (m³), and a row of the timber's totals; the stock's size and each stock piece's length; the bill of materials's material and grade. A design with profiled boards (the cut list's `profiled`, mitcad#477) adds three more: the profile, the cover width and the area covered (m²), its total in the totals row. A design with timber frames (a cut row's `frame`, mitcad#522) lists each frame's members apart, by frame, with a last column Frame. A design without timber lists exactly as before. The Bill of Materials tab's Property columns field (Alt+L, mitcad#496) takes property keys separated by commas (`Mark, Pset_WallCommon/FireRating, Mass`): a column each after the others with each part's value (its component's own, its library's or computed), in the CSV and the PDF too; the keys stay for the session | `build_cut_list` (`kerf`), `parts_list` (`properties`) |
@@ -10041,7 +10254,7 @@ length at the free end), `Placed panel <part> as <name> (<occurrence>), fits; 0
 clamp(s)` (`, does not fit: <reason>`), `Connected <part> at junction <id>
 (<kind>) as <component>: <n> added`, `Fasteners of <name>: <n>
 command(s)`, `Length of <name>: <value>` (`bound, face`), `Ends of <name>:
-end a 45 deg about x, shared, machining D6.8 mm x 15 mm M8 at end a`, `Flip <names>`, `Rotate <names> 90 deg`,
+end a 45 deg about x, machining D6.8 mm x 15 mm M8 at end a` (`end b shared miter with end a of C2` with Also the Component It Meets), `BUILD ends of C1: end b picked, meets end a of C2`, `Inspect Ends: C1 end b: <ends>; meets end a of C2; about y; 4 end labels`, `Flip <names>`, `Rotate <names> 90 deg`,
 `Cut list row: 2 x <part>, 500.0 mm, A 45 deg (x), B square`, `Cut list
 stock: <part>, 6000.0 mm stock x 1, pieces 500.0, ..., offcut <mm>`, `Cut
 list: <n> row(s), <n> stock, <n> other part(s), kerf 3 mm`, `Build components
@@ -10052,7 +10265,33 @@ list: <n> row(s)`, `Build list CSV: <line>`, `Build list copied as CSV:
 `tools/ui-build-test.sh`, `tools/ui-windows-build-test.ps1` (ctest
 `app.ui-windows-build`); the lists as text (mitcad#1641): `tools/ui-build-lists-text-test.sh`,
 `tools/ui-windows-build-lists-text-test.ps1` (ctest `app.ui-windows-build-lists-text`) with the
-shared `tools/ui-scripts/build-lists-text.mitcad-ui`, and `app.unit` (`app/tests/list_tables.cpp`).
+shared `tools/ui-scripts/build-lists-text.mitcad-ui`, and `app.unit` (`app/tests/list_tables.cpp`);
+mitering two profiles placed apart (mitcad#1940): `tools/ui-build-end-meets-test.sh`,
+`tools/ui-windows-build-end-meets-test.ps1` (ctest `app.ui-windows-build-end-meets`),
+`tools/ui-macos-build-end-meets-test.sh` (ctest `app.ui-macos-build-end-meets`) with the shared
+`tools/ui-scripts/build-end-meets.mitcad-ui`.
+
+**Mitering two profiles** (mitcad#1940). A corner is mitered in one of
+three ways, each giving the same shared miter (both ends cut on the
+bisector, each by half the corner, the outer corners meeting, each length
+the long point):
+
+- **placing the second part on the first one's end**: Profile, a click
+  near an edge of the end face turns the corner, Miter Shared (Auto at a
+  corner of another angle than 90°) cuts both; the end pick's view hint
+  says so;
+- **Ends on a part placed apart**: pick the part near the end at the
+  corner (the ends show `A` and `B`; the click chooses the nearer one) and
+  check Also the Component It Meets, offered when the other profile's end
+  touches, overlaps or comes within 5 mm; the part on a side runs through
+  to the other's outer side (its joint's frame moved, its far end kept),
+  and a free end changes its length; the panel says in words why it is not
+  offered (no end near, the parts on one axis, a length bound to another
+  part, a part tilted on its side);
+- **not** by binding the first part's length to the second when the
+  second was placed after it: a bound length refers only to parts placed
+  before it, and the refusal says to miter the corner in one of the two
+  ways above.
 
 ### Timber
 
@@ -11030,6 +11269,23 @@ settings in the user's settings (`ViewSettings`, group `view`);
   vertical pan on a vertical two-finger scroll pans the other way and a
   horizontal one the same way (the step `expect-view-pan-along`); the
   setting read back by a new process and turned off there again.
+  On Linux (Qt's xcb platform, which the app always uses there) a
+  touchpad's two-finger scroll arrives through libinput as wheel steps,
+  with no scroll phase and no pixel deltas (GitHub mitcad/Mitcad#381):
+  the view tells it from a mouse wheel by its device
+  (`QPointingDevice::type()` is `TouchPad`, `isXcbTouchpadScroll` in
+  `OcctViewer.cpp`), never by the steps' size, so high-resolution and
+  free-spinning wheels keep zooming. Under the trackpad schemes and Custom
+  such a scroll pans, and with the orbit key orbits, as a trackpad's does
+  elsewhere; xcb swaps a scroll's axes while Alt is held, and the view
+  swaps them back for these scrolls, so Alt + scroll moves in the
+  fingers' direction. Windows and macOS are unchanged.
+  `tools/ui-navigation-device-scroll-test.sh` (step
+  `expect-device-scroll`, script
+  `tools/ui-scripts/navigation-device-scroll.mitcad-ui`) sends a
+  touchpad device's wheel steps vertically and sideways (both pan),
+  sideways with Alt as xcb gives a vertical move (orbits vertically), and
+  a mouse's whole and partial notch (both zoom).
   The Navigation page fills the window's height (mitcad#1394, `pageFills`
   in `ViewController.cpp`): the bindings table (`navigationBindings`,
   `NavigationBindingsTable`) asks for its 138-pixel minimum only, so the
@@ -11383,7 +11639,8 @@ settings in the user's settings (`ViewSettings`, group `view`);
   setting `quickAccess/visible`, [The quick-access
   group](#the-quick-access-group)), which shows or hides the quick-access
   group at once in either layout and in the AppKit toolbar, keeping its
-  choice of commands. In builds with
+  choice of commands, and on its row **Toolbar labels** (Icons only or
+  Labels under icons, mitcad#1936, [Toolbar labels](#toolbar-labels)). In builds with
   the render worker, Display also has the **render device** (mitcad#50,
   the setting `render/device`: Automatic, the CPU or a GPU the worker
   lists with `mitcad-render --list-devices`; a device of an earlier choice
@@ -12271,6 +12528,7 @@ UI thread.
 | `framework/CommandPanel.*` | the panel generated from the inputs |
 | `framework/CommandRegistry.*` | every command with its `QAction`; shortcuts saved in the settings, per context where they differ (mitcad#720), the actions' keys of the current context (`setShortcutContext`); `alias(oldId, id)` keeps a renamed command's saved shortcut and `find`, `action`, `trigger` working for its old id (`file.move_to_project`, mitcad#503) |
 | `framework/Ribbon.*` | the toolbar: tabs, groups, group menus, the commands pinned in their groups (mitcad#1001, mitcad#1084) |
+| `framework/RibbonLabels.*` | Preferences › Display › Toolbar labels: the setting, its notifier, the buttons' labels' text, font and width (mitcad#1936) |
 | `framework/ToolbarPins.*` | the commands pinned to the toolbar per tab, each in its group, kept in the settings (mitcad#1001, mitcad#1084) |
 | `framework/CommandSearch.*` | the command search (S) |
 | `framework/ShortcutDialog.*` | Tools > Keyboard Shortcuts: a tree of commands with their context and key, a row per context for a command of several (mitcad#720), a context filter, the reserved keys as read-only rows (mitcad#730) |
@@ -12641,10 +12899,18 @@ A sketch's DXF leaves its construction curves and center lines out unless
 **Include construction geometry** is checked (mitcad#1445: a check below
 the DXF unit row, shown for DXF only, off unless chosen and remembered as
 `export/dxfConstruction`; `construction` of `export_sketch`, written on the
-layer `construction`); the log line ends `…, construction geometry left
-out` or `…, construction geometry included`. The sketch's context-menu
-Export DXF leaves them out (`Exported <path>: dxf, 4 entities, in mm,
-construction geometry left out`).
+layer `construction`); the log line goes on `…, construction geometry left
+out` or `…, construction geometry included`. **Include points**
+(mitcad#1963, GitHub #408: a check below it, shown for DXF only, object
+name `exportDxfPoints`, on unless unchecked and remembered as
+`export/dxfPoints`; `points` of `export_sketch`) writes the sketch's
+free-standing points, such as hole marks for a plasma table, as POINT
+entities on the layer `POINTS`; the log line ends `…, points included` or
+`…, points left out`. The sketch's context-menu Export DXF… (the
+Browser's and the view's) opens this dialog on that sketch, its file
+named after the sketch (`MainWindow::exportFile(sketch)`), so that both
+checks are offered there too (`Exported <path>: dxf, 4 entities, in mm,
+construction geometry left out, points included`).
 Bodies are where the design shows them (the model's default;
 a STEP of moved bodies is an assembly, which keeps the design's
 components, each written once, mitcad#1915); with occurrences, Coordinates can
@@ -14944,7 +15210,26 @@ linked design whose configuration table is **open** (`options`, not
   "Length": "800 mm"}`), and `library.config` the row the combination
   matches, none when it matches no row (so a combination without a row
   counts under the component in In this design and the tiles' `×N`).
-  Place Component (mitcad#525) sends the same `parameters`.
+  Place Component (mitcad#525) sends the same `parameters`. A component
+  cut to length (mitcad#1950: its manifest's `build.length`, the length
+  an option of the parts library's components) has **Stock length**
+  above its options (`partOptionStock`, `OptionChooser::setStockOption`):
+  Custom, then the rows that set only the length, else (a closed table of
+  sizes) the manifest's `build.length.stock`; a stock length sets the
+  length (`Library stock length <row>: <length>`), and the chooser follows
+  the length typed (Custom for one no row has). A closed table with open
+  options (`open`, mitcad#1950: a timber board's or a steel tube's length
+  beside its rows of sizes) is chosen by the choosers too
+  (`isOpenTable`): its rows' options as lists of the rows' values, the
+  open ones within their limits; Insert sends `library.config` (the row)
+  and only the open options as `parameters`. BUILD's component picker
+  keeps such a table's rows as tiles and shows no options for it.
+- **Derived Component** (`commands/DerivedPartCommands.cpp`) shows the
+  options a part does not set yet beside the Configuration of an open
+  table's rows too (the `configure` answer's `closed`, mitcad#1950), so
+  that a library component cut to length changes its length there; a
+  closed table is chosen by its row only but for its open options (the
+  answer's `open`), and a BUILD part's length is its own Length field.
 - **BUILD's component picker**: the rows of an open table stay tiles (presets
   of the options; favorites and use counts per row as before,
   mitcad#491, mitcad#518), and the options of the tile chosen show under
@@ -14953,7 +15238,12 @@ linked design whose configuration table is **open** (`options`, not
   tile's key with the matching row and the options (`lib|comp|row?{json}`,
   `build::optionsKey`); `Catalog::find` gives the part with them,
   `build_place`'s `part` carries `parameters`, the Part drop-down lists
-  it in place of its tile with the option values.
+  it in place of its tile with the option values. A BUILD part cut to
+  length leaves its length option to BUILD (`PickerPart::lengthParameter`,
+  `OptionChooser::setHiddenOptions`; mitcad#1950): a part whose only
+  option is its length shows no options, and its rows that set only the
+  length are no tiles unless a row has its own part number
+  (`BuildCatalog`'s `partsOf`).
 - **The Standard and Supplier filters** (mitcad#949, `OptionChooser`,
   `library/PartOptions.*`; the rows' tags in
   [docs/libraries.md](../docs/libraries.md#standards-and-suppliers-of-rows)):
@@ -16012,7 +16302,8 @@ sketch edit starts with (`SelectionScope::sketch`):
 | Sketch geometry (the edited sketch's ordinary curves and points; center lines too, they bound profiles) | cross |
 | Construction geometry | cross |
 | Projected geometry (reference entities) | cross |
-| Dimensions and constraints (sketch mode's overlay) | square |
+| Dimensions (sketch mode's overlay) | square |
+| Constraints (sketch mode's overlay; Fix symbols too) | square |
 | Profiles | square |
 | Visible body edges | square |
 | Occluded body edges | empty |
@@ -16024,7 +16315,22 @@ sketch edit starts with (`SelectionScope::sketch`):
   selectable, Shift included (`filterRowOf`); another sketch's profiles,
   dimensions and constraints have no row at all. A window collects every kind the filter lets a window
   take, not one preferred kind; dimensions and constraints come from the
-  overlay (`SketchController::annotationsIn`) when their row is a cross.
+  overlay (`SketchController::annotationsIn`), each kind when its own row
+  is a cross (`MainWindow::sketchWindowItems`).
+- Dimensions and Constraints are two rows (`dimensions`, `constraints`;
+  GitHub mitcad/Mitcad#388, mitcad#1966), so that a window can take only
+  the dimensions or only the constraints; a click follows each item's own
+  row too (`filterRowOf`: a sketch dimension gives `Dimensions`, a
+  constraint and an entity's Fix symbol, the `fix:` item, `Constraints`).
+  Test: `tools/ui-sketch-filter-annotations-test.sh`,
+  `app.ui-windows-sketch-filter-annotations` and
+  `app.ui-macos-sketch-filter-annotations`, one input script
+  `tools/ui-scripts/sketch-filter-annotations.mitcad-ui` on
+  `sketch-filter-annotations.json`: only Dimensions a cross, a window over
+  the sketch takes the dimension and no constraints; only Constraints a
+  cross, the Parallel and the Fix symbol and no dimensions; Dimensions
+  empty, a click on the dimension's text does not select it and one on
+  the Parallel's symbol does.
 - Visible or occluded: for a body edge, the view looks from the picked
   point of the edge (a click: the edge's point nearest where it hit; a
   window: its samples inside the window) towards the eye, along the view
@@ -16091,7 +16397,8 @@ filter sketch restored: ...`, `Selection filter widened (Shift)` and
 `Selection filter as set`; with `MITCAD_LOG_PICKS` also `Sketch hover:
 <item>|nothing`, and with `MITCAD_LOG_EDGE_PLACES` once the camera rests `Sketch pick places:` then
 `Sketch pick edge F1.b0/<edge> visible|occluded at x,y`. Tests: `app.unit`
-(`selectionScopeTests`), `tools/ui-sketch-select-test.sh`.
+(`selectionScopeTests`), `tools/ui-sketch-select-test.sh`,
+`tools/ui-sketch-filter-annotations-test.sh`.
 
 ## Icons
 
@@ -17933,6 +18240,7 @@ next screenshot.
 | `Timeline tooltip: Fillet2: <error>`, `Marker at 2 of 4`, `Moved Plane1 to 0 in the timeline`, `Move of Fillet1 refused: <reason>`, `Suppressed Fillet1`, `Renaming Plane1 in the timeline`, `Timeline rename editor at x,y wxh in the visible WxH, text N wide` (the rename editor in the viewport's pixels, mitcad#1742), `Renamed Plane1 to Datum`, `Delete Sketch1: also Extrude1, Fillet1?`, `Deleted Sketch1, Extrude1, Fillet1`, `Delete Sketch1 cancelled` | timeline actions |
 | `Browser width 240` (`, scrolls sideways` with a horizontal scroll bar), `Browser Root/Bodies/Body1 at x,y` (its name), `Browser eye <path> at x,y`, `Browser radio <path> at x,y`, `Browser linked Root/Sketches/Sketch1/Extrude2 to Component1` (a feature row whose result is in another component), `Browser shared Root/Features/Extrude1/Sketch1: used by 2 features` (a sketch row under a feature with the shared mark, mitcad#1699) | the browser's width and the rows in sight (names from the root; a row whose middle is in the view), when they changed, also when the tree scrolls or the panel moves in the window; a place logged before whose row has left sight (scrolled away, folded, gone) is logged once more as `Browser <path> out of sight` (also `Browser eye <path>`, `Browser radio <path>`), so that a test never clicks a place that is not valid; `tools/ui-test-lib.sh` scrolls such a row back into sight before it clicks it (`ui_browser_reveal`) |
 | `Browser background: rows` (`card`), `Preferences: browser background rows`, `Preferences browser background at x,y`, `Browser view beside the rows at x,y` (`… out of sight`) | the Browser's background in the Floating layout (mitcad#419): at start and on each change, the choice saved in Preferences, its drop-down in the dialog, and with Rows a place right of every row's box where a click reaches the 3D view (`tools/ui-browser-rows-test.sh`) |
+| `Preferences: ribbon labels labels` (`icons`), `Ribbon labels: labels (rows <h> px high, <d> px for the labels)` (`Ribbon labels: icons (rows <h> px high)`), `Ribbon group SOLID/CREATE labels: Sketch, Extrude, Revolve, Hole`, `Ribbon collapsed SOLID: INSERT, RENDER, SELECT` (`none`) | Preferences › Display › Toolbar labels (mitcad#1936, [Toolbar labels](#toolbar-labels)): the choice saved, the rows' height and each group's labels after a change, and a tab's groups collapsed to their names whenever they change (`tools/ui-ribbon-labels-test.sh`) |
 | `Browser rows width <w> (widest row <n>, at most <p>% of <view>: <limit>)`, `Browser name elided <path>: tooltip "<line>"`, `Browser names elided: <n>`, `Preferences: browser rows at most <p>%`, `Browser card edge at x,y` (`Browser card edge: none`), `Browser card width <w> remembered`, `Browser card width <w> (remembered)` | the Browser card's width in the Floating layout (mitcad#1932): with Rows the width for its widest row and its limit, when it changed; the rows in sight whose name is elided, with their tooltip's first line (the name in full), and their count; the limit saved in Preferences; with Card its width grip, the width remembered when a drag ends and restored at the start (`tools/ui-browser-widths-test.sh`) |
 | `Browser scroll range 240`, `Browser scroll bar at x,y` (`… out of sight`) | the rows' vertical scroll range (0 while every row fits; mitcad#425: the Floating Browser card grows to the timeline before it scrolls) and the vertical scroll bar in sight, the tree's or, with Rows, the one at the card's left (`BrowserPanel::setScrollBarOnLeft`), with the rows' places (`tools/ui-browser-rows-test.sh`, `app.ui-windows-browser-rows`) |
 | `Browser selected: <paths>`, `Visibility <path>: hidden`, `Visibility <path>: hidden (during Extrude)`, `Command Extrude: 1 visibility change(s) kept`, `Renaming <path>`, `Renamed Body1 to Plate`, `Renamed body F3.b0 with its component to Bracket` (mitcad#291), `Activated Bracket`, `Isolated …`, `Copied …`, `Pasted Bracket:1 as Bracket:2`, `Placed Bracket:2 at (90, 0, 0)`, `Paste of Bracket:3 cancelled`, `Ground Bracket:2`, `Deleted Bracket:2`, `New component in Root`, `Placement warning: <text>` (mitcad#292), `Look at plane F4`, `View top`, `Units: in`, `Found … in the browser` | browser actions |
@@ -17940,7 +18248,8 @@ next screenshot.
 | `Bodies shown: F2.b0, F3.b0 in O1`, `Body F3.b0 in O1 at x,y` | the shown bodies (with their occurrences) and their middles in the window |
 | `Failed features: Fillet2: <error>` / `none`, `Failures button at x,y`, `Revealed Fillet2` | the status bar's summary; a reveal selects the feature (mitcad#961) |
 | `Feature warnings: Fillet1: <warning>` / `none`, `Preview Fillet: ok, warning: <warning>` | features that succeeded with warnings, when they change; a preview's warning |
-| `Warnings badge: Fillet1: <message>; Tilted: <message>` / `none`, `Warnings button at x,y` | the yellow badge's features (built with warnings; an import note is information since mitcad#1040), when they change |
+| `Warnings badge: Fillet1: <message>; Tilted: <message>` / `none`, `Warnings button at x,y` | the yellow badge's features (built with warnings; an import note is information since mitcad#1040), when they change; not those acknowledged (mitcad#1935) |
+| `Acknowledged warnings: Fillet1, Tilted` / `none`, `Acknowledged warning of Fillet1`, `Showing warning again of Fillet1`, `Acknowledge refused: <why>` | the features whose warning the user acknowledged, when they change; Acknowledge Warning and Show Again ([Acknowledged warnings](#acknowledged-warnings-mitcad1935)) |
 | `Status <level>: <text>`, `Native message band: full\|stub <level> <text>`, `Browser level <path>: <level>`, `Selection card level <feature>: <level>`, `Panel <command> message box: <level>: <text>`, `Sketch Palette solve: <level>: <text>; …` / `none`, `Sketch notice level: <level>`, `View message level: <level>`, `Rules status level: <level>`, `Configurations option marks: …` / `Configurations row marks: …`, `Annotations level <name>: <level>` | a message's level on each surface (mitcad#1040, mitcad#1051, "Messages and their levels") |
 | `Message band: <level> <text>`, `Message band full: <level> <text>`, `Message band stub: <level> <text> (faded)` (or `closed`, `next command`, `cleared`, `withdrawn`), `Message band cleared (another design)`, `Status line cleared (another design)`, `Message band source closed: <level> <text> (<source>)`, `Status error source: <source>`, `Status line cleared (<source> closed)` (mitcad#1621), `Message band placed: full x,y wxh, row <h>, timeline x,y wxh` (`stub`), `Message band close at x,y`, `Message stub at x,y`, `Message history button at x,y`, `Message history: <n> entries`, `Message history row <i>: <level> <text> at x,y`, `Message history: selected <uid>`, `Message history: closed` | the message band, its stub and the session's message history (mitcad#1042, "Messages and their levels"; `tools/ui-message-band-test.sh`) |
 | `Browser sketch DOF: Sketch1 0, Sketch2 4` | the sketches' degrees of freedom the browser shows, when they change |
@@ -18023,9 +18332,9 @@ next screenshot.
 | `Section caps: 3 colour(s) [#e0892a hatch #4b2d0b at 135 deg, 12 lines; …] in Shaded, bodies in appearance colours` | the viewer's caps (mitcad#382): per color group the cap color (the component's timeline color, the default orange for the root), the hatch's color, direction and line count; again when the visual style or Component Colors change |
 | `Hide Above Sketch on`/`off`, `In front of the sketch plane: F2.b0 5.0, F5.b0 10.0` | the sketch palette's option; in sketch mode (also while a sketch command's panel is open), how far each shown body reaches in front of the sketch plane (mm, when it changes; 0 or less once cut, a body cut away entirely is left out) |
 | `Exported <path>: dxf flat pattern of Body1, 5 entities (CUT_OUTER 4, BEND_DOWN 1), in mm` (the unit written, mitcad#1408), `Export Flat Pattern dialog: unit in (in \| mm \| cm \| m \| ft)`, `Export of the flat pattern of Body1 refused: <reasons>`, `Flat pattern of Body1 shown` (`folded`), `Flat pattern of Body1: valid, area 1086.39 mm2, 1 bend(s)`, `Deleted the flat pattern of Body1`, `Added sheet face of 1 profile(s), new rules, thickness 2`, `Added flange, length 15 (tangent), angle 90 deg`, `Sheet rules: thickness …` | sheet metal (mitcad#210): the Flat Pattern's export, display and item, the commands' describe lines |
-| `Export dialog: STEP AP214 (*.step) to <path>` (a mesh type adds `, refinement high`; a 3MF then `, plates one_file, slicer bambu_studio, on the bed`, mitcad#1679), `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: usdz, 1 body(ies), 1 material(s)`, `Exported <path>: dxf, 4 entities, in mm, construction geometry left out` (the unit written, mitcad#1408; `included` with Include construction geometry, mitcad#1445) | export |
+| `Export dialog: STEP AP214 (*.step) to <path>` (a mesh type adds `, refinement high`; a 3MF then `, plates one_file, slicer bambu_studio, on the bed`, mitcad#1679), `Exported <path>: step, 1 body(ies), mm` (with occurrences `…, mm, design coordinates` or `component coordinates`), `Exported <path>: usdz, 1 body(ies), 1 material(s)`, `Exported <path>: dxf, 4 entities, in mm, construction geometry left out, points included` (the unit written, mitcad#1408; `included` with Include construction geometry, mitcad#1445; `points left out` without Include points, mitcad#1963) | export |
 | `3D Print panel: 3 visible: Plate, Cube, Pin; format stl, refinement high, slicer Fake slicer (/path <files>); slicers None \| …` (`1 selected: Cube`), `3D Print Bodies: 2 bodies [body F1.b0; body F2.b0]` (the input, as every selection input logs), `3D Print: Format = 3MF`, `3D Print: left out Surface1 (a surface body)`, `3D Print: no solid or mesh bodies`, `3D Print: 3 bodies as stl (high) to <folder>: Plate.stl, Cube.stl, Pin.stl` (a body shown twice: `Pin (Pin_1).stl, Pin (Pin_2).stl`; 3MF: `parts.3mf`… per body `Plate 12 triangles, 1000.000 mm3`), `3D Print: started <program> <arguments>`, `3D Print: <slicer> did not start`, `3D Print: opened <folder>`, `Done 3D Print`, `Command 3D Print cancelled`, `Preferences: slicer <slicer>` (or `automatic`) | 3D Print (mitcad#234: the panel replaced the dialog, whose `3D Print dialog: …` and `3D Print cancelled` lines are gone) |
-| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408; then `, dxf construction off` or `on`: Include construction geometry as it starts, mitcad#1445; then `, plates one_file (2), slicer bambu_studio` or `none`: the print plates and the slicer it offers a 3MF file, mitcad#1679), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Add User Parameter dialog opened: unit mm` (the design's unit first, mitcad#1452), `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
+| `Export dialog opened: unit mm (mm \| cm \| m \| in \| ft)` (with occurrences also `, coordinates design (design \| component)`; then `, type step-ap214, refinement medium, file <path>`: the type, refinement and file it starts with, mitcad#1164; then `, dxf unit in (in \| mm \| cm \| m \| ft)`: a DXF file's unit, the design's first, mitcad#1408; then `, dxf construction off` or `on`: Include construction geometry as it starts, mitcad#1445, and `, dxf points on` or `off`: Include points as it starts, mitcad#1963; then `, plates one_file (2), slicer bambu_studio` or `none`: the print plates and the slicer it offers a 3MF file, mitcad#1679), `Insert Mesh dialog opened: unit …`, `Insert DXF dialog opened: unit …`, `Units dialog opened: mm (…)`, `Add User Parameter dialog opened: unit mm` (the design's unit first, mitcad#1452), `Grid settings dialog opened: automatic, fixed spacing 10 mm` (the fixed spacing in the design's unit, `0.5 in`, mitcad#1210) | a dialog that offers units opened, with its default first |
 | `Panel Hole choices: placement=face, …, standard=iso_metric, size=6, designation=M6x1, class=6H`, `Panel Hole options size: 1 \| 1.1 \| …`, `Panel Circular Pattern checks: symmetric=on`, `Panel Rectangular Pattern label distance1: Extent` | a panel's choices and check boxes when it starts; the options of a `withChoices` input when they change; a `withLabel` input's label when it changes (mitcad#545) |
 | `Imported block.step as Base1: 1 body(ies)`, `Inserted drawing.dxf into Sketch2: 4 curves, 4 points, 0 texts, 1 profiles, 0 warnings`, `Inserted component block (linked) from block.mitcad` | import |
 | `Insert SVG dialog opened: 100 x 60 mm, 2 filled, 1 stroked, 1 texts`, `Insert SVG scale at x,y` (`x`, `y`, `bands`, `OK`), `Insert SVG: scale 1, lower left at (0, 0), bands on`, `Inserted logo.svg into Sketch1: 16 curves, 17 points, 1 texts, 8 profiles, 0 warnings, 3 filled, 1 bands` | the Insert SVG dialog (places in the main window's coordinates), what it chose and what came in (mitcad#473) |
@@ -20789,12 +21098,24 @@ until CAM exists.
   label, a letter in use) is the panel's error, with Add disabled. The
   preview goes when the panel ends; after Add the annotation stands in
   its place.
-- **Export Face as DXF…** takes the selected planar face (a hint asks
-  for one): the body's outline seen along it (`export_face_dxf`, the
-  model's *Export Face as DXF*) through the file dialog of the Export
-  folder group, whose file types are the units the file can be in (the
-  design's first, as Export Flat Pattern's, mitcad#1408); also in a
-  planar face's context menu. Its tooltip says
+- **Export Face as DXF…** takes the selected planar face: the body's
+  outline seen along it (`export_face_dxf`, the model's *Export Face as
+  DXF*) through the file dialog of the Export folder group, whose file
+  types are the units the file can be in (the design's first, as Export
+  Flat Pattern's, mitcad#1408); also in a planar face's context menu.
+  With no planar face selected (mitcad#1963, GitHub #408: a hint in the
+  status bar alone was easy to miss) it opens its panel, an application
+  panel (`accept`) with a **Face** input that takes planar faces of
+  bodies (`withAccepts`; another face is refused with "Pick a planar face
+  of a body."), its message asking for one; **Export** (Enter) writes the
+  face picked there through the same file dialog, and the panel stays
+  open when the dialog is canceled or the model refuses. With one
+  selected it writes at once, as before: the command's `runsAtOnce`
+  (`framework/Command.hpp`, asked by `MainWindow::trigger` before a panel
+  opens) does the work and no panel opens. Logged `Export Face as DXF: no
+  planar face selected, the panel opens`, then the panel's own lines
+  (`Command Export Face as DXF… started`, `Panel Export Face as DXF…
+  input face at x,y`, `Export Face as DXF… Face: 1 face`). Its tooltip says
   the file also serves waterjet and plasma cutters, as Export Flat
   Pattern's does.
 - **The selected body's card.** On the Make tab, with one body (or a
@@ -20992,6 +21313,10 @@ the same with the test's shortcuts for the Annotate entries) and
 (`tools/ui-macos-make-tab-test.sh`: the tabs, the moved commands from the
 Make tab in Qt and from the toolbar's actions in AppKit, the card in Qt,
 the Browser marker in both).
+`tools/ui-export-face-panel-test.sh` and `app.ui-windows-export-face-panel`
+(`tools/ui-windows-export-face-panel-test.ps1`, mitcad#1963): Export Face
+as DXF… with nothing selected opens its panel with the Face input (Esc
+cancels it); a plate's top picked there and Export write its outline.
 The tests that kept measurements from the Measure panel
 (`tools/ui-annotations-test.sh`, `tools/ui-measurement-objects-test.sh`,
 `tools/ui-annotation-colour-test.sh` and their Windows counterparts, the
@@ -21502,8 +21827,9 @@ Fix <n> Features` for a selection), the bodies unchanged.
   the badge then always opens its menu, the warned features to go to and
   after a separator **Auto Fix** of every warned feature it can fix (one
   undo step, as for a selection), also when only one feature warns
-  (`BrowserController::showIssues`); without such a warning a click on
-  the badge with one feature still goes to it.
+  (`BrowserController::showIssues`); since mitcad#1935 the badge's menu
+  always opens, also for one warning, as it offers Acknowledge Warning
+  ([Acknowledged warnings](#acknowledged-warnings-mitcad1935)).
 - **What it says**: the model's summary, logged as it is and shown in the
   status bar, a success when nothing is left, else a warning naming what
   is left and what to do: `Auto Fix: 2 of 3 warnings fixed; Hole1: the
@@ -21538,6 +21864,54 @@ the warning and the entry back. Before that the cell's tooltip and the
 warnings badge's name Auto Fix, and at the end Auto Fix from the badge's
 menu fixes the warning again (mitcad#1677). `test_app`'s
 `feature_status.cpp` checks the two hints' texts.
+
+## Acknowledged warnings (mitcad#1935)
+
+GitHub mitcad/Mitcad#380: a warning the user has seen no longer marks the
+design. `BrowserController::acknowledgeWarnings` sends the model's
+`acknowledge_warnings` (*Acknowledged warnings* in
+`core/model-api/src/commands.md`; one undo step, nothing recomputed);
+the timeline query's `acknowledged` is `DocumentSnapshot::Feature::
+acknowledged`.
+
+- **Acknowledge Warning** in the context menu of a warned feature's
+  timeline cell and Browser row (after its other entries, before the
+  timeline groups'): for a feature in the timeline's selection, every
+  warned feature of the selection, as Auto Fix. A failed feature has no
+  such entry: errors cannot be acknowledged.
+- **The warnings badge's menu** (`BrowserController::showIssues`) always
+  opens: the warned features to go to, then the acknowledged ones,
+  dimmed (their icon faded, `Fillet1: … (acknowledged)`), each a
+  submenu with **Show Again**; after a separator **Acknowledge Warning**
+  (one warned feature) or an **Acknowledge Warning** submenu of the warned
+  features and **Acknowledge All Warnings** (one undo step), then Auto
+  Fix. The failures badge still goes to its one feature at once.
+- **Acknowledged**: the timeline cell is painted as ok (no yellow ring,
+  no badge; logged `Timeline cell Extrude1: ok, acknowledged`), the
+  Browser row is not yellow (`Browser level <path>: acknowledged`), the
+  feature is not counted in the badge and the timeline search's
+  `is:warning` does not find it. Its tooltips (timeline cell, Browser
+  row, search result) still tell the warning, marked: `Acknowledged
+  warning: …` (`acknowledgedWarningText`, `browser/FeatureStatus.*`).
+  The selection card and the feature's notices keep the warning.
+- **Show Warning Again** in the same context menus (for an acknowledged
+  feature) and **Show Again** in the badge's menu bring the yellow and the
+  count back (one undo step).
+- **Lapses by itself**: the model keeps the warning's text; an edit after
+  which the feature fails or warns otherwise forgets it, so a new problem
+  is never hidden. It is saved with the design.
+- **Logged**: `Acknowledged warning of Extrude1`, `Showing warning again
+  of Extrude1`, `Acknowledge refused: <why>`, and `Acknowledged warnings:
+  <names>|none` when the list changes.
+
+Tests: `tools/ui-acknowledge-warning-test.sh`,
+`app.ui-windows-acknowledge-warning` and `app.ui-macos-acknowledge-warning`,
+the shared steps `tools/ui-scripts/acknowledge-warning.mitcad-ui` on
+`tools/ui-scripts/timeline-auto-fix.json`: Acknowledge Warning in the
+timeline menu (the badge gone, the cell not yellow, the tooltip marked,
+one undo step), Show Warning Again (both back), then Acknowledge Warning
+from the badge's menu and Undo. The model's:
+`core/model-tests/api/src/acknowledged_warnings_tests.rs`.
 
 ## The Start tab
 
@@ -23299,6 +23673,699 @@ the same on Linux, Windows and macOS (`framework/WindowPlace`,
   removed monitor, half off-screen and larger than the screen wholly
   within the primary screen's available area.
 
+## Flex (mitcad#1713)
+
+**Flex** (`solid.flex`, `commands/FlexCommands.cpp`, the route while it is
+laid `commands/FlexRoute.*`; the model's `flex` feature: commands.md,
+"Flex") lays a wire, a cable, a hose, a flat cable or a strip through the
+model by clicks. It is a feature command (`featureType` `flex`: its panel
+also edits an item from the timeline), in the SOLID CREATE menu after
+Envelope in a section of its own (`flex`), not pinned; the search finds it
+by wire, cable, hose, tube, cord, harness, strip, ribbon and belt. The
+in-view node handles of an existing item are `app/flex/`. **Editing an
+item** (owner 14.11.2026) is its edit session (*Flex editing* below):
+Edit Flex, a double-click on the item or on its row opens this panel on it
+with the item's handles in the view beside it; while the panel edits, a
+click in the view places no node, nothing follows the pointer, and
+Backspace takes no node back (the handles' Delete does); Undo takes the
+session's last change back; OK keeps the whole session as one undo step.
+
+**The panel**, top to bottom:
+
+| Input | What |
+|---|---|
+| Type (`type`) | the `flex_types` query's types in a searchable picker (headings Built-in, My library, This project; the size as the row's tag). A new item starts with the type of the last item made (kept between starts), else the library's first, so the first click can come at once. An edited item that is no type of the library (its values changed, or its type gone) is the entry of the item's own name under This design. Without a library (an older model) a stand-in 10 mm hose |
+| Route (`nodes`) | the active input: the nodes, listed as their count (`3 nodes`; *No nodes yet* before the first); its picks are the faces, edges and points the nodes are on. A pick taken out in the row takes its nodes, the row cleared starts the route again |
+| Free Nodes On (`free_plane`) | the plane clicks off the model land on: Automatic, XY Plane, YZ Plane or ZX Plane; Tab steps it |
+| Twist (`twist`) | a section that is not round, once a node is placed: the turn of the section at the node placed last, or at an earlier node clicked since (the label then *Twist at Node 2*), with a ring in the view at that node about the way the route runs there (from two nodes on). A new node starts at 0 and the node the row was of keeps what was shown |
+| Section (`section`), Diameter or Width, Height and Corner Radius | the item's section, from the type, or from the end port the item starts at (*The size of a pipe's end* below); an outline type shows Outline and no sizes |
+| Hollow (`hollow`), Wall Thickness (`wall`) | |
+| Bend Radius (`bend_radius`), Bend Radius on Edge (`bend_radius_edge`, not round) | empty: the item does not bend that way (a round section needs one) |
+| Appearance (`appearance`) | Default (the component's), or one of the `appearances` query |
+| Save as Type (`saving`, a disclosure): Name (`type_name`) and Save to My Library | `flex.save_type` with the panel's item under that name in the user's library; the saved type becomes the item's type |
+
+**The size of a pipe's end** (owner 13.11.2026; `takeStartSection`,
+`flexSectionAtPort`): an item whose first node is at an end port takes
+the size there, shown in the panel, which can still change it:
+
+- a round Pipe: a round section of its outer diameter (a hollow pipe's
+  too); a square Pipe: a rectangle of its width and height (Bend Radius on
+  Edge, when the panel had none, the Bend Radius: it bends over either
+  side alike); a triangular Pipe: the round section round the triangle
+  (its circumscribed circle, 2 × side / √3), there being no triangular
+  section;
+- a Flex item's end: that item's round or rectangular section (and its
+  Bend Radius on Edge when the panel had none); an outline item's end
+  leaves the panel as it is.
+
+The wall stays as the panel has it (the type's): hollow with the same
+wall thickness, or solid; a wall the new section has no room for makes it
+solid. The sizes are the `end_ports` query's `size`; the shape of the
+section is read from the port's feature (the `feature` query's `def`:
+a Pipe's `section`, a Flex item's `item.section`), else guessed from the
+sizes (equal: round). A first node anywhere else keeps the type's section
+(after a start at a port taken back with Backspace, the type's again).
+Once the user has changed the Section, a Diameter, Width, Height or Corner
+Radius in this run, no start at a port changes them; choosing another Type
+shows its sizes and lets a port's size come again. An edited item keeps
+its section. The size is taken when the first node is placed, not while
+the pointer is over a port.
+
+**The item of the definition** (`itemIn`, `flexItemWith`): the type's item
+with its `origin` while the panel's section, wall and appearance are the
+type's; a bend radius that differs is the item's own (the definition's
+`bend_radius`, `bend_radius_edge`: the typed expression). Anything else
+changed makes a copy without the origin. An edited item's `profile` and
+`fixed_length` are kept as they are.
+
+**Laying the route.** Each click in the view is a node:
+
+- **On what is under the pointer**: a face, an edge, a vertex, a sketch
+  point, a construction point or the origin (`on`: the item's reference;
+  `at` where the click hit). Geometry of another component is linked from
+  the occurrence it was clicked in (`links`, `datum_links`, as a
+  construction feature's, mitcad#1029); the item is made in the active
+  component.
+- **At an end port** (the `end_ports` query, read when the command
+  starts; for a body seen in an occurrence asked again with `body`,
+  `occurrence` and `component`, so that its ports are in the item's
+  component): a click on a cap of a Pipe or of a Flex item, or on the same
+  body within the cap's size of its middle (a hollow cap is a thin ring
+  to hit), is a node with that `port`. The first node starts there; a
+  later one ends the item there, and that click is also OK. While the
+  pointer is over a body with end ports, each is marked with a ring round
+  its cap and an arrow the way an item leaves it.
+- **Free in space, with Alt held** (owner 14.11.2026): a click off the
+  model without Alt places nothing, and the status line says "Click a
+  face, an edge or a point; hold Alt to place a node in space." (a click
+  on a node placed already, to end the item or choose its twist, is still
+  taken). With Alt (`CommandContext::pointerModifiers`, the keys of the
+  view's last mouse event) the click lands on the placement plane
+  through the last node (the origin before any): *Free Nodes On*
+  (`free_plane`) is Automatic (across the main direction nearest to the
+  view's: horizontal unless the view looks along it), XY Plane, YZ Plane
+  or ZX Plane of the item's component, and Tab steps it while the window
+  has the keyboard (`withTabCycle`), as a 3D sketch's drawing tools step
+  their placement plane (`CommandDef::cursorPlane`, given only while
+  nothing a click picks is under the pointer).
+
+**While the pointer moves** (owner 14.11.2026) only a thin dashed straight
+line runs from the last node to the pointer (`lightPreviewMoved`,
+`FlexRopeOverlay::showLine`): no model call. **Once the pointer has rested**
+(300 ms) on a place a click makes a node of (a face, an edge, a vertex, a
+point, an end port; in space only with Alt held: `hover_target` in the
+state) the model works out the route alone, once (`CommandDef::lightPreview`:
+the definition with one more node where the pointer is and
+`"route_only": true`; `hoverPreview`, `cursorPlaneMoved`; a move of less
+than two pixels asks for nothing); over empty space without Alt the dashed
+line stays alone. **With Shift held** the route follows the pointer and is
+worked out on every move, as before (`lightPreviewLive`). The command reads
+the `flex` query's `preview` (with `frames` for a section that is not
+round) and draws it as the item's rope, as wide as the section and a flat
+one as a strip, with the routed length beside its end, in place of the
+dashed line (`flex::FlexRopeOverlay` and `paintFlexRope` of
+`app/flex/FlexRope.*`, the drawer the node handles of an existing item use
+too). One model request at most: a move while the model computes waits for
+the rest. **After each node placed** the feature's own preview is computed
+of the nodes placed (never of the pointer): the solid, the panel's note
+with the routed length (`Length: 143.2 mm`; an item whose fixed length is
+longer than its route, the `flex` query's `slack`, in a design with no
+direction of gravity, has one plain line under it, "The extra length hangs
+down once gravity is set in Let It Hang.") and how the item ends ("Click
+to add a node; double-click or press Enter to finish."), after the route's
+warnings when there are any (the panel's *Warning:* heads the first line),
+their places painted while the pointer is over the panel's message; the
+rope goes when it shows (`previewReported`). Each node is a small cross in
+the view (`viewLines`). Before two nodes the panel asks for the next click
+as a hint (`Built::asking`): "Click where the item starts: an end of a
+pipe, a face or a point.", "Click where the item goes next: a face, an
+edge or a point. Alt places a node in space; Shift shows the route as the
+pointer moves.", which the status line repeats (`<command>: <hint>`).
+
+- **Backspace** takes the last node back (while the pointer is over the
+  view and no field has been typed in).
+- **Enter** (OK) ends the item at the last click: the node under the
+  pointer is not part of it (`CommandDef::confirming`).
+- **A double click**, or a click on the last node again, ends the item
+  there (a second click within five pixels of the last node as the view
+  shows it, not timed). Also while the item's preview is computed: OK
+  then waits for it and adds the item, and what comes meanwhile (the
+  double click's further events, a move of the pointer) is not taken
+  and does not cancel the preview OK waits for
+  (`CommandSession::resumePendingCommit`).
+- **A click on an end port** after the first node ends the item at once
+  (the click is OK too). Should OK be refused then, a further click says
+  in the status line that the item ends there (Enter, or Backspace for
+  the end).
+- **A click on an earlier node** of an item that is not round makes the
+  panel's Twist that node's (`twist_node`; within six pixels of its
+  cross): the row's label says *Twist at Node 2*, the ring moves there and
+  its cross is drawn larger. A new node, or Backspace, makes Twist the
+  last node's again.
+- **Esc** cancels.
+
+**The last type** is kept between starts as the panels' remembered values
+are (`rememberPanelValues("solid.flex", type)` on a new item's OK; not
+while `MITCAD_REMEMBER_PANEL_VALUES` is 0, as in the UI tests).
+
+**Framework hooks it added** (`framework/Command.hpp`,
+`CommandSession.cpp`, `CommandSessionHover.cpp`):
+
+- `CommandDef::backspace(state, model)`: Backspace while the pointer is
+  over the view, in the command's window, unless the keyboard is in a
+  text field the user typed in (a value field that got the keyboard by
+  itself and is unchanged is none); true when the command took it. The
+  key's shortcut override is taken too, so that no shortcut gets it
+  (Delete's Backspace on macOS). Logged `<command>: Backspace taken`.
+- `CommandDef::confirming(state, model)`: called when OK is coming, before
+  its preview; true when the state changed, so that the preview is
+  computed again and OK adds what it shows.
+- `CommandDef::clickConfirms(state)`: asked after a pick of an input with
+  `onPick` and after a click on the cursor plane; true makes the click OK
+  too. Logged `<command> <input>: the click confirms`, `<command>: the
+  click on the plane confirms`.
+- `Built::asking(message, input)`: an incomplete definition that only says
+  what the command waits for; the panel shows it as a hint, not as an
+  error (the log line stays `Preview <command>: not built: <message>`).
+- `CommandDef::lightPreview(state, model)` and `lightPreviewShown(ok,
+  error, state, host)` (`CommandSession::pointerPreview`): a cheap
+  definition for the moves of the pointer. When set, a `hoverPreview` or
+  `cursorPlaneMoved` that returns true takes the feature's shown preview
+  away, previews this definition at once (the command's `add_feature`, or
+  `edit_feature` of the edited feature; skipped while a job computes the
+  model), calls `lightPreviewShown` while the model holds it, drops the
+  model's preview again and starts the wait for the pointer's rest, after
+  which the feature's own preview runs.
+- `CommandDef::lightPreviewLive(state, model)` and
+  `lightPreviewMoved(state, host)` (owner 14.11.2026; `runLightPreview`,
+  `m_lightRestTimer`): a light preview of the pointer alone. With
+  `lightPreviewLive` set, a move neither takes the feature's shown preview
+  away nor asks for it again; `lightPreviewMoved` draws what costs no
+  model call, and the light preview runs at once when `lightPreviewLive`
+  is true (Flex: Shift held), else once the pointer has rested 300 ms;
+  a move while the model computes waits for the rest.
+
+**Logs:** `Flex: <n> type(s), <m> end port(s)` (the model read), `Flex: <n>
+type file(s) of the library could not be read` (the `flex_types` query's
+`problems`, also a warning in the status line), `Flex: type
+<library>/<id>`, `Flex: node <n> at an end port|free|on <item> at x, y, z`
+(design coordinates), `Flex: section of the end port of <feature>: round
+<d> mm|rectangular <w> x <h> mm[, hollow]`, `Flex: section of the type
+again`, `Flex: no definition of <feature>: <error>`, `Flex: last node
+taken back, <n> left`, `Flex: a
+click on the last node ends the item at node <n>`, `Flex: node <n> chosen
+for its twist`, `Flex: free nodes on auto|xy|yz|zx`, `Flex route under the
+pointer: <n> node(s), <length>, <w> warning(s)` (`none` with the refusal
+when the route was not worked out, `none (no place for a node under the
+pointer)` in empty space without Alt; once per change), `Flex: click in
+empty space not taken (Alt places a free node)`, `Flex: click not
+taken: the item ends at an end port`, `Flex: <a> of <b> node(s) left` (a
+pick taken out in the row), `Flex: editing an item of <n> node(s), type
+<type>`, `Flex: saved type user/<id>`, `Added flex item <name> through <n>
+node(s)`.
+
+**Tests:** `app/tests/flex_route.cpp` (the end port a click takes, the
+nodes' ids and fields, the same place, a port inside the route, the item
+and its origin, the section a port gives: a 12 mm round, square or
+triangular pipe, a Flex item's flat end, an outline's, a wall without
+room); the shared input script `tools/ui-scripts/flex.mitcad-ui`
+on `tools/ui-scripts/flex.json` (two upright pipes and a block between
+them), run by `tools/ui-flex-test.sh` (Linux, Xvfb) and
+`app.ui-windows-flex` (`tools/ui-windows-flex-test.ps1`), each in the
+Docked and the Floating layout: a hose from a pipe's end port over the
+block's top and side with the length in the panel, its Diameter the 8 mm
+pipe's; the plane stepped with
+Tab, a click in empty space without Alt not taken, free nodes with Alt,
+the route alone under the resting pointer and the solid once the node is
+placed, Backspace, a double click as the end; a flat section's
+twist at its last and, after a click on it, its first node, and Undo; Esc;
+an item from one pipe's end port to the other's, ended by that click;
+Flex1 edited from the timeline; Save as Type.
+
+**Known limits:** the automatic placement plane is worked out when the
+pointer comes onto another item, not on every frame, so a view turned
+without moving onto another item keeps the earlier plane until then; an
+edited item of another than the active component places new nodes in the
+active component's coordinates unless its nodes are linked; the project's
+own Flex types are not listed (the `flex_types` query is asked without a
+project folder).
+
+## Flex editing (mitcad#1713)
+
+A Flex item (core's commands.md, "Flex") is edited in one **edit
+session** (owner 14.11.2026, as a sketch is edited): the Flex panel open on
+the item (type, section, size, hollow and wall, bend radii, appearance)
+and, at the same time, the item's handles in the 3D view (its nodes, the
+`+` at each end, the insert points, the twist ring), as a rope is taken by
+its knots; both change one live preview. Code:
+`app/flex/FlexEditController.{hpp,cpp}` (the handles over the view, the
+mouse), `app/flex/FlexEdit.{hpp,cpp}` (the plain logic: the `flex` query
+read, the commands, the session's definitions), `app/flex/FlexRope.{hpp,cpp}`
+(the item painted from its route's samples), `app/commands/FlexCommands.cpp`
+(the panel, its edit session: `isFlexEditSession`, `flexSessionDefinition`,
+`setFlexSessionNodes`, its Undo), `app/MainWindowFlexEdit.cpp` (the main
+window's hooks).
+
+- **Opening the session.** **Edit Flex1** in the context menu, a
+  double-click on the item in the view (`MainWindow::flexDoubleClicked`
+  from `onPicked`: two clicks on the item's body, faces, edges or vertices
+  within the system's double-click time), or a double-click on its row in
+  the Timeline or the Browser opens the same session (`editFeature`): the
+  Flex panel edits the item and its handles are shown beside it
+  (`MainWindow::updateFlexEdit`, `FlexEditController::show(uid, true)`,
+  again after each preview: `CommandSession::previewShown`). A **single
+  click only selects** the item, as any body: highlight and selection card,
+  no handles. **OK** (Enter) keeps everything the session changed as **one
+  undo step** (the panel's `edit_feature`); **Esc** or **Cancel** takes the
+  whole session back; **Undo** (Ctrl+Z) in the session takes its last
+  change back, a handle's or the panel's (`CommandDef::undo`: the panel's
+  state before each new definition, `CommandSession::undo`), the model's
+  history untouched; with nothing left the status line says "Nothing to
+  undo in this edit. Esc cancels the edit." A Flex item's hover text
+  and selection card (`featurePresentation`) read the item through the
+  panel's `CommandDef::hoverLoad`, with the library's types read into
+  state of its own (mitcad#1971): built also while the session runs (the
+  Timeline's tooltips, the UI tests' visible-text guard), it leaves the
+  session's types, end ports, home and Undo as they are; only opening a
+  session (`load`) or a new item (`init`) reads them and empties the
+  session's changes. In the session **nothing
+  follows the pointer**: a click in the view places no node, no dashed line
+  or route runs to the pointer (the panel's hover, light preview and
+  placement plane are off while it edits, `editing`), unless a node is
+  being dragged or `+` was clicked to make the item longer. The handles
+  are drawn over the bodies (a route behind a part can still be taken),
+  with the route's center line thin between them: a ring for a node free in
+  space, a ring with a dot for one on a face, an edge or a point, a square
+  for one on an end port, the warning's color for a node whose face or port
+  is gone. They stand on the session's nodes (`itemOfDefinition`) and its
+  preview's route (the `flex` query with `uid` and `preview`), following
+  the camera and each preview (`reload`).
+- **Dragging a node.** A left press within 9 px of a handle that moves
+  3 px pulls the node, which is the selected one from then on; a press
+  that does not move is a click and only selects it. Each move asks the
+  view what is under the pointer (`OcctViewer::itemsAt`, nearest first as
+  a click takes it, the item's own body left out). While the pull lasts
+  the view picks faces, edges, vertices, sketch points and construction
+  points whatever the idle selection filter takes
+  (`FlexEditController::pickFilter`, kept by `updateIdleView`):
+  - a face: the node goes to where the pointer's ray meets it. On its own
+    face it slides (`flex.move_node`); on another face it is attached
+    there on release (`flex.attach_node` with `on` and `at`);
+  - an edge, a vertex, a sketch point, a construction point or the
+    origin: the node is attached to it (`flex.attach_node` with `on`; on
+    an edge at the edge's place nearest to the pointer on the screen, of
+    64 samples along it). On its own edge it slides;
+  - an end port, for the first and the last node: a cap face of a Pipe or
+    of another Flex item under the pointer, or the port's middle within
+    14 px of it: `flex.attach_node` with `port`. The ports are read when
+    the pull starts (`end_ports`; those of another component again with
+    `body`, `occurrence`, `context` and the item's `component`, so that
+    their places are in the item's coordinates). Dragging an end off its
+    port detaches it the same way;
+  - nothing, or **Alt held** (owner 14.11.2026: Alt alone, Shift being the
+    live route's): the node is free on the plane through its last
+    place that faces the viewer (`flex.move_node` for a free node,
+    `flex.attach_node` with `free` for one that leaves what held it).
+
+  Geometry of another component is sent with its `occurrence` and the
+  item's `context`. What the node would take is painted as a notice's
+  places are, and the badge beside the node says `On this face`, `On this
+  edge`, `On this point`, `Joins this end` or `Free in space`. Release
+  makes that one change of the session: the `flex.*` command it stands
+  for is applied to the session's definition (`withNodeCommand`) and put
+  into the panel (`setFlexSessionNodes` through
+  `CommandSession::changeInputs`), which previews it. Esc during the drag
+  changes nothing.
+- **While a node is pulled** in the session the item stays as the
+  panel's preview shows it and thin dashed lines run from the nodes beside
+  the target to it, over the item's center line as it was
+  (`Scene::dashes`); no route is worked out
+  under the pointer and no model call is made (`schedulePreview` does
+  nothing in a session): the panel's preview after the release shows the
+  route. What follows here is the handles outside a session (`show`
+  without it: each edit its own `flex.*` command and undo step), which no
+  part of the application opens any more.
+- **The item follows the pointer** (outside a session). While a node is
+  pulled (and while one is added or a section is turned) the item's own
+  body is faded and not
+  picked (`BodyDisplay::Style::Ghost` for it, the selection's highlight
+  taken away), and the item is painted where its route is now, in its
+  body's color and with its section's size on the screen
+  (`paintFlexRope`): a round section as a tube, any other as a strip
+  between its two edges, each piece lighter the more it faces the viewer,
+  so that a twist shows as the strip turning over. The route comes from
+  the model's route-only preview: the item's definition with that one
+  change and `route_only` (`preview` of an `edit_feature`, then the `flex`
+  query with `preview` and `frames`); no solid is built until the release,
+  when the body is shown again and the command rebuilds it. **When the
+  route is worked out** (owner 14.11.2026): while the pointer moves
+  without Shift, thin dashed lines run from the nodes beside the target
+  to it, over the item's center line as it was (`Scene::dashes`), and no
+  model call is made; once the pointer rests 300 ms (`kRestMs`) on a place
+  (every place a drag ends on is a node: a face, an edge, a point, a port
+  or free) the route there is worked out once, and the release sends the
+  command whether or not it was. **With Shift held** the route follows on
+  every move, as before. Previews are throttled: at most one is computed
+  and none queued; a move during one only marks that another is wanted
+  when it ends, for the pointer's newest place (without Shift a route
+  that came for a place the pointer has left is dropped). A preview that
+  gives no item draws the route as it was, dashed, and release then takes
+  nothing. **An edit that makes the item fail** (no route or no solid
+  could be made at all, the item newly in error: the command's
+  `failed_features` with `new`, `editFailure`) is taken back at once with
+  an undo, and the message band says "The item could not be made so, and
+  the change was taken back: <the model's words>" after the undo's own
+  status, so that the item is never lost by an edit (mitcad#1713). An item
+  made with warnings (a bend tighter than its radius, a body passed
+  through) is made: the edit is kept, with its warnings. In the session
+  the panel's preview shows a failure as any feature's, and OK keeps
+  nothing that does not build.
+  `FlexRope.hpp` is a piece of its own for whatever lays or edits an
+  item: samples (a point, the route's direction and the section's up, in
+  the design), the section and a color in, a `QPainter` and the view's
+  projection; `ropeSamples` and `ropeLook` make them from a `flex` query's
+  answer.
+- **Adding a node.** A `+` 26 px beyond each end, along the route as the
+  screen shows it, extends the item: in the session **a click on it turns
+  adding on at that end**, and then each click in the view adds the next
+  end node there (a dashed line runs from the end node to the pointer
+  meanwhile, `armExtend`), until **Esc** or **a click on that `+` again**
+  ends adding and the session is as before; a `+` dragged out and
+  released adds one end node and leaves nothing on the pointer
+  (`flex.add_node` with `place` `end` or `start`; the old end stays a
+  node). (Outside a session a click arms it for one node.) Between two
+  nodes, anywhere over the item as the screen shows it
+  (within half its section's reach of the center line, at least 7 px, and
+  16 px clear of the handles; along the route more than the section's
+  reach from every node: mitcad#1713, a click on the item's start piece
+  beyond its first node added a node "after" it at the route's own start,
+  the route turned back on itself and the item was lost; the item's end
+  piece beyond its first or last node is that end's `+`) an insert point
+  is shown at the nearest
+  place of the route: a click adds a node right there, on the face the
+  route lies on at that place (the query's `runs`) or free, so that the
+  item keeps its way; a press dragged out puts the new node where it is
+  released, as a pulled node (`flex.add_node` with `place` `{"after":
+  …}`). The new node is the selected one afterwards.
+- **The selected node.** A click on a handle selects the node; a click
+  elsewhere or Esc lets it go. Delete deletes it (`flex.delete_node`;
+  with two nodes left the status line says an item keeps at least two);
+  the key deletes the main window's selection only when no node is
+  selected. A right click on a handle opens its menu: **Delete Node**,
+  **Detach** (the node comes off what holds it and stays where it is),
+  and for a section that is not round **Set Twist…** and **Reset Twist**.
+- **Twist.** A node of an item whose section is not round shows a ring
+  square to the route (36 px) while the pointer is over its handle (it
+  stays while the pointer goes to the knob) and while it is selected,
+  with a knob where the section's own up points and the angle beside it.
+  Dragging the knob turns the section about the route (`flex.set_twist`
+  on release, the strip turning live), snapping to quarter turns within
+  6°; a double click on the knob or the handle, or Set Twist…, opens a
+  field for the angle in degrees (Enter takes it, Esc closes it).
+- **Length, bend and warnings.** While a node is selected or pulled, a
+  badge beside it shows `Length 143.20 mm` in the design's unit (the
+  previewed length while pulling), `Tightest bend 31.40 mm, limit 30.00
+  mm` (the query's `smallest_bend` against `bend_radius`), for a section
+  that is not round also `Tightest bend over its edge 20.00 mm, limit
+  50.00 mm` (`smallest_bend_edge` against `bend_radius_edge`; for an item
+  that does not bend over its edge at all, `…, its type does not bend
+  over its edge` while the model warns of it, `edge_bend_too_tight`;
+  mitcad#1713: the flat bend stood beside a warning about the edge), the
+  twist while it is turned, and the item's
+  warnings in the model's own plain words (no names, ids or coordinates).
+  The tightest bend (over the edge where both are) is ringed on the item
+  (the error's color) only where the model warns of it: tighter than the
+  limit by more than its slack
+  (1.15 times the curvature; the router bends at the limit by design, so
+  a bend at it is no fault). The badge keeps clear of a twist ring at its
+  node. The
+  warnings' places are painted in the view while the handles are shown
+  (`hoverNoticePlaces` with the source `Flex`).
+- **Keys and the view.** Esc takes back, in this order: the angle field,
+  what is under way (a drag, `+` adding nodes, a turn), the selected node;
+  then it cancels the session (`MainWindow::cancel` asks the handles
+  before the panel). Enter is the panel's OK; Delete deletes the selected
+  node also while the panel is open; Undo is the session's. Only
+  the left button on a handle, a `+`, the knob or the item, and the right
+  button on a handle, are taken; every other press, the middle and right
+  buttons' navigation (also while a `+` is armed), the wheel and the
+  trackpad are the view's. A press with Ctrl or Shift is the view's
+  selection. In a read-only window an edit is refused with the reason.
+  The same in the Floating and the Docked layout: the overlay is the
+  view's child and keeps its badge inside the part no panel covers. An
+  end's handle or its `+` that a card covers as the item is selected (the
+  Floating layout's selection card) cannot be pressed there, so the view
+  moves sideways once, as little as it takes, until the item and its `+`
+  are clear of the cards (fitted into the free part when larger; logged
+  `Flex edit: an end's handle under a card, the item brought clear of the
+  cards` and the view's `View moved dx,dy px: the part clear of the
+  panels`); a view moved later stays as it is.
+- **Logs** (places in window coordinates, for the UI tests): `Flex edit
+  shown: F2 Flex1, 3 nodes, length 104.321`, `Flex node n2 face at x,y`
+  (`free`, `edge`, `point`, `port`, `… lost`), `Flex add start at x,y`,
+  `Flex add end at x,y`, `Flex insert after n1 at x,y` (the middle of each
+  stretch), `Flex twist knob n2 at x,y`, `Flex node selected: n2`
+  (`none`), `Flex edit badge: Length … | …`, `Flex edit drag: started n3`,
+  `Flex edit: the item's body faded, the item drawn from its route`,
+  `Flex edit: the item's body shown again`, `Flex edit target: face F1:top
+  of F1.b0` (`port …`, `link {…}`, `free`, `free (Alt)`), `Flex
+  edit preview: 3 nodes, 0 warnings` (`refused: …`), `Flex edit command:
+  {…}`, `Flex edit drag n3: done; nodes n1 n2 n3, length …, 0 warnings`
+  (`add at the end`, `add after n1`, `delete n4`, `twist n2`, `detach
+  n2`), `Flex edit add after n1: the item failed (<error>); undone`,
+  `Flex edit: cancelled, nothing changed`, `Flex edit hidden: F2`; in the
+  session `Flex: double-click on F2 opens its edit session`, `Flex edit
+  session change: {…}`, `Flex edit drag n3: in the session; nodes n1 n2
+  n3`, `Flex edit drag n3: not taken; nothing changed`, `Flex edit add:
+  armed at the end, each click adds a node`, `Flex edit add: ended by a
+  click on +`, the panel's `Flex: Flex handles: drag n3 taken` and
+  `Flex: Undo taken` (`Flex: undo in the edit: 1 change(s) left, 3
+  node(s)`, `Flex: undo in the edit: nothing to undo`), `Flex: click not
+  taken: the item's handles edit its nodes`, and for an item's hover text
+  `Flex: hover text of F3 read on its own; the panel keeps 1 type(s), 2
+  end port(s)` (the panel's own counts, as its last `Flex: <n> type(s),
+  <m> end port(s)` read them).
+- **Tests:** `app/tests/flex_edit.cpp` (the query read, the tightest bend
+  against its limit, the command of each kind of release, add, delete,
+  twist and detach, the previewed definitions and `route_only`, places on
+  the route, the twist's snap and angle, `editFailure`, the session's
+  `withNodeCommand` and `itemOfDefinition`); the UI tests
+  `tools/ui-flex-edit-test.sh` (Linux) and `app.ui-windows-flex-edit`
+  (`tools/ui-windows-flex-edit-test.ps1`): a single click selecting the
+  item without handles, the session opened by a double-click, a node
+  dragged into the panel (no model step until OK), Undo in the session, a
+  node selected and Esc, a node added on the item and deleted, end nodes
+  added from the `+` until it is clicked again, OK as one undo step; then,
+  in the app started again with the shared input script
+  `tools/ui-scripts/flex-edit-hover.mitcad-ui`, the test driver's pointer
+  over a second item's Timeline cell during the session, whose hover text
+  leaves the session's types and end ports as they were.
+
+## Hanging cables (mitcad#1713)
+
+A Flex item let hang is taken in hand as a real hose is, in a panel of
+its own that also carries the design's direction of gravity (the model's
+side: core's commands.md, "Gravity" and "Hanging cables"). There is no
+gravity tool of its own (owner 15.11.2026: Gravity Direction in MODIFY,
+its Clear Gravity button and the context menu's Gravity from Here were
+taken out). Code: `commands/GravityCommands.cpp` (the panel),
+`gravity/GravityController.{hpp,cpp}` (the view: the marker, a hanging
+item's mouse, steps and drawing), `gravity/GravityLogic.{hpp,cpp}` (the
+plain logic), `MainWindowGravity.cpp` (the main window's hooks); shared Qt
+only, the same in the Floating and the Docked layout. (The rigid parts
+that were unlocked to fall and be dragged were taken out on 15.11.2026;
+that code is kept on the branch `archive/flex-rigid-gravity`.)
+
+- **Let It Hang** (`assemble.flex_hang`, ASSEMBLE, searched also by hang,
+  drape, cable, hose, wire, flex, sag, gravity, down and weight; offered
+  at the top of the view's context menu and on a Browser row for one Flex
+  item, `offeredAtTop`) opens a panel. An application panel (`accept`,
+  `acceptPreview`): each change of its inputs is made so in the view at
+  once (`acceptPreview` with the panel's definition, `gravity::HangWish`,
+  given to the controller's `apply`), nothing waits for OK but keeping
+  the shape; inputs that are not complete (a value being typed, an
+  invalid one: the panel says what is wrong, OK waits) leave the item
+  hanging as it is. Its rows, in order:
+  - **Item**: the Flex item selected or right-clicked when the panel
+    opened; only when none was, a pick field (a body, face or edge of a
+    Flex item; `flexItemOf`). Its length fills **Length** when it is
+    picked.
+  - **Gravity**: **Direction From** (a planar face or a plane: gravity
+    pulls against its normal; an axis, a straight edge or a sketch line:
+    along it; a face of another component where an occurrence shows it,
+    its path sent as `occurrence`) and **Reverse** (only with a pick).
+    It starts from what the design's direction was taken from (the
+    `gravity` query's `source`); the arrow of the direction it sets is
+    drawn at the pick (`viewLines`; at a face's middle). A change runs
+    `gravity.set` (its own undo step `Set Gravity` meanwhile), unless the
+    design's direction is already the one it gives (`sameDirection`);
+    an item that hangs goes on hanging and settles again toward the new
+    direction (the model keeps its session, `hang_follow_gravity`). A
+    design with no direction opens the panel all the same: the field
+    asks "Pick a planar face, a plane or an axis that gives the way
+    gravity pulls." as a hint (OK waits) and the item hangs as soon as a
+    direction is given. A design whose direction was given as a vector
+    only (an agent's `gravity.set` with `direction`) keeps it while the
+    field stays empty. While the design has a direction, **Clear
+    Gravity** (a note row's button, `clear`) puts the item back, runs
+    `gravity.clear` (one undo step `Clear Gravity`; logged `Hang: F4 let
+    go: gravity cleared` and `Gravity cleared`; the status line says `The
+    design has no direction of gravity now.`) and the field asks again
+    (`modelChanged` empties it).
+  - **Length**: the item's length in the design's unit (`flex.hang_set`
+    `length` once it is changed and committed: the field left or Enter
+    pressed in it, `withOnCommit`, as a spin box without keyboard
+    tracking; a text being typed is checked, not applied: "1200" typed
+    no longer hung it at 1, 12 and 120 on the way; logged `Hang length
+    200.000 mm`); the item settles again. (The small length panel at the view's top left
+    went away with it.)
+  - **Damping**: a slider (0 to 1, two decimals; `InputDef::withSlider`)
+    beside its value field, 0.5 at first as the model's default, "slight
+    swing"; a change is `flex.hang_set` `damping` (logged `Hang damping
+    0.800`), which holds it back from the next step on.
+  - **Ends**: **Start pinned** and **End pinned** (both at first):
+    `flex.hang_set` with the pins, the nodes between as they are (logged
+    `Hang ends pinned free`); the item settles again. A click on an end's
+    handle in the view checks or clears its box (`setLetItHangEnds`).
+  - Friction and dropping the item again are not in the panel (still
+    being agreed with the owner).
+
+  **OK** keeps the shape it rests in (what is left of a settling first,
+  2 s of it at most in one step: then as it is):
+  `flex.hang_lock`; the panel's direction changes and the kept shape are
+  then one undo step (`merge_undo` from the depth the panel opened at,
+  named as the kept shape's, `Edit Flex1`; logged `Let It Hang: its steps
+  merged into Edit Flex1`). A lock the model refuses keeps the panel open
+  with the model's words as its error (`CommandSession::showRefusal`,
+  logged `Panel Let It Hang refused: …`), the item still hanging. **Cancel**
+  (Esc, also while it is dragged or settles) puts it back
+  (`flex.hang_cancel`) and undoes the direction changes the panel made
+  (logged `Let It Hang: 1 direction change(s) taken back`); nothing of the
+  design is left changed. Another command or a sketch that starts puts it
+  back too; a change of the design beside the panel (an agent's command)
+  lets it go, as the model does (`Hose 6 no longer hangs: the design
+  changed.`). The steps mesh nothing for the view
+  (`DocumentSession::command`, `commandAsync`); only the lock does.
+- **While it hangs**, nothing of the design changes; the item's body is
+  faded (`placeShown`, wherever the main window shows the bodies) and the
+  item is drawn along its chain with its section's real size and in its
+  body's color (`flex/FlexRope.hpp`'s `paintFlexRope`, as Flex editing
+  draws a pulled item; the section, the name and the color read once with
+  the `flex` query), a flat section's flat side on what it lies on. It
+  falls at once (`flex.hang_step` in real-time steps, below) until the
+  model says it rests. The status line says `Drag the hanging Hose 6 by
+  any point; click a node to pin it or let it go. Enter keeps its shape,
+  Esc puts it back.` (the item's own name).
+- **Its nodes are handles**: a filled circle is pinned (it stays where it
+  is), a ring hangs free, as the model's answers say. At first both ends
+  and every node attached to a face, an edge, a point or a port are
+  pinned (clips; `flex.hang` is sent without `pins` and the model pins
+  them); only the nodes placed freely in space hang free. The panel's
+  Start pinned and End pinned change only the ends' pins, the nodes
+  between kept as they are. A left click on a handle (within twice its
+  radius) toggles it: `flex.hang_set` with the pins, and the item settles
+  again; the status line says `The node is pinned: it stays where it is.`
+  or `The node is let go: it hangs free.`.
+- **The left button on the item is the hanging item's**, before the
+  view's own and before a joint drag of an occurrence: a left press
+  without keys on a handle toggles it, one on the item (within its drawn
+  half width and 4 pixels) grabs it there (its moves and release, and the
+  second press of a double click on it, are the tool's too). A press
+  anywhere else is the view's (logged `Hang press beside F4: the view's`):
+  the panel's Direction From takes a face there, a drag orbits. Other
+  buttons, a key held, the orientation cube and the panels over the view
+  stay the view's. The pointer over the item or a handle is an open hand,
+  closed while it is held.
+- **Dragging.** While the button is held the grabbed point follows the
+  pointer (`flex.hang_step` with `grab`: the point of the chain where the
+  press took it and the pointer's point on the plane through it that faces
+  the viewer), the rest hanging from it, sliding on and never through the
+  bodies. The steps run on a 16 ms clock, each simulating the real time
+  since the last began (1/240 to 1/30 s: a slow step leaves time out
+  rather than catching up, as the model's work is in proportion to the
+  time simulated): one step in flight at a time, never one queued; a tick
+  while one is computed is skipped, and so is a tick while calls wait
+  for the model's idle point (`idleCallsWaiting`: a panel's change, a
+  command). Each step is a runtime command on the model's worker
+  (`CommandHost::modelRuntimeCommandAsync`,
+  `DocumentSession::runtimeCommandAsync`): the view, the panel and the
+  mouse go on while it is computed, the rope is drawn again when its
+  answer comes, and nothing else is done around it (no wait cursor,
+  progress, busy state, refresh or document query; the model runs it
+  without a design change's checks). Any other use of the model waits for
+  the step in flight instead of being refused (`yieldRuntimeJob`,
+  `takeModel`), and its answer then is dropped. A dashed line from the
+  held point to the pointer shows the pull. Released, it settles again
+  (shown as it goes until the model's `at_rest`, with a slight swing that
+  dies out within about two seconds at the model's default damping; one
+  that has not come to rest after 20 seconds stops where it is). At rest the status line says `Hose 6 rests. Enter keeps
+  this shape; drag it again, click a node to pin it or let it go, or Esc
+  puts it back.` (`… has not come to rest …` when it did not). Pulled
+  longer than its length between its pins (`taut`) it is drawn in the
+  warning's color and the status line says `Hose 6 is pulled tight between
+  its pins: make it longer, or let a pin go.`.
+- **The marker.** While the panel is open and the design has a direction,
+  a small circle in the lower left corner of the part of the view no
+  panel covers shows the way gravity pulls on the screen: an arrow, a dot
+  when it pulls towards the viewer, a cross when away (`g` beside it); in
+  the warning's color when what it was taken from points another way now.
+  It follows the camera. With the panel closed it is not shown (logged
+  `Gravity marker: none`).
+- **Not in the browser.** The direction is no row of the browser (it was
+  under Origin until 15.11.2026); it is set, changed and cleared in the
+  panel.
+- **The Flex panel** says, under its routed length, "The extra length
+  hangs down once gravity is set in Let It Hang." for an item whose fixed
+  length is longer than its route in a design with no direction (see
+  [Flex](#flex-mitcad1713)).
+- **Logs** (places in window coordinates, for the UI tests): `Hang panel
+  opened` (`closed`), `Gravity direction: 0.000,0.000,-1.000 from face`
+  (`…, reversed`, `…, its source moved since`; `none`), `Gravity marker:
+  arrow 0.00,-1.00 at x,y` (`away from the viewer`, `towards the viewer`;
+  `none`), `Gravity cleared`, `Hang panel: gravity refused: …`, `Hang
+  refused: F4: …`, `Hang started F4 (Hose 6): points 31, touching 0, pins
+  n1,n3, length 187.9, lowest 100.0 along 0.000,0.000,-1.000, at rest
+  no`, `Hang rest F4: … at rest yes; 41 drag step(s), 96 settling
+  step(s), 3 skipped, steps of 4.2 ms on average, 9.8 ms at most` (from
+  the request to the answer; the model's own time of each is a `Timing
+  runtime command: 3.10 ms, flex.hang_step` line where timings are
+  logged), `Hang node F4 n2 free at x,y` (`pinned`; each node, after each
+  rest and camera move) and `Hang middle of F4 at x,y`,
+  `Hang pin n2 pinned` (`let go`), `Hang length 200.000 mm`, `Hang
+  damping 0.800`, `Hang ends pinned free`, `Hang drag of F4 started at
+  x,y,z`, `Hang drag of F4 released after 41 step(s): it settles`, `Hang
+  F4 pulled tight between its pins`, `Hang lock F4: …`, `Hang locked F4:
+  nodes n1,n4,n5,n3, deviation 0.812 mm`, `Hang lock refused: F4: <the
+  model's words>`, `Hang cancelled: F4 put back after 12 drag step(s), 30
+  settling step(s)`, `Hang: F4 let go: the design changed` (`gravity
+  cleared`), `Hang step refused: …`, `Hang: a command or a sketch
+  started, the item is put back`.
+- **Tests:** `app/tests/gravity_logic.cpp` (`app.unit`: the direction and
+  the hanging item read, its pins toggled and its ends set, what the panel
+  wants and whether the design's direction is already that, the point
+  nearest to a press, one step in flight, the step's time, the commands,
+  where a press goes, the marker's arrow, the log line); the shared input
+  script `tools/ui-scripts/gravity.mitcad-ui` on
+  `tools/ui-scripts/gravity.json` (a plate, a step on it, a plank above
+  the step's edge and a hose over them in an S from two free ends, its
+  middle where the view logs it), run by `tools/ui-gravity-test.sh`
+  (Linux, Xvfb), `app.ui-windows-gravity`
+  (`tools/ui-windows-gravity-test.ps1`) and `app.ui-macos-gravity`
+  (`tools/ui-macos-gravity-test.sh`), on Linux and Windows in the Docked
+  and the Floating layout: the context menu on the hose offers Let It
+  Hang; its panel asks for a direction (no marker before); the plate's
+  top face picked: the direction, the marker, and the hose falling onto
+  the plank (its rest checked: three points or more on a body, none below
+  the plate's top); a press beside it is the view's; its middle node
+  pinned and let go with clicks on its handle; dragged by its middle and
+  released; the length and the damping changed, End pinned cleared and
+  checked again; OK keeps its shape, the direction and the shape one undo
+  step, the marker gone; Undo takes both back; Let It Hang again from the
+  ribbon with the hose selected, a face picked, dragged, Esc: put back,
+  the direction undone, no undo step left; once more, Clear Gravity puts
+  it back and the field asks again, a face picked again hangs it again,
+  Cancel leaves the design as it was.
+
 ## The CNC group
 
 mitcad#1013 (`cam/MainWindowCam.cpp`, `cam/CamMachinesDialog.*`,
@@ -23938,7 +25005,8 @@ the view) and `MainWindowForm.cpp` (Edit Form opened for a Form feature).
   after each edit and each change of the model (`modelChanged`: an undo),
   the picks the cage no longer has dropped.
   - **Edit**: Move, Rotate, Scale, Extrude Faces, Insert Edge Loop, Delete
-    Edge Loop, Crease, Uncrease, Delete Faces, Symmetry, in this order.
+    Edge Loop, Crease, Uncrease, Delete Faces, Symmetry, Fill Hole, Bridge,
+    in this order.
     **Select** (Faces, Edges, Vertices) is shown for the edits that take
     more than one kind (Move, Rotate, Scale any; Crease, Uncrease edges or
     vertices; the others say their own kind); a change of either drops
@@ -23968,7 +25036,19 @@ the view) and `MainWindowForm.cpp` (Edit Form opened for a Form feature).
     `Form edit mirror plane Plane yz: {"normal":[1,0,0],"origin":[0,0,0]}`),
     sent as `{"origin", "normal"}`: the half on the side the normal points
     to is kept (`form.symmetry`); no cage picks, and without a plane `Pick
-    a plane or a planar face for the mirror plane.` Move, Rotate and Scale go
+    a plane or a planar face for the mirror plane.` Fill Hole (mitcad#1941):
+    the opening the one picked edge lies on filled (`form.fill_hole`), with
+    **Quads** (off) a grid of quads when it has an even number of edges, else
+    one face; `Pick one edge of the opening to fill.` Bridge: two openings,
+    or two runs of open edges of as many edges each, joined by a strip of
+    quads (`form.bridge`): **Whole Openings** (on: an edge of each opening is
+    enough, `loops`; off: the picked edges are the sides) and **Segments**
+    (1, rows across; a whole number from 1 to 100, else `Segments must be a
+    whole number from 1 to 100.`); `Pick an edge of each of the two openings
+    to join.` The model refuses the rest in words (an edge with a face on
+    both sides, an opening across the symmetry plane, sides of different
+    lengths). Both are previewed as the other edits, and the cage read
+    again says whether it is `closed` or `open`. Move, Rotate and Scale go
     back to 0, 0° and 1 after Apply; the picks stay (a face keeps its id
     through moves and extrusions).
   - **A vertex dragged** (mitcad#1810): while vertices are picked (Select
@@ -23993,6 +25073,16 @@ the view) and `MainWindowForm.cpp` (Edit Form opened for a Form feature).
   - **The edits' row**: `N edit(s) applied in this panel` with **Undo Last
     Edit** and **Undo All Edits** (`undo` for this panel's edits): Undo
     All Edits and Close are Cancel.
+  - **Fill Hole and Bridge outside the panel** (mitcad#1941): while Edit
+    Form is open, the view's context menu begins with **Fill Hole** and
+    **Bridge** (before OK and Cancel), and the command search finds them
+    (`solid.form_fill_hole`, `solid.form_bridge`, `kFormFillHoleCommand`,
+    `kFormBridgeCommand`: `duringCommands` actions enabled only then,
+    `MainWindow::formEditOpen`). Each chooses its edit in the panel's
+    **Edit** (`chooseInCommand` on `action`) and, once the model is idle,
+    applies it to the picks as Apply does (`MainWindow::applyFormEdit`):
+    one undo step, or the panel's or the model's refusal in words. Log:
+    `Form edit fill_hole asked for: Edit chosen, then Apply`.
   - The handles are worked out in the Form's component's coordinates and
     placed by its first occurrence (`handlesSeenAt`).
 - **Open Cage as Form** (mitcad#1757, commands.md "Forms from imported
@@ -24037,7 +25127,8 @@ the view) and `MainWindowForm.cpp` (Edit Form opened for a Form feature).
   drags it, above).
 - Logs: `Editing Form F1 (Form1)`, `Form edit Form1: cage of 26 vertices,
   48 edges, 24 faces, closed` (`, symmetric`), `Form cage face 7 (+z) at
-  x,y` (`edge 5,6 (creased)`, `edge 5,6 (semi-sharp 1.5)`, `vertex 5`: each element of the kind
+  x,y` (`edge 5,6 (creased)`, `edge 5,6 (semi-sharp 1.5)`, `edge 5,6
+  (boundary)` on an opening (mitcad#1941), `vertex 5`: each element of the kind
   picked that is seen, when they change), `Form cage click: faces 7 ->
   {...}`, `Form edit picked: {...}`, `Form edit preview: 96 lines`
   (`refused: …`), `Form edit Extrude in Form1: done: {command}`, `Form
@@ -24061,7 +25152,18 @@ the view) and `MainWindowForm.cpp` (Edit Form opened for a Form feature).
   dragged in the view (one undo step, halves still equal), Close keeping
   the edits; then a box added and a Form with Operation Cut and the box
   as its Objects, the box cut (less volume). `tools/ui-form-kept-cage-test.sh`:
-  Open Cage as Form (above). `tools/ui-sketch-create-menu-test.sh` and
+  Open Cage as Form (above). mitcad#1941: `app/tests/form_cage.cpp`
+  (Fill Hole's and Bridge's commands and refusals) and the UI test
+  `tools/ui-form-fill-hole-test.sh` with its twins
+  `tools/ui-windows-form-fill-hole-test.ps1` (ctest
+  `app.ui-windows-form-fill-hole`) and `tools/ui-macos-form-fill-hole-test.sh`
+  (ctest `app.ui-macos-form-fill-hole`), the shared steps
+  `tools/ui-scripts/form-fill-hole.mitcad-ui`: a top face of a box cage
+  deleted in Edit Form; Patch picks the Form body's opening by one of its
+  free edges, the whole loop (as for any open shell, mitcad#1927: a Form's
+  open body is a surface body whose free edges have no names); an edge of
+  the opening picked in Edit Form and Fill Hole from the view's context
+  menu, one undo step, the cage closed and the body a solid again. `tools/ui-sketch-create-menu-test.sh` and
   `tools/ui-windows-pattern-options-test.ps1` list Form in its section.
 
 ## Selection color and line width (mitcad#1803)
@@ -24260,3 +25362,44 @@ Tests: `updateRowTests` in `test_app` (two windows' bars of one row),
 `tools/ui-update-one-row-test.sh` with `app.ui-windows-update-one-row` and
 `app.ui-macos-update-one-row` (the shared steps
 `tools/ui-scripts/update-one-row.mitcad-ui`).
+
+## Web: mitered corners, Extend Ends, patterns re-solved (mitcad#1968)
+
+GitHub mitcad/Mitcad#409: a web's corners were not mitered, lines short of
+the walls stayed short, and patterned ribs and webs did not re-solve where
+they landed.
+
+- **Panel** (`commands/SweepCommands.cpp`, `ribOrWeb`): the Web now has
+  *Extend Ends* (`extend_ends`, a check, on by default; its tooltip says
+  that free ends go to the faces and an end past a wall is cut back to
+  it) and *End Offset* (`end_offset`, shown only while Extend Ends is
+  on), before Objects, as the Rib has. `build` writes `"extend_ends":
+  true` and the `end_offset` expression for either when it is checked;
+  `load` sets the check from the feature, so a web saved without it opens
+  with it off and keeps its ends as drawn.
+- **Model** (`core/model/src/features/rib.rs`, `commands.md` "rib, web"):
+  a web takes `extend_ends` and `end_offset`; Rib and Web rebuild their
+  tool at each copy of a pattern (`Evaluate::placed_tool`) when the extent
+  is To Next or Extend Ends is on, so a copy reaches the faces and is cut
+  back to the walls where it lands. The kernel (`geometry/src/rib.cpp`,
+  `web_tool`) miters two walls whose curves share an end (cut off past a
+  thickness at sharp angles), keeps a run's walls on its first curve's
+  side, joins three or more walls at a node by the hull of their ends, and
+  continues each free end (`extension`) or cuts it back to the wall it
+  crosses (`drawn_part`, also for a rib's ends).
+- **Tests:** `tools/ui-web-extend-ends-test.sh` with
+  `app.ui-windows-web-extend-ends` and `app.ui-macos-web-extend-ends` (the
+  shared steps `tools/ui-scripts/web-extend-ends.mitcad-ui` on
+  `web-extend-ends.json`: Extend Ends checked for a new web on an L short
+  of a room's walls, OK makes the walls reach them, mitered, one body of the
+  analytic volume, Undo); `tools/ui-sweep-test.sh` (the Web panel's rows on
+  the bracket, one end reaching the plate); `cli.f3_web_corners` (L, T,
+  Y, a line short of two walls, every Thickness Side, the second line
+  drawn the other way round); `cli.f3_rib_web_pattern` (a Rib and a Web
+  patterned toward the narrow, deep end of a room with slanted walls and a
+  sloped floor, each copy cut back to the walls and reaching the floor);
+  `test_sweeps` (`test_web_corners`, and in `test_ribs` a web's end
+  continued and cut back); the mock tests in
+  `core/model-tests/features-profile/src/f3_tests.rs`
+  (`rib_ends_extend_to_the_bodies`,
+  `patterned_ribs_and_webs_are_rebuilt_at_each_copy`).

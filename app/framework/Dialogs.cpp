@@ -57,7 +57,8 @@ namespace {
 // it hit this. So the selection is kept to the typed name: after each edit
 // of the name, and when Enter is pressed in it, a selection holding any
 // entry other than the name itself is cleared (with nothing selected, the
-// dialog takes the typed name). Multi-file dialogs are left alone.
+// dialog takes the typed name). A quoted list of multiple names stays selected;
+// a single typed path is kept even when the dialog permits multiple files.
 class TypedNameKeeper : public QObject {
 public:
   explicit TypedNameKeeper(QFileDialog* dialog) : QObject(dialog), m_dialog(dialog) {
@@ -97,7 +98,7 @@ private:
   }
 
   void keepTypedName() {
-    if (m_edit == nullptr || m_list == nullptr || m_dialog->fileMode() == QFileDialog::ExistingFiles) {
+    if (m_edit == nullptr || m_list == nullptr) {
       return;
     }
     const QString text = m_edit->text().trimmed();

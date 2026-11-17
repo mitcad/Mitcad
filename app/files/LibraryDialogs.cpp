@@ -1014,6 +1014,15 @@ void LibraryBrowser::showVersion() {
   // the library's component at the version shown.
   m_size->setOptionsQuery(libraryOptionsQuery(libraryCommand, str(item, "url"), str(item, "library"), rev,
                                               str(item, "id"), [this] { return m_size->standard(); }));
+  // A component cut to length (mitcad#1950): its length an option, its
+  // stock lengths offered above it.
+  const QJsonObject cutLength =
+      component.value(QStringLiteral("build")).toObject().value(QStringLiteral("length")).toObject();
+  QStringList stockLengths;
+  for (const QJsonValue& stock : cutLength.value(QStringLiteral("stock")).toArray()) {
+    stockLengths << (stock.isDouble() ? QString::number(stock.toDouble(), 'g', 12) : stock.toString());
+  }
+  m_size->setStockOption(str(cutLength, "parameter"), stockLengths);
   // The Standard and Supplier filters (mitcad#949): the component's
   // standards in its order, the grid's supplier to start with.
   QJsonObject table = component.value(QStringLiteral("configurations")).toObject();

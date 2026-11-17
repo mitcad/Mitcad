@@ -292,32 +292,14 @@ fn current<S>(
     ))
 }
 
-/// Why a sheet with an overlay has no Flat Pattern (`overlay_refusal`), the
-/// feature that made the overlay by its name; its id for agents
-/// (mitcad#1639). One whole message per kind of overlay.
-fn overlay_refusal(
-    state: &SheetState,
-    name: &dyn Fn(FeatureUid) -> String,
-) -> Result<(), FlatFailure> {
-    let Some(overlay) = state.overlays.first() else {
-        return Ok(());
-    };
-    let detail = state
-        .overlay_refusal("the Flat Pattern")
-        .err()
-        .unwrap_or_default();
-    let feature = name(overlay.feature);
-    let shown = match overlay.kind {
-        SheetOverlayKind::Straight { .. } => format!(
-            "the Flat Pattern needs the sheet's developed form, which {feature} does not have \
-             (a straight cut through a bend or an inclined panel)"
-        ),
-        SheetOverlayKind::Change { .. } => format!(
-            "the Flat Pattern needs the sheet's developed form, which {feature} does not have \
-             (a fillet or chamfer the material domains do not hold)"
-        ),
-    };
-    Err(FlatFailure::told("invalid", shown, detail))
+/// Why a sheet with an overlay has no Flat Pattern
+/// ([`SheetState::overlay_said`]): the feature that made the overlay by its
+/// name and what it does; its id for agents (mitcad#1639, mitcad#1942).
+fn overlay_refusal(state: &SheetState, words: &FeatureWords<'_>) -> Result<(), FlatFailure> {
+    match state.overlay_said("the Flat Pattern", words) {
+        Some((shown, detail)) => Err(FlatFailure::told("invalid", shown, detail)),
+        None => Ok(()),
+    }
 }
 
 fn line(map: Isometry2, u: f64, interval: [f64; 2]) -> FlatLine {
@@ -327,19 +309,21 @@ fn line(map: Isometry2, u: f64, interval: [f64; 2]) -> FlatLine {
     }
 }
 
-/// Evaluates the Flat Pattern of `body` with `def` at the marker. `name`
-/// gives a feature's name, for the reason of a sheet that is not valid and
-/// the walls a failed development names (mitcad#1639).
+/// Evaluates the Flat Pattern of `body` with `def` at the marker. `words`
+/// name a feature, for the reason of a sheet that is not valid and the
+/// walls a failed development names (mitcad#1639), and say what a fillet
+/// or chamfer the sheet keeps does (mitcad#1942).
 pub(crate) fn evaluate<K: Kernel>(
     kernel: &K,
     result: &Recomputed<K::Shape>,
     body: BodyUid,
     def: &FlatPatternDef,
-    name: &dyn Fn(FeatureUid) -> String,
+    words: &FeatureWords<'_>,
 ) -> Result<FlatPattern<K::Shape>, FlatFailure> {
+    let name = words.name;
     let (state, thickness, sheet_version) = current(result, body, name)?;
     let invalid = |m: String| FlatFailure::named("invalid", &m, name);
-    overlay_refusal(&state, name)?;
+    overlay_refusal(&state, words)?;
     let fixed = SheetDomainRef::Panel(def.stationary);
     let fixed_embedding = state
         .charts

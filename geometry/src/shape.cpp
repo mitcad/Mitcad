@@ -284,6 +284,7 @@ void Shape::keep_measures_of(const Shape& other) const {
   take(other.m_faceBoxes, m_faceBoxes);
   take(other.m_valid, m_valid);
   take(other.m_displayMeshed, m_displayMeshed);
+  take(other.m_displaySection, m_displaySection);
 }
 
 const TopoDS_Face& Shape::face(int i) const {

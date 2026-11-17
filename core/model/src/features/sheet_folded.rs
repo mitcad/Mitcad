@@ -684,31 +684,34 @@ impl<K: Kernel> Evaluate<K> for SheetFlangeDef {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
         // A profile sketch left where an earlier angle or position put the
         // wall says so (mitcad#1648); the wall follows its outline anyway.
-        crate::sheet::folded::warn_moved_profile(&d, ctx)?;
-        crate::sheet::folded::flange(&d, ctx)
+        crate::sheet::folded::warn_moved_profile(&d, ctx)
+            .and_then(|()| crate::sheet::folded::flange(&d, ctx))
+            .map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 impl<K: Kernel> Evaluate<K> for SheetBendDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
-        crate::sheet::folded::bend(&d, ctx)
+        crate::sheet::folded::bend(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 impl<K: Kernel> Evaluate<K> for SheetFoldDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
-        crate::sheet::folded::fold(&d, ctx)
+        crate::sheet::folded::fold(&d, ctx).map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 impl<K: Kernel> Evaluate<K> for SheetCornerRoundDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
         crate::sheet::folded::corner_round(&d, ctx)
+            .map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }
 impl<K: Kernel> Evaluate<K> for SheetCornerChamferDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
         crate::sheet::folded::corner_chamfer(&d, ctx)
+            .map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

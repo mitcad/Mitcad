@@ -624,28 +624,44 @@ pub fn layout(
                 TextAlign::Right => total - w,
             }
         };
+        // The flips act in the path's own frame (mitcad#1946): Flip
+        // Horizontal mirrors along the path about the middle of the text
+        // block, Flip Vertical across the path (an offset d becomes -d, so
+        // the baseline or the hanging top stays on the path and the text
+        // moves to its other side); both turn the text half round about the
+        // block's middle point on the path, reading from the other end.
+        let middle = start + w * scale_fit / 2.0;
+        let along = if text.flip_x { -1.0 } else { 1.0 };
+        let across = if text.flip_y { -1.0 } else { 1.0 };
+        // Below the path the text hangs from its top: the capitals' top
+        // when `height` is theirs (mitcad#1177), else the ascender.
+        let lift = match (path.above, cap) {
+            (true, _) => 0.0,
+            (false, true) => -text.height,
+            (false, false) => -ascender,
+        };
         let mut x = 0.0;
         for k in order {
             let a = advance(k);
             let mut s = start + (x + a / 2.0) * scale_fit;
+            if text.flip_x {
+                s = 2.0 * middle - s;
+            }
             if closed && total > 0.0 {
                 s = s.rem_euclid(total);
             }
             let [p, d1, _] = curve.eval(table.param(s.clamp(0.0, total)));
             let t = unit(d1);
             let n = perp(t);
-            // Below the path the text hangs from its top: the capitals'
-            // top when `height` is theirs (mitcad#1177), else the
-            // ascender.
-            let lift = match (path.above, cap) {
-                (true, _) => 0.0,
-                (false, true) => -text.height,
-                (false, false) => -ascender,
-            };
-            let origin = add(p, add(scale(t, -a / 2.0), scale(n, lift)));
+            // A point of the glyph in the path's frame at the glyph's
+            // middle: along the path from it, and off the path.
             placements.push((
                 k,
-                Box::new(move |g: P2| add(origin, add(scale(t, g[0] * h), scale(n, g[1] * h)))),
+                Box::new(move |g: P2| {
+                    let along_path = along * (g[0] * h - a / 2.0);
+                    let off_path = across * (g[1] * h + lift);
+                    add(p, add(scale(t, along_path), scale(n, off_path)))
+                }),
             ));
             x += a;
         }

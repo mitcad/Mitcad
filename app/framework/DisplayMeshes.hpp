@@ -86,6 +86,9 @@ struct DisplayMeshing {
   std::size_t incomplete = 0; // of them, shapes with faces OCCT's mesher failed on
   std::size_t ready = 0; // shapes that had a triangulation on every face, or a stand-in (not meshed)
   std::size_t reused = 0; // faces that took a donor's triangulation
+  // Flex items' bodies given their stand-in's meshes (counted in `ready`,
+  // mitcad#1713)
+  std::size_t fromStandIns = 0;
   DisplayTier tier = DisplayTier::Final;
   qint64 milliseconds = 0;
   // The stand-ins made or drawn again (the interactive tier): the caller

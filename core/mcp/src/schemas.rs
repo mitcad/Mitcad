@@ -35,6 +35,9 @@ mod form;
 mod joints;
 mod print;
 
+// Flex items, hanging cables and the direction of gravity (mitcad#1713).
+mod flex;
+
 /// A family's module: its commands with a schema, in the reference's
 /// order, and its schemas as [`spec`] writes them.
 type Family = (&'static [&'static str], fn(&str) -> Option<Value>);
@@ -53,6 +56,7 @@ const FAMILIES: &[Family] = &[
     (annotations::COMMANDS, annotations::spec),
     (cam::COMMANDS, cam::spec),
     (form::COMMANDS, form::spec),
+    (flex::COMMANDS, flex::spec),
 ];
 
 /// The JSON Schema dialect of the schemas.

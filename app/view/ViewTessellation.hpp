@@ -52,7 +52,9 @@ namespace mitcad {
 // polylines of their own, cut finely and the same for every shape
 // (view/ViewEdges.hpp, mitcad#1633). On
 // the reporter's machine (mitcad-cli mesh-compare, the final tier): 780 000
-// triangles, the part above 35 000, meshed in 2.4 s.
+// triangles, the part above 35 000, meshed in 2.4 s. A Flex item's body
+// meshes by its section instead (geometry::Shape::display_section,
+// io::MeshOptions::section, mitcad#1713; framework/DisplayMeshes).
 constexpr double kViewDeviation = 0.01;
 constexpr double kViewSizeDeviation = 1e-3;
 constexpr double kViewDeviationMax = 0.5;

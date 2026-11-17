@@ -143,7 +143,8 @@ public:
   // Saves the view's camera as a named view of the document (the next free
   // NamedView<n> when `name` is empty); `replace` overwrites one (U5).
   virtual void saveNamedView(const QString& name, bool replace) = 0;
-  // Save As DXF: a sketch's curves to a DXF file the user chooses (U6).
+  // Save As DXF: a sketch to a DXF file the user chooses (U6), through the
+  // Export dialog on that sketch (mitcad#1963).
   virtual void exportSketch(const QString& sketch) = 0;
   // Convert to 3D Sketch (mitcad#1544): opens the planar sketch and turns
   // it into a 3D sketch in place.

@@ -215,6 +215,14 @@ ShapePtr through_sections(const std::vector<TopoDS_Shape>& sections, const Named
 // The outer solid with the holes' solids cut out; the names carry.
 ShapePtr with_holes(const ShapePtr& outer, const std::vector<ShapePtr>& holes, const char* what);
 
+// The same for sweeps of one law whose holes lie inside the outer sweep
+// apart from it (a wall between them), the outer's caps named `first` and
+// `last` and the holes' caps without names: the faces joined into one
+// solid without a boolean, the caps with the holes' caps as their holes;
+// where they do not join, with_holes.
+ShapePtr with_holes_joined(const ShapePtr& outer, const std::vector<ShapePtr>& holes, const NameList& first,
+                           const NameList& last, const char* what);
+
 class FaceNamer;
 
 // Names the unnamed faces of the namer's result that the section bounds or

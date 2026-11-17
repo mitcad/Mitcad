@@ -1423,15 +1423,31 @@ void test_ribs() {
   down.direction = gp_Dir(gp_Vec(gp_Pnt(30, 20, 50), gp_Pnt(70, 20, 30)));
   CHECK(throws_with([&] { rib(down); }, "the rib's direction runs along its curves' chord"));
 
-  // A web's curves are not continued.
+  // A web's free ends continued (mitcad#1968): on the base's top, the line
+  // (15, 20) - (40, 20) 2 thick and 10 deep; its start reaches the plate
+  // (x = 5), its end meets nothing and stays, with a note.
   RibSpec web_ends;
   web_ends.feature = "F9";
   web_ends.web = true;
+  web_ends.frame = xy_at(5);
   web_ends.thickness = 2;
   web_ends.depth = 10.0;
   web_ends.extend_ends = true;
-  web_ends.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(40, 0, 0))}}};
-  CHECK(throws_with([&] { rib(web_ends); }, "a web's curves end where they are drawn"));
+  web_ends.bodies = {body};
+  web_ends.chains = {{{"c1", line3(gp_Pnt(15, 20, 5), gp_Pnt(40, 20, 5))}}};
+  const ShapePtr reached = rib(web_ends);
+  CHECK_NEAR(volume(*reached), 35.0 * 2 * 10);
+  CHECK(reached->notes().size() == 1);
+  CHECK(near(bounding_box(*reached).min.X(), 5, 1e-6));
+  // From past the plate (x = -5): cut back to it, the piece outside
+  // dropped (the tool loses the plate's material it crossed too).
+  web_ends.chains = {{{"c1", line3(gp_Pnt(-5, 20, 5), gp_Pnt(40, 20, 5))}}};
+  const ShapePtr cut_back = rib(web_ends);
+  CHECK_NEAR(volume(*cut_back), 35.0 * 2 * 10);
+  CHECK(near(bounding_box(*cut_back).min.X(), 5, 1e-6));
+  // Without Extend Ends it stays as drawn, through the plate.
+  web_ends.extend_ends = false;
+  CHECK_NEAR(volume(*rib(web_ends)), 45.0 * 2 * 10);
 
   // Webs: two crossing lines 2 thick, 10 deep from the XY plane.
   RibSpec webs;
@@ -1459,6 +1475,72 @@ void test_ribs() {
   CHECK_NEAR(volume(*rib(webs)), 40 * 2 * 20);
   webs.flip = true;
   CHECK(throws_with([&] { rib(webs); }, "lies inside the bodies"));
+}
+
+// Web corners (mitcad#1968): an L of lines 2 thick and 10 deep meets in a
+// mitre with no notch at every Thickness Side, also with its second line
+// drawn the other way round; at 20 degrees the mitre is cut off a
+// thickness past the walls' outer sides; a T keeps its stem at the bar;
+// three walls from one point join there.
+void test_web_corners() {
+  RibSpec spec;
+  spec.feature = "F7";
+  spec.web = true;
+  spec.thickness = 2;
+  spec.depth = 10.0;
+  const auto l_shape = [&](bool reversed) {
+    const ModelCurve second = reversed ? line3(gp_Pnt(30, 30, 0), gp_Pnt(30, 0, 0))
+                                       : line3(gp_Pnt(30, 0, 0), gp_Pnt(30, 30, 0));
+    spec.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(30, 0, 0))}}, {{"c2", second}}};
+    const ShapePtr result = rib(spec);
+    CHECK(solids(*result).size() == 1);
+    return volume(*result);
+  };
+  // Symmetric: 2 x (31 + 29) / 2 per wall.
+  CHECK_NEAR(l_shape(false), 2 * 60.0 * 10);
+  // Side 1 inside the L, 2 x (30 + 28) / 2 per wall; Side 2 outside it,
+  // 2 x (32 + 30) / 2.
+  spec.location = ThicknessLocation::Side1;
+  CHECK_NEAR(l_shape(false), 2 * 58.0 * 10);
+  spec.location = ThicknessLocation::Side2;
+  CHECK_NEAR(l_shape(false), 2 * 62.0 * 10);
+  // The second line drawn towards the corner: its wall stays outside.
+  CHECK_NEAR(l_shape(true), 2 * 62.0 * 10);
+  CHECK(near(bounding_box(*rib(spec)).max.X(), 32, 1e-6));
+
+  // At 20 degrees the outer mitre would run 1 / sin 10 = 5.76 past the
+  // corner; it is cut off 3 past it (half the thickness and a thickness),
+  // square to the bisector: the walls reach x = 33.04, not 35.67.
+  spec.location = ThicknessLocation::Symmetric;
+  const double turn = 20.0 * kPi / 180.0;
+  spec.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(30, 0, 0))}},
+                 {{"c2", line3(gp_Pnt(30, 0, 0), gp_Pnt(30 - 30 * std::cos(turn), 30 * std::sin(turn), 0))}}};
+  const ShapePtr sharp = rib(spec);
+  CHECK(solids(*sharp).size() == 1);
+  CHECK(bounding_box(*sharp).max.X() > 32.9 && bounding_box(*sharp).max.X() < 33.2);
+
+  // A T: the stem from the bar's middle, as drawn.
+  spec.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(40, 0, 0))}},
+                 {{"c2", line3(gp_Pnt(20, 0, 0), gp_Pnt(20, 20, 0))}}};
+  const ShapePtr tee = rib(spec);
+  CHECK(solids(*tee).size() == 1);
+  CHECK_NEAR(volume(*tee), (80.0 + 40 - 2) * 10);
+
+  // A Y of three lines 20 long from (0, 0) at 120 degrees. Symmetric, the
+  // walls overlap pairwise near the node in kites of 1 / sqrt(3); Side 1,
+  // each to the left of its line, they touch only at the node, and the
+  // node piece fills the three gaps between them, 1 / sqrt(3) each.
+  const double h = 10.0 * std::sqrt(3.0);
+  spec.chains = {{{"c1", line3(gp_Pnt(0, 0, 0), gp_Pnt(0, 20, 0))}},
+                 {{"c2", line3(gp_Pnt(0, 0, 0), gp_Pnt(-h, -10, 0))}},
+                 {{"c3", line3(gp_Pnt(0, 0, 0), gp_Pnt(h, -10, 0))}}};
+  const ShapePtr y_symmetric = rib(spec);
+  CHECK(solids(*y_symmetric).size() == 1);
+  CHECK_NEAR(volume(*y_symmetric), (120.0 - std::sqrt(3.0)) * 10);
+  spec.location = ThicknessLocation::Side1;
+  const ShapePtr y_side = rib(spec);
+  CHECK(solids(*y_side).size() == 1);
+  CHECK_NEAR(volume(*y_side), (120.0 + std::sqrt(3.0)) * 10);
 }
 
 // Extend Ends past the outline of a torus and of a freeform face
@@ -2542,6 +2624,7 @@ void sweeps_tests_2() {
   guarded("ribs", test_ribs);
   guarded("rib outlines", test_rib_outlines);
   guarded("rib rim cap", test_rib_rim_cap);
+  guarded("web corners", test_web_corners);
 }
 
 void sweeps_tests_3() {

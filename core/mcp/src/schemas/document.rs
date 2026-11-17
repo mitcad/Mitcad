@@ -27,6 +27,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "merge_undo",
     "set_feature_visible",
     "set_datum_display_size",
+    "acknowledge_warnings",
     "add_named_view",
     "delete_named_view",
     "rename_named_view",
@@ -244,6 +245,16 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             },
             "required": ["uid"],
             "examples": [{"cmd": "set_datum_display_size", "uid": "F3", "size": 80}]
+        }),
+        "acknowledge_warnings" => json!({
+            "description": "Marks features' warnings as seen (the timeline's acknowledged), or shows them again; lapses when a warning changes. Failed features are refused.",
+            "properties": {
+                "uids": {"type": "array", "items": {"type": "string", "pattern": "^F(0|[1-9][0-9]*)$"}, "description": "The features with warnings (uids)"},
+                "acknowledged": flag(true, "Acknowledged; false shows them again")
+            },
+            "required": ["uids"],
+            "examples": [{"cmd": "acknowledge_warnings", "uids": ["F4"]},
+                         {"cmd": "acknowledge_warnings", "uids": ["F4"], "acknowledged": false}]
         }),
         "add_named_view" => json!({
             "description": "Saves a camera as a named view. Result: name.",

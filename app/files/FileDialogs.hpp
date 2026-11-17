@@ -29,6 +29,9 @@ struct ExportChoice {
   // DXF: also the sketch's construction curves and center lines, on the
   // layer construction (mitcad#1445); off unless chosen, remembered.
   bool dxfConstruction = false;
+  // DXF: also the sketch's free-standing points, as POINT entities on the
+  // layer POINTS (mitcad#1963: hole marks); on unless unchecked, remembered.
+  bool dxfPoints = true;
   // Bodies (mitcad#19): design (where the design shows them, the
   // default) or component (each in its component's coordinates); empty
   // when the design has no occurrences to choose by. "frame" (mitcad#1775):

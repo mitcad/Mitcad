@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-filter-annotations.mitcad-ui (GitHub #388): Sketch1 (F1) on XY, two lines 30 mm long and 10 mm apart: c3 from the fixed point p1 at (5, 0) (a Fix symbol; a fixed point at the origin is taken as the sketch origin, which shows none), Horizontal k4 on it; c6 above it, Parallel k7 to it, and the dimension k8 of 10 between them. Two fixed points frame the view so that after a fit the window and the clicks stay in its free part (also in session 0's 1024x768 window on Windows)."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy",
+    "entities": [
+      {"id": "p1", "type": "point", "at": [5, 0], "fixed": true},
+      {"id": "p2", "type": "point", "at": [35, 0]},
+      {"id": "c3", "type": "line", "start": "p1", "end": "p2"},
+      {"id": "p4", "type": "point", "at": [5, 10]},
+      {"id": "p5", "type": "point", "at": [35, 10]},
+      {"id": "c6", "type": "line", "start": "p4", "end": "p5"},
+      {"id": "p9", "type": "point", "at": [-30, -25], "fixed": true},
+      {"id": "p10", "type": "point", "at": [60, 35], "fixed": true}],
+    "constraints": [
+      {"id": "k4", "type": "horizontal", "line": "c3"},
+      {"id": "k7", "type": "parallel", "a": "c6", "b": "c3"}],
+    "dimensions": [
+      {"id": "k8", "type": "line_distance", "a": "c6", "b": "c3", "value": 10}]}},
+  {"expect": {"query": {"query": "sketch", "uid": "F1"}, "result": {"solved": true, "conflicts": []}}}
+]

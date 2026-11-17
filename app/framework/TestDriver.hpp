@@ -199,6 +199,13 @@
 //                           alone unchanged, an upward drag that wobbles
 //                           sideways closer at every step (mitcad#1867;
 //                           synthetic)
+//   expect-device-scroll      wheel steps with no phase and no pixel deltas
+//                           in the Trackpad scheme: from a touchpad device
+//                           on xcb they pan both ways and Alt + a vertical
+//                           move (axes swapped as xcb sends it) orbits
+//                           vertically; from a mouse, whole and partial
+//                           notches zoom (GitHub mitcad/Mitcad#381;
+//                           synthetic)
 //   view-navigation <scheme>  this process's view navigation, not saved:
 //                           middle-pan|alt-buttons|middle-pan-f4|middle-orbit|
 //                           right-orbit|trackpad|trackpad-shift
@@ -233,6 +240,9 @@
 //                           optionally add the visible Create row's size hint
 //   click <x%> <y%> [button] [mods]
 //   dblclick <x%> <y%> [button] [mods]
+//   click-now <x%> <y%> [button] [mods]  a click without waiting for the
+//                           model to be idle (a click while a held preview
+//                           computes, hold-model-preview)
 //   drag <x1%> <y1%> <x2%> <y2%> [button] [mods]     with moves between
 //   wheel <x%> <y%> <notches> [mods]                 positive: away from you
 //   wheel-logged <regex> <notches> [mods]  the wheel over the last place a
@@ -357,7 +367,9 @@
 //                           the submenu Sub and chooses Item in it (also
 //                           for context-menu-logged's entry); Item is
 //                           looked for in the submenu Sub opened, not in
-//                           whichever popup Qt reports active
+//                           whichever popup Qt reports active; "Rim: *"
+//                           chooses the first entry that starts with
+//                           "Rim: " when none is "Rim: *" (mitcad#1935)
 //   expect-popup-entries <regex>  the open popup menu's shown entries,
 //                           joined with " | " ("Name (disabled)" for a
 //                           disabled one, no separators), match; logs
@@ -528,6 +540,12 @@
 //   view-context-menu-logged <regex> cancel|item right click a logged position
 //   view-pointer press|move|release <x%> <y%> none|left|right|middle [mods]
 //                           separate events can simulate a release lost to menus
+//   pointer-logged press|move|release <regex> none|left [dx dy]   the same at
+//                           a logged place, dx, dy pixels off it: a drag held
+//                           between steps (a screenshot of it under way).
+//                           While a press of it is held, move and release
+//                           are off the pressed place, whatever was logged
+//                           since (a dragged handle logs its place anew)
 //   capture-view-orientation <var> record actual camera direction and up
 //   expect-view-orientation <before> changed|unchanged compare that orientation
 //   expect-view-buttons none|left|right|middle inspect OCCT's actual held buttons
@@ -765,7 +783,8 @@
 //   expect-clipboard-file <path> [seconds]   the file holds exactly the
 //                           clipboard's text, in UTF-8: a list's Save as
 //                           Text… against its Copy as Text (mitcad#1641)
-//   screenshot <png>        the main window (the 3D view composed in)
+//   screenshot <png>        the main window (the 3D view composed in, and an
+//                           open popup menu drawn over it at its place)
 //   screenshot-view <png>   the 3D view's framebuffer, as --screenshot
 //   screenshot-screen <png> macOS: what the window server shows of the
 //                           application's windows, the floating panels' child
@@ -800,6 +819,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <QElapsedTimer>
@@ -923,6 +943,7 @@ private:
   void testNavigationRelease();
   void testNavigationGestureState();
   void testDragZoom();
+  void testDeviceScroll();
   void setViewNavigation(const QString& scheme);
   void testNavigationControls(const QString& mode);
   void testAssistantSetup(const QString& mode);
@@ -979,6 +1000,7 @@ private:
   QHash<QString, QPointer<QWidget>> m_documentWindows;
   QPointer<QWidget> m_dialog; // the target of key, type and button; else the main window
   QPointer<QWidget> m_grab;   // the widget a pressed mouse button belongs to
+  std::optional<QPoint> m_pointerHeld; // pointer-logged's held press
   QPointer<QWidget> m_pointerTarget; // the last ungrabbed pointer receiver
   // The submenu a popup stage opened ("Sub/Item"), taken by the stage
   // that chooses in it; set only while that stage is queued.

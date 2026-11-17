@@ -1392,6 +1392,87 @@ void testPatternSharesMeshes() {
 // giveRemeshed into the body) has more triangles, every face a new
 // triangulation and still meshed to the end; back in Adaptive, meshed
 // again, as many as at first.
+// A Flex item's preview and add (mitcad#1713): its body meshes by its
+// section (geometry::Shape::display_section), far coarser along its route
+// than by its size alone (a wire of 1 mm took 78 000 triangles and 1.4 s,
+// held then to 3 500), in one stand-in (its tool is the body's own shape);
+// the preview's refinement and an add before it take the stand-in's meshes
+// instead of meshing the body again.
+void testFlexItem() {
+  const QJsonObject box{{"cmd", "add_feature"},
+                        {"def", QJsonObject{{"type", "box"},
+                                            {"plane", "xy"},
+                                            {"corner", QJsonArray{20, 20}},
+                                            {"length", 40},
+                                            {"width", 30},
+                                            {"height", 20},
+                                            {"operation", "new_body"}}}};
+  const QJsonObject flex{
+      {"cmd", "add_feature"},
+      {"def", QJsonObject{{"type", "flex"},
+                          {"item", QJsonObject{{"name", "Wire 1"},
+                                               {"section", QJsonObject{{"type", "round"}, {"diameter", 1}}},
+                                               {"bend_radius", 5}}},
+                          {"nodes", QJsonArray{QJsonObject{{"id", "n1"}, {"at", QJsonArray{-10, 35, 30}}},
+                                               QJsonObject{{"id", "n2"},
+                                                           {"at", QJsonArray{40, 35, 20}},
+                                                           {"on", QJsonObject{{"body", "F1.b0"}, {"face", "F1:top"}}}},
+                                               QJsonObject{{"id", "n3"}, {"at", QJsonArray{90, 70, 30}}}}}}}};
+  const QByteArray request = mitcad::compactJson(flex);
+  for (const bool refineFirst : {true, false}) {
+    rust::Box<Document> document = mitcad::new_document();
+    run(*document, box);
+    meshShown(*document);
+    const Preview p = preview(*document, request);
+    CHECK(p.report.value("status").toString() == QStringLiteral("ok"));
+    const ShapePtr body = changedBody(*document, p.report);
+    CHECK(body != nullptr);
+    if (!body) {
+      return;
+    }
+    CHECK(body->display_section() == 1.0);
+    CHECK(document->preview_tool_shape() == body);
+    CHECK(p.meshing.standIns.size() == 1);
+    const ShapePtr standIn = body->display_stand_in();
+    CHECK(standIn && standIn->display_meshed() && mitcad::io::has_triangulation(standIn->occt()));
+    if (!standIn) {
+      return;
+    }
+    const std::size_t triangles = mitcad::io::mesh_stats(standIn->occt()).triangles;
+    if (refineFirst) {
+      // By its size alone, as before, without the hold that then took most
+      // of what the first meshing made away again.
+      const ShapePtr bySize = mitcad::geometry::independent_copy(*body);
+      mitcad::io::MeshOptions sizeOnly = mitcad::viewMeshOptions();
+      sizeOnly.hold_face_triangles = false;
+      mitcad::io::mesh_in_place(bySize->occt(), sizeOnly);
+      const std::size_t sized = mitcad::io::mesh_stats(bySize->occt()).triangles;
+      std::printf("Flex item: %zu triangles by its section in %.0f ms, %zu by its size\n", triangles, p.meshMs, sized);
+      CHECK(triangles > 0 && 3 * triangles < sized);
+      // The refinement takes the stand-in's meshes.
+      const mitcad::DisplayShapes refinable = mitcad::refinableShapes({standIn});
+      CHECK(refinable.size() == 1);
+      mitcad::ModelJob job;
+      const mitcad::DisplayMeshing refined = mitcad::meshForDisplay(refinable, job, mitcad::DisplayTier::Final);
+      CHECK(refined.bodies == 0 && refined.fromStandIns == 1 && refined.ready == 1);
+      CHECK(finalTier(body));
+      CHECK(!shareFacesOrMeshes(standIn->occt(), body->occt()));
+      CHECK(mitcad::io::mesh_stats(body->occt()).triangles == triangles);
+    }
+    // Added: the body the document keeps is the previewed one, meshed by
+    // then or given its stand-in's meshes now.
+    mitcad::DisplayMeshing committed;
+    command(*document, flex, &committed);
+    std::printf("Flex item added (%s): %zu bodies meshed, %zu from stand-ins\n",
+                refineFirst ? "refined first" : "at once", committed.bodies, committed.fromStandIns);
+    CHECK(committed.bodies == 0);
+    CHECK(committed.fromStandIns == (refineFirst ? 0U : 1U));
+    for (const ShapePtr& shown : mitcad::shownBodyShapes(*document)) {
+      CHECK(finalTier(shown));
+    }
+  }
+}
+
 void testRemeshSmallCircles() {
   CHECK(mitcad::viewSmallCircles() == mitcad::SmallCircles::Adaptive);
   rust::Box<Document> document = mitcad::new_document();
@@ -1507,6 +1588,7 @@ int main(int argc, char** argv) {
   testMeshDuringRecompute();
   testPatternSharesMeshes();
   testRemeshSmallCircles();
+  testFlexItem();
   if (failures > 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return 1;

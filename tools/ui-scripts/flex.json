@@ -1,0 +1,21 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Flex laid by clicks (mitcad#1713), tools/ui-flex-test.sh: an upright 8 mm pipe (sketch F1 on XZ, whose second axis runs down -Z, Pipe1, body F2.b0, from z = 0 up to 30) 40 mm from a 40 x 40 x 20 block (Box1, body F3.b0) on the XY plane, and a second upright pipe (sketch F4, Pipe2, body F5.b0) 40 mm beyond the block."},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xz", "entities": [
+    {"id": "p1", "type": "point", "at": [-40, 0]},
+    {"id": "p2", "type": "point", "at": [-40, -30]},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F1", "curves": ["c3"]},
+    "section": "circular", "size": 8, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, -20],
+    "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xz", "entities": [
+    {"id": "p1", "type": "point", "at": [80, 0]},
+    {"id": "p2", "type": "point", "at": [80, -30]},
+    {"id": "c3", "type": "line", "start": "p1", "end": "p2"}]}},
+  {"cmd": "add_feature", "def": {"type": "pipe", "path": {"sketch": "F4", "curves": ["c3"]},
+    "section": "circular", "size": 8, "operation": "new_body"}},
+  {"expect": {"feature": "Pipe1", "status": "ok"}},
+  {"expect": {"feature": "Box1", "status": "ok"}},
+  {"expect": {"feature": "Pipe2", "status": "ok"}}
+]

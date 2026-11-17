@@ -94,7 +94,7 @@ pub enum SegmentGeometry {
 
 impl SegmentGeometry {
     /// Points on the curve (ends and samples), for bounds.
-    fn sample(&self) -> Vec<[f64; 2]> {
+    pub(crate) fn sample(&self) -> Vec<[f64; 2]> {
         let on_ellipse = |center: [f64; 2], a: f64, b: f64, rotation: f64, t: f64| {
             let (x, y) = (a * t.cos(), b * t.sin());
             [

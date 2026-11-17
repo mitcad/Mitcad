@@ -1555,7 +1555,12 @@ ShapePtr sweep(const SweepSpec& requested) {
             for (std::size_t l = 1; l < loops.size(); ++l) {
               holes.push_back(detail::pipe_shell(loops[l], spine, mode, {}, {}, tolerance));
             }
-            parts.push_back(detail::with_holes(outer, holes, "the sweep"));
+            // (Along an auxiliary curve, a Flex item's frames, the holes'
+            // sides lie inside the outer sides all along: joined without a
+            // boolean, which took minutes at the framed tolerance.)
+            parts.push_back(mode.kind == PipeMode::Kind::Auxiliary
+                                ? detail::with_holes_joined(outer, holes, profile.first, profile.last, "the sweep")
+                                : detail::with_holes(outer, holes, "the sweep"));
           }
           return detail::fused(parts, "the sweep");
         };

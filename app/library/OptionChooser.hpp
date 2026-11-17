@@ -74,6 +74,22 @@ public:
   void setOptionsQuery(OptionsQuery query) { m_query = std::move(query); }
   // The log lines' prefix ("Library", "BUILD", "Edit Options").
   void setLogName(const QString& name) { m_logName = name; }
+  // Options left out of the choosers and of parameters() (mitcad#1950: BUILD's
+  // part picker leaves out a part cut to length's length, which BUILD gives).
+  // Before setTable.
+  void setHiddenOptions(const QStringList& names) { m_hidden = names; }
+  // A part cut to length (mitcad#1950): the option of its length and its
+  // stock lengths (the manifest's `build.length.stock`). An open table's
+  // rows that set only the length (its stock rows), else those lengths (a
+  // closed table of sizes, whose rows cannot), are offered by a "Stock
+  // length" chooser above the options: a stock length sets the option, and
+  // the chooser shows Custom for any other length. Logged: "<prefix> stock
+  // length <row>: <length>" (a length without a row: the length as the
+  // row). Before setTable; an empty name: none.
+  void setStockOption(const QString& name, const QStringList& lengths = QStringList()) {
+    m_stockOption = name;
+    m_stockLengths = lengths;
+  }
   // The table as library_show gives it (`options`, `closed`, `rows`,
   // `default`; or the old `selectors`); `row`: the row to show first (else
   // the default). An open table without a query shows its rows as a closed
@@ -179,6 +195,14 @@ private:
   void showAnswer(const OptionsAnswer& answer);
   void optionEdited(int index, const QJsonValue& value);
   void say(const QString& text, bool problem);
+  // The query's answer without the hidden options (setHiddenOptions).
+  OptionsAnswer ask(const QJsonObject& values) const;
+  // The rows that set only the stock option, as (row, length text).
+  QList<std::pair<QString, QString>> stockRows() const;
+  // The Stock length chooser on the row of the length shown (Custom: none).
+  void showStock(const OptionsAnswer& shown);
+  // A stock length chosen: the length option set to it.
+  void stockChosen();
 
   QFormLayout* m_form = nullptr;
   QLabel* m_notice = nullptr;
@@ -196,6 +220,10 @@ private:
   QStringList m_kinds;     // "list", "number" or "text" per option, as made
   OptionsAnswer m_answer;
   QJsonObject m_wanted;    // the values chosen (option -> query value)
+  QStringList m_hidden;    // options not chosen here (setHiddenOptions)
+  QString m_stockOption;   // a part cut to length's length (setStockOption)
+  QStringList m_stockLengths; // its stock lengths when no row sets only the length
+  QComboBox* m_stock = nullptr; // its Stock length chooser, when it has stock rows
   // The Standard and Supplier filters (mitcad#949).
   QWidget* m_filters = nullptr;
   QFormLayout* m_filterForm = nullptr;

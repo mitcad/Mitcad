@@ -157,7 +157,7 @@ pub(crate) fn perforate<K: Kernel>(
     let margin = d.margin.unwrap_or(d.diameter);
     check_sizes(d.diameter, d.pitch, margin)?;
     let (state, rules) = read(ctx, d.body)?;
-    state.overlay_refusal("Perforate")?;
+    super::overlay_refusal(ctx, &state, "Perforate")?;
     let thickness = rules.thickness;
     let stationary = match d.stationary {
         Some(panel) => panel,

@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: MIT
+# A touchpad's two-finger scroll on Linux's xcb platform (GitHub
+# mitcad/Mitcad#381) on the demo block, application events only: wheel
+# steps with no phase and no pixel deltas from a touchpad device pan the
+# view both ways in the Trackpad scheme, and with Alt a vertical move (its
+# axes swapped, as xcb sends it) orbits vertically; a mouse wheel's whole
+# and partial notches zoom. Run by tools/ui-navigation-device-scroll-test.sh
+# (Linux), in the Floating and the Docked layout.
+wait-idle
+expect-viewport
+expect-device-scroll
+expect-never '^(TestDriver: FAIL|OCCT view event failed)'

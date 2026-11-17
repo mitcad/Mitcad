@@ -46,7 +46,8 @@ enum class FilterRow {
   SketchGeometry,       // the active sketch's ordinary curves and points
   ConstructionGeometry, // ... its construction curves and points
   ProjectedGeometry,    // ... its projected (reference) curves and points
-  Annotations,          // ... its dimensions and constraints
+  Dimensions,           // ... its dimensions
+  Constraints,          // ... its constraints (Fix symbols too)
   Profiles,             // ... its profile regions
   VisibleEdges,         // body edges, the part hit in sight
   OccludedEdges,        // body edges, the part hit behind faces
@@ -61,7 +62,7 @@ enum class FilterRow {
   // are never selectable.
   OtherSketchGeometry,
 };
-constexpr int kFilterRowCount = 13;
+constexpr int kFilterRowCount = 14;
 
 // "sketch-geometry", "visible-edges", ... (logs, tests, action names).
 QString filterRowId(FilterRow row);
@@ -91,8 +92,10 @@ public:
   SelectionScope(const QString& name, const std::vector<std::pair<FilterRow, FilterState>>& defaults);
 
   // Sketch mode's rows with their defaults (the ticket's table): sketch
-  // geometry, construction and projected geometry cross; dimensions and
+  // geometry, construction and projected geometry cross; dimensions,
   // constraints, profiles and visible body edges square; the rest empty.
+  // Dimensions and constraints are separate rows (GitHub #388), so that a
+  // window can take only the one or the other.
   static SelectionScope sketch();
   // Project's source rows: visible edges cross, occluded edges empty, faces
   // and vertices square, other sketches' curves and points cross

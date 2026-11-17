@@ -43,6 +43,13 @@ features inside Bodies and consumed operands are part of their results (a
 Body a clone's base feature names is not consumed: it stays a body). A binder's `Context` (the Body or Assembly it is in)
 consumes nothing (mitcad#952): only its `Support` is what it binds, so a
 Body with binders stays a body. The report says why for each object.
+What is no feature is `included`, not `skipped` (mitcad#1960), so the
+import's notice counts only what was really left out: an origin and its
+planes, axes and point (MitCad's own origin stands for them), a coordinate
+system something is attached to (the sketches on it or its planes carry
+it; one nothing uses stays `skipped`), the planes, axes and point a
+coordinate system holds, and a VarSet or
+spreadsheet whose values became parameters (stage 4).
 `--bodies-only` stops here.
 
 ## Colours as appearances (mitcad#793)

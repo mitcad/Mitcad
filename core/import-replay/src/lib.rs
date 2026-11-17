@@ -246,6 +246,12 @@ pub struct Options {
     /// the api's `command`. None: such a paste is not moved by a command
     /// and takes the usual route.
     pub commands: Option<Commands>,
+    /// Turn a design modelled with another up direction (its Front view
+    /// not MitCad's) so that it stands on Z up after the replay, as Reorient
+    /// Design does (mitcad#1937, [`upright`]). Off by default: the designs
+    /// of other documents a design refers to keep their own coordinates,
+    /// which the design's placements of them assume.
+    pub upright: bool,
 }
 
 impl Default for Options {
@@ -274,6 +280,7 @@ impl Default for Options {
             retry_bodies: None,
             accept_deviations: AcceptDeviations::None,
             commands: None,
+            upright: false,
         }
     }
 }
@@ -809,6 +816,11 @@ pub fn replay_design<K: ImportKernel>(
     } = importer;
     // (Asked in this import or an earlier try of it, mitcad#283.)
     report.retry_question = options.retry_bodies.as_ref().and_then(|c| c.asked());
+    // A design modelled with Y up turned to stand on Z up, in the import's
+    // undo step (mitcad#1937).
+    if options.upright && report.stopped.is_none() {
+        upright::stand_upright(doc, dump, &mut report);
+    }
     if let Some(label) = &options.undo_label {
         doc.merge_undo(depth, label);
     }
@@ -1055,6 +1067,8 @@ use mitcad_import_base::scaffold;
 use scaffold::{CandidateCore, substitute};
 // Drafts about a neutral plane (mitcad#1363).
 mod drafts;
+// A design modelled with another up direction stood on Z up (mitcad#1937).
+pub mod upright;
 
 fn item_name(item: &TimelineItem) -> String {
     item.name().unwrap_or("?").to_owned()

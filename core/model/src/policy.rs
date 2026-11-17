@@ -321,6 +321,8 @@ fn links(def: &FeatureDef) -> Vec<(LinkKind, &OccurrenceLink)> {
         FeatureDef::Pulley(_) | FeatureDef::Gear(_) | FeatureDef::PrintableBearing(_) => {
             def.seat_link().map(|(_, link)| link).into_iter().collect()
         }
+        // A Flex item's nodes on other components' geometry (mitcad#1713).
+        FeatureDef::Flex(f) => f.links.values().chain(f.datum_links.values()).collect(),
         _ => Vec::new(),
     };
     let mut out: Vec<(LinkKind, &OccurrenceLink)> = references

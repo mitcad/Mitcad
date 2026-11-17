@@ -59,7 +59,7 @@ wait-idle
 mark
 button '^Restore Defaults$' preferencesRestoreDefaults
 popup 'All Settings'
-focus-dialog '^Restore Defaults$'
+focus-dialog '^(Restore Defaults|Restore the defaults of (the Display|all) settings[?])$'
 button '^Restore Defaults$'
 wait-log '^Preferences: restore defaults, all settings: '
 focus-dialog '^(Preferences|Settings)$'

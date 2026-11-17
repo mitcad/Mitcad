@@ -249,6 +249,11 @@ fn cycles_and_later_targets_are_refused() {
     )
     .unwrap_err();
     assert!(error.contains("placed after"), "{error}");
+    // What to do instead, in words (mitcad#1940).
+    assert!(
+        error.contains("Miter Auto or Shared") && error.contains("Also the Component It Meets"),
+        "{error}"
+    );
     assert_eq!(doc.revision(), revision_before);
     assert!(revision < revision_before);
 }

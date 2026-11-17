@@ -841,20 +841,23 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
                           .withVisible([](const CommandState& s) {
                             return s.choice(QStringLiteral("direction")) == QStringLiteral("along");
                           }));
-    // A rib's ends continued to the bodies' faces (mitcad#1746), before
-    // Objects: on for a new rib; a rib saved without it loads it off.
-    const auto inputCount = def.inputs.size();
-    def.inputs.insert(inputCount - 1,
-                      checkInput(QStringLiteral("extend_ends"), QObject::tr("Extend Ends"), true)
-                          .withTooltip(QObject::tr("Continue the curves' open ends along their direction until "
-                                                   "the rib meets the bodies' faces")));
-    def.inputs.insert(inputCount,
-                      valueInput(QStringLiteral("end_offset"), QObject::tr("End Offset"), ValueKind::Length,
-                                 QStringLiteral("0 mm"))
-                          .withTooltip(QObject::tr("How much further the ends go into the faces they meet; "
-                                                   "negative stops them short"))
-                          .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("extend_ends")); }));
   }
+  // The ends continued to the bodies' faces (a rib's mitcad#1746, a web's
+  // free ends mitcad#1968), before Objects: on for a new rib or web; one
+  // saved without it loads it off.
+  const auto inputCount = def.inputs.size();
+  def.inputs.insert(inputCount - 1,
+                    checkInput(QStringLiteral("extend_ends"), QObject::tr("Extend Ends"), true)
+                        .withTooltip(web ? QObject::tr("Continue the curves' free ends to the bodies' faces; "
+                                                       "an end past a wall is cut back to it")
+                                         : QObject::tr("Continue the curves' open ends along their direction until "
+                                                       "the rib meets the bodies' faces")));
+  def.inputs.insert(inputCount,
+                    valueInput(QStringLiteral("end_offset"), QObject::tr("End Offset"), ValueKind::Length,
+                               QStringLiteral("0 mm"))
+                        .withTooltip(QObject::tr("How much further the ends go into the faces they meet; "
+                                                 "negative stops them short"))
+                        .withVisible([](const CommandState& s) { return s.checked(QStringLiteral("extend_ends")); }));
   def.enabled = [&context] { return hasSketches(context, true); };
   const QString type = def.featureType;
 
@@ -892,7 +895,7 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     if (state.checked(QStringLiteral("flip"))) {
       result.def.insert(QStringLiteral("flip"), true);
     }
-    if (type == QStringLiteral("rib") && state.checked(QStringLiteral("extend_ends"))) {
+    if (state.checked(QStringLiteral("extend_ends"))) {
       result.def.insert(QStringLiteral("extend_ends"), true);
       result.def.insert(QStringLiteral("end_offset"), state.expression(QStringLiteral("end_offset")));
     }
@@ -926,7 +929,8 @@ CommandDef ribOrWeb(const CommandContext& context, bool web) {
     state.setChoice(QStringLiteral("depth_type"), str(extent, "type"));
     loadValue(state, QStringLiteral("depth"), extent.value(QStringLiteral("depth")), feature, context);
     state.setChecked(QStringLiteral("flip"), feature.value(QStringLiteral("flip")).toBool());
-    // A rib saved without Extend Ends keeps its ends as drawn (mitcad#1746).
+    // A rib or web saved without Extend Ends keeps its ends as drawn
+    // (mitcad#1746, mitcad#1968).
     state.setChecked(QStringLiteral("extend_ends"), feature.value(QStringLiteral("extend_ends")).toBool());
     loadValue(state, QStringLiteral("end_offset"), feature.value(QStringLiteral("end_offset")), feature, context);
     // Its Direction: absent is Perpendicular to Chord.

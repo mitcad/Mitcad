@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MIT
+# The view follows a sketch its first dimension scales (mitcad#1948, GitHub
+# #400), on sketch-scale-view.json (Sketch1 on XY: free circles of
+# diameter 40 about (600, 0), 62.5 about (720, 0) and 30 about (600, 90),
+# far from the sketch origin), with Preferences > Sketch > Scale the sketch
+# to its first dimension on:
+#   1. A diameter of 50 on the first circle scales the sketch by 1.25 about
+#      its origin: the circle's centre goes from (600, 0) to (750, 0), and
+#      the view moves with it, so that the centre stays at its place in the
+#      window (within a pixel), at the same zoom; where (600, 0) is moved.
+#   2. Undone; a diameter of 50 on the second circle scales the sketch by
+#      0.8: its centre goes from (720, 0) to (576, 0) and stays at its
+#      place in the window the same way.
+# Run by tools/ui-sketch-scale-view-test.sh (Linux),
+# tools/ui-windows-sketch-scale-view-test.ps1 (Windows) and
+# tools/ui-macos-sketch-scale-view-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+# The test libraries turn the rule off; this test is about it.
+set-setting sketch/scaleToFirstDimension true
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+command view.fit
+wait-idle
+capture-undo-depth baseline
+
+# 1. Scaled up by 1.25.
+capture-view-point centre 600,0,0
+capture-view-height height
+sketch-click 600 -20
+expect-selection 1 0
+mark
+key d
+sketch-click 640 -45
+expect-log 'Sketch value editor at'
+type '50 mm'
+key Return
+expect-log 'Added dimension \S+ diameter \S+ = 50 mm'
+expect-log '^Scaled the sketch by 1[.]25 to its first dimension$'
+expect-log '^Sketch view moved with the scaled sketch by 150[.]000 mm'
+expect-undo-depth ${baseline} 1
+expect-view-point 750,0,0 ${centre} same 1
+expect-view-point 600,0,0 ${centre} moved 20
+expect-view-zoom ${height} unchanged
+key Escape
+key ctrl+z
+expect-undo-depth ${baseline} 0
+
+# 2. Scaled down by 0.8.
+command view.fit
+wait-idle
+capture-view-point centre 720,0,0
+capture-view-height height
+sketch-click 720 -31.25
+expect-selection 1 0
+mark
+key d
+# The value placed between the two circles, as high in the view as in 1.:
+# view.fit frames the circles closely, and a place far below them is under
+# the view's bottom edge or its cards, where no editor opens.
+sketch-click 680 -40
+expect-log 'Sketch value editor at'
+type '50 mm'
+key Return
+expect-log 'Added dimension \S+ diameter \S+ = 50 mm'
+expect-log '^Scaled the sketch by 0[.]8 to its first dimension$'
+expect-log '^Sketch view moved with the scaled sketch by 144[.]000 mm'
+expect-undo-depth ${baseline} 1
+expect-view-point 576,0,0 ${centre} same 1
+expect-view-point 720,0,0 ${centre} moved 20
+expect-view-zoom ${height} unchanged
+
+key Escape
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

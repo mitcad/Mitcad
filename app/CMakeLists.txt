@@ -2478,6 +2478,37 @@ target_sources(mitcad PRIVATE view/PickList.cpp view/PickList.hpp view/PickListV
 # and expect-window-on-screen (TestDriverWindowFit.cpp).
 target_sources(mitcad PRIVATE framework/WindowPlace.cpp framework/WindowPlace.hpp)
 
+# Flex (mitcad#1713, app/COMMANDS.md "Flex"): the command that lays a wire,
+# cable, hose or strip through the model by clicks, and the route it keeps
+# while it is laid (nodes, end ports, the item of the panel); its unit
+# tests in tests/unit/flex_route.cmake.
+target_sources(mitcad PRIVATE commands/FlexCommands.cpp commands/FlexRoute.cpp commands/FlexRoute.hpp)
+
+# Editing a Flex item directly in the 3D view (mitcad#1713, app/COMMANDS.md
+# "Flex editing"): a selected item's nodes as handles, dragged along and
+# between faces, onto end ports and into space with a live preview, nodes
+# added at the ends and between, deleted, a flat section's twist ring.
+target_sources(mitcad PRIVATE
+  MainWindowFlexEdit.cpp
+  flex/FlexEdit.cpp
+  flex/FlexEdit.hpp
+  flex/FlexEditController.cpp
+  flex/FlexEditController.hpp
+  flex/FlexRope.cpp
+  flex/FlexRope.hpp)
+
+# Let It Hang (mitcad#1713, app/COMMANDS.md "Hanging cables"): a panel with
+# the design's direction of gravity, the length, the damping and the end
+# pins, and a Flex item let hang in the view, its nodes pinned or let go,
+# dragged by any point, settling until it rests and kept there on OK.
+target_sources(mitcad PRIVATE
+  MainWindowGravity.cpp
+  commands/GravityCommands.cpp
+  gravity/GravityController.cpp
+  gravity/GravityController.hpp
+  gravity/GravityLogic.cpp
+  gravity/GravityLogic.hpp)
+
 # CAM (mitcad#1013, app/COMMANDS.md "The CNC group"): the Make tab's CNC
 # group (New Setup, the operations' panels, Generate, Simulate, Post
 # Process…, Machines and Tools…), the Browser's CAM folder and the
@@ -2601,6 +2632,11 @@ target_sources(mitcad PRIVATE framework/BusyMark.cpp framework/BusyMark.hpp)
 # mitcad/Mitcad#378): Add User Parameter's Unit lists and the parameters
 # table's Unit column.
 target_sources(mitcad PRIVATE framework/ParameterUnits.cpp framework/ParameterUnits.hpp)
+
+# Preferences › Display › Toolbar labels (mitcad#1936, GitHub
+# mitcad/Mitcad#356): the ribbon's buttons with a short label under each
+# icon, the setting and its notifier.
+target_sources(mitcad PRIVATE framework/RibbonLabels.cpp framework/RibbonLabels.hpp)
 
 # app.unit's test files (mitcad#1925): each tests/<file>.cpp registers its
 # entry point (tests/UnitTests.hpp) and its sources in tests/unit/<file>.cmake,

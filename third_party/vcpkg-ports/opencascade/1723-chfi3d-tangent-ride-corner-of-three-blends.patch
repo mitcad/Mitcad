@@ -1,0 +1,388 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillet: the corner at a tangent ride's end (1722) where the other rounding
+reaches past the ride's point, so that three blends meet on the ride's
+line (mitcad#1926, after 1722).
+
+A wall 2.5 wide whose top's edges are rounded with 2 and 1, an end's edge
+at the rounding of 2 rounded with 1.2 or 1.5 (or at the rounding of 1 with
+1.7): that rounding's contact on the end face meets the other blend of the
+ride, past the ride's point. And GitHub #371's tower, its top rounded with
+2 and 1 and its legs' inner front edges with 0.5 (the ride's point lies
+0.285 from the inner side there). 1722's corner did not take it and the
+corner failed (the blends intersecting).
+
+- PerformTwoCornerAtRideEnd: where the small's contact on the face at the
+  end meets the big's blend past the ride's line (or not at all), the
+  corner of three blends: Q, where the ride's line meets the small's blend;
+  the small cut by the big's blend from the crossing of their contacts on
+  the common face to Q and by the ride's other blend (U) from Q to P*,
+  where its contact on the face at the end meets U's blend; the big cut by
+  the small's blend up to Q, its point on the ride's line there; U cut by
+  the small's blend from Q to P* and by the face at the end from P* to its
+  point on its arc there, so that its own corner at its vertex is made here
+  (its end in the data structure). Each curve goes into the data structure
+  on its surfaces and the last on the face at the end, its transition there
+  FORWARD where the vertex of U's edge on that face, which goes, lies on
+  the curve's right about the surface's own normal (outside every tangent
+  of U's section between its contacts, for either kind of rounding).
+- Compute: the corners of two stripes one of which is a tangent ride's are
+  made before the others, so that such a corner finds U's end not made yet.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 8993987a..8843c75d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -6227,8 +6227,31 @@ void ChFi3d_Builder::Compute()
+       myFailedCornerEdges.Append(myCornerEdges);
+       myFailedCornerMessages.Append(TCollection_AsciiString(theMessage));
+     };
+-    for (j = 1; j <= myVDataMap.Extent(); j++)
++    // (The corners of two stripes where one is a tangent ride's first:
++    // such a corner may make the other stripe of the ride's end at its own
++    // vertex too, PerformTwoCornerAtRideEnd.)
++    NCollection_Sequence<int> anOrder;
++    for (int pass = 0; pass < 2; pass++)
+     {
++      for (j = 1; j <= myVDataMap.Extent(); j++)
++      {
++        bool aRideCorner = false;
++        if (myVDataMap(j).Extent() == 2)
++        {
++          for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itR(myVDataMap(j)); itR.More(); itR.Next())
++          {
++            aRideCorner = aRideCorner || IsTangentRide(itR.Value()) || IsTangentRideOn(itR.Value());
++          }
++        }
++        if (aRideCorner == (pass == 0))
++        {
++          anOrder.Append(j);
++        }
++      }
++    }
++    for (int jo = 1; jo <= anOrder.Length(); jo++)
++    {
++      j              = anOrder(jo);
+       myCorner       = Corner_None;
+       myCornerBlends = 0;
+       myCornerEdges  = 0;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+index 77646563..c1b8eccb 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C2.cxx
+@@ -60,6 +60,7 @@
+ #include <TopOpeBRepDS_HDataStructure.hxx>
+ #include <TopOpeBRepDS_Interference.hxx>
+ #include <TopOpeBRepDS_SurfaceCurveInterference.hxx>
++#include <BRepAdaptor_Curve2d.hxx>
+ #include <BRepAdaptor_Surface.hxx>
+ #include <BRepLProp_SLProps.hxx>
+ #include <BRep_Tool.hxx>
+@@ -1017,6 +1018,306 @@ bool ChFi3d_Builder::PerformTwoCornerAtRideEnd(const int Index)
+     }
+     Hctg->Load(ctg, FiArcSma.FirstParameter(), temp);
+   }
++  // Where the small's contact on the face at the end meets the big's blend:
++  // on the big's own part of its surface (between its contact on the
++  // common face and the ride's line), else past the ride's line, on the
++  // other blend of the ride (a corner of three blends, below).
++  bool aOnBig = false;
++  {
++    gp_Pnt2d     aUV = UVi;
++    double       aW  = wi;
++    const auto&  FiRide = BigFD->Interference(IFaArcBig);
++    const auto&  FiCo   = BigFD->Interference(IFaCoBig);
++    if (ChFi3d_IntCS(BigHS, Hctg, aUV, aW) && FiRide.LineIndex() > 0 && FiCo.LineIndex() > 0)
++    {
++      const gp_Pnt                  aP  = BigHS->Value(aUV.X(), aUV.Y());
++      const occ::handle<Geom_Curve> aCR = DStr.Curve(FiRide.LineIndex()).Curve();
++      const occ::handle<Geom_Curve> aCC = DStr.Curve(FiCo.LineIndex()).Curve();
++      GeomAPI_ProjectPointOnCurve   aPrR(aP, aCR);
++      GeomAPI_ProjectPointOnCurve   aPrC(aP, aCC);
++      if (aPrR.NbPoints() > 0 && aPrC.NbPoints() > 0)
++      {
++        GeomAPI_ProjectPointOnCurve aPrX(aPrR.NearestPoint(), aCC);
++        aOnBig = aPrX.NbPoints() > 0 && aPrC.LowerDistance() <= aPrX.LowerDistance() + 10. * tolapp3d;
++      }
++    }
++  }
++  if (!aOnBig)
++  {
++    // The other blend of the ride (U), its SurfData whose side lies on the
++    // face between (onU) and its end at the ride's point.
++    const int iFBetween = BigFD->Index(IFaArcBig);
++    occ::handle<ChFiDS_Stripe> U;
++    {
++      NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itS(myRideStripes), itO(myRideOn);
++      for (; itS.More() && U.IsNull(); itS.Next(), itO.Next())
++      {
++        if (!myTangentRides.Contains(itS.Value()))
++        {
++          continue;
++        }
++        if (itS.Value() == BigCD)
++        {
++          U = itO.Value();
++        }
++        else if (itO.Value() == BigCD)
++        {
++          U = itS.Value();
++        }
++      }
++    }
++    if (U.IsNull() || U == SmaCD || U->SetOfSurfData().IsNull() || iFBetween <= 0)
++    {
++      return false;
++    }
++    occ::handle<ChFiDS_SurfData> SU;
++    int                          onU = 0;
++    bool                         isfirstU = false;
++    for (int j = 1; j <= U->SetOfSurfData()->Length() && SU.IsNull(); j++)
++    {
++      const occ::handle<ChFiDS_SurfData>& D = U->SetOfSurfData()->Value(j);
++      for (int k = 1; k <= 2 && SU.IsNull(); k++)
++      {
++        for (const bool f : {true, false})
++        {
++          if (SU.IsNull() && D->Index(k) == iFBetween && D->Vertex(f, k).Point().Distance(aRidePoint) <= 10. * tolapp3d)
++          {
++            SU       = D;
++            onU      = k;
++            isfirstU = f;
++          }
++        }
++      }
++    }
++    if (SU.IsNull() || U->IsInDS(isfirstU) != 0 || SU->Index(3 - onU) <= 0
++        || !SU->Vertex(isfirstU, 3 - onU).IsOnArc())
++    {
++      return false;
++    }
++    const ChFiDS_FaceInterference& FiRideBig = BigFD->Interference(IFaArcBig);
++    const ChFiDS_FaceInterference& FiRideU   = SU->Interference(onU);
++    const ChFiDS_FaceInterference& FiArcU    = SU->Interference(3 - onU);
++    if (FiRideBig.LineIndex() <= 0 || FiRideU.LineIndex() <= 0 || FiArcU.PCurveOnSurf().IsNull()
++        || FiRideU.PCurveOnSurf().IsNull())
++    {
++      return false;
++    }
++    occ::handle<GeomAdaptor_Surface> UHS = ChFi3d_BoundSurf(DStr, SU, onU, 3 - onU);
++    // Q: where the ride's line meets the small's blend.
++    const occ::handle<Geom_Curve>  aCR  = DStr.Curve(FiRideBig.LineIndex()).Curve();
++    occ::handle<GeomAdaptor_Curve> HCR  = new GeomAdaptor_Curve(aCR, FiRideBig.FirstParameter(), FiRideBig.LastParameter());
++    gp_Pnt2d                       aUVQ;
++    double                         tQ = FiRideBig.Parameter(isfirstBig);
++    if (!ChFi3d_IntCS(SmaHS, HCR, aUVQ, tQ))
++    {
++      return false;
++    }
++    const gp_Pnt Q = aCR->Value(tQ);
++    // The parameter of Q on U's line (the same curve, or its reverse).
++    const occ::handle<Geom_Curve> aCU = DStr.Curve(FiRideU.LineIndex()).Curve();
++    double                        tQU = 0.;
++    {
++      GeomAPI_ProjectPointOnCurve aPr(Q, aCU, FiRideU.FirstParameter(), FiRideU.LastParameter());
++      if (aPr.NbPoints() == 0 || aPr.LowerDistance() > 10. * tolapp3d)
++      {
++        return false;
++      }
++      tQU = aPr.LowerDistanceParameter();
++    }
++    // P*: where the small's contact on the face at the end meets U's blend.
++    gp_Pnt2d aUVP;
++    double   wP = wi;
++    if (!ChFi3d_IntCS(UHS, Hctg, aUVP, wP))
++    {
++      return false;
++    }
++    const gp_Pnt2d aPOnSma = FiArcSma.PCurveOnSurf()->Value(wP);
++    const gp_Pnt   PMid    = SmaHS->Value(aPOnSma.X(), aPOnSma.Y());
++    // The curves: the small with the big from the common face to Q, the
++    // small with U from Q to P*, U with the face at the end from P* to U's
++    // point on its arc.
++    NCollection_Array1<double> Pq(1, 4), Pp(1, 4), Pa(1, 4), Pf(1, 4);
++    occ::handle<Geom2d_Curve>  PcA1, PcA2, PcU1, PcU2, PcF1, PcF2;
++    occ::handle<Geom_Curve>    CvA, CvU, CvF;
++    double                     tolA = tolapp3d, tolU = tolapp3d, tolF = tolapp3d;
++    const gp_Pnt2d             aQOnBig = FiRideBig.PCurveOnSurf()->Value(tQ);
++    Pq(1) = aUVQ.X();
++    Pq(2) = aUVQ.Y();
++    Pq(3) = aQOnBig.X();
++    Pq(4) = aQOnBig.Y();
++    if (!ChFi3d_ComputeCurves(SmaHS, BigHS, Pardeb, Pq, CvA, PcA1, PcA2, tolapp3d, tol2d, tolA))
++    {
++      return false;
++    }
++    const gp_Pnt2d aQOnU = FiRideU.PCurveOnSurf()->Value(tQU);
++    Pq(3)                = aQOnU.X();
++    Pq(4)                = aQOnU.Y();
++    Pp(1)                = aPOnSma.X();
++    Pp(2)                = aPOnSma.Y();
++    Pp(3)                = aUVP.X();
++    Pp(4)                = aUVP.Y();
++    if (!ChFi3d_ComputeCurves(SmaHS, UHS, Pq, Pp, CvU, PcU1, PcU2, tolapp3d, tol2d, tolU))
++    {
++      return false;
++    }
++    occ::handle<BRepAdaptor_Surface> HF = new BRepAdaptor_Surface(F);
++    ChFiDS_CommonPoint&              CPUarc = SU->ChangeVertex(isfirstU, 3 - onU);
++    {
++      const gp_Pnt2d aPOnF = FiArcSma.PCurveOnFace()->Value(wP);
++      TopoDS_Edge    etest = CPUarc.Arc();
++      if (BRep_Tool::IsClosed(etest, F))
++      {
++        etest.Reverse();
++      }
++      BRepAdaptor_Curve2d arc(etest, F);
++      const gp_Pnt2d      aAOnF = arc.Value(CPUarc.ParameterOnArc());
++      const gp_Pnt2d      aAOnU = FiArcU.PCurveOnSurf()->Value(FiArcU.Parameter(isfirstU));
++      Pf(1) = aPOnF.X();
++      Pf(2) = aPOnF.Y();
++      Pf(3) = aUVP.X();
++      Pf(4) = aUVP.Y();
++      Pa(1) = aAOnF.X();
++      Pa(2) = aAOnF.Y();
++      Pa(3) = aAOnU.X();
++      Pa(4) = aAOnU.Y();
++      double uu1 = 0., uu2 = 0., vv1 = 0., vv2 = 0.;
++      ChFi3d_Boite(aPOnF, aAOnF, uu1, uu2, vv1, vv2);
++      ChFi3d_BoundFac(*HF, uu1, uu2, vv1, vv2, true);
++      if (!ChFi3d_ComputeCurves(HF, UHS, Pf, Pa, CvF, PcF1, PcF2, tolapp3d, tol2d, tolF))
++      {
++        return false;
++      }
++    }
++    // The points.
++    ChFiDS_CommonPoint& psmaco  = SmaFD->ChangeVertex(isfirstSma, IFaCoSma);
++    ChFiDS_CommonPoint& psmamil = SmaFD->ChangeVertex(isfirstSma, IFaArcSma);
++    const double        tolpco  = std::max(psmaco.Tolerance(), BigFD->Vertex(isfirstBig, IFaCoBig).Tolerance());
++    psmaco.Reset();
++    psmaco.SetPoint(PFaCo);
++    psmaco.SetTolerance(std::max(tolpco, tolA));
++    psmamil.Reset();
++    psmamil.SetPoint(PMid);
++    psmamil.SetTolerance(std::max(tolU, tolF));
++    ChFiDS_CommonPoint aCPQ;
++    aCPQ.SetPoint(Q);
++    aCPQ.SetTolerance(std::max(tolA, tolU));
++    const int IpCo  = ChFi3d_IndexPointInDS(psmaco, DStr);
++    const int IpMid = ChFi3d_IndexPointInDS(psmamil, DStr);
++    const int IpQ   = ChFi3d_IndexPointInDS(aCPQ, DStr);
++    CPUarc.SetTolerance(std::max(CPUarc.Tolerance(), tolF));
++    const int IpArc = ChFi3d_IndexPointInDS(CPUarc, DStr);
++    SmaFD->ChangeInterference(IFaCoSma).SetParameter(UIntPCSma, isfirstSma);
++    SmaFD->ChangeInterference(IFaArcSma).SetParameter(wP, isfirstSma);
++    BigFD->ChangeVertex(isfirstBig, IFaCoBig) = psmaco;
++    BigFD->ChangeInterference(IFaCoBig).SetParameter(UIntPCBig, isfirstBig);
++    {
++      ChFiDS_CommonPoint& CP = BigFD->ChangeVertex(isfirstBig, IFaArcBig);
++      CP.Reset();
++      CP.SetPoint(Q);
++      CP.SetParameter(tQ);
++      CP.SetTolerance(aCPQ.Tolerance());
++      BigFD->ChangeInterference(IFaArcBig).SetParameter(tQ, isfirstBig);
++    }
++    {
++      ChFiDS_CommonPoint& CP = SU->ChangeVertex(isfirstU, onU);
++      CP.Reset();
++      CP.SetPoint(Q);
++      CP.SetParameter(tQU);
++      CP.SetTolerance(aCPQ.Tolerance());
++      SU->ChangeInterference(onU).SetParameter(tQU, isfirstU);
++    }
++    // (The transition of a stripe's end curves on its blend, from its side
++    // 1, the curves running from side IFaCo to the other.)
++    const auto endTransition = [&](const occ::handle<ChFiDS_SurfData>& D, const bool isfirst, const int IFaCo,
++                                   TopAbs_Orientation& theTra) {
++      if (D->IndexOfS1() > 0)
++      {
++        theTra = TopAbs::Compose(TopAbs::Compose(DStr.Shape(D->IndexOfS1()).Orientation(), D->Orientation()),
++                                 D->InterferenceOnS1().Transition());
++      }
++      else if (D->IndexOfS2() > 0)
++      {
++        theTra = TopAbs::Reverse(
++          TopAbs::Compose(TopAbs::Compose(DStr.Shape(D->IndexOfS2()).Orientation(), D->Orientation()),
++                          D->InterferenceOnS2().Transition()));
++      }
++      else
++      {
++        return false;
++      }
++      if (!isfirst)
++      {
++        theTra = TopAbs::Reverse(theTra);
++      }
++      if (IFaCo != 1)
++      {
++        theTra = TopAbs::Reverse(theTra);
++      }
++      return true;
++    };
++    TopAbs_Orientation traSma = TopAbs_FORWARD, traBig = TopAbs_FORWARD, traU = TopAbs_FORWARD;
++    if (!endTransition(SmaFD, isfirstSma, IFaCoSma, traSma) || !endTransition(BigFD, isfirstBig, IFaCoBig, traBig)
++        || !endTransition(SU, isfirstU, onU, traU))
++    {
++      return false;
++    }
++    const auto addCurve = [&](const occ::handle<Geom_Curve>& C, const double tol, const int Ip1, const int Ip2) {
++      const int I = DStr.AddCurve(TopOpeBRepDS_Curve(C, tol));
++      NCollection_List<occ::handle<TopOpeBRepDS_Interference>>& L = DStr.ChangeCurveInterferences(I);
++      L.Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, I, Ip1, C->FirstParameter()));
++      L.Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, I, Ip2, C->LastParameter()));
++      return I;
++    };
++    const int ICvA = addCurve(CvA, tolA, IpCo, IpQ);
++    const int ICvU = addCurve(CvU, tolU, IpQ, IpMid);
++    const int ICvF = addCurve(CvF, tolF, IpMid, IpArc);
++    // The small: both curves on its blend (common face, Q, its point on the
++    // face at the end).
++    SmaCD->SetIndexPoint(IpCo, isfirstSma, IFaCoSma);
++    SmaCD->SetIndexPoint(IpMid, isfirstSma, IFaArcSma);
++    DStr.ChangeSurfaceInterferences(SmaFD->Surf()).Append(ChFi3d_FilCurveInDS(ICvA, SmaFD->Surf(), PcA1, traSma));
++    DStr.ChangeSurfaceInterferences(SmaFD->Surf()).Append(ChFi3d_FilCurveInDS(ICvU, SmaFD->Surf(), PcU1, traSma));
++    SmaCD->InDS(isfirstSma);
++    // The big: the curve with the small, from the common face to Q.
++    BigCD->SetIndexPoint(IpCo, isfirstBig, IFaCoBig);
++    BigCD->SetIndexPoint(IpQ, isfirstBig, IFaArcBig);
++    DStr.ChangeSurfaceInterferences(BigFD->Surf()).Append(ChFi3d_FilCurveInDS(ICvA, BigFD->Surf(), PcA2, traBig));
++    BigCD->InDS(isfirstBig);
++    // U: from Q (its side on the ride's line) to P*, then to its point on its
++    // arc; its end's corner is this one.
++    U->SetIndexPoint(IpQ, isfirstU, onU);
++    U->SetIndexPoint(IpArc, isfirstU, 3 - onU);
++    DStr.ChangeSurfaceInterferences(SU->Surf()).Append(
++      ChFi3d_FilCurveInDS(ICvU, SU->Surf(), PcU2, traU));
++    DStr.ChangeSurfaceInterferences(SU->Surf()).Append(ChFi3d_FilCurveInDS(ICvF, SU->Surf(), PcF2, traU));
++    U->InDS(isfirstU);
++    // The face at the end: from P* to U's point on its arc.
++    {
++      const double tm = 0.5 * (CvF->FirstParameter() + CvF->LastParameter());
++      gp_Pnt       aP;
++      gp_Vec       aT;
++      CvF->D1(tm, aP, aT);
++      const gp_Pnt2d     aUV = PcF1->Value(tm);
++      BRepLProp_SLProps  aProps(*HF, aUV.X(), aUV.Y(), 1, Precision::Confusion());
++      TopAbs_Orientation traface = TopAbs_FORWARD;
++      // (The side that goes: towards the vertex where U's edge meets the face
++      // at the end, outside every tangent of U's section between its
++      // contacts, for a convex rounding as for a concave one.)
++      const gp_Pnt aGone =
++        BRep_Tool::Pnt(isfirstU ? U->Spine()->FirstVertex() : U->Spine()->LastVertex());
++      if (aProps.IsNormalDefined())
++      {
++        const gp_Vec aN(aProps.Normal());
++        if (aN.Crossed(aT).Dot(gp_Vec(aP, aGone)) > 0.)
++        {
++          traface = TopAbs_REVERSED;
++        }
++      }
++      const int IShape = DStr.AddShape(F);
++      DStr.ChangeShapeInterferences(IShape).Append(ChFi3d_FilCurveInDS(ICvF, IShape, PcF1, traface));
++    }
++    return true;
++  }
+   if (!ChFi3d_IntCS(BigHS, Hctg, UVi, wi))
+   {
+     return false;

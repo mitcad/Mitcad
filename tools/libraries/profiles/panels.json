@@ -14,7 +14,7 @@
     "supplier": "Motedis",
     "part_number": "Plate 169x1964 racking",
     "supplier_url": "https://www.motedis.com/en/Macrolon-multi-wall-sheet-169x1964x8mm",
-    "designation": "Multi-wall sheet {Width}x{L}x8",
+    "designation": "Multi-wall sheet {W}x{L}x8",
     "rows": [
       {
         "name": "169",
@@ -68,7 +68,7 @@
     "supplier": "Motedis",
     "part_number": "Alu DIN/EN-Platte (5083) 4mm - Breite 80",
     "supplier_url": "https://www.motedis.com/en/Aluminium-plate-4x80-mm",
-    "designation": "Aluminium plate 4x{Width} L={L}",
+    "designation": "Aluminium plate 4x{W} L={L}",
     "rows": [
       {
         "name": "80",

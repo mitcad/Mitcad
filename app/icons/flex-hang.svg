@@ -1,0 +1,9 @@
+<!-- SPDX-License-Identifier: MIT -->
+<!-- MitCad icon: 24 x 24, dark outline, blue solids, orange actions. A hose let hang: draped over a round bar from two pinned ends, gravity's arrow beside it (mitcad#1713). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2b3a4a" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+  <circle cx="11" cy="14" r="3.5" fill="#c9ddf6"/>
+  <path d="M3 4 C3 13 6 10 8 10.5 C10 9 12 9 14 10.5 C16 11 17 14 17 20" stroke="#9cc0ec" stroke-width="2.6"/>
+  <path d="M3 4 C3 13 6 10 8 10.5 C10 9 12 9 14 10.5 C16 11 17 14 17 20" stroke-width="0.9"/>
+  <circle cx="3" cy="4" r="1.4" fill="#2b3a4a"/>
+  <path d="M21 3 V9 M19 7 L21 9.5 L23 7" stroke="#e07b1a" stroke-width="1.6"/>
+</svg>

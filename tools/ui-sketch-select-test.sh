@@ -25,7 +25,8 @@
 #   4. Visible edges a cross: a window dragged to the right takes the edges
 #      in sight, also the partly hidden one, but not the hidden one.
 #      Visible edges empty: a click does not take them, Shift+click does.
-#      Dimensions and constraints a cross: a window takes the dimensions.
+#      Dimensions a cross: a window takes the dimensions (only Dimensions
+#      or only Constraints a cross: tools/ui-sketch-filter-annotations-test.sh).
 #      Reset to Defaults.
 #   5. Project: its own rows; a click where an edge is hidden takes the face
 #      in front, Shift+click the hidden edge; a row changed while it runs;
@@ -73,9 +74,9 @@ cat > "$WORK/model.json" << 'EOF'
 EOF
 "$CLI" run "$WORK/model.json" --save "$FILE" > "$WORK/cli.log" 2>&1 || { cat "$WORK/cli.log"; ui_fail "mitcad-cli"; }
 
-DEFAULTS="sketch-geometry=cross, construction-geometry=cross, projected-geometry=cross, annotations=square,\
- profiles=square, visible-edges=square, occluded-edges=empty, faces=empty, vertices=empty, bodies=empty,\
- components=empty, reference-geometry=empty"
+DEFAULTS="sketch-geometry=cross, construction-geometry=cross, projected-geometry=cross, dimensions=square,\
+ constraints=square, profiles=square, visible-edges=square, occluded-edges=empty, faces=empty, vertices=empty,\
+ bodies=empty, components=empty, reference-geometry=empty"
 
 # selected: the last "Selected:" line since the mark.
 selected() { tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep "Selected: " | tail -1; }
@@ -258,8 +259,8 @@ ui_mark
 ui_step "Shift+click it"                     shift_click_at $(place "$VIS" visible)
 ui_expect_new "Selected: 1 edge [edge $VIS of F1.b0]" "Shift+click takes it all the same"
 
-ui_step "dimensions and constraints: cross"  cycle annotations
-ui_expect_new "Selection filter sketch annotations cross:" "dimensions and constraints a cross"
+ui_step "dimensions: cross"                  cycle dimensions
+ui_expect_new "Selection filter sketch dimensions cross:" "dimensions a cross"
 ui_mark
 ui_step "window to the left over everything" window_over left
 ui_expect_new "Selected: " "the window selected"

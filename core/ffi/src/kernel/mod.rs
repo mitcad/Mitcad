@@ -110,6 +110,10 @@ pub mod press_pull;
 pub mod step_tree;
 // Kernel calls given up by a Cancel or the time limit (mitcad#1917).
 pub mod abandon;
+// Flex: routes of flexible items, their solids and end ports (mitcad#1713).
+pub mod flex;
+// Flex drape: a Flex item let hang, its chain and its nodes (mitcad#1713).
+pub mod flex_drape;
 
 use std::sync::Arc;
 
@@ -2884,6 +2888,31 @@ impl Kernel for OcctKernel {
             .collect())
     }
 
+    // Flex: routes, the solids of sections that are not round and end
+    // ports (mitcad#1713; flex.rs).
+
+    fn flex_route(
+        &self,
+        spec: &mitcad_model::flex::FlexRouteSpec<'_, Self::Shape>,
+    ) -> Result<mitcad_model::flex::FlexRoute, KernelError> {
+        flex::route(spec)
+    }
+
+    fn flex_solid(
+        &self,
+        spec: &mitcad_model::flex::FlexSolidSpec<'_>,
+    ) -> Result<Self::Shape, KernelError> {
+        flex::solid(spec)
+    }
+
+    fn end_port(
+        &self,
+        shape: &Self::Shape,
+        cap: &FaceName,
+    ) -> Result<mitcad_model::flex::EndPort, KernelError> {
+        flex::end_port(shape, cap)
+    }
+
     // Curve tools: helical curves, sections of faces and bodies, and helices
     // of sketch curves (mitcad#1777; intersection_curve.rs, surface_sweeps.rs).
 
@@ -3230,6 +3259,23 @@ impl Kernel for OcctKernel {
         let curves =
             face_outline::ffi::face_silhouettes(occt(shape)?, &name, direction).map_err(failed)?;
         Ok(curves.iter().map(face_outline::curve).collect())
+    }
+
+    // Flex drape: a Flex item let hang, its chain and its nodes
+    // (mitcad#1713; flex_drape.rs).
+
+    fn flex_drape_step(
+        &self,
+        spec: &mitcad_model::flex_drape::DrapeStepSpec<'_, Self::Shape>,
+    ) -> Result<mitcad_model::flex_drape::DrapeStep, KernelError> {
+        flex_drape::step(spec)
+    }
+
+    fn flex_drape_nodes(
+        &self,
+        spec: &mitcad_model::flex_drape::DrapeNodesSpec<'_, Self::Shape>,
+    ) -> Result<mitcad_model::flex_drape::DrapeNodes, KernelError> {
+        flex_drape::nodes(spec)
     }
 }
 

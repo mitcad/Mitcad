@@ -1,0 +1,245 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillet: a tangent ride between two crossings whose rider is a closed
+contour (mitcad#1926, after 1724).
+
+A plate whose corners are rounded in plan, its top's rim rounded with 1
+all round (one closed, tangent contour), past whose back edge a tower of
+half a cylinder stands (2.3 or 2.5 from it at its apex), the tower's foot
+rounded with 2: 1724 refused the closed rider (a walk over a part of a
+periodic spine wrote past the spine's law arrays), and OCCT failed (the
+blends intersecting).
+
+- ChFi3d_Builder::RideOnBlendBetweenCrossings: a closed rider is walked on
+  the larger blend's surface by a stripe of its own whose spine is the
+  rider's edge beside the two crossings alone (an open spine of one edge,
+  the rider's radius and concavity); that stripe is registered as the
+  tangent ride for the walk (StartSolOverflow finds the support) and
+  dropped after it. The walked piece's spine parameters are shifted to the
+  rider's (its lines keep their own parameters; the pieces are split by
+  those). The rider itself is not reset.
+- The walk's range in the rider's spine parameters is measured on the
+  spine's edge the two crossings project inside (Absc), not taken from the
+  contact line's parameters: the line of an analytic blend starts on its
+  own edge, so its parameters are the spine's on the spine's first edge
+  only. An open rider of one edge, or whose crossings lie beside two
+  edges, keeps the line's parameters as before.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 1789b559..04c90262 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -3133,13 +3133,14 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+   const occ::handle<ChFiDS_FilSpine> aFsA = occ::down_cast<ChFiDS_FilSpine>(A->Spine());
+   const occ::handle<ChFiDS_FilSpine> aFsB = occ::down_cast<ChFiDS_FilSpine>(B->Spine());
+   if (aFsA.IsNull() || aFsB.IsNull() || !aFsA->IsConstant() || !aFsB->IsConstant()
+-      || A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull()
+-      // (A rider of a closed contour: its walk over a part of a periodic
+-      // spine is not made.)
+-      || B->Spine()->IsPeriodic() || B->Spine()->IsClosed())
++      || A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull())
+   {
+     return false;
+   }
++  // (A rider of a closed contour is walked over the ride on a spine of its
++  // own, the rider's edge there alone: a walk over a part of a periodic
++  // spine is not made.)
++  const bool aClosedRider = B->Spine()->IsPeriodic() || B->Spine()->IsClosed();
+   ChFiDS_TypeOfConcavity aType[2] = {ChFiDS_Other, ChFiDS_Other};
+   for (int i = 0; i < 2; i++)
+   {
+@@ -3289,12 +3290,94 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+   {
+     return false;
+   }
++  // (B walked on the support over the ride and a little beyond its ends
++  // only: past them the ball does not reach A's blend.)
++  const double aMargin = 0.1 * (tBHi - tBLo);
++  // The stripe walked on the support (aWalker): B, or for a closed B a
++  // stripe whose spine is B's edge holding the ride alone, its parameters
++  // those of B less aShift. The range of the walk in B's spine parameters
++  // (aWLo, aWHi): the crossings' contact parameters are those of the line of
++  // B's SurfData, which need not be the spine's (a line of an analytic
++  // blend starts on its own edge), so they are measured on the edge of B's
++  // spine the two crossings lie beside, where both project inside one edge.
++  occ::handle<ChFiDS_Stripe> aWalker = B;
++  double                     aShift  = 0.;
++  double                     aWLo = tBLo - aMargin, aWHi = tBHi + aMargin;
++  if (aClosedRider || B->Spine()->NbEdges() > 1)
++  {
++    const occ::handle<ChFiDS_Spine>& aSpB  = B->Spine();
++    int                              iE    = 0;
++    double                           aBest = RealLast(), uE[2] = {0., 0.};
++    for (int i = 1; i <= aSpB->NbEdges(); i++)
++    {
++      double                        f = 0., l = 0.;
++      const occ::handle<Geom_Curve> aC = BRep_Tool::Curve(aSpB->Edges(i), f, l);
++      if (aC.IsNull())
++      {
++        continue;
++      }
++      double u[2] = {0., 0.}, d = 0.;
++      bool   ok   = true;
++      for (int j = 0; j < 2 && ok; j++)
++      {
++        GeomAPI_ProjectPointOnCurve aPr(j == 0 ? PBLo : PBHi, aC, f, l);
++        ok = aPr.NbPoints() > 0;
++        if (ok)
++        {
++          u[j] = aPr.LowerDistanceParameter();
++          d    = std::max(d, aPr.LowerDistance());
++          ok   = u[j] > f + 1.e-3 * (l - f) && u[j] < l - 1.e-3 * (l - f);
++        }
++      }
++      if (ok && d < aBest)
++      {
++        aBest = d;
++        iE    = i;
++        uE[0] = u[0];
++        uE[1] = u[1];
++      }
++    }
++    const bool aFound = iE != 0 && aBest <= 2. * aFsB->Radius();
++    if (!aFound && aClosedRider)
++    {
++      return false;
++    }
++    if (aFound)
++    {
++      const double sB[2] = {aSpB->Absc(uE[0], iE), aSpB->Absc(uE[1], iE)};
++      const double aM    = 0.1 * std::abs(sB[1] - sB[0]);
++      aWLo               = std::min(sB[0], sB[1]) - aM;
++      aWHi               = std::max(sB[0], sB[1]) + aM;
++    }
++    if (aClosedRider)
++    {
++      // (The walker: a stripe of B's edge there alone, its spine parameters
++      // those of B less aShift.)
++      occ::handle<ChFiDS_FilSpine> aFs = new ChFiDS_FilSpine(aSpB->GetTolesp());
++      aFs->SetEdges(aSpB->Edges(iE));
++      aFs->SetTypeOfConcavity(aSpB->GetTypeOfConcavity());
++      aFs->Load();
++      aFs->SetRadius(aFsB->Radius(), aSpB->Edges(iE));
++      aWalker                = new ChFiDS_Stripe();
++      aWalker->ChangeSpine() = aFs;
++      aShift                 = aSpB->Absc(uE[0], iE) - aFs->Absc(uE[0], 1);
++    }
++  }
+   myRideStripes.Append(B);
+   myRideOn.Append(A);
+   myRideFaces.Append(F);
+   myRideEdges.Append(TopoDS_Edge());
+   myRideSupports.Append(Support);
+   myTangentRides.Append(B);
++  if (aWalker != B)
++  {
++    myRideStripes.Append(aWalker);
++    myRideOn.Append(A);
++    myRideFaces.Append(F);
++    myRideEdges.Append(TopoDS_Edge());
++    myRideSupports.Append(Support);
++    myTangentRides.Append(aWalker);
++  }
+   // (B's SurfDatas as computed on the faces of its edges, SB among them.)
+   const NCollection_Sequence<occ::handle<ChFiDS_SurfData>> aBOrig = B->SetOfSurfData()->Sequence();
+   int                                                      iSB    = 0;
+@@ -3302,38 +3385,50 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+   {
+     iSB = aBOrig(j) == SB ? j : 0;
+   }
++  const auto dropWalker = [&]() {
++    if (aWalker != B)
++    {
++      removeRideOf(aWalker, myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
++      removeTangentRide(aWalker, myTangentRides);
++    }
++  };
+   const auto undo = [&]() {
++    dropWalker();
+     removeRideOf(B, myRideStripes, myRideOn, myRideFaces, myRideEdges, myRideSupports);
+     removeTangentRide(B, myTangentRides);
+-    B->Reset();
+-    B->Spine()->SetErrorStatus(ChFiDS_Ok);
++    if (aWalker == B)
++    {
++      B->Reset();
++      B->Spine()->SetErrorStatus(ChFiDS_Ok);
++    }
+     if (B->SetOfSurfData().IsNull())
+     {
+       B->ChangeSetOfSurfData() = new NCollection_HSequence<occ::handle<ChFiDS_SurfData>>();
+     }
+     B->ChangeSetOfSurfData()->ChangeSequence() = aBOrig;
+   };
+-  B->Reset();
+-  B->Spine()->SetErrorStatus(ChFiDS_Ok);
+-  // (B walked on the support over the ride and a little beyond its ends
+-  // only: past them the ball does not reach A's blend.)
+-  const double aSpineFirst = B->Spine()->FirstParameter(), aSpineLast = B->Spine()->LastParameter();
+-  const double aMargin     = 0.1 * (tBHi - tBLo);
+-  B->Spine()->SetFirstParameter(std::max(aSpineFirst, tBLo - aMargin));
+-  B->Spine()->SetLastParameter(std::min(aSpineLast, tBHi + aMargin));
++  if (aWalker == B)
++  {
++    B->Reset();
++    B->Spine()->SetErrorStatus(ChFiDS_Ok);
++  }
++  const occ::handle<ChFiDS_Spine>& aWSp        = aWalker->Spine();
++  const double                     aSpineFirst = aWSp->FirstParameter(), aSpineLast = aWSp->LastParameter();
++  aWSp->SetFirstParameter(std::max(aSpineFirst, aWLo - aShift));
++  aWSp->SetLastParameter(std::min(aSpineLast, aWHi - aShift));
+   bool aWalked = true;
+   try
+   {
+     OCC_CATCH_SIGNALS
+-    occ::handle<ChFiDS_Stripe> aStripe = B;
++    occ::handle<ChFiDS_Stripe> aStripe = aWalker;
+     PerformSetOfSurf(aStripe);
+   }
+   catch (Standard_Failure const&)
+   {
+     aWalked = false;
+   }
+-  B->Spine()->SetFirstParameter(aSpineFirst);
+-  B->Spine()->SetLastParameter(aSpineLast);
++  aWSp->SetFirstParameter(aSpineFirst);
++  aWSp->SetLastParameter(aSpineLast);
+   if (!aWalked)
+   {
+     undo();
+@@ -3343,11 +3438,11 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+   occ::handle<ChFiDS_SurfData> SB2;
+   int                          onB2 = 0;
+   double                       tR[2] = {0., 0.};
+-  if (B->Spine()->ErrorStatus() == ChFiDS_Ok && !B->SetOfSurfData().IsNull())
++  if (aWSp->ErrorStatus() == ChFiDS_Ok && !aWalker->SetOfSurfData().IsNull())
+   {
+-    for (int j = 1; j <= B->SetOfSurfData()->Length() && SB2.IsNull(); j++)
++    for (int j = 1; j <= aWalker->SetOfSurfData()->Length() && SB2.IsNull(); j++)
+     {
+-      const occ::handle<ChFiDS_SurfData>& D = B->SetOfSurfData()->Value(j);
++      const occ::handle<ChFiDS_SurfData>& D = aWalker->SetOfSurfData()->Value(j);
+       for (int k = 1; k <= 2 && SB2.IsNull(); k++)
+       {
+         if (D->Index(k) <= 0 || !DStr.Shape(D->Index(k)).IsSame(Support) || D->Interference(k).LineIndex() <= 0)
+@@ -3376,11 +3471,19 @@ bool ChFi3d_Builder::RideOnBlendBetweenCrossings(const occ::handle<ChFiDS_Stripe
+       }
+     }
+   }
++  dropWalker();
+   if (SB2.IsNull())
+   {
+     undo();
+     return false;
+   }
++  if (aShift != 0.)
++  {
++    // (The walked piece's spine parameters those of B; its lines keep their
++    // own parameters.)
++    SB2->FirstSpineParam(SB2->FirstSpineParam() + aShift);
++    SB2->LastSpineParam(SB2->LastSpineParam() + aShift);
++  }
+   const ChFiDS_FaceInterference& FR0 = SB2->Interference(onB2);
+   const occ::handle<Geom_Curve>  CB  = DStr.Curve(FR0.LineIndex()).Curve();
+   // The ride's piece between the crossings.

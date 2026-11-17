@@ -1281,6 +1281,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
             "flat_pattern",
             "bodies",
             "construction",
+            "points",
         ]
         .into_iter()
         .chain(THREE_MF_FIELDS)
@@ -1359,6 +1360,15 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     if construction && sketch.is_none() {
         return Err("construction is only accepted with sketch".to_owned());
     }
+    // A sketch's free-standing points unless left out (mitcad#1963).
+    let points = match arguments.get("points") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(points)) => *points,
+        Some(_) => return Err("points must be true or false".to_owned()),
+    };
+    if arguments.get("points").is_some_and(|p| !p.is_null()) && sketch.is_none() {
+        return Err("points is only accepted with sketch".to_owned());
+    }
     // A 3MF's print plates, slicer and placements, and the print bed of a
     // 3MF, STL or OBJ (mitcad#1490): passed on to `export` as given, which
     // checks them and refuses what it does not take together (bodies with
@@ -1432,7 +1442,7 @@ fn export_plan(arguments: &Value, path: &Path) -> Result<ExportPlan, String> {
     } else if let Some(sketch) = sketch {
         require_extension(path, "dxf")?;
         json!({"cmd": "export_sketch", "path": text, "sketch": sketch,
-               "construction": construction})
+               "construction": construction, "points": points})
     } else if let Some(body) = flat {
         require_extension(path, "dxf")?;
         json!({"cmd": "export_flat_pattern_dxf", "path": text, "body": body})

@@ -306,6 +306,9 @@ pub use spatial_sketch::{SpatialSketchDef, SpatialSketchOutput};
 // Pipe and Sweep along curves of 3D sketches (mitcad#1523).
 pub mod spatial_path;
 pub use spatial_path::SpatialPath;
+// Flex: flexible items routed through the model (mitcad#1713).
+pub mod flex;
+pub use flex::{FlexDef, FlexNode, FlexOutput};
 // Coordinate System: a frame at a point with axes along edges, for
 // sketches, joints and exports in a chosen frame (mitcad#1775).
 pub mod coordinate_system;
@@ -509,6 +512,8 @@ feature_types! {
     IntersectionCurve(IntersectionCurveDef),
     // 3D Sketch (mitcad#1521).
     SpatialSketch(SpatialSketchDef),
+    // Flex (mitcad#1713).
+    Flex(FlexDef),
     // Coordinate System (mitcad#1775).
     CoordinateSystem(CoordinateSystemDef),
     // Helix Curve (mitcad#1777).
@@ -944,6 +949,10 @@ pub(crate) struct Env<'a, S> {
     /// holes read it (mitcad#1516), through
     /// [`EvalContext::print_layer_height`].
     pub layer_height: Option<f64>,
+    /// The design's direction of gravity in its coordinates, None
+    /// without one: a Flex item with a fixed length hangs its slack that
+    /// way (mitcad#1713), through [`EvalContext::gravity`].
+    pub gravity: Option<[f64; 3]>,
 }
 
 // (References only: an evaluation and its preview's extra see the same,
@@ -1014,6 +1023,9 @@ pub struct EvalContext<'a, K: Kernel> {
     /// What a 3D sketch's evaluation gave (mitcad#1521): kept with its
     /// result also when it failed (its frame and failure, no geometry).
     pub(crate) spatial: Option<spatial_sketch::SpatialSketchOutput>,
+    /// What a Flex item's evaluation found (mitcad#1713): kept with its
+    /// result also when its solid failed (the nodes and the route).
+    pub(crate) flex: Option<flex::FlexOutput>,
     /// The bodies of other components that the geometry the feature refers
     /// to is on, by their links (a construction plane's, mitcad#196): read
     /// in their components and moved into the feature's coordinates.
@@ -1052,6 +1064,7 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             move_basis: None,
             objects_before: None,
             spatial: None,
+            flex: None,
             geom_links: std::collections::BTreeMap::new(),
             datum_links: std::collections::BTreeMap::new(),
             next_body: 0,
@@ -1170,6 +1183,18 @@ impl<'a, K: Kernel> EvalContext<'a, K> {
             self.reads.push(read);
         }
         height.unwrap_or(crate::print_changes::DEFAULT_LAYER)
+    }
+
+    /// The design's direction of gravity in the design's coordinates, None
+    /// without one (mitcad#1713); a read, so that a result that used it is
+    /// evaluated again when it changes (a Flex item's hanging slack).
+    pub(crate) fn gravity(&mut self) -> Option<[f64; 3]> {
+        let gravity = self.env.gravity;
+        let read = Read::Gravity(gravity.map(|g| g.map(f64::to_bits)));
+        if !self.reads.contains(&read) {
+            self.reads.push(read);
+        }
+        gravity
     }
 
     /// Information about the feature that needs no action (mitcad#1106).

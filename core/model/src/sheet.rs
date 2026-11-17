@@ -198,22 +198,98 @@ impl SheetState {
     }
 
     /// Why the sheet has no developed form: a change it keeps as an overlay
-    /// (mitcad#242).
-    pub(crate) fn overlay_refusal(&self, what: &str) -> Result<(), String> {
-        match self.overlays.first() {
-            Some(o) => Err(format!(
-                "{what} needs the sheet's developed form, which {} does not have ({})",
-                o.feature,
-                match o.kind {
-                    SheetOverlayKind::Straight { .. } =>
-                        "a straight cut through a bend or an inclined panel",
-                    SheetOverlayKind::Change { .. } =>
-                        "a fillet or chamfer the material domains do not hold",
-                }
-            )),
+    /// (mitcad#242), as a failure's text (mitcad#1942): a person reads the
+    /// feature that made it by its name and what it does (`Fillet3 rounds
+    /// edges of the sheet's faces`), agents read its id in the detail.
+    /// `what` is what needs the developed form ("sheet Unfold").
+    pub(crate) fn overlay_refusal(
+        &self,
+        what: &str,
+        words: &FeatureWords<'_>,
+    ) -> Result<(), String> {
+        match self.overlay_said(what, words) {
+            Some((shown, detail)) => Err(crate::notice::FeatureError::new(shown)
+                .with_detail(detail)
+                .text()),
             None => Ok(()),
         }
     }
+
+    /// The refusal of [`SheetState::overlay_refusal`] as a person reads it
+    /// and as agents read it, with the feature's id; None without an
+    /// overlay. One whole sentence per kind of overlay, so that each is
+    /// translated as one.
+    pub(crate) fn overlay_said(
+        &self,
+        what: &str,
+        words: &FeatureWords<'_>,
+    ) -> Option<(String, String)> {
+        let o = self.overlays.first()?;
+        let feature = (words.name)(o.feature);
+        let shown = match (&o.kind, (words.edges)(o.feature)) {
+            (SheetOverlayKind::Straight { .. }, _) => format!(
+                "{what} needs the sheet's developed form, which {feature} does not have \
+                 (a straight cut through a bend or an inclined panel)"
+            ),
+            (SheetOverlayKind::Change { .. }, EdgeChange::Rounds) => format!(
+                "{what} needs the sheet's developed form, but {feature} rounds edges of the \
+                 sheet's faces, which cannot be flattened; only corners through the thickness \
+                 unfold"
+            ),
+            (SheetOverlayKind::Change { .. }, EdgeChange::Bevels) => format!(
+                "{what} needs the sheet's developed form, but {feature} bevels edges of the \
+                 sheet's faces, which cannot be flattened; only corners through the thickness \
+                 unfold"
+            ),
+            (SheetOverlayKind::Change { .. }, EdgeChange::Other) => format!(
+                "{what} needs the sheet's developed form, but {feature} repeats a fillet or \
+                 chamfer on edges of the sheet's faces, which cannot be flattened; only corners \
+                 through the thickness unfold"
+            ),
+        };
+        // Agents read the same words with the feature's id (the CLI's and
+        // MCP's error text, `FeatureError::agent_text`); a straight cut's
+        // as it always read.
+        let detail = match o.kind {
+            SheetOverlayKind::Straight { .. } => format!(
+                "{what} needs the sheet's developed form, which {} does not have (a straight cut through a bend or an inclined panel)",
+                o.feature
+            ),
+            SheetOverlayKind::Change { .. } => format!("{shown} (the overlay of {})", o.feature),
+        };
+        Some((shown, detail))
+    }
+}
+
+/// What a feature that left a fillet or chamfer on the sheet does to its
+/// edges, for the refusal that names it (mitcad#1942).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeChange {
+    /// A fillet.
+    Rounds,
+    /// A chamfer.
+    Bevels,
+    /// Another feature (a pattern or mirror that repeats one).
+    Other,
+}
+
+impl EdgeChange {
+    /// What `def`, the feature's definition, does to edges.
+    pub(crate) fn of<P>(def: &crate::features::FeatureDef<P>) -> Self {
+        match def {
+            crate::features::FeatureDef::Fillet(_) => Self::Rounds,
+            crate::features::FeatureDef::Chamfer(_) => Self::Bevels,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// How the sheet's refusals name features (mitcad#1942, the rule of
+/// mitcad#1327): `name` gives a feature's name as the timeline shows it,
+/// `edges` what a feature does to the sheet's edges.
+pub(crate) struct FeatureWords<'a> {
+    pub name: &'a dyn Fn(FeatureUid) -> String,
+    pub edges: &'a dyn Fn(FeatureUid) -> EdgeChange,
 }
 
 /// Every replacement either supplies domains, deliberately transforms them,
@@ -299,6 +375,82 @@ pub(crate) fn name_walls(message: &str, name: &dyn Fn(FeatureUid) -> String) -> 
             (false, k) => format!("{feature_name} (bend {})", k + 1),
         }
     })
+}
+
+/// A refusal of a sheet operation as a failure's text (mitcad#1942, the
+/// rule of mitcad#1327, as the Flat Pattern's reasons of mitcad#1639): a
+/// person reads the walls it names (`panel F6 slot 1`) by their features as
+/// the timeline names them (`SheetFlange2 (wall 2)`, [`name_walls`]) and
+/// other features (`open by F7`) by their names, the rest in words (the
+/// model's cleaner); the walls are its places, painted on hover; agents
+/// read the text as it was, with the ids. A text that already carries its
+/// places and detail (a [`crate::notice::FeatureError`]'s) is kept as its
+/// maker wrote it.
+pub(crate) fn worded(message: &str, name: &dyn Fn(FeatureUid) -> String) -> String {
+    use crate::notice::{FeatureError, PLACED_TAIL};
+    if message.contains(PLACED_TAIL) {
+        return message.to_owned();
+    }
+    let shown = FeatureError::from_text(&name_features(&name_walls(message, name), name));
+    FeatureError {
+        message: shown.message,
+        places: shown.places,
+        detail: String::new(),
+    }
+    .with_places(walls_named(message).into_iter().map(wall_place))
+    .with_detail(message)
+    .text()
+}
+
+/// The front face of a panel or a bend: where a refusal that names the
+/// wall paints it (mitcad#1877, mitcad#1942).
+pub(crate) fn wall_place(domain: SheetDomainRef) -> crate::notice::NoticePlace {
+    crate::notice::NoticePlace::face(match domain {
+        SheetDomainRef::Panel(p) => format!("{}:sheet_front({})", p.feature, p.slot),
+        SheetDomainRef::Bend(b) => format!("{}:sheet_bend_front({})", b.feature, b.slot),
+    })
+}
+
+/// A message with the features it names by their ids (`open by F7`)
+/// named as the timeline shows them (mitcad#1942). Only a whole word is a
+/// feature's id: a topological name (`F2:top`, `E{F2:a|F3:b}`) or a body's
+/// uid (`F3.b0`) is left to the cleaner, which takes it out into places.
+fn name_features(message: &str, name: &dyn Fn(FeatureUid) -> String) -> String {
+    let bytes = message.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut named = String::with_capacity(message.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let starts = bytes[i] == b'F' && (i == 0 || (!word(bytes[i - 1]) && bytes[i - 1] != b'.'));
+        if !starts {
+            i += 1;
+            continue;
+        }
+        let end = i
+            + 1
+            + bytes[i + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit())
+                .count();
+        let next = bytes.get(end).copied();
+        let after = bytes.get(end + 1).copied();
+        let id = end > i + 1
+            && !next.is_some_and(word)
+            && next != Some(b':')
+            && !(next == Some(b'.') && after == Some(b'b'));
+        let parsed = id
+            .then(|| message[i + 1..end].parse::<u64>().ok())
+            .flatten();
+        if let Some(uid) = parsed {
+            named.push_str(&message[copied..i]);
+            named.push_str(&name(FeatureUid(uid)));
+            copied = end;
+        }
+        i = end.max(i + 1);
+    }
+    named.push_str(&message[copied..]);
+    named
 }
 
 /// The walls a message names (`panel F6 slot 0`, `bend F4 slot 0`), in

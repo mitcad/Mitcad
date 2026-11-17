@@ -38,6 +38,7 @@
 #include "framework/Json.hpp"
 #include "framework/ModelShapes.hpp"
 #include "framework/TestSync.hpp"
+#include "gravity/GravityController.hpp"
 
 namespace mitcad {
 namespace {
@@ -93,6 +94,11 @@ void MainWindow::setUpOccurrenceDrag() {
 }
 
 MainWindow::DragAnswer MainWindow::dragAnswer(const SelectionItem& item) const {
+  // A Flex item let hang owns the left button in the view: no
+  // occurrence drag starts and no drag hint shows meanwhile (mitcad#1713).
+  if (m_gravity != nullptr && m_gravity->isHanging()) {
+    return {};
+  }
   const bool idle = m_mode == Mode::Idle && !m_session;
   const bool body = isBodyItem(item);
   // In a design without components nothing drags, nor while a command's

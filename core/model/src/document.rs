@@ -327,6 +327,10 @@ pub struct DocState {
     /// of a skipped item. Shown as the feature's warning until an edit of
     /// its definition builds.
     pub(crate) import_notes: BTreeMap<FeatureUid, String>,
+    /// Warnings the user acknowledged (mitcad#1935), by feature: the
+    /// warning's text as it was then. Not shown as a warning while the
+    /// feature builds with that very text (`document/acknowledged_warnings.rs`).
+    pub(crate) acknowledged_warnings: BTreeMap<FeatureUid, String>,
     /// Flat Patterns of sheet-metal bodies (mitcad#208), by body.
     pub flat_patterns: BTreeMap<BodyUid, crate::sheet::flat::FlatPatternDef>,
     /// The distance (mm) within which the features' joins still fuse
@@ -391,6 +395,8 @@ pub struct DocState {
     /// Filament changes at print heights (mitcad#1596): the design's own
     /// schedule and print plates' own, at most one per plate.
     pub(crate) filament_changes: Vec<crate::print_changes::ChangeSchedule>,
+    /// The direction of gravity (mitcad#1713, Part B), None without one.
+    pub(crate) gravity: Option<crate::gravity::Gravity>,
     /// CAM setups, their operations and the machines they use
     /// (mitcad#1013), kept with the design and off the timeline.
     pub(crate) cam: crate::cam::CamState,
@@ -419,6 +425,7 @@ impl Default for DocState {
             tables: Default::default(),
             hybrid_assembly: false,
             import_notes: BTreeMap::new(),
+            acknowledged_warnings: BTreeMap::new(),
             flat_patterns: BTreeMap::new(),
             join_tolerance: None,
             library_sources: Default::default(),
@@ -441,6 +448,7 @@ impl Default for DocState {
             next_comment: 1,
             print_plates: Vec::new(),
             filament_changes: Vec::new(),
+            gravity: None,
             cam: Default::default(),
         }
     }
@@ -653,6 +661,19 @@ impl DocState {
             crate::features::bound_length::settle_parameter(params, bound.parameter, owner)
                 .map_err(invalid)?;
         }
+        // A Flex item's length is a reference parameter of its own
+        // (mitcad#1713).
+        if let FeatureDef::Flex(flex) = &mut resolved {
+            let new = crate::features::flex::settle_length(
+                flex,
+                params,
+                owner,
+                owner_name,
+                old_slots.get("length").copied(),
+            )
+            .map_err(invalid)?;
+            created.extend(new);
+        }
         // A growing helix without a construction keeps the one it had, else
         // it is Mitcad's (mitcad#83).
         if let FeatureDef::Helix(helix) = &mut resolved {
@@ -678,6 +699,15 @@ impl DocState {
             });
         }
         crate::features::sheet_folded::settle(&mut resolved, old);
+        // A Flex item's body takes the material and the appearance its
+        // item names (mitcad#1713).
+        if let FeatureDef::Flex(flex) = &resolved {
+            let before = match old {
+                Some(FeatureDef::Flex(old)) => Some(&old.item),
+                _ => None,
+            };
+            self.settle_flex_look(owner, &flex.item, before);
+        }
         Ok((resolved, created, kept))
     }
 
@@ -825,6 +855,8 @@ impl DocState {
                 }
                 // A bound length keeps its own reference (mitcad#375).
                 Some(FeatureDef::BoundLength(def)) => BTreeSet::from([def.parameter]),
+                // A Flex item keeps its length (mitcad#1713).
+                Some(FeatureDef::Flex(def)) => def.length.into_iter().collect(),
                 _ => BTreeSet::new(),
             };
             for id in self.parameters.owned_by(owner) {
@@ -1239,6 +1271,8 @@ impl DocState {
         self.datum_display_sizes
             .retain(|uid, _| !removed.contains(uid));
         self.import_notes.retain(|uid, _| !removed.contains(uid));
+        self.acknowledged_warnings
+            .retain(|uid, _| !removed.contains(uid));
         self.release_components(removed);
         self.drop_orphan_drawings();
         order
@@ -1355,6 +1389,9 @@ pub(crate) fn check_components(
         FeatureDef::ConstructionPlane(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         FeatureDef::ConstructionAxis(a) => a.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         FeatureDef::ConstructionPoint(p) => p.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
+        // A Flex item's nodes on construction features and sketches of
+        // other components, by its `datum_links` (mitcad#1713).
+        FeatureDef::Flex(f) => f.datum_links.iter().map(|(u, l)| (*u, l)).collect(),
         _ => Vec::new(),
     };
     for uid in entry.def.info().references().features {
@@ -1758,6 +1795,9 @@ pub struct Document<K: Kernel> {
     /// state, like the statistics; a save given a new one changes it
     /// through a shared reference ([`Document::save_file_previewed`]).
     design_preview: RwLock<Option<crate::file::DesignPreview>>,
+    /// The Flex item that hangs (mitcad#1713): runtime only, never saved
+    /// or undone ([`Document::flex_hang`]).
+    hang_session: std::sync::Mutex<Option<flex_hang::HangSession<K::Shape>>>,
     /// The kind of step the running command's sketch edits record, and the
     /// step recorded last (mitcad#1750, [`Document::set_sketch_step_kind`]).
     /// Runtime context only.
@@ -1828,6 +1868,7 @@ impl<K: Kernel> Document<K> {
             statistics: RwLock::new(crate::file::KeptStatistics::new_design()),
             unknown_fields: RwLock::new(Default::default()),
             design_preview: RwLock::new(None),
+            hang_session: Default::default(),
             sketch_step_kind: None,
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
@@ -1968,6 +2009,8 @@ impl<K: Kernel> Document<K> {
         let monitor = self.monitor.as_ref();
         let result = recompute(&self.kernel, &self.state, &mut self.cache, monitor)?;
         self.state.take_measured(&result.measured);
+        // Where the attached nodes of Flex items are now (mitcad#1713).
+        self.state.take_flex_places(&result);
         self.set_result(result);
         Ok(self.stats())
     }
@@ -2187,6 +2230,7 @@ impl<K: Kernel> Document<K> {
             statistics: RwLock::new(self.kept_statistics()),
             unknown_fields: RwLock::new(self.kept_unknown_fields()),
             design_preview: RwLock::new(self.kept_design_preview()),
+            hang_session: Default::default(),
             sketch_step_kind: None,
             recorded_sketch_step: None,
             sketch_step_changes: Vec::new(),
@@ -2884,11 +2928,16 @@ impl<K: Kernel> Document<K> {
         if let Some(result) = &result {
             check(&next, result)?;
             next.take_measured(&result.measured);
+            // Where the attached nodes of Flex items are now (mitcad#1713).
+            next.take_flex_places(result);
         }
         // An edited definition that builds clears its import note
         // (mitcad#170).
         if let Some(result) = &result {
             next.settle_import_notes(&self.state, result);
+            // An acknowledged warning lapses when the feature's warning
+            // changes or it fails (mitcad#1935).
+            next.settle_acknowledged_warnings(result);
         }
         self.commit(label, next);
         self.configuration_moves = (self.revision, moves);
@@ -5276,6 +5325,17 @@ pub use thread_fit::{AutoFixFit, NoFit, SharedChoice};
 // A sheet-metal flange's profile sketch made on its wall, or moved back
 // onto it (mitcad#1648).
 mod flange_profile;
+// Flex items: their routes, their edits and the end ports of pipes and
+// Flex items (mitcad#1713).
+mod flex;
+pub use flex::{EndPortView, FlexLength, FlexTypeWrite, PortsSeen};
+// The direction of gravity (mitcad#1713, Part B).
+mod gravity;
+// A Flex item let hang (mitcad#1713).
+mod flex_hang;
+pub use flex_hang::{
+    HANG_MOST_SECONDS, HANG_STEP_SECONDS, HangLocked, HangNode, HangState, hang_tolerance,
+};
 // CAM setups, operations, machines and their toolpaths (mitcad#1013).
 mod cam;
 // Linked designs from outside the project: whether a link would be
@@ -5303,6 +5363,9 @@ pub use convert_derived::{CONVERT_LABEL, ConvertedPart};
 // component that links it, followed when the link is read again
 // (mitcad#1921).
 mod linked_looks;
+// Acknowledged warnings: a feature's warning the user has seen, no longer
+// shown as one until it changes (mitcad#1935).
+mod acknowledged_warnings;
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

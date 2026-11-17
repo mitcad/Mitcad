@@ -80,7 +80,20 @@ QVector<Part> partsOf(const QJsonObject& component) {
   }
   QVector<Part> parts;
   const QJsonObject configurations = component.value(QStringLiteral("configurations")).toObject();
-  const QJsonArray rows = configurations.value(QStringLiteral("rows")).toArray();
+  // A part cut to length's rows of a length alone (its stock lengths,
+  // mitcad#1950) are presets of the length BUILD gives, not tiles of their
+  // own, unless a row has its own article (a rail's stock rows).
+  const QString lengthParameter = text(part.build.value(QStringLiteral("length")).toObject(), "parameter");
+  QJsonArray rows;
+  for (const QJsonValue& value : configurations.value(QStringLiteral("rows")).toArray()) {
+    const QJsonObject row = value.toObject();
+    const QJsonObject select = row.value(QStringLiteral("select")).toObject();
+    const bool lengthOnly = !lengthParameter.isEmpty() && select.size() == 1 && select.contains(lengthParameter);
+    if (lengthOnly && text(row, "part_number").isEmpty()) {
+      continue;
+    }
+    rows.append(row);
+  }
   // An open table's options are chosen in the picker (mitcad#810); its rows
   // stay tiles of their own, presets of the options.
   part.table = configurations;
@@ -196,7 +209,12 @@ QString keyPrefix(const QString& key) {
 
 QString Part::role() const { return text(build, "role"); }
 
-bool Part::openTable() const { return isOpenTable(table); }
+// BUILD gives a part cut to length its length (mitcad#1950): not one of the
+// options chosen in BUILD.
+bool Part::openTable() const {
+  const QString length = text(build.value(QStringLiteral("length")).toObject(), "parameter");
+  return isOpenTable(table, length.isEmpty() ? QStringList() : QStringList{length});
+}
 
 QString Part::systemText() const {
   const auto one = [](const QJsonObject& system) {

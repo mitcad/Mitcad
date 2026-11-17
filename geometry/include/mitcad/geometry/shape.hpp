@@ -283,11 +283,19 @@ public:
   }
   void set_stand_in_for(const std::shared_ptr<Shape>& shape) const { m_standInFor.set(shape); }
 
+  // The size of the section of a body swept along a route (a Flex item,
+  // mitcad#1713), which the view meshes it by (io::MeshOptions::section);
+  // 0 for any other shape. keep_measures_of takes it, an independent_copy
+  // does not.
+  double display_section() const { return m_displaySection.get().value_or(0.0); }
+  void set_display_section(double size) const { m_displaySection.set(size); }
+
   // Takes what was worked out of `other`, a Shape of the same B-rep (the
   // same TopoDS_Shape, with other face names), that does not depend on
   // face names: the measures, the box, the face measures and boxes, the
   // edges' curves, the boundary index, the checker's verdict (mitcad#244)
-  // and whether it was meshed for display. Edge middles and the face index carry names; they are
+  // whether it was meshed for display and its section for display. Edge
+  // middles and the face index carry names; they are
   // worked out anew.
   void keep_measures_of(const Shape& other) const;
 
@@ -401,6 +409,7 @@ private:
   LazyValue<bool> m_displayMeshed;
   LazyValue<std::weak_ptr<Shape>> m_displayStandIn;
   LazyValue<std::weak_ptr<Shape>> m_standInFor;
+  LazyValue<double> m_displaySection;
   // A large shape's faces by each reference that matches one of their
   // names (naming.hpp: the name, or the name before a "#k"), made the
   // first time a face is looked for (mitcad#181: finding faces one by one

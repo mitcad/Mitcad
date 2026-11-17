@@ -1,0 +1,49 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillet: a corner of more than two blends whose parse round the vertex
+meets an edge twice fails instead of reading past its stripes' surfdata
+(mitcad#1926).
+
+A fin's foot rounded with 3 and its top's edges with 0.5 in one fillet:
+at the vertex where an arm's outer side, its top and the plate meet, the
+rounding of 3 consumes the outer side (patch 1700), and the parse of the
+edges and faces round the vertex in PerformMoreThreeCorner met the top's
+outer edge twice, so that one stripe stood at two places of the corner.
+The first intersection of the stripes trimmed that stripe's surfdata;
+its index at the second place still named the surfdata it had before, one
+past its end, and the search for the stripes' intersection
+(ChFi3d_SearchFD, ChFi3d_IsInFront) read past the sequence's end and did
+not return (no result within 15 minutes).
+
+- PerformMoreThreeCorner: an edge met twice in the parse throws the
+  parse's construction error, so that the corner fails at its vertex
+  (Failure_Corner, the vertex a faulty one) at once.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index cadeacc3..4308830a 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -1658,6 +1658,22 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+       SummarizeNormal(V1, Fcur, Ecur, SumFaceNormalAtV1);
+     }
+   }
++  // An edge met twice in the parse round the vertex (the faces round it no
++  // longer close, as where a stripe's face at the vertex is consumed by
++  // another stripe's blend): the corner cannot be built from this parse,
++  // and the indices of a stripe met twice would no longer follow its
++  // surfdata once the first meeting has trimmed them.
++  for (ic = 0; ic < nedge; ic++)
++  {
++    for (ind = ic + 1; ind < nedge; ind++)
++    {
++      if (Evive.Value(ic).IsSame(Evive.Value(ind)))
++      {
++        throw Standard_ConstructionError(
++          "PerformMoreThreeCorner: an edge met twice in the parsing of edges and faces");
++      }
++    }
++  }
+   // mise a jour du tableau regul
+   for (ic = 0; ic < nedge; ic++)
+   {

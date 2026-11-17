@@ -5,7 +5,10 @@
 // Browser or Edit Feature (editFeature), and the cage drawn and picked
 // over the view while it is open (view/FormCageOverlay.hpp): a click on the
 // cage sets the panel's hidden picks, a vertex's drag its hidden drag
-// (mitcad#1810), the panel's changes redraw the cage.
+// (mitcad#1810), the panel's changes redraw the cage. Fill Hole and Bridge
+// (mitcad#1941) are also actions while the panel is open, in the view's
+// context menu and the command search: each chooses its edit in the panel
+// and applies it to the picks.
 #include "MainWindow.hpp"
 
 #include <exception>
@@ -14,6 +17,7 @@
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 #include <QtLogging>
 
 #include "OcctViewer.hpp"
@@ -42,6 +46,51 @@ void MainWindow::registerFormCommands() {
   };
   hooks.ended = [this] { endFormEdit(); };
   registerFormEditCommand(*m_registry, *this, *this, std::move(hooks));
+
+  const auto edit = [this](const char* id, const QString& name, const QString& tooltip, const QString& action,
+                           const QStringList& keywords) {
+    CommandDef def;
+    def.id = QString::fromLatin1(id);
+    def.name = name;
+    def.icon = QStringLiteral("form");
+    def.tooltip = tooltip;
+    def.kind = CommandDef::Kind::Action;
+    def.mode = CommandDef::Mode::Model;
+    def.tab.clear(); // the context menu and the command search
+    def.group = QStringLiteral("CREATE");
+    def.keywords = keywords;
+    def.duringCommands = true;
+    def.enabled = [this] { return formEditOpen(); };
+    def.run = [this, action] { applyFormEdit(action); };
+    m_registry->add(def);
+  };
+  edit(kFormFillHoleCommand, tr("Fill Hole"), tr("Fills the opening of the picked edge of the Form's cage"),
+       QStringLiteral("fill_hole"), {QStringLiteral("form"), QStringLiteral("cage"), QStringLiteral("close"),
+                                     QStringLiteral("cap"), QStringLiteral("opening")});
+  edit(kFormBridgeCommand, tr("Bridge"), tr("Joins the two openings of the picked edges of the Form's cage"),
+       QStringLiteral("bridge"), {QStringLiteral("form"), QStringLiteral("cage"), QStringLiteral("join"),
+                                  QStringLiteral("connect"), QStringLiteral("opening")});
+}
+
+bool MainWindow::formEditOpen() const {
+  return m_mode == Mode::Command && m_session && m_session->def().id == QString::fromLatin1(kFormEditCommand);
+}
+
+void MainWindow::applyFormEdit(const QString& action) {
+  if (!formEditOpen()) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Form edit %1 asked for: Edit chosen, then Apply").arg(action);
+  if (!chooseInCommand(QString::fromLatin1(kFormEditCommand), QStringLiteral("action"), action)) {
+    return;
+  }
+  // Apply once the choice is taken (queued while the model computes): the
+  // edit on the picks, one undo step, or why not in words.
+  whenIdle(this, [this] {
+    if (formEditOpen()) {
+      confirm();
+    }
+  });
 }
 
 std::optional<gp_Trsf> MainWindow::formPlacement() const {

@@ -61,6 +61,13 @@
 //!   trimmed as above (a tapered waist). An outline too small to keep any
 //!   curve of its own (a lobe narrower than twice the distance) is left out,
 //!   and a note says so, when the rest is kept.
+//! - Curves that fold over in places (mitcad#1938): a spline or ellipse
+//!   whose radius of curvature on the offset's side is below the distance
+//!   only in places is cut into parts there ([`split_folds`]); the
+//!   stretches that fold over vanish and the parts meet where their
+//!   offsets cross, as whole curves do. What is left of the curve is its
+//!   one result, a spline with a corner (a triple knot, [`Made::Spline`])
+//!   where its parts meet.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -427,19 +434,30 @@ pub fn chain_directions(curves: &[EntityUid], index: &EntityIndex<'_>) -> Vec<bo
     out
 }
 
-/// One source curve in chain direction, offset by `d` to its right.
+/// One source curve in chain direction, offset by `d` to its right; or a
+/// part of one between the places where its offset folds over
+/// (mitcad#1938, [`split_folds`]).
 #[derive(Debug, Clone)]
 struct Piece {
     curve: Curve2,
     forward: bool,
     /// Signed distance along the source curve's left normal.
     left: f64,
+    /// The source parameters it runs over, lower first: the curve's whole
+    /// domain, or a part of it.
+    span: (f64, f64),
+    /// A part of a source curve (mitcad#1938): its offset may meet another
+    /// part's where the two cross away from their ends.
+    part: bool,
+    /// A part whose offset folds over (the distance passes its radius of
+    /// curvature on that side): it vanishes.
+    folded: bool,
 }
 
 impl Piece {
     /// The source parameter at chain parameter `u` in [0, 1].
     fn t(&self, u: f64) -> f64 {
-        let (lo, hi) = self.curve.domain();
+        let (lo, hi) = self.span;
         if self.forward {
             lo + u * (hi - lo)
         } else {
@@ -449,7 +467,7 @@ impl Piece {
 
     /// The exact offset point and its derivative by `u`.
     fn eval(&self, u: f64) -> (P2, P2) {
-        let (lo, hi) = self.curve.domain();
+        let (lo, hi) = self.span;
         let dt = if self.forward { hi - lo } else { lo - hi };
         let [c, d1, d2] = self.curve.eval(self.t(u));
         let speed = norm(d1);
@@ -510,12 +528,9 @@ impl Piece {
         if self.is_line() {
             return Ok(());
         }
-        let (lo, hi) = self.curve.domain();
+        let (lo, hi) = self.span;
         for t in self.curve.sample_params(lo, hi) {
-            let [_, d1, d2] = self.curve.eval(t);
-            let speed = norm(d1);
-            let curvature = cross(d1, d2) / (speed * speed * speed);
-            if 1.0 - self.left * curvature < 0.02 {
+            if self.stretch(t) < FOLD {
                 return Err(
                     "the offset is larger than a curve's radius of curvature on that side"
                         .to_owned(),
@@ -524,6 +539,154 @@ impl Piece {
         }
         Ok(())
     }
+
+    /// How the offset's length runs against the source's at source
+    /// parameter `t`: 1 less the distance times the curvature toward the
+    /// offset's side. At zero or below the offset folds over (it runs
+    /// backward).
+    fn stretch(&self, t: f64) -> f64 {
+        let [_, d1, d2] = self.curve.eval(t);
+        let speed = norm(d1);
+        let curvature = cross(d1, d2) / (speed * speed * speed);
+        1.0 - self.left * curvature
+    }
+
+    /// The same source curve over source parameters `span`.
+    fn over(&self, span: (f64, f64), folded: bool) -> Self {
+        Self {
+            curve: self.curve.clone(),
+            forward: self.forward,
+            left: self.left,
+            span,
+            part: true,
+            folded,
+        }
+    }
+}
+
+/// Where the offset of a curve counts as folding over: its length runs
+/// below this share of the source's ([`Piece::stretch`]).
+const FOLD: f64 = 0.02;
+
+/// Where a part of a curve that folds over ends (mitcad#1938): a little
+/// past [`FOLD`], so that the parts on either side do not fold over.
+const FOLD_EDGE: f64 = 0.03;
+
+/// The stretches of a curve (not a line, an arc or a circle) whose offset
+/// folds over (mitcad#1938), as source parameters, lower first: each a run
+/// of [`Piece::stretch`] below [`FOLD_EDGE`] that dips below [`FOLD`].
+fn fold_zones(piece: &Piece) -> Vec<(f64, f64)> {
+    if piece.is_line()
+        || piece.is_arc()
+        || matches!(piece.curve, Curve2::Circle { .. })
+        || piece.left == 0.0
+    {
+        return Vec::new();
+    }
+    let (lo, hi) = piece.span;
+    // The curve's own samples, and a fine even spread: a tight bend of a
+    // long curve is short.
+    let mut ts = piece.curve.sample_params(lo, hi);
+    ts.extend((0..=400).map(|k| lo + (hi - lo) * f64::from(k) / 400.0));
+    ts.sort_by(f64::total_cmp);
+    ts.dedup_by(|a, b| (*a - *b).abs() <= 1e-12 * (hi - lo));
+    let g: Vec<f64> = ts.iter().map(|t| piece.stretch(*t)).collect();
+    // Where the stretch crosses `FOLD_EDGE` between two samples.
+    let edge = |a: f64, b: f64| {
+        let (mut inside, mut outside) = if piece.stretch(a) < FOLD_EDGE {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        for _ in 0..60 {
+            let mid = 0.5 * (inside + outside);
+            if piece.stretch(mid) < FOLD_EDGE {
+                inside = mid;
+            } else {
+                outside = mid;
+            }
+        }
+        outside
+    };
+    let mut zones = Vec::new();
+    let mut k = 0;
+    while k < ts.len() {
+        if g[k] >= FOLD_EDGE {
+            k += 1;
+            continue;
+        }
+        let first = k;
+        let mut deepest = g[k];
+        while k + 1 < ts.len() && g[k + 1] < FOLD_EDGE {
+            k += 1;
+            deepest = deepest.min(g[k]);
+        }
+        if deepest < FOLD {
+            let start = if first == 0 {
+                lo
+            } else {
+                edge(ts[first - 1], ts[first])
+            };
+            let end = if k + 1 == ts.len() {
+                hi
+            } else {
+                edge(ts[k], ts[k + 1])
+            };
+            zones.push((start, end));
+        }
+        k += 1;
+    }
+    zones
+}
+
+/// The pieces of a chain with each curve whose offset folds over in places
+/// (mitcad#1938) cut into parts: the stretches that fold over
+/// ([`fold_zones`], [`Piece::folded`]: they vanish) and those between them,
+/// in chain order, with the index of each one's source curve. The parts on
+/// either side of a fold meet where their offsets cross ([`trim`]), as the
+/// offsets of two curves on either side of one that vanishes do; what is
+/// left of one curve is its one result, with a corner where its parts meet.
+/// The one stretch left of a single closed curve is cut in two halves, so
+/// that it can meet itself.
+fn split_folds(pieces: Vec<Piece>, single_closed: bool) -> (Vec<Piece>, Vec<usize>) {
+    let mut out = Vec::with_capacity(pieces.len());
+    let mut owner = Vec::with_capacity(pieces.len());
+    for (i, piece) in pieces.into_iter().enumerate() {
+        let zones = fold_zones(&piece);
+        if zones.is_empty() {
+            out.push(piece);
+            owner.push(i);
+            continue;
+        }
+        let (lo, hi) = piece.span;
+        let tiny = 1e-9 * (hi - lo);
+        let mut spans: Vec<((f64, f64), bool)> = Vec::new();
+        let mut at = lo;
+        for (start, end) in zones {
+            if start - at > tiny {
+                spans.push(((at, start), false));
+            }
+            spans.push(((start.max(at), end), true));
+            at = end;
+        }
+        if hi - at > tiny {
+            spans.push(((at, hi), false));
+        }
+        let good: Vec<usize> = (0..spans.len()).filter(|k| !spans[*k].1).collect();
+        if single_closed && let [only] = good.as_slice() {
+            let ((a, b), _) = spans[*only];
+            let mid = 0.5 * (a + b);
+            spans.splice(*only..=*only, [((a, mid), false), ((mid, b), false)]);
+        }
+        if !piece.forward {
+            spans.reverse();
+        }
+        for (span, folded) in spans {
+            out.push(piece.over(span, folded));
+            owner.push(i);
+        }
+    }
+    (out, owner)
 }
 
 /// How the offsets of two curves meet.
@@ -552,7 +715,10 @@ pub enum Made {
         radius: f64,
     },
     /// A cubic B-spline with double interior knots (C1): `knots` are the
-    /// distinct ones on [0, 1], two control points per knot.
+    /// distinct ones on [0, 1], two control points per knot. A knot listed
+    /// twice in a row is a corner (mitcad#1938: where the parts of a curve
+    /// on either side of a fold meet): a triple knot with one control
+    /// point, the corner.
     Spline {
         knots: Vec<f64>,
         control: Vec<P2>,
@@ -888,7 +1054,9 @@ fn trim(pieces: &[Piece], d: f64, closed: bool, size: f64, sharp: bool) -> Resul
     let nothing = VANISH * size;
     let folds: Vec<bool> = pieces
         .iter()
-        .map(|p| p.offset_radius().is_none() && !p.is_line() && p.check_fit().is_err())
+        .map(|p| {
+            p.folded || (p.offset_radius().is_none() && !p.is_line() && p.check_fit().is_err())
+        })
         .collect();
     let mut kept: Vec<bool> = pieces
         .iter()
@@ -1150,7 +1318,14 @@ fn meeting(
             Join::Trim
         };
         if kind == Join::Trim || (sharp && kind == Join::Round) {
-            match crossing(a, b).or_else(|| beyond(a, b)) {
+            // Parts of a curve whose offset folds over (mitcad#1938) cross
+            // where Newton from their ends may not find it.
+            let found = crossing(a, b).or_else(|| beyond(a, b)).or_else(|| {
+                (a.part || b.part)
+                    .then(|| sampled_crossing(pieces, a, b, d, size))
+                    .flatten()
+            });
+            match found {
                 Some((u, v)) => {
                     range[i].1 = through.map_or(u, |g| along(&pieces[i], &pieces[g], u));
                     range[j].0 = v;
@@ -1436,9 +1611,13 @@ fn hermite(piece: &Piece, u0: f64, u1: f64, w: &[f64]) -> Vec<P2> {
 /// The B-spline of a Hermite control polygon (see [`Made::Spline`]).
 pub fn spline_nurbs(knots: &[f64], control: &[P2]) -> Nurbs {
     let mut full = vec![knots[0]; 4];
-    for k in &knots[1..knots.len() - 1] {
+    let inner = &knots[1..knots.len() - 1];
+    for (j, k) in inner.iter().enumerate() {
         full.push(*k);
-        full.push(*k);
+        // The second of a corner's two adds one more (a triple knot).
+        if j == 0 || inner[j - 1] != *k {
+            full.push(*k);
+        }
     }
     full.extend(std::iter::repeat_n(knots[knots.len() - 1], 4));
     Nurbs {
@@ -1488,6 +1667,49 @@ fn adaptive_knots(piece: &Piece, u0: f64, u1: f64) -> Vec<f64> {
 fn crossing(a: &Piece, b: &Piece) -> Option<(f64, f64)> {
     let (u, v) = newton(a, b)?;
     (u > 0.0 && u <= 1.0 + 1e-9 && (-1e-9..1.0).contains(&v)).then_some((u.min(1.0), v.max(0.0)))
+}
+
+/// Where the offsets of two pieces cross within their ranges, found along
+/// polylines of both and refined by Newton (mitcad#1938: the parts of a
+/// curve on either side of a fold, whose offsets run slowly near the
+/// fold, where Newton from their ends wanders): of several, a point of the
+/// offset ([`clear`]) before others, then the one nearest the end of `a`.
+fn sampled_crossing(
+    pieces: &[Piece],
+    a: &Piece,
+    b: &Piece,
+    d: f64,
+    size: f64,
+) -> Option<(f64, f64)> {
+    let line = |p: &Piece| -> Vec<(f64, P2)> {
+        let steps: u32 = if p.is_line() { 1 } else { 96 };
+        (0..=steps)
+            .map(|k| {
+                let u = f64::from(k) / f64::from(steps);
+                (u, p.eval(u).0)
+            })
+            .collect()
+    };
+    let inside = |w: f64| (-1e-9..=1.0 + 1e-9).contains(&w);
+    let mut best: Option<(bool, f64, f64)> = None;
+    for (u, v) in crossings(&line(a), &line(b)) {
+        let Some((u, v)) = newton_from(a, b, u, v) else {
+            continue;
+        };
+        if !(inside(u) && inside(v)) {
+            continue;
+        }
+        let (u, v) = (u.clamp(0.0, 1.0), v.clamp(0.0, 1.0));
+        let point = clear(pieces, a.eval(u).0, d, size);
+        let better = match best {
+            None => true,
+            Some((was, bu, _)) => (point && !was) || (point == was && u > bu),
+        };
+        if better {
+            best = Some((point, u, v));
+        }
+    }
+    best.map(|(_, u, v)| (u, v))
 }
 
 /// [`crossing`] where the offsets may run on past their ends to meet
@@ -1561,6 +1783,9 @@ fn pieces_of(sources: &[(Curve2, bool)], d: f64) -> Vec<Piece> {
             curve: curve.clone(),
             forward: *forward,
             left: if *forward { -d } else { d },
+            span: curve.domain(),
+            part: false,
+            folded: false,
         })
         .collect()
 }
@@ -1745,12 +1970,221 @@ pub(crate) fn outlines_of(
     (outlines, ends)
 }
 
+/// What a chain's offset trimmed over the parts of its curves
+/// ([`split_folds`]) is per source curve ([`collapse`], mitcad#1938): the
+/// pieces of each result in order (one, or the parts of a curve that folds
+/// over, which meet at corners), the result after each along its outline,
+/// the joins between results, and the source curves that vanish, run on
+/// along another's or are left out as a part too small.
+struct Collapsed {
+    results: Vec<Vec<usize>>,
+    next: Vec<Option<usize>>,
+    joins: Vec<Join>,
+    dropped: Vec<usize>,
+    merged: Vec<(usize, usize)>,
+    left: Vec<usize>,
+}
+
+/// [`Collapsed`] from what [`trim`] keeps of the pieces whose source curves
+/// are `owner` (of `n`). The parts of one curve that are kept must follow
+/// each other along one outline, or its offset falls apart. `alone`: the
+/// parts of a single closed curve, whose result closes on itself.
+fn collapse(
+    trimmed: &Trimmed,
+    owner: &[usize],
+    n: usize,
+    alone: bool,
+    name: &dyn Fn(usize) -> String,
+) -> Result<Collapsed, String> {
+    let kept = &trimmed.kept;
+    let m = kept.len();
+    // The result of each kept piece (by its position), and where each
+    // result's pieces start.
+    let mut of = vec![0; m];
+    let mut results: Vec<Vec<usize>> = Vec::new();
+    let mut firsts: Vec<usize> = Vec::new();
+    for (k, &p) in kept.iter().enumerate() {
+        if k == 0 || owner[kept[k - 1]] != owner[p] {
+            results.push(Vec::new());
+            firsts.push(k);
+        }
+        of[k] = results.len() - 1;
+        results.last_mut().expect("a result").push(p);
+    }
+    let apart = |k: usize| {
+        crate::said(
+            "the offset of a curve whose radius of curvature is smaller than the distance falls \
+             apart where it folds over",
+            format!(
+                "the offset of {} falls apart where it folds over at this distance",
+                name(owner[kept[k]])
+            ),
+        )
+    };
+    let last_of = |k: usize| k + 1 == m || of[k + 1] != of[k];
+    // Each result's parts follow each other.
+    for k in 0..m {
+        if !last_of(k) && trimmed.next[k] != Some(k + 1) {
+            return Err(apart(k));
+        }
+    }
+    let mut next = vec![None; results.len()];
+    let mut joins_of: Vec<Option<Join>> = vec![None; results.len()];
+    for ((k, after), join) in linked(&trimmed.next)
+        .into_iter()
+        .zip(trimmed.joins.iter().copied())
+    {
+        let (g, h) = (of[k], of[after]);
+        if !last_of(k) {
+            // Two parts of one curve meet at a corner of its result.
+            if join == Join::Round {
+                return Err(apart(k));
+            }
+            continue;
+        }
+        if after != firsts[h] || (g == h && !alone) {
+            return Err(apart(k));
+        }
+        if !alone {
+            next[g] = Some(h);
+            joins_of[g] = Some(join);
+        }
+    }
+    if alone && m > 0 && trimmed.next[m - 1] != Some(0) {
+        return Err(apart(m - 1));
+    }
+    let joins = joins_of.into_iter().flatten().collect();
+    let dropped: Vec<usize> = (0..n)
+        .filter(|s| !results.iter().any(|r| owner[r[0]] == *s))
+        .collect();
+    let merged = trimmed
+        .merged
+        .iter()
+        .map(|&(curve, into)| (owner[curve], owner[into]))
+        .collect();
+    let mut left: Vec<usize> = Vec::new();
+    for s in trimmed.left.iter().map(|p| owner[*p]) {
+        if dropped.contains(&s) && !left.contains(&s) {
+            left.push(s);
+        }
+    }
+    Ok(Collapsed {
+        results,
+        next,
+        joins,
+        dropped,
+        merged,
+        left,
+    })
+}
+
+/// The knots and Hermite control points of the spline result of the
+/// pieces `parts` on their ranges (mitcad#1938: the parts of a curve that
+/// folds over, with a corner where each two meet, [`Made::Spline`]), from
+/// the stored knots when given. Each part takes a share of [0, 1] by its
+/// length.
+fn joined_spline(
+    pieces: &[Piece],
+    parts: &[usize],
+    range: &[(f64, f64)],
+    stored: Option<Vec<f64>>,
+) -> Result<(Vec<f64>, Vec<P2>), String> {
+    let (knots, locals): (Vec<f64>, Vec<Vec<f64>>) = match stored {
+        Some(stored) => {
+            // A knot listed twice in a row starts the next part.
+            let mut segments: Vec<Vec<f64>> = vec![Vec::new()];
+            for (j, k) in stored.iter().enumerate() {
+                if j > 0 && stored[j - 1] == *k {
+                    segments.push(Vec::new());
+                }
+                segments.last_mut().expect("a segment").push(*k);
+            }
+            let fits = segments.len() == parts.len()
+                && segments
+                    .iter()
+                    .all(|s| s.len() >= 2 && s[s.len() - 1] > s[0]);
+            if !fits {
+                return Err(crate::said(
+                    "the offset no longer fits: where a curve's offset folds over changed; an \
+                     edit of the sketch makes it again",
+                    format!(
+                        "the offset no longer fits: a curve's offset has {} parts now and its \
+                         stored knots {}",
+                        parts.len(),
+                        segments.len()
+                    ),
+                ));
+            }
+            let locals = segments
+                .iter()
+                .map(|s| {
+                    let (a, b) = (s[0], s[s.len() - 1]);
+                    s.iter().map(|w| (w - a) / (b - a)).collect()
+                })
+                .collect();
+            (stored, locals)
+        }
+        None => {
+            let locals: Vec<Vec<f64>> = parts
+                .iter()
+                .map(|&p| adaptive_knots(&pieces[p], range[p].0, range[p].1))
+                .collect();
+            let lengths: Vec<f64> = parts
+                .iter()
+                .map(|&p| pieces[p].length(range[p].0, range[p].1).max(1e-12))
+                .collect();
+            let total: f64 = lengths.iter().sum();
+            let mut knots = Vec::new();
+            let mut at = 0.0;
+            for (t, local) in locals.iter().enumerate() {
+                let end = if t + 1 == locals.len() {
+                    1.0
+                } else {
+                    at + lengths[t] / total
+                };
+                let last = local.len() - 1;
+                for (j, w) in local.iter().enumerate() {
+                    // The ends exactly, so that a corner is one knot twice.
+                    knots.push(match j {
+                        0 => at,
+                        j if j == last => end,
+                        _ => at + w * (end - at),
+                    });
+                }
+                at = end;
+            }
+            (knots, locals)
+        }
+    };
+    let mut control: Vec<P2> = Vec::new();
+    for (&p, local) in parts.iter().zip(&locals) {
+        let (u0, u1) = range[p];
+        let mut more = hermite(&pieces[p], u0, u1, local);
+        if let Some(end) = control.last_mut() {
+            // The corner where the two parts' offsets meet: one control
+            // point (a triple knot).
+            *end = scale(add(*end, more[0]), 0.5);
+            more.remove(0);
+        }
+        control.extend(more);
+    }
+    Ok((knots, control))
+}
+
 /// Computes the offset of a chain of solved curves: `d` to the right of
 /// the chain's direction (negative to the left), with what vanishes at the
 /// distance left out ([`trim`], mitcad#1234); `name` names a source curve
 /// by its index for the errors. With a structure, the joins, the curves
 /// that vanish and the spline knots are those of the structure, and a join
 /// of another kind or another set of curves vanishing now is an error.
+///
+/// A curve whose offset folds over in places (its radius of curvature on
+/// that side is smaller than the distance: a tight bend of a spline, an
+/// ellipse's ends) is cut into parts there ([`split_folds`], mitcad#1938):
+/// the stretches that fold over vanish, and the parts on either side meet
+/// where their offsets cross, or vanish in turn, as whole curves do. What is
+/// left of a curve is its one result, with a corner where its parts meet;
+/// a single closed curve so cut is trimmed as a closed chain of its parts.
 pub fn compute(
     sources: &[(Curve2, bool)],
     d: f64,
@@ -1758,12 +2192,19 @@ pub fn compute(
     structure: Option<&Structure>,
     name: &dyn Fn(usize) -> String,
 ) -> Result<Computed, String> {
-    let pieces = pieces_of(sources, d);
-    let n = pieces.len();
-    let size = chain_size(&pieces);
+    let whole_pieces = pieces_of(sources, d);
+    let n = whole_pieces.len();
+    let size = chain_size(&whole_pieces);
     let single_closed = n == 1 && sources[0].0.is_closed();
+    // A single closed curve whose offset folds over in places (mitcad#1938).
+    let alone = single_closed && !fold_zones(&whole_pieces[0]).is_empty();
     let closed = closed && !single_closed;
-    let trimmed = if single_closed {
+    let (pieces, owner) = if single_closed && !alone {
+        (whole_pieces, vec![0])
+    } else {
+        split_folds(whole_pieces, alone)
+    };
+    let trimmed = if single_closed && !alone {
         for p in &pieces {
             p.check_fit()?;
         }
@@ -1777,20 +2218,31 @@ pub fn compute(
             left: Vec::new(),
         }
     } else {
-        trim(&pieces, d, closed, size, false).map_err(|e| e.message(name))?
+        let named = |i: usize| name(owner[i]);
+        trim(&pieces, d, closed || alone, size, false).map_err(|e| e.message(&named))?
     };
-    let Trimmed {
-        kept,
+    let Collapsed {
+        results,
         next,
-        range,
         joins,
+        dropped,
         merged,
-        whole,
         left,
-    } = trimmed;
+    } = if single_closed && !alone {
+        Collapsed {
+            results: vec![vec![0]],
+            next: vec![None],
+            joins: Vec::new(),
+            dropped: Vec::new(),
+            merged: Vec::new(),
+            left: Vec::new(),
+        }
+    } else {
+        collapse(&trimmed, &owner, n, alone, name)?
+    };
+    let Trimmed { range, whole, .. } = trimmed;
     // The joins follow the links of the curves that have one after them.
     let links = linked(&next);
-    let dropped: Vec<usize> = (0..n).filter(|i| !kept.contains(i)).collect();
     if let Some(s) = structure {
         if s.dropped != dropped {
             let names = |list: &[usize]| {
@@ -1815,8 +2267,12 @@ pub fn compute(
                     .to_owned(),
             );
         }
+        // A smooth join and a trimmed one both share a point; only a round
+        // corner has a curve of its own (a part of a curve that folds over
+        // ends where it is trimmed, mitcad#1938).
         for (j, kind) in joins.iter().enumerate() {
-            if s.joins.get(j) != Some(kind) {
+            let round = |join: &Join| *join == Join::Round;
+            if s.joins.get(j).map(round) != Some(round(kind)) {
                 return Err(format!(
                     "the offset no longer fits: the corner at join {j} changed from {:?} to \
                      {kind:?} (round, trimmed or smooth); offset again",
@@ -1825,27 +2281,34 @@ pub fn compute(
             }
         }
     }
-    let m = kept.len();
+    let m = results.len();
     // Round corners about the source's corner.
     let mut corners = Vec::new();
     for (&(j, after), join) in links.iter().zip(&joins) {
         if *join == Join::Round {
-            let (a, b) = (&pieces[kept[j]], &pieces[kept[after]]);
+            let last = *results[j].last().expect("a piece");
+            let (a, b) = (&pieces[last], &pieces[results[after][0]]);
             let (corner, _) = a.source(1.0);
             corners.push((j, round_corner(corner, a.eval(1.0).0, b.eval(0.0).0)));
         }
     }
-    // Each kept piece in chain direction: start and end, then its curve.
+    // Each result in chain direction: start and end, then its curve.
     let mut ends: Vec<(P2, P2)> = Vec::with_capacity(m);
-    for i in &kept {
-        let (u0, u1) = range[*i];
-        if u1 <= u0 {
-            return Err(format!(
-                "the offset is larger than {} of the chain",
-                name(*i)
-            ));
+    for parts in &results {
+        for p in parts {
+            let (u0, u1) = range[*p];
+            if u1 <= u0 {
+                return Err(format!(
+                    "the offset is larger than {} of the chain",
+                    name(owner[*p])
+                ));
+            }
         }
-        ends.push((pieces[*i].eval(u0).0, pieces[*i].eval(u1).0));
+        let (first, last) = (parts[0], *parts.last().expect("a piece"));
+        ends.push((
+            pieces[first].eval(range[first].0).0,
+            pieces[last].eval(range[last].1).0,
+        ));
     }
     // Pieces that meet share one point exactly.
     for (&(j, after), join) in links.iter().zip(&joins) {
@@ -1856,9 +2319,9 @@ pub fn compute(
         }
     }
     let mut made = Vec::with_capacity(m);
-    for (k, i) in kept.iter().enumerate() {
+    for (k, parts) in results.iter().enumerate() {
+        let i = &parts[0];
         let p = &pieces[*i];
-        let (u0, u1) = range[*i];
         let (from, to) = ends[k];
         made.push(match &p.curve {
             Curve2::Line { .. } => Made::Line(from, to),
@@ -1894,11 +2357,8 @@ pub fn compute(
                 }
             }
             _ => {
-                let knots = match structure.and_then(|s| s.knots.get(k).cloned().flatten()) {
-                    Some(knots) => knots,
-                    None => adaptive_knots(p, u0, u1),
-                };
-                let mut control = hermite(p, u0, u1, &knots);
+                let stored = structure.and_then(|s| s.knots.get(k).cloned().flatten());
+                let (knots, mut control) = joined_spline(&pieces, parts, &range, stored)?;
                 let last = control.len() - 1;
                 control[0] = from;
                 control[last] = if single_closed { from } else { to };
@@ -1976,15 +2436,24 @@ fn positions(made: &Made, kind: &EntityKind) -> Result<Positions, String> {
     })
 }
 
-/// The distinct knots of a stored spline result, scaled to [0, 1].
-fn stored_knots(kind: &EntityKind) -> Option<Vec<f64>> {
+/// The distinct knots of a stored spline result, scaled to [0, 1]; an
+/// inner triple knot, a corner, twice ([`Made::Spline`], mitcad#1938).
+pub(crate) fn stored_knots(kind: &EntityKind) -> Option<Vec<f64>> {
     let EntityKind::Spline { knots, .. } = kind else {
         return None;
     };
+    let (first, last) = (knots.first()?, knots.last()?);
     let mut distinct: Vec<f64> = Vec::new();
+    let mut run = 0;
     for k in knots {
-        if distinct.last() != Some(k) {
+        if distinct.last() == Some(k) {
+            run += 1;
+            if run == 3 && k != first && k != last {
+                distinct.push(*k);
+            }
+        } else {
             distinct.push(*k);
+            run = 1;
         }
     }
     Some(distinct)

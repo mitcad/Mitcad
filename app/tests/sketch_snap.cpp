@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-// The sketch snapper's body targets (mitcad#258): body vertices and the
-// middles of body edges in the sketch plane are found within the pixel
-// tolerances when a tool's switch gives them, never without it, and the
-// sketch's own geometry wins ties against them; those out of the plane
-// (mitcad#866) are read but never snapped to. The sketch's x and y axes
+// The sketch snapper's body targets (mitcad#258, mitcad#1967): body
+// vertices, the middles of body edges and the edges in the sketch plane
+// are found within the pixel tolerances when a tool's switch gives them,
+// never without it, and the sketch's own geometry wins ties against them;
+// those out of the plane (mitcad#866) are read but never snapped to. The sketch's x and y axes
 // (mitcad#948) as curves to snap onto, and the coincident that holds a
 // point placed there on the axis's entity. What a drawing tool adds
 // automatically (mitcad#1024): a quadrant's coincident and centre
@@ -135,9 +135,26 @@ void bodyTargetTests() {
   CHECK(s.bodyItem.type == QStringLiteral("line"));
   CHECK(s.describe() == QStringLiteral("midpoint of body edge E{d}"));
   // 7 pixels from the middle (within 8); 9 pixels: neither the middle nor
-  // a corner, and a body edge is no curve to snap onto.
+  // a corner, and too far from the edge to snap onto it (6).
   CHECK(snapAt(settings, V2{30.7, 5.0}).kind == Snap::Kind::BodyMidpoint);
   CHECK(snapAt(settings, V2{30.9, 5.0}).kind == Snap::Kind::None);
+  // Onto a body edge away from its middle and ends (mitcad#1967): 3
+  // pixels from the line at (30, 2), the nearest point of the edge; 7
+  // pixels: not.
+  s = snapAt(settings, V2{30.3, 2.0});
+  CHECK(s.kind == Snap::Kind::BodyOnEdge);
+  CHECK(sameAt(s.at, V2{30.0, 2.0}));
+  CHECK(s.bodyItem.source == QStringLiteral("E{d}"));
+  CHECK(s.onGeometry() && !s.atPoint() && s.alongCurve() && s.onBody());
+  CHECK(s.describe() == QStringLiteral("on body edge E{d}"));
+  CHECK(snapAt(settings, V2{30.7, 2.0}).kind == Snap::Kind::None);
+  // The edge's end corner and its middle win over the edge.
+  CHECK(snapAt(settings, V2{30.2, 0.3}).kind == Snap::Kind::BodyVertex);
+  CHECK(snapAt(settings, V2{30.2, 5.3}).kind == Snap::Kind::BodyMidpoint);
+  // Without the switch: no edge either.
+  settings.body = nullptr;
+  CHECK(snapAt(settings, V2{30.3, 2.0}).kind == Snap::Kind::None);
+  settings.body = &body;
 
   // Ties: the sketch's point at the body corner's place wins, also when
   // the cursor is a little nearer the corner; the sketch line's middle wins
@@ -149,6 +166,10 @@ void bodyTargetTests() {
   CHECK(s.kind == Snap::Kind::Point);
   s = snapAt(settings, V2{5.0, 20.1});
   CHECK(s.kind == Snap::Kind::Midpoint);
+  CHECK(s.curve == QStringLiteral("c4"));
+  // The sketch line wins over the body edge under it (mitcad#1967).
+  s = snapAt(settings, V2{2.0, 20.2});
+  CHECK(s.kind == Snap::Kind::OnCurve);
   CHECK(s.curve == QStringLiteral("c4"));
   // A body corner still wins over a sketch point clearly further away.
   PointData beside;

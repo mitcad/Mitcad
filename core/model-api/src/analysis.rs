@@ -1468,6 +1468,16 @@ impl<K: Kernel> AnalysisOps<K> for Document<K> {
     }
 }
 
+/// An occurrence path from the root by ids, names or both
+/// ([`AnalysisLocal::occurrence_path`]), for the commands of the direction of
+/// gravity (mitcad#1713).
+pub(crate) fn occurrence_path_of<K: Kernel>(
+    doc: &Document<K>,
+    text: &str,
+) -> Result<OccurrencePath, ApiError> {
+    doc.occurrence_path(text)
+}
+
 /// The document's methods used only in this module, as an
 /// extension trait (mitcad#777): the api can then live in a crate above
 /// the model.

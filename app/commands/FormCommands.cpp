@@ -16,8 +16,10 @@
 //   the lines over the view) and applied by Apply (Enter) as one undo step
 //   (CommandDef::apply, repeats): Move, Rotate and Scale with their
 //   handles, Extrude Faces, Insert Edge Loop, Delete Edge Loop, Crease
-//   (sharp or semi-sharp), Uncrease, Delete Faces and Symmetry (about X, Y,
-//   Z or a picked plane); a vertex dragged in the view is put there at
+//   (sharp or semi-sharp), Uncrease, Delete Faces, Symmetry (about X, Y,
+//   Z or a picked plane), Fill Hole and Bridge (mitcad#1941; also the
+//   view's context menu and the command search while the panel is open:
+//   MainWindowForm.cpp); a vertex dragged in the view is put there at
 //   once, one undo step too (mitcad#1810). Close keeps the edits; Undo Last
 //   Edit and Undo All Edits take this panel's edits back.
 #include <cmath>
@@ -307,6 +309,9 @@ const QString kCreaseType = QStringLiteral("crease_type");  // Sharp or Semi-Sha
 const QString kSharpness = QStringLiteral("sharpness");
 const QString kMirror = QStringLiteral("mirror");           // a picked plane or planar face
 const QString kMirrorPlane = QStringLiteral("mirror_plane"); // it resolved (state object)
+const QString kQuads = QStringLiteral("quads");             // Fill Hole: a grid of quads (mitcad#1941)
+const QString kLoops = QStringLiteral("loops");             // Bridge: whole openings
+const QString kSegments = QStringLiteral("segments");       // Bridge: rows across
 
 forms::Action actionIn(const CommandState& state) {
   return forms::actionOf(state.choice(kAction)).value_or(forms::Action::Move);
@@ -349,6 +354,9 @@ forms::Edit editIn(const CommandState& state) {
   if (edit.action == forms::Action::Crease && state.choice(kCreaseType) == QStringLiteral("semi")) {
     edit.sharpness = state.value(kSharpness); // NaN: refused in words
   }
+  edit.quads = state.checked(kQuads);
+  edit.loops = state.checked(kLoops);
+  edit.segments = state.value(kSegments); // NaN: refused in words
   edit.plane = state.choice(kPlane);
   const QJsonObject mirror = state.object(kMirrorPlane);
   if (edit.plane == QStringLiteral("picked") && !mirror.isEmpty()) {
@@ -601,7 +609,9 @@ CommandDef formEditCommand(DocumentHost& host, const FormEditHooks& hooks) {
                    {QStringLiteral("crease"), QStringLiteral("Crease")},
                    {QStringLiteral("uncrease"), QStringLiteral("Uncrease")},
                    {QStringLiteral("delete_faces"), QStringLiteral("Delete Faces")},
-                   {QStringLiteral("symmetry"), QStringLiteral("Symmetry")}},
+                   {QStringLiteral("symmetry"), QStringLiteral("Symmetry")},
+                   {QStringLiteral("fill_hole"), QStringLiteral("Fill Hole")},
+                   {QStringLiteral("bridge"), QStringLiteral("Bridge")}},
                   QStringLiteral("move"))
           .withTooltip(QObject::tr("What Apply does to the picks"))
           .withOnChange([hooks](CommandState& state, const CommandContext&) {
@@ -764,6 +774,18 @@ CommandDef formEditCommand(DocumentHost& host, const FormEditHooks& hooks) {
             return actionIn(state) == forms::Action::Crease && state.choice(kCreaseType) == QStringLiteral("semi");
           })
           .withTooltip(QObject::tr("How many subdivision steps the edges stay sharp; more is sharper")),
+      // Fill Hole and Bridge (mitcad#1941): the opening a picked boundary
+      // edge lies on filled; two openings or runs of open edges joined.
+      checkInput(kQuads, QObject::tr("Quads"), false)
+          .withVisible(is(forms::Action::FillHole))
+          .withTooltip(QObject::tr("A grid of quads when the opening has an even number of edges; else one face")),
+      checkInput(kLoops, QObject::tr("Whole Openings"), true)
+          .withVisible(is(forms::Action::Bridge))
+          .withTooltip(QObject::tr("An edge of each opening joins the whole openings; off, the picked edges are the sides")),
+      valueInput(kSegments, QObject::tr("Segments"), ValueKind::Unitless, QStringLiteral("1"))
+          .withStepMinimum(1.0)
+          .withVisible(is(forms::Action::Bridge))
+          .withTooltip(QObject::tr("Rows of faces across the bridge")),
       choiceInput(kPlane, QObject::tr("Plane"),
                   {{QStringLiteral("none"), QStringLiteral("None")},
                    {QStringLiteral("x"), QStringLiteral("X")},

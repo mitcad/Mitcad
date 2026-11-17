@@ -245,3 +245,52 @@ inactive),
 `tests::constraint_tests` (a parallel constraint and a second width among
 good ones; a dimension 4 µm off and a coincidence 50 µm off a linked
 spline come in inactive), `freecad::tests` (a parallel constraint).
+
+## Units and up direction (mitcad#1937)
+
+**Length unit.** The design segment keeps six unit systems
+(`UnitSystems`: `CmMKS`, `MmMKS`, `MMKS`, `InchImperial`, `Imperial`,
+`Custom`), and the `AssetSettings` record (the segment's first object)
+refers to the one the design uses. That system's `ModelingLength` entry
+(property `modelingLengthName`) names the unit as text: `millimeter`,
+`centimeter`, `meter`, `inch` or `foot`. The decoder writes it as
+`document.default_length_units` (`mm`, `cm`, `m`, `in`, `ft`), and the
+replay sets the design's unit to it before the parameters
+(`Importer::set_units`). Model coordinates are centimetres whichever the
+unit, so nothing else changes. Until mitcad#1937 the stream decoder did
+not read it and every design came in in millimetres.
+
+**Up direction.** A design is modelled with Z up or with Y up, a choice
+made when the design was started. The file has no separate flag for it;
+its standard named views carry it. Each named view record (UTF-16 name
+`TOP`, `FRONT`, `RIGHT`, `HOME`) refers to a camera record that ends with
+the eye, a `u32`, the target and the up vector (`f64` each, cm). A Z-up
+design's Front view looks along +Y with +Z up (MitCad's own Front); a
+Y-up design's looks along -Z with +Y up, and in MitCad's views it lay on
+its side. The decoder writes the views as `document.named_views`.
+
+**The choice: turn the design, not the views.** MitCad has no per-design
+up direction (the view cube, the standard views and named views are Z up
+everywhere), so after the replay the import turns a design whose Front
+view is not MitCad's by the quarter turns that take it there (Y up: 90
+degrees about X), with Reorient Design (`mitcad-import-replay`'s
+`upright`). That is a rewrite of the definitions, not a move: the design
+stays parametric, sketches go onto the turned origin planes with their
+frames, and coordinates, exports and views all agree on Z up. It is part
+of the import's undo step and is reported as `upright` (commands.md,
+*The design's length unit and up direction*). Where Reorient Design
+refuses (a feature that would fail turned, a body that would not be where
+the turn takes it) the design stays as modelled, with a warning. The
+documents a design refers to are not turned: the design's placements of
+their components are in their own coordinates (`Options::upright` is set
+for the design opened only). A Front view off the model axes (set by the
+user at an angle) leaves the design as it is.
+
+Tests: `build::settings::tests` (`mitcad-f3d-design`: the unit system the
+settings refer to, the named views' cameras), `tests::upright_tests`
+(`mitcad-import`, mock kernel: a Y-up block stands on Z up in inches, a
+Z-up one and a referred document are not turned), Reorient Design's own
+in `reorient_tests` (a base feature without bodies, a Move Face), and the
+ctest `cli.f3d_reported_house` (a reported Y-up design in inches under
+`MITCAD_MITCAD_REPORTED`, skipped without it: its unit, the turn, and its
+occurrences placed as the file places them, turned).

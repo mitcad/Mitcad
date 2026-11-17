@@ -12,7 +12,9 @@ Language ([user guide](user-guide.md#language)).
   `QCoreApplication::translate()` or `QT_TRANSLATE_NOOP()`. The ribbon's
   tabs, groups and menu subgroups are named by ids in code ("SHEET METAL",
   "Machine Elements"); their shown names are the context `RibbonName`
-  (`displayName` in `app/framework/Ribbon.cpp`).
+  (`displayName` in `app/framework/Ribbon.cpp`). A command's short label
+  under its button (`CommandDef::shortLabel`, Preferences › Display ›
+  Toolbar labels) is the context `RibbonLabel`.
 - **Catalogues.** Each language has a Qt Linguist file
   `app/translations/mitcad_<code>.ts` and a line in
   `app/translations/languages.txt`: its code and its baseline of unfinished
@@ -399,9 +401,10 @@ päätä", never "napsauta keskipiste".
 | mesh | verkko | never verkkomalli (malli is a design); Convert Mesh: Muunna verkko; Save as Mesh: Tallenna verkkona |
 | feature | piirre | |
 | sketch | luonnos | Create Sketch: Luo luonnos; Finish Sketch: Lopeta luonnos |
-| through the bodies (drawn) | kappaleiden läpi | Sketches Through Bodies: Luonnokset kappaleiden läpi; Show All Sketches, Hide All Sketches: Näytä kaikki luonnokset, Piilota kaikki luonnokset |
+| through the bodies (drawn) | kappaleiden läpi | Sketches Through Bodies: Luonnokset kappaleiden läpi; Selection Through Bodies: Valinta kappaleiden läpi; Show All Sketches, Hide All Sketches: Näytä kaikki luonnokset, Piilota kaikki luonnokset |
 | 3D sketch | 3D-luonnos | Create 3D Sketch: Luo 3D-luonnos; Convert to 3D Sketch: Muunna 3D-luonnokseksi; 3D Sketch Palette: 3D-luonnospaletti; route (a 3D sketch's path): reitti |
 | text (sketch) | teksti | anchor (a text's): ankkuri; Position X, Y: Sijainti X, Y; a text on a path: polulla oleva teksti; QR code: QR-koodi |
+| Flex (the tool and what it lays) | Flex | the item: taipuisa osa (osa after the first mention); node: solmu; end of a pipe: putken pää; twist: kierto; bend radius on edge: taivutussäde syrjän yli; flat side: lape; hose: letku; wire: johdin; strip: nauha |
 | relation (3D sketch) | suhde | a 3D sketch's constraint; Relations: Suhteet; In plane: Tasossa; in-plane relation, Fix, dimension: tasosuhde, tasokiinnitys, tasomitta; Align X: Suuntaa X; Keep Axis, Keep Plane: Pidä akselilla, Pidä tasossa |
 | On Sketch Plane | Luonnostasolla | the relation; Release from Plane: Vapauta tasosta; Release Plane: Vapauta taso |
 | attach, detach (3D sketch) | linkittää, irrottaa | Attach: Linkitä; Detach: Irrota; linked reference: linkitetty viittaus; source: lähde; Replace Reference: Korvaa viittaus; reference curve: viitekäyrä; On Face (a point on a face): Tahkolla |
@@ -556,6 +559,8 @@ päätä", never "napsauta keskipiste".
 | prime tower (3D print) | esitäyttötorni | brim: reunus; skirt: helma; raft: lautta; ironing: silitys; retraction: takaisinveto |
 | key names | Shift, Ctrl, Alt, Enter | as on the keyboard, never translated (not Vaihto) |
 | navigation bar, toolbar | navigointipalkki, työkalurivi | Pin to Navigation Bar: Kiinnitä navigointipalkkiin; Unpin from Navigation Bar: Irrota navigointipalkista; Pin to Toolbar: Kiinnitä työkaluriville |
+| node, twist (a flexible item laid through the model) | solmu, kierto | Delete Node: Poista solmu; Set Twist: Aseta kierto; Reset Twist: Nollaa kierto; tightest bend: jyrkin taivutus; to route: reitittää; an end (of a pipe or an item): pää |
+| gravity, let hang, keep shape (a hanging cable) | painovoima, anna roikkua, pidä muoto | Let It Hang: Anna roikkua (its panel's Gravity: Painovoima; Direction From: Suunta kohteesta; Clear Gravity: Poista painovoima; Damping: Vaimennus; Ends: Päät; Start pinned: Alku kiinnitetty; End pinned: Loppu kiinnitetty); keep the shape: pidä muoto; pinned: kiinnitetty (pin: kiinnitä); let go (a node): vapauta; hangs free: roikkuu vapaana; settle, rest: asettua, levossa; pulled tight: kireällä; fixed length: kiinteä pituus; slack: löysä |
 | setup (CAM) | kiinnitys | New Setup: Uusi kiinnitys; never asetus, which is a setting |
 | operation (CAM) | työstövaihe | Facing: Tasaus; Contour: Ääriviiva; Pocket: Tasku; Drill: Poraus; Adaptive Clearing: Mukautuva rouhinta; Rest Machining: Jäännöstyöstö; contour (the operation) in a sentence: ääriviivatyöstö |
 | toolpath | työstörata | Generate: Laske; Simulate: Simuloi; Post Process…: Jälkikäsittele…; the program: ohjelma |
@@ -569,3 +574,8 @@ päätä", never "napsauta keskipiste".
 | heights, depths (CAM) | korkeudet, syvyydet | clearance height: siirtokorkeus; retract height: vetäytymiskorkeus; safe height: turvakorkeus; step down: askelsyvyys; stepover: sivuaskel |
 | entry (CAM) | sisääntulo | plunge: pisto; ramp: ramppi; helix: heliksi (a helix curve is kierukka); lead in and out: sisään- ja ulosajokaaret; engagement: kosketuskulma |
 | holding tab | pidike | peck drilling: askelporaus; canned cycle: ohjaimen porauskierto |
+| acknowledge (a warning) | kuitata | Acknowledge Warning: Kuittaa varoitus; Acknowledge All Warnings: Kuittaa kaikki varoitukset; acknowledged: kuitattu; Show Again: Näytä uudelleen (mitcad#1935) |
+| toolbar labels | työkalurivin tekstit | Icons only: Vain kuvakkeet; Labels under icons: Tekstit kuvakkeiden alla; the buttons' short labels (the context `RibbonLabel`): Sketch: Luonnos; Section: Leikkaus |
+| Fill Hole, Bridge (Form) | Täytä aukko, Silta | an opening of the cage: aukko; quads: nelikulmiot; segments: segmentit; whole openings: kokonaiset aukot (mitcad#1941) |
+| shared miter | yhteinen jiiri | Miter Shared (the choice): jiirin valinta Jaettu; the component an end meets: kohdattava komponentti; Meets end %1 of %2: Kohtaa kohteen %2 pään %1; Leans: Kallistus (mitcad#1940) |
+| second direction (sketch pattern) | toinen suunta | Direction 2: Suunta 2; At Right Angles: Kohtisuoraan; As Stored: Tallennettu (mitcad#1969) |

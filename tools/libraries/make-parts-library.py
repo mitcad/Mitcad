@@ -7,7 +7,7 @@ library is MIT; the fasteners keep CC0-1.0 as their own licence.
 
     python3 make-parts-library.py --cli build/dev/tools/cli/mitcad-cli \\
         --source <folder of the supplier's files> --out <clone of the parts repository> \\
-        [--groups tools/libraries/profiles] [--version 2.11.0] [--work <folder>] [--no-render] [--commit] \\
+        [--groups tools/libraries/profiles] [--version 2.12.0] [--work <folder>] [--no-render] [--commit] \\
         [--render-worker build/dev/app/mitcad-render] [--rerender]
 
 --out is a clone of the parts repository (the fastener library until
@@ -18,9 +18,10 @@ already has is refused before anything is made (library_tags.py,
 mitcad#1372). The version is 2.0.0 for the first parts library, since the library's id
 changed (mitcad-fasteners became mitcad-parts); designs that recorded the
 fasteners at 1.0.0 keep reading them from the same repository. The
-default version is the next one to publish: 2.11.0 adds the square and
-rectangular steel tubes to ASTM A500 in inch sizes and a square and a
-rectangular steel tube of a typed size (mitcad#1328; 2.10.0 gave the
+default version is the next one to publish: 2.12.0 gives every part cut
+to length a length option with its stock lengths (mitcad#1950; 2.11.0 added
+the square and rectangular steel tubes to ASTM A500 in inch sizes and a square and a
+rectangular steel tube of a typed size, mitcad#1328; 2.10.0 gave the
 fasteners their mount frames, mitcad#1197; 2.9.0 made each
 fastener one component of its ISO and DIN standard, its rows tagged with
 their standards and the suppliers' articles, mitcad#949; 2.8.0 added the ISO
@@ -175,6 +176,8 @@ keep reading their parts at the versions they recorded.
 What the recent versions added (Update in MitCad's library browser fetches
 the newest):
 
+- 2.12.0: a length for every part cut to length (profiles, tubes, timber,
+  rails, strips and panels), typed or chosen from its stock lengths.
 - 2.11.0: the square and rectangular steel tubes to ASTM A500 (HSS) in inch
   sizes (search A500 or HSS), and a square and a rectangular steel tube of
   any size you type.
@@ -201,7 +204,7 @@ def main():
     parser.add_argument("--source", required=True, help="the folder of the supplier's files (never copied)")
     parser.add_argument("--out", required=True, help="a clone of the parts repository, or a new folder")
     parser.add_argument("--groups", default=os.path.join(HERE, "profiles"), help="the profile parts' group files")
-    parser.add_argument("--version", default="2.11.0", help="the library's version")
+    parser.add_argument("--version", default="2.12.0", help="the library's version")
     parser.add_argument("--work", help="folder for intermediate files (default: next to --out)")
     parser.add_argument("--no-render", action="store_true", help="passed to both generators")
     parser.add_argument("--render-worker", help="mitcad-render for the previews, passed to both generators")

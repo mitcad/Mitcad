@@ -2022,6 +2022,17 @@ void ConfigurationsDialog::removeOption() {
   for (cfg::Row& row : table.rows) {
     row.setValue(name, QString());
   }
+  // An open option of a closed table (mitcad#1950, kept in `other`) goes
+  // with it.
+  if (table.other.contains(QStringLiteral("open"))) {
+    QJsonArray open;
+    for (const QJsonValue& value : table.other.value(QStringLiteral("open")).toArray()) {
+      if (value.toString() != name) {
+        open.append(value);
+      }
+    }
+    table.other.insert(QStringLiteral("open"), open);
+  }
   submitTable(table, QString(), name, QStringLiteral("removed option"));
 }
 

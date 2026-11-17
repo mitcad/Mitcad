@@ -12,6 +12,10 @@
 #     window's pick, the highlights' slices), none asserted.
 #   - A click on the pattern's timeline cell selects its 255 bodies (drawn
 #     as shadows with their dashed copies, sliced); Esc clears them.
+#   - The window's edges are drawn through the bodies (mitcad#1956): the
+#     copies counted, nothing meshed for them. The pattern's bodies,
+#     selected with their feature in the timeline, are inspected through
+#     what hides them (their dashed copies) and get no such copy.
 #   - Drawn slowly on purpose (MITCAD_TEST_HIGHLIGHT_STEP_MS: one body's
 #     highlights at a time, 40 ms apart), the window's highlights are cut
 #     short: by Esc, by another window and by a click, each of which drops
@@ -75,6 +79,7 @@ timings() {
   echo "     $(last_new '^Timing window pick: ')"
   echo "     $(last_new '^Selection timing: ')"
   echo "     $(last_new '^View highlights drawn: ')"
+  echo "     $(last_new '^Selection through the bodies: ')"
 }
 
 # select_all_and_clear what: a window over the whole view, then Esc; the
@@ -83,6 +88,7 @@ select_all_and_clear() {
   ui_mark
   ui_step "window over $1"                 ui_view_drag 1 3 3 97 97
   expect_new_match "^Selected: [0-9]+ " "the window selected $1" 120
+  expect_new_match "^Selection through the bodies: .*; [1-9][0-9]* copies, nothing meshed$"     "$1 drawn through the bodies, nothing meshed" 120
   ui_wait_idle
   ui_sync
   timings
@@ -110,7 +116,14 @@ ui_expect_log "Timeline RectangularPattern1 at" "the pattern's cell"
 ui_mark
 ui_step "click RectangularPattern1"      ui_click_logged "Timeline RectangularPattern1"
 ui_expect_new "Selected: 255 bodies" "the pattern's bodies selected" 60
+expect_new_match "^View body highlights: .+, " "the bodies' highlights drawn" 60
 ui_sync
+# Inspected through what hides them (their dashed copies): no copy of the
+# selection through the bodies for them (OcctViewer::wantsSelectionThrough).
+if tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -qE '^Selection through the bodies: body '; then
+  ui_fail "the bodies inspected from the timeline got copies through the bodies"
+fi
+echo "ok   the inspected bodies get no copies through the bodies"
 timings
 ui_mark
 ui_step "clear the selection (Esc)"      ui_key Escape

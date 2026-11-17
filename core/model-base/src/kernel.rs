@@ -1985,6 +1985,45 @@ pub trait Kernel: Send {
         Err(KernelError::Unsupported("face separations"))
     }
 
+    // Flex: flexible items routed through the model, the solids of their
+    // sections that are not round, and the end ports of pipes and Flex
+    // items (mitcad#1713; `crate::flex`, `features::flex`).
+
+    /// The route of a Flex item through its nodes
+    /// ([`crate::flex::FlexRouteSpec`]): its centre line, its samples with
+    /// the section's orientation, and what is wrong with it. A route that
+    /// passes through something or bends too tightly is no error: the
+    /// best one found comes with its problems. The obstacles are left as
+    /// they are.
+    fn flex_route(
+        &self,
+        _spec: &crate::flex::FlexRouteSpec<'_, Self::Shape>,
+    ) -> Result<crate::flex::FlexRoute, KernelError> {
+        Err(KernelError::Unsupported("flex routes"))
+    }
+
+    /// The solid of the section swept along a route,
+    /// turned as the route's samples say ([`crate::flex::FlexSolidSpec`]).
+    /// A round one along a route in one plane is built as a pipe.
+    fn flex_solid(
+        &self,
+        _spec: &crate::flex::FlexSolidSpec<'_>,
+    ) -> Result<Self::Shape, KernelError> {
+        Err(KernelError::Unsupported("flex solids"))
+    }
+
+    /// The end port at the cap face `cap` of a pipe's or a Flex item's
+    /// body (`F5:start`, `F5:end`; every piece of the name):
+    /// [`crate::flex::EndPort`]. An error when the shape has no such face
+    /// or the face is not planar.
+    fn end_port(
+        &self,
+        _shape: &Self::Shape,
+        _cap: &FaceName,
+    ) -> Result<crate::flex::EndPort, KernelError> {
+        Err(KernelError::Unsupported("end ports"))
+    }
+
     // Curve tools: helical curves, sections of faces and bodies, and helices
     // of sketch curves (mitcad#1777; `features::helix_curve`,
     // `features::intersection_curve`, `features::helix`).
@@ -2206,6 +2245,30 @@ pub trait Kernel: Send {
         _direction: [f64; 3],
     ) -> Result<Vec<Curve3>, KernelError> {
         Err(KernelError::Unsupported("face silhouettes"))
+    }
+
+    // Flex drape: a Flex item let hang, the chain its centre line hangs as
+    // and the nodes that keep its shape (mitcad#1713; `crate::flex_drape`).
+
+    /// The chain of a hanging item simulated for `spec.seconds`
+    /// ([`crate::flex_drape::DrapeStepSpec`]): where its points are then,
+    /// their velocities, the section's orientation, what each lies on and
+    /// whether it rests. The obstacles are left as they are.
+    fn flex_drape_step(
+        &self,
+        _spec: &crate::flex_drape::DrapeStepSpec<'_, Self::Shape>,
+    ) -> Result<crate::flex_drape::DrapeStep, KernelError> {
+        Err(KernelError::Unsupported("hanging flex items"))
+    }
+
+    /// The fewest points of a resting chain through which the item's route
+    /// is the chain's shape within the tolerance
+    /// ([`crate::flex_drape::DrapeNodesSpec`]).
+    fn flex_drape_nodes(
+        &self,
+        _spec: &crate::flex_drape::DrapeNodesSpec<'_, Self::Shape>,
+    ) -> Result<crate::flex_drape::DrapeNodes, KernelError> {
+        Err(KernelError::Unsupported("hanging flex items"))
     }
 }
 

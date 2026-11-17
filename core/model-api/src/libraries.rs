@@ -382,6 +382,15 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             value["quantity"] = json!(row.part.quantity);
             value["body"] = json!(row.body);
             value["group_names"] = json!(row.names);
+            // A Flex item's row says how much of what (mitcad#1713): its
+            // routed length, and the type it was copied from.
+            if let Some(flex) = self.flex_length_of_row(row.part.component, row.body) {
+                value["flex"] = json!(flex.feature);
+                value["length"] = json!(flex.length);
+                if let Some(id) = &flex.type_id {
+                    value["flex_type"] = json!(id);
+                }
+            }
             if !row.materials.is_empty() {
                 let material = row
                     .materials

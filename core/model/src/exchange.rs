@@ -1812,13 +1812,18 @@ impl<K: Kernel> Document<K> {
     /// coordinates and in `unit` (mitcad#1408: the design's unless the
     /// export names another). Construction curves and center lines are
     /// written, on the layer `construction`, only with `construction`
-    /// (mitcad#1445). Returns the number of entities.
+    /// (mitcad#1445). With `points`, the sketch's free-standing points are
+    /// written as POINT entities on the layer `POINTS` (mitcad#1963: hole
+    /// marks for a cutting table), its construction points on the layer
+    /// `construction` only with `construction` too. Returns the number of
+    /// entities.
     pub fn export_sketch_dxf(
         &self,
         sketch: FeatureUid,
         path: &str,
         unit: crate::expr::LengthUnit,
         construction: bool,
+        points: bool,
         options: &mitcad_dxf::WriteOptions,
     ) -> Result<usize, ModelError> {
         let entry = self
@@ -1867,8 +1872,16 @@ impl<K: Kernel> Document<K> {
                 Some((layer, e.as_ref().to_string(), curve.whole()))
             })
             .collect();
-        let drawing = sketch_drawing(curves.iter().map(|(l, n, g)| (*l, n.as_str(), g)))
+        let mut drawing = sketch_drawing(curves.iter().map(|(l, n, g)| (*l, n.as_str(), g)))
             .map_err(|e| invalid(format!("{}: {e}", entry.name)))?;
+        if points {
+            for (layer, at) in sketch_free_points(def, &output.solved.points, construction) {
+                drawing.push(
+                    layer,
+                    mitcad_dxf::Geometry::Point(mitcad_dxf::Point2::new(at[0], at[1])),
+                );
+            }
+        }
         let drawing = dxf_in_unit(drawing, unit);
         mitcad_dxf::write_file(&drawing, path, options)
             .map_err(|e| invalid(format!("cannot write {path}: {e}")))?;
@@ -2014,6 +2027,40 @@ pub fn sketch_drawing<'a>(
         }
     }
     Ok(drawing)
+}
+
+/// The sketch's free-standing points (mitcad#1963), each with its DXF
+/// layer and its solved place in sketch coordinates and millimetres: the
+/// points no curve refers to (not an end, centre or control point), on the
+/// layer `POINTS`; the construction ones on the layer `construction`, only
+/// with `construction`. The sketch's origin point and its axes' ends, which
+/// stand for the sketch's own frame, are not among them.
+pub(crate) fn sketch_free_points(
+    def: &crate::features::SketchDef,
+    solved: &BTreeMap<crate::ids::EntityUid, [f64; 2]>,
+    construction: bool,
+) -> Vec<(&'static str, [f64; 2])> {
+    let used: BTreeSet<crate::ids::EntityUid> =
+        def.entities.iter().flat_map(|e| e.kind.points()).collect();
+    let origin = crate::sketch::axes::origin_point(def);
+    def.entities
+        .iter()
+        .filter(|e| e.kind.is_point() && e.axis.is_none())
+        .filter(|e| !used.contains(&e.id) && Some(e.id) != origin)
+        .filter(|e| construction || !e.construction)
+        .filter_map(|e| {
+            let at = match e.kind {
+                crate::sketch::EntityKind::Point { at } => solved.get(&e.id).copied().unwrap_or(at),
+                _ => return None,
+            };
+            let layer = if e.construction {
+                "construction"
+            } else {
+                "POINTS"
+            };
+            Some((layer, at))
+        })
+        .collect()
 }
 
 /// An ellipse, or the arc between two parameter angles counter-clockwise,

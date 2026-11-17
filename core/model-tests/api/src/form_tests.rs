@@ -3,7 +3,8 @@
 //! started from a box cage, its cage queried and edited (moves, an
 //! extrusion, an edge loop in and out, creases), each edit one undo step;
 //! a symmetric cage whose halves stay equal; previews that change nothing;
-//! refusals that leave no step; saved and read back.
+//! refusals that leave no step; saved and read back; openings filled and
+//! bridged (mitcad#1941).
 
 use serde_json::{Value, json};
 
@@ -484,4 +485,241 @@ fn a_form_starts_from_a_face_of_the_model() {
     assert_eq!(sheet["faces"], 1);
     // An eight-sided face: eight patches.
     assert_eq!(faces(&doc, "F4.b0").len(), 8);
+}
+
+/// The cage face of the top (facing up) whose centre is furthest along +x.
+fn top_face_at_right(cage: &Value) -> Value {
+    cage["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["normal"][2].as_f64().unwrap() > 0.99)
+        .max_by(|a, b| {
+            let x = |f: &Value| f["center"][0].as_f64().unwrap();
+            x(a).total_cmp(&x(b))
+        })
+        .unwrap()
+        .clone()
+}
+
+/// The first edge of the cage on its boundary.
+fn boundary_edge(cage: &Value) -> Value {
+    cage["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["boundary"] == true)
+        .unwrap_or_else(|| panic!("no boundary edge in {cage}"))["vertices"]
+        .clone()
+}
+
+/// mitcad#1941: a box's top deleted and the opening filled again, with one
+/// face or with quads, each one undo step; a preview changes nothing.
+#[test]
+fn an_opening_is_filled_with_one_face_or_with_quads() {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "form.create", "primitive": {"type": "box", "size": [40, 40, 40], "segments": [2, 2, 2]}}),
+    );
+    let before = cage(&doc, "F1");
+    let tops: Vec<i64> = before["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["normal"][2].as_f64().unwrap() > 0.99)
+        .map(|f| f["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(tops.len(), 4);
+    command(
+        &mut doc,
+        json!({"cmd": "form.delete_faces", "form": "F1", "faces": tops}),
+    );
+    let open = cage(&doc, "F1");
+    assert_eq!(open["closed"], false);
+    assert_eq!(open["faces"].as_array().unwrap().len(), 20);
+    let edge = boundary_edge(&open);
+
+    // An edge with a face on both sides is refused in words.
+    let inner = open["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["boundary"] == false)
+        .unwrap()["vertices"]
+        .clone();
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": inner}),
+    );
+    assert!(error.contains("not on an opening"), "{error}");
+    assert!(!error.contains('['), "{error}");
+
+    // A preview changes nothing.
+    let preview = command(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": edge, "preview": true}),
+    );
+    assert_eq!(preview["preview"], true);
+    assert_eq!(preview["cage"]["closed"], true);
+    assert_eq!(cage(&doc, "F1")["closed"], false);
+
+    // One face of eight corners.
+    let filled = command(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": edge}),
+    );
+    assert_eq!(undo_label(&doc), "Fill Hole in Form1");
+    assert_eq!(filled["closed"], true);
+    assert_eq!(filled["faces"].as_array().unwrap().len(), 1);
+    let one = cage(&doc, "F1");
+    assert_eq!(one["closed"], true);
+    let face = one["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["id"] == filled["faces"][0])
+        .unwrap()
+        .clone();
+    assert_eq!(face["vertices"].as_array().unwrap().len(), 8);
+    assert!(face["normal"][2].as_f64().unwrap() > 0.99, "{face}");
+    assert!(
+        faces(&doc, "F1.b0")
+            .iter()
+            .any(|f| f.starts_with(&format!("F1:cage({})", face["id"])))
+    );
+
+    // Undone, then filled with quads: a grid of 2 x 2 round a new vertex.
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(cage(&doc, "F1")["closed"], false);
+    let quads = command(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": edge, "quads": true}),
+    );
+    assert_eq!(quads["closed"], true);
+    assert_eq!(quads["faces"].as_array().unwrap().len(), 4);
+    assert_eq!(quads["vertices"].as_array().unwrap().len(), 1);
+    let middle = position(&cage(&doc, "F1"), quads["vertices"][0].as_i64().unwrap());
+    assert_eq!(middle, [0.0, 0.0, 20.0]);
+    let after = cage(&doc, "F1");
+    assert_eq!(after["faces"].as_array().unwrap().len(), 24);
+    assert_eq!(after["closed"], true);
+}
+
+/// mitcad#1941: two tubes (cylinders with one cap taken out each) in one
+/// cage, their open ends bridged with a strip of quads.
+#[test]
+fn two_open_ends_are_bridged() {
+    use mitcad_model::subdiv::primitive::cylinder_cage;
+    use mitcad_model::subdiv::{CageFace, CageVertex};
+    let mut tubes = cylinder_cage([0.0; 3], 20.0, 10.0, 8, 1).unwrap();
+    let upper = cylinder_cage([0.0, 0.0, 30.0], 20.0, 10.0, 8, 1).unwrap();
+    // The lower one's top cap (face 2) and the upper one's bottom cap
+    // (face 1) go; the upper one's ids are 100 on.
+    tubes.faces.retain(|f| f.id != 2);
+    tubes
+        .vertices
+        .extend(upper.vertices.iter().map(|v| CageVertex {
+            id: v.id + 100,
+            at: v.at,
+        }));
+    tubes
+        .faces
+        .extend(upper.faces.iter().filter(|f| f.id != 1).map(|f| CageFace {
+            id: f.id + 100,
+            vertices: f.vertices.iter().map(|v| v + 100).collect(),
+        }));
+    let mut doc = Document::new(MockKernel::default());
+    let made = command(
+        &mut doc,
+        json!({"cmd": "form.create", "primitive": {"type": "cage", "cage": tubes}}),
+    );
+    assert_eq!(made["closed"], false);
+    // The two ends of other lengths: refused in words.
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "form.bridge", "form": "F1", "edges": [[9, 10], [10, 11], [101, 102]]}),
+    );
+    assert!(error.contains("as many edges"), "{error}");
+    // One edge of each end, whole openings, two rows across.
+    let bridged = command(
+        &mut doc,
+        json!({"cmd": "form.bridge", "form": "F1", "edges": [[9, 10], [101, 102]],
+               "loops": true, "segments": 2}),
+    );
+    assert_eq!(undo_label(&doc), "Bridge in Form1");
+    assert_eq!(bridged["closed"], true);
+    assert_eq!(bridged["faces"].as_array().unwrap().len(), 16);
+    assert_eq!(bridged["vertices"].as_array().unwrap().len(), 8);
+    let after = cage(&doc, "F1");
+    assert_eq!(after["closed"], true);
+    for v in bridged["vertices"].as_array().unwrap() {
+        let p = position(&after, v.as_i64().unwrap());
+        assert!((p[2] - 15.0).abs() < 1e-9, "{p:?}");
+    }
+    // The body is one piece of the tubes and the strip.
+    // Two caps of eight corners, eight patches each; four a quad.
+    assert_eq!(faces(&doc, "F1.b0").len(), 2 * 8 + 4 * (8 + 8 + 16));
+}
+
+/// mitcad#1941: a symmetric Form fills the opening and its mirror image;
+/// an opening across the plane is refused in words.
+#[test]
+fn a_symmetric_form_fills_both_sides() {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "form.create", "symmetry": "x",
+               "primitive": {"type": "box", "size": [40, 20, 20], "segments": [4, 1, 1]}}),
+    );
+    let whole = cage(&doc, "F1");
+    assert_eq!(whole["faces"].as_array().unwrap().len(), 18);
+    // The stored top face away from the plane.
+    let outer = top_face_at_right(&whole);
+    assert!(outer["id"].as_i64().unwrap() > 0, "{outer}");
+    command(
+        &mut doc,
+        json!({"cmd": "form.delete_faces", "form": "F1", "faces": [outer["id"]]}),
+    );
+    let open = cage(&doc, "F1");
+    assert_eq!(open["closed"], false);
+    assert_eq!(open["faces"].as_array().unwrap().len(), 16);
+    // Picked on the mirrored half: both openings are filled.
+    let edge = [
+        -outer["vertices"][0].as_i64().unwrap(),
+        -outer["vertices"][1].as_i64().unwrap(),
+    ];
+    let filled = command(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": edge}),
+    );
+    assert_eq!(filled["closed"], true);
+    let after = cage(&doc, "F1");
+    assert_eq!(after["faces"].as_array().unwrap().len(), 18);
+    assert_eq!(after["closed"], true);
+    assert_symmetric(&after);
+
+    // The top face beside the plane taken out: its opening runs across it.
+    let inner = after["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["normal"][2].as_f64().unwrap() > 0.99)
+        .find(|f| {
+            let x = f["center"][0].as_f64().unwrap();
+            x > 0.0 && x < 10.0
+        })
+        .unwrap()
+        .clone();
+    command(
+        &mut doc,
+        json!({"cmd": "form.delete_faces", "form": "F1", "faces": [inner["id"]]}),
+    );
+    let edge = boundary_edge(&cage(&doc, "F1"));
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "form.fill_hole", "form": "F1", "edge": edge}),
+    );
+    assert!(error.contains("crosses the symmetry plane"), "{error}");
+    assert_eq!(undo_label(&doc), "Delete Faces in Form1");
 }

@@ -348,10 +348,13 @@ fn component_json(
             .collect();
         // `selectors`, `selector_values` and the rows' `select` are the
         // options' values as text, as pickers read them before mitcad#798.
+        // A closed table's open options (mitcad#1950) are chosen beside its
+        // rows: no selectors of the pickers that choose by rows.
         value["configurations"] = json!({
             "options": table.options,
             "closed": table.closed,
-            "selectors": table.options,
+            "open": table.open,
+            "selectors": table.row_options(),
             "selector_values": table.selector_values(),
             "default": table.default_row().map(|r| r.name.clone()),
             "rows": table.rows.iter().map(|r| {

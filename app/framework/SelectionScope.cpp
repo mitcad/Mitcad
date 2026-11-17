@@ -10,10 +10,10 @@ namespace {
 
 constexpr std::array<FilterRow, kFilterRowCount> kAllRows = {
     FilterRow::SketchGeometry, FilterRow::ConstructionGeometry, FilterRow::ProjectedGeometry,
-    FilterRow::Annotations,    FilterRow::Profiles,             FilterRow::VisibleEdges,
-    FilterRow::OccludedEdges,  FilterRow::Faces,                FilterRow::Vertices,
-    FilterRow::Bodies,         FilterRow::Components,           FilterRow::ReferenceGeometry,
-    FilterRow::OtherSketchGeometry};
+    FilterRow::Dimensions,     FilterRow::Constraints,          FilterRow::Profiles,
+    FilterRow::VisibleEdges,   FilterRow::OccludedEdges,        FilterRow::Faces,
+    FilterRow::Vertices,       FilterRow::Bodies,               FilterRow::Components,
+    FilterRow::ReferenceGeometry, FilterRow::OtherSketchGeometry};
 
 std::size_t indexOf(FilterRow row) { return static_cast<std::size_t>(row); }
 
@@ -76,8 +76,10 @@ QString filterRowId(FilterRow row) {
     return QStringLiteral("construction-geometry");
   case FilterRow::ProjectedGeometry:
     return QStringLiteral("projected-geometry");
-  case FilterRow::Annotations:
-    return QStringLiteral("annotations");
+  case FilterRow::Dimensions:
+    return QStringLiteral("dimensions");
+  case FilterRow::Constraints:
+    return QStringLiteral("constraints");
   case FilterRow::Profiles:
     return QStringLiteral("profiles");
   case FilterRow::VisibleEdges:
@@ -117,8 +119,10 @@ QString filterRowLabel(FilterRow row) {
     return QStringLiteral("Construction geometry");
   case FilterRow::ProjectedGeometry:
     return QStringLiteral("Projected geometry");
-  case FilterRow::Annotations:
-    return QStringLiteral("Dimensions and constraints");
+  case FilterRow::Dimensions:
+    return QStringLiteral("Dimensions");
+  case FilterRow::Constraints:
+    return QStringLiteral("Constraints");
   case FilterRow::Profiles:
     return QStringLiteral("Profiles");
   case FilterRow::VisibleEdges:
@@ -151,7 +155,8 @@ SelectFilter filterRowKinds(FilterRow row) {
     // With the curves of Intersection Curves, features the view draws
     // (mitcad#1417).
     return SelectKind::SketchCurve | SelectKind::SketchPoint | SelectKind::Feature;
-  case FilterRow::Annotations:
+  case FilterRow::Dimensions:
+  case FilterRow::Constraints:
     return SelectFilter();
   case FilterRow::Profiles:
     return SelectKind::Profile;
@@ -189,7 +194,8 @@ SelectionScope SelectionScope::sketch() {
                         {{FilterRow::SketchGeometry, FilterState::Window},
                          {FilterRow::ConstructionGeometry, FilterState::Window},
                          {FilterRow::ProjectedGeometry, FilterState::Window},
-                         {FilterRow::Annotations, FilterState::Click},
+                         {FilterRow::Dimensions, FilterState::Click},
+                         {FilterRow::Constraints, FilterState::Click},
                          {FilterRow::Profiles, FilterState::Click},
                          {FilterRow::VisibleEdges, FilterState::Click},
                          {FilterRow::OccludedEdges, FilterState::Off},
@@ -310,9 +316,11 @@ std::optional<FilterRow> filterRowOf(const SelectionItem& item, const QString& a
   case SelectKind::SketchCurve:
   case SelectKind::SketchPoint:
     return sketchRow ? sketchRow(item) : FilterRow::SketchGeometry;
-  case SelectKind::SketchConstraint:
   case SelectKind::SketchDimension:
-    return FilterRow::Annotations;
+    return FilterRow::Dimensions;
+  case SelectKind::SketchConstraint:
+    // A Fix symbol (an entity's "fix:" item) is a constraint as well.
+    return FilterRow::Constraints;
   case SelectKind::Profile:
     return FilterRow::Profiles;
   case SelectKind::Edge:

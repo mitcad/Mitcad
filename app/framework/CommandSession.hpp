@@ -68,6 +68,20 @@ public:
   virtual bool modelCommandAsync(const QJsonObject&, QObject*, AsyncCompletion) { return false; }
   virtual bool modelPreviewAsync(const QByteArray&, const QString&, QObject*, AsyncCompletion) { return false; }
   virtual bool modelInspectionAsync(const QString&, QObject*, InspectionTask, InspectionCompletion) { return false; }
+  // A command that changes only the document's runtime state, never the
+  // design (a hanging Flex item's step, flex.hang_step, mitcad#1713), on
+  // the worker without anything shown around it; the completion on the UI
+  // thread. False when it did not start (a job computes, the window is
+  // read-only, the host computes in place): the caller runs it as a
+  // command. Meanwhile modelBusy() is true, but any other job and the
+  // model's reads wait for it (yieldModelJob) instead of being refused.
+  virtual bool modelRuntimeCommandAsync(const QJsonObject&, QObject*, AsyncCompletion) { return false; }
+  // Such a runtime command in flight is waited for now (its completion
+  // queued); true when no job computes the model afterwards.
+  virtual bool yieldModelJob() { return !modelBusy(); }
+  // Calls wait for the model's idle point (whenIdle): what starts runtime
+  // commands at a steady rate leaves that point to them first.
+  virtual bool idleCallsWaiting() const { return false; }
   virtual void cancelModelJob() {}
   virtual OcctViewer& viewer() = 0;
   // Runs a model command as it is and returns its result; throws
@@ -341,8 +355,10 @@ public:
   int restoresMarker() const { return m_markerMoved ? m_originalMarker : -1; }
   bool previewApplied() const { return m_appliedDepth >= 0; }
 
-  // A pick in the view goes to the active selection input.
-  void picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window);
+  // A pick in the view goes to the active selection input. `click` is the
+  // view's number of the click (OcctViewer::picked; 0 for a pick from
+  // elsewhere): a click that clickedAt took is not taken again.
+  void picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click = 0);
   // The host's selection filter context (CommandHost::commandScope)
   // changed: the active input picks through it as it is now (mitcad#217).
   void scopeChanged();
@@ -426,6 +442,10 @@ public:
   // shaft's notice once another pick places it), logged "Panel <command>
   // notice cleared".
   void setActivationNotice(const QString& text);
+  // An application panel's OK the model refused (mitcad#1713: Let It
+  // Hang's kept shape): its words in the panel's message as an error, the
+  // panel left open; logged "Panel <command> refused: <text>".
+  void showRefusal(const QString& message);
   const QString& activationNotice() const { return m_activationNotice; }
   // A text of the inputs the panel does not show (a hidden input's), set
   // by the host while a pick comes (mitcad#1856: the component Joint goes
@@ -476,6 +496,18 @@ public:
   // Esc while the panel is open: the command's own (CommandDef::escape),
   // true when it took it; else the window's Esc cancels.
   bool escape();
+  // Backspace while the panel is open (CommandDef::backspace,
+  // mitcad#1713): true when the command took it.
+  bool backspace();
+  // Undo while the panel is open (CommandDef::undo, mitcad#1713): true when
+  // the command took it.
+  bool undo();
+  // A change of the inputs from beside the panel (mitcad#1713: a Flex item's
+  // handles in the view during its edit session): `change` changes the
+  // state as the command's own callbacks do and returns true when it did;
+  // the panel, the highlights and the preview follow, as after Backspace.
+  // `what` is for the log. Once the model is idle when it computes now.
+  bool changeInputs(std::function<bool(CommandState&, const CommandContext&)> change, const QString& what);
 
   // Live MCP (mitcad#265, CommandSessionScript.cpp): an agent fills the
   // inputs by their keys through the panel's own actions, as typing,
@@ -509,6 +541,9 @@ public:
 
 signals:
   void finished(bool committed);
+  // A feature preview was drawn (mitcad#1713: a Flex item's handles beside
+  // its edit session read the previewed route again).
+  void previewShown();
   // A failed cancellation leaves the session open for another attempt.
   // Successful cancellation can retain earlier applications of a repeating command.
   void cancelFinished(bool succeeded);
@@ -790,6 +825,11 @@ private:
   // dragged last, mitcad#444).
   void setCursorKey(const QString& key);
   QPointer<QLineEdit> m_cursorBox;
+  // The pointer's last move or press was over the view, and it has not
+  // left it since: what Backspace looks at besides the view's own
+  // under-mouse state, which events posted to it (the Windows UI tests')
+  // do not set (mitcad#1713).
+  bool m_pointerOverView = false;
   QString m_cursorKey;
   QString m_loggedCursorBox;
   // A handle's value box clicked (Manipulator::valueBox, mitcad#656): a
@@ -952,6 +992,10 @@ private:
   // invalid while none computes (mitcad#1788).
   QElapsedTimer m_previewClock;
   bool m_commitRequested = false;
+  // A requested commit waits for the model's idle point, or for its posted
+  // turn (resumePendingCommit): one of each at a time.
+  bool m_commitWaitsForIdle = false;
+  bool m_commitResumePosted = false;
   bool m_committing = false;
   bool m_cancelRequested = false;
   QJsonValue m_checkpoint;
@@ -1046,12 +1090,26 @@ private:
   // The point under the mouse moved (CommandDef::hoverPreview, mitcad#417):
   // the command's preview again when the command says so.
   void hoverMoved(const SelectionItem& item);
+  // The preview a move of the pointer asks for: the command's light one
+  // (CommandDef::lightPreview, mitcad#1713) with the feature's own once
+  // the pointer rests, else the feature's.
+  void pointerPreview();
+  // The light preview itself, now (CommandDef::lightPreview); and, for a
+  // command whose light preview is of the pointer alone
+  // (CommandDef::lightPreviewLive), the wait for the pointer's rest.
+  void runLightPreview();
+  QTimer m_lightRestTimer;
   // The mouse over the view and a click there, for a command's point on a
   // plane (CommandDef::cursorPlane, mitcad#1196; CommandSessionHover.cpp):
   // the last position (none: off the view) and whether a move waits for
   // the model to be idle.
   void pointerMoved(std::optional<QPointF> position);
-  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers);
+  void clickedAt(const QPointF& position, Qt::KeyboardModifiers modifiers, quint64 click, const Selection& items);
+  // The view's click taken last, by clickedAt or picked (its number): its
+  // other report is then not taken again (mitcad#1713: a click while the
+  // pointer's preview computed was taken twice, the second time as a click
+  // on the node it had just placed, which ended the item).
+  quint64 m_clickTaken = 0;
   std::optional<QPointF> m_pointer;
   bool m_pointerWaits = false;
 

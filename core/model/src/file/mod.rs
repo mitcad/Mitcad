@@ -156,6 +156,11 @@
 //! `[[step, value], …]`) and `contact_sets` (`name`, `occurrences` as paths
 //! from the root, `"suppressed": true`), see [`crate::motion`].
 //!
+//! The direction of gravity (mitcad#1713), when the design has one:
+//! `gravity` (`direction`, a unit vector, and `source`: `geometry`, a
+//! reference, `occurrence`, the path it was picked at, `"reverse": true`),
+//! see [`crate::gravity`].
+//!
 //! Properties (mitcad#496), when there are any: `property_types` (`name`,
 //! `base`, `values`, `unit`, `default`, `description`) and `properties`
 //! (`owner`: `C2`, `O3` or `F7.b0`, `sets`: `name`, `properties`: `key`,

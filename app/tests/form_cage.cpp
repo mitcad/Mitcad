@@ -323,6 +323,57 @@ void followUpTests() {
   CHECK(dragCommand(QStringLiteral("F1"), drag, true).value(QStringLiteral("preview")).toBool());
 }
 
+// mitcad#1941: Fill Hole on one edge of an opening, with quads when asked;
+// Bridge on the edges of two sides, whole openings and segments.
+void openingTests() {
+  Picked one;
+  one.edges = {{5, 6}};
+  Picked two;
+  two.edges = {{5, 6}, {-5, -6}};
+  Edit edit;
+  edit.action = Action::FillHole;
+  const QJsonObject fill = editCommand(QStringLiteral("F1"), edit, one, false);
+  CHECK(fill.value(QStringLiteral("cmd")).toString() == QStringLiteral("form.fill_hole"));
+  CHECK(fill.value(QStringLiteral("edge")).toArray() == (QJsonArray{5, 6}));
+  CHECK(!fill.contains(QStringLiteral("quads")));
+  edit.quads = true;
+  CHECK(editCommand(QStringLiteral("F1"), edit, one, true).value(QStringLiteral("quads")).toBool());
+  CHECK(editCommand(QStringLiteral("F1"), edit, one, true).value(QStringLiteral("preview")).toBool());
+  // One edge only, said in words.
+  CHECK(editCommand(QStringLiteral("F1"), edit, two, false).isEmpty());
+  CHECK(!editRefusal(edit, two).isEmpty());
+  CHECK(!editRefusal(edit, Picked()).isEmpty());
+  CHECK(editRefusal(edit, one).isEmpty());
+
+  edit.action = Action::Bridge;
+  CHECK(editCommand(QStringLiteral("F1"), edit, one, false).isEmpty());
+  CHECK(!editRefusal(edit, one).isEmpty());
+  const QJsonObject bridge = editCommand(QStringLiteral("F1"), edit, two, false);
+  CHECK(bridge.value(QStringLiteral("cmd")).toString() == QStringLiteral("form.bridge"));
+  CHECK(bridge.value(QStringLiteral("edges")).toArray().size() == 2);
+  CHECK(bridge.value(QStringLiteral("loops")).toBool());
+  CHECK(!bridge.contains(QStringLiteral("segments")));
+  edit.loops = false;
+  edit.segments = 3;
+  const QJsonObject runs = editCommand(QStringLiteral("F1"), edit, two, false);
+  CHECK(!runs.contains(QStringLiteral("loops")));
+  CHECK(runs.value(QStringLiteral("segments")).toInt() == 3);
+  CHECK(editRefusal(edit, two).isEmpty());
+  edit.segments = 0;
+  CHECK(editCommand(QStringLiteral("F1"), edit, two, false).isEmpty());
+  CHECK(!editRefusal(edit, two).isEmpty());
+  edit.segments = 1.5;
+  CHECK(!editRefusal(edit, two).isEmpty());
+
+  CHECK(actionOf(QStringLiteral("fill_hole")) == Action::FillHole);
+  CHECK(actionOf(QStringLiteral("bridge")) == Action::Bridge);
+  CHECK(actionKey(Action::Bridge) == QStringLiteral("bridge"));
+  CHECK(onlyKind(Action::FillHole) == Kind::Edges);
+  CHECK(onlyKind(Action::Bridge) == Kind::Edges);
+  CHECK(stepName(Action::FillHole) == QStringLiteral("Fill Hole"));
+  CHECK(stepName(Action::Bridge) == QStringLiteral("Bridge"));
+}
+
 } // namespace
 
 int formCageTests() {
@@ -332,6 +383,7 @@ int formCageTests() {
   commandTests();
   lineTests();
   followUpTests();
+  openingTests();
   return failures;
 }
 MITCAD_UNIT_TEST(formCageTests);

@@ -128,6 +128,16 @@ struct MeshOptions {
   // degrees (60 pieces a turn for every hole). 0: the angle for every
   // circle, as before (the exports' presets, the view's "Full detail").
   int small_circle_segments = 0;
+  // A body swept along a route with a section small beside its length (a
+  // Flex item, mitcad#1713; geometry::Shape::display_section): above 0, the
+  // section's size (mm). Its faces' insides mesh with a deviation of
+  // kSectionDeviation of it where that is more than the shape's, and
+  // BRepMesh's parameters (a B-spline's knots) at least kSectionStep of it
+  // apart (its MinSize): the size of the whole route made a hose of 1 mm
+  // over 124 mm mesh to 78 000 triangles at 0.11 mm, 1.4 s, held then to
+  // 3 500, and a flat cable's faces to 200 000 each, 34 s. The edges keep
+  // the shape's deviation. 0: none.
+  double section = 0.0;
 
   MeshOptions() = default;
   // The first six, as an aggregate of them before mitcad#1275; the others

@@ -1,0 +1,187 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a stripe whose walk failed after a walk rolling on an edge is
+computed again with OCCT's equations in the surface/edge inverse function
+(mitcad#1902, after 0170).
+
+0170 makes the inverse function that ends a walk rolling on an edge where
+the surface's contact reaches an arc (BRepBlend_SurfCurvConstRadInv) solve
+the rolling ball's equations, so that the end section lies on the ball the
+walk is. In OCCT's blend/complex A6 at scale 10 the walk on two edges that
+starts from that end takes no step (each step too large down to the guide's
+tolerance) and the rounding fails; with OCCT's equations there (both
+contacts in the guide's normal plane) it is made at all five scales. Those
+equations alone lose eight of MitCad's rounding tests, so they are only the
+second solver:
+
+- ChFi3d_Builder::Compute: a stripe that failed in the walk (a walking or
+  start failure) and whose walks used the rolling inverse function is reset
+  and computed again with OCCT's equations in it; it is kept where that
+  succeeds, and stays failed as it was otherwise. The other stripes, and
+  every stripe whose walk succeeds, are computed as before.
+- ChFi3d_FilBuilder::PerformSurf (the two constant-radius surface/
+  restriction walks): the inverse function's equations follow
+  myRollingInverse, and each walk with the rolling ones is counted.
+- ChFi3d_Builder::PerformSetOfSurf: myRollingInverse is false for the
+  stripes computed again so (myOcctInverseStripes), also where a later step
+  of Compute computes such a stripe again.
+
+Upstream: with 0170 only; without it the inverse function is OCCT's already.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index ccba7ca8..e162732b 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -4001,10 +4001,15 @@ void ChFi3d_Builder::Compute()
+ #endif
+ 
+   // Construction of the stripe of fillet on each stripe.
++  // (The stripes whose walks used the rolling surface/edge inverse
++  // functions, for the stripes computed again below.)
++  NCollection_List<occ::handle<ChFiDS_Stripe>> aRollingInverseStripes;
++  myOcctInverseStripes.Clear();
+   for (itel.Initialize(myListStripe); itel.More(); itel.Next())
+   {
+     itel.Value()->Spine()->SetErrorStatus(ChFiDS_Ok);
+     myWalkOnEdge = false;
++    const int aRollingInverseWalks = myRollingInverseWalks;
+     try
+     {
+       OCC_CATCH_SIGNALS
+@@ -4029,6 +4034,10 @@ void ChFi3d_Builder::Compute()
+       badstripes.Append(itel.Value());
+       noteFailure(itel.Value(), blendFailure(itel.Value()));
+     }
++    if (myRollingInverseWalks != aRollingInverseWalks)
++    {
++      aRollingInverseStripes.Append(itel.Value());
++    }
+     done = true;
+   }
+   // (The other parts of chamfers cut by the faces beyond a narrow face.)
+@@ -4095,6 +4104,63 @@ void ChFi3d_Builder::Compute()
+     st->Spine()->SetErrorStatus(aStatus);
+     itBad.Next();
+   }
++  // Stripes whose walk failed where a walk rolling on an edge had used the
++  // rolling ball's equations in its surface/edge inverse function (the
++  // point where the surface's contact reaches an arc): computed again with
++  // OCCT's equations there (both contacts in the guide's normal plane), the
++  // walks themselves unchanged; as they were where that fails too. (OCCT's
++  // blend/complex A6 at scale 10: the walk on two edges took no step from
++  // the end the rolling equations gave that walk.)
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itBad(badstripes); itBad.More();)
++  {
++    occ::handle<ChFiDS_Stripe> st      = itBad.Value();
++    const ChFiDS_ErrorStatus   aStatus = st->Spine()->ErrorStatus();
++    bool                       aRolled = false;
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itR(aRollingInverseStripes); itR.More() && !aRolled;
++         itR.Next())
++    {
++      aRolled = itR.Value() == st;
++    }
++    if ((aStatus != ChFiDS_WalkingFailure && aStatus != ChFiDS_StartsolFailure) || !aRolled)
++    {
++      itBad.Next();
++      continue;
++    }
++    st->Reset();
++    st->Spine()->SetErrorStatus(ChFiDS_Ok);
++    myWalkOnEdge = false;
++    myOcctInverseStripes.Append(st);
++    bool aComputed = true;
++    try
++    {
++      OCC_CATCH_SIGNALS
++      done = true;
++      PerformSetOfSurf(st);
++      aComputed = done;
++    }
++    catch (Standard_Failure const&)
++    {
++      aComputed = false;
++    }
++    if (aComputed && st->Spine()->ErrorStatus() == ChFiDS_Ok)
++    {
++      badstripes.Remove(itBad);
++      continue;
++    }
++    for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itO(myOcctInverseStripes); itO.More();)
++    {
++      if (itO.Value() == st)
++      {
++        myOcctInverseStripes.Remove(itO);
++      }
++      else
++      {
++        itO.Next();
++      }
++    }
++    st->Spine()->SetErrorStatus(aStatus);
++    itBad.Next();
++  }
+   done = (badstripes.IsEmpty());
+   // Stripes whose blends ran over a narrow face of their edge onto a face
+   // where another stripe's contact lies are computed again rolling on the
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 64959046..b8204269 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -931,6 +931,15 @@ protected:
+   //! face (ChamferCutByFacesBeyond): stripes of their own, added to the
+   //! stripes once these are computed.
+   NCollection_List<occ::handle<ChFiDS_Stripe>> myNarrowParts;
++  //! The surface/edge inverse functions of the constant-radius roundings'
++  //! walks (BRepBlend_SurfCurvConstRadInv) solve the rolling ball's
++  //! equations; false: OCCT's, for the stripes of myOcctInverseStripes,
++  //! computed again so where their walk failed with the rolling ones
++  //! (Compute, PerformSetOfSurf). myRollingInverseWalks counts the walks
++  //! that used the rolling ones.
++  bool                                         myRollingInverse      = true;
++  int                                          myRollingInverseWalks = 0;
++  NCollection_List<occ::handle<ChFiDS_Stripe>> myOcctInverseStripes;
+ 
+ private:
+   Standard_EXPORT bool FaceTangency(const TopoDS_Edge&   E0,
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index e5d4eadb..04e6372a 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -23882,6 +23882,13 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+   const occ::handle<ChFiDS_Spine>& sp = Stripe->Spine();
+   int                              SI = ChFi3d_SolidIndex(sp, DStr, myESoMap, myEShMap);
+   Stripe->SetSolidIndex(SI);
++  // (OCCT's equations in the surface/edge inverse functions for a stripe
++  // whose walk failed with the rolling ball's, Compute.)
++  myRollingInverse = true;
++  for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itO(myOcctInverseStripes); itO.More(); itO.Next())
++  {
++    myRollingInverse = myRollingInverse && itO.Value() != Stripe;
++  }
+   bool aCaught = false, aNarrowCut = false;
+   try
+   {
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+index 289812b2..7eac2ac6 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+@@ -2619,7 +2619,8 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC1, HS1);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS2, HC, HGuide);
+-    finvc.SetRollingBall(true);
++    finvc.SetRollingBall(myRollingInverse);
++    myRollingInverseWalks += myRollingInverse ? 1 : 0;
+     BRepBlend_SurfPointConstRadInv finvp(HS2, HGuide);
+     gp_Ax1                         axis;
+     if (ChFi3d_CoaxialRestriction(HS2, PC1, axis))
+@@ -2808,7 +2809,8 @@ void ChFi3d_FilBuilder::PerformSurf(NCollection_Sequence<occ::handle<ChFiDS_Surf
+     occ::handle<Adaptor3d_CurveOnSurface> HC = new Adaptor3d_CurveOnSurface();
+     HC->Load(PC2, HS2);
+     BRepBlend_SurfCurvConstRadInv  finvc(HS1, HC, HGuide);
+-    finvc.SetRollingBall(true);
++    finvc.SetRollingBall(myRollingInverse);
++    myRollingInverseWalks += myRollingInverse ? 1 : 0;
+     BRepBlend_SurfPointConstRadInv finvp(HS1, HGuide);
+     gp_Ax1                         axis;
+     if (ChFi3d_CoaxialRestriction(HS1, PC2, axis))

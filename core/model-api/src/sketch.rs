@@ -485,6 +485,10 @@ named_enum! {
             entities: Vec<Ref>,
             #[serde(default = "x_axis")]
             direction: [f64; 2],
+            // The second direction; left out, a quarter turn from the
+            // first (mitcad#1969).
+            #[serde(default)]
+            direction2: Option<[f64; 2]>,
             count: [u32; 2],
             spacing: [ValueInput; 2],
             // Per direction: the originals in the middle (an odd count).
@@ -503,6 +507,9 @@ named_enum! {
             spacing: Option<[ValueInput; 2]>,
             #[serde(default)]
             direction: Option<[f64; 2]>,
+            // `null` takes the second direction away (mitcad#1969).
+            #[serde(default, deserialize_with = "crate::annotations::present")]
+            direction2: Option<Option<[f64; 2]>>,
             #[serde(default)]
             center: Option<Value>,
             #[serde(default)]
@@ -3371,6 +3378,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                 C::RectangularPattern {
                     entities,
                     direction,
+                    direction2,
                     count,
                     spacing,
                     symmetric,
@@ -3379,6 +3387,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     let id = edit.rectangular_pattern(
                         &entities,
                         direction,
+                        direction2,
                         count,
                         [&spacing[0], &spacing[1]],
                         symmetric,
@@ -3391,6 +3400,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                     angle,
                     spacing,
                     direction,
+                    direction2,
                     center,
                     entities,
                     ..
@@ -3406,6 +3416,7 @@ impl<K: Kernel> SketchLocal<K> for Document<K> {
                         angle,
                         spacing,
                         direction,
+                        direction2,
                         center,
                         entities,
                     };

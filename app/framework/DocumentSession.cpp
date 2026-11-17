@@ -49,6 +49,15 @@ QList<DocumentSession*>& documentSessions() {
   return sessions;
 }
 
+// Whether a command's bodies are meshed for the view in its job (DisplayMeshes.hpp,
+// mitcad#398): not for a sketch's own commands, which do not change them, nor
+// for the commands of gravity and of a hanging Flex item (mitcad#1713: only
+// the lock of a hanging item, flex.hang_lock, changes a body).
+bool meshesForDisplay(const QString& name) {
+  return !name.startsWith(QStringLiteral("sketch.")) && !name.startsWith(QStringLiteral("gravity.")) &&
+         (!name.startsWith(QStringLiteral("flex.hang")) || name == QStringLiteral("flex.hang_lock"));
+}
+
 QString commandStage(QString name) {
   name.replace(QLatin1Char('_'), QLatin1Char(' ')).replace(QLatin1Char('.'), QLatin1Char(' '));
   if (!name.isEmpty()) {
@@ -69,6 +78,9 @@ struct DocumentSession::AsyncJob {
   // A job in the background that gives way to the UI thread's own work
   // (commandTaskAsync, yieldBackgroundJob; mitcad#1121).
   bool yields = false;
+  // A runtime command (runtimeCommandAsync, mitcad#1713): no presentation
+  // at all, it is waited for rather than cancelled when it gives way.
+  bool quiet = false;
 };
 
 // A run of the rolled-back features (mitcad#1267): its control (the run's
@@ -180,7 +192,13 @@ void DocumentSession::refreshMemoryCacheBudgets() {
 
 const Document& DocumentSession::idleDocument() const {
   if (busy()) {
-    throw ModelBusy();
+    if (!runtimeJobRunning()) {
+      throw ModelBusy();
+    }
+    // A runtime command (runtimeCommandAsync): read once the worker has left
+    // the document, its few milliseconds waited for without an event loop.
+    while (!m_worker->waitFor(std::chrono::milliseconds(20))) {
+    }
   }
   return *m_state.document;
 }
@@ -363,9 +381,8 @@ QJsonObject DocumentSession::command(const QJsonObject& request) {
   Document& document = *m_state.document;
   ScopedTiming timing("command");
   timing.setDetail(name);
-  // The bodies the view will draw are meshed in the job (DisplayMeshes.hpp,
-  // mitcad#398); a sketch's own commands do not change them.
-  const bool display = !name.startsWith(QStringLiteral("sketch."));
+  // The bodies the view will draw are meshed in the job (meshesForDisplay).
+  const bool display = meshesForDisplay(name);
   // An export's plan (`plan`: what it would write, mitcad#1109: Send to
   // Slicer's bed face as its panel opens) is a job of its own name, apart
   // from an export that writes, so that logs and the tests' job delays
@@ -425,7 +442,7 @@ bool DocumentSession::commandAsync(const QJsonObject& request, QObject* context,
   const QByteArray json = compactJson(request);
   auto result = std::make_shared<AsyncResult>();
   Document* document = &*m_state.document;
-  const bool display = !name.startsWith(QStringLiteral("sketch."));
+  const bool display = meshesForDisplay(name); // as command()'s
   auto meshing = std::make_shared<DisplayMeshing>();
   const bool failForTest = !busy() && name == m_testFailCommand;
   if (failForTest) { m_testFailCommand.clear(); }
@@ -443,6 +460,53 @@ bool DocumentSession::commandAsync(const QJsonObject& request, QObject* context,
     logDisplayMeshing(*meshing, name);
     if (completion) { completion(outcome); }
   });
+}
+
+bool DocumentSession::runtimeCommandAsync(const QJsonObject& request, QObject* context, Completion completion) {
+  if (busy() || computeInline()) {
+    return false;
+  }
+  QString startupError;
+  if (!m_worker->ensureStarted(startupError)) {
+    return false;
+  }
+  const QString name = request.value(QStringLiteral("cmd")).toString();
+  // As runJob: the background evaluation stops first (it starts again
+  // after the next job of the design). Section Analysis' rounds go on: the
+  // command writes into no body (a hanging item meshes copies of them).
+  stopBackgroundEvaluation(QStringLiteral("job %1").arg(name), true);
+  auto result = std::make_shared<AsyncResult>();
+  Document* document = &*m_state.document;
+  const QByteArray json = compactJson(request);
+  m_async = std::make_unique<AsyncJob>();
+  m_async->label = name;
+  m_async->result = result;
+  m_async->context = context;
+  m_async->completion = std::move(completion);
+  m_async->yields = true;
+  m_async->quiet = true;
+  m_async->clock.start();
+  m_job = &m_async->job;
+  ModelJob* state = m_job;
+  m_worker->post([document, json, result, state, name] {
+    // The model's own time of each runtime command, in the debug log.
+    ScopedTiming timing("runtime command");
+    timing.setDetail(name);
+    const AttachedJob attached(*document, *state);
+    result->answer = parseObject(document->command(rustStr(json)));
+  });
+  return true;
+}
+
+bool DocumentSession::runtimeJobRunning() const { return m_async && m_async->quiet && m_job == &m_async->job; }
+
+bool DocumentSession::yieldRuntimeJob() {
+  if (runtimeJobRunning()) {
+    while (!m_worker->waitFor(std::chrono::milliseconds(20))) {
+    }
+    finishAsync(true);
+  }
+  return !busy();
 }
 
 bool DocumentSession::previewAsync(const QByteArray& request, const QString& name, QObject* context,
@@ -587,6 +651,9 @@ bool DocumentSession::yieldBackgroundJob() {
   if (!m_async || !m_async->yields || m_job != &m_async->job) {
     return !busy();
   }
+  if (m_async->quiet) {
+    return yieldRuntimeJob(); // a few milliseconds: waited for, not cancelled
+  }
   qDebug().noquote() << QStringLiteral("Computing %1: gives way after %2 ms").arg(m_async->label)
                            .arg(m_async->clock.elapsed());
   m_async->job.control().cancel();
@@ -600,7 +667,7 @@ bool DocumentSession::yieldBackgroundJob() {
 
 bool DocumentSession::startAsync(const QString& label, const QString& stage, Job job,
                                  std::shared_ptr<AsyncResult> result, QObject* context, Completion completion) {
-  if (busy()) {
+  if (busy() && !yieldRuntimeJob()) {
     return false;
   }
   QString startupError;
@@ -662,6 +729,10 @@ void DocumentSession::finishAsync(bool queueCompletion) {
   }
   const std::exception_ptr error = m_worker->take();
   std::unique_ptr<AsyncJob> finished = std::move(m_async);
+  if (finished->quiet) {
+    finishRuntimeJob(std::move(finished), error, queueCompletion);
+    return;
+  }
   m_progressTimer.stop();
   // As runJob: the memory guard's stop is an error (mitcad#1480).
   const bool userCancel =
@@ -705,6 +776,36 @@ void DocumentSession::finishAsync(bool queueCompletion) {
   if (finished->context && finished->completion) {
     finished->completion(*finished->result);
   }
+}
+
+void DocumentSession::finishRuntimeJob(std::unique_ptr<AsyncJob> finished, const std::exception_ptr& error,
+                                       bool queueCompletion) {
+  // Nothing of the design changed: no busyChanged, changed, jobFinished,
+  // document query or background evaluation; the calls that waited for
+  // the idle point run (after the completion).
+  m_job = nullptr;
+  if (error) {
+    try {
+      std::rethrow_exception(error);
+    } catch (const std::exception& exception) {
+      finished->result->error = errorText(exception);
+    } catch (...) {
+      finished->result->error = tr("An unknown computation error occurred.");
+    }
+  }
+  if (queueCompletion) {
+    QMetaObject::invokeMethod(
+        this,
+        [context = finished->context, completion = std::move(finished->completion), result = finished->result] {
+          if (context && completion) {
+            completion(*result);
+          }
+        },
+        Qt::QueuedConnection);
+  } else if (finished->context && finished->completion) {
+    finished->completion(*finished->result);
+  }
+  scheduleIdleCalls();
 }
 
 void DocumentSession::finishJob(const QString& label, bool cancelled, const QString& error) {
@@ -830,7 +931,7 @@ void DocumentSession::finishBackgroundEvaluation(bool adopt) {
 }
 
 void DocumentSession::clearPreview() {
-  if (busy()) {
+  if (busy() && !yieldRuntimeJob()) {
     throw ModelBusy();
   }
   m_state.document->clear_preview();
@@ -838,7 +939,7 @@ void DocumentSession::clearPreview() {
 }
 
 void DocumentSession::markSaved() {
-  if (busy()) {
+  if (busy() && !yieldRuntimeJob()) {
     throw ModelBusy();
   }
   m_state.document->command(rustStr(compactJson({{QStringLiteral("cmd"), QStringLiteral("mark_saved")}})));

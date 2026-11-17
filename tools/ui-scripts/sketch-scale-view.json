@@ -1,0 +1,8 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/sketch-scale-view.mitcad-ui (mitcad#1948, GitHub #400): Sketch1 on XY holds three free circles 600 mm and more from the sketch origin, without dimensions or fixed points: a diameter 40 about (600, 0), a diameter 62.5 about (720, 0) and a diameter 30 about (600, 90). A first diameter of 50 scales the sketch about its origin, by 1.25 on the first circle and by 0.8 on the second."},
+  {"cmd": "sketch.create", "plane": "xy"},
+  {"cmd": "sketch.circle", "sketch": "F1", "mode": "center", "center": [600, 0], "radius": 20},
+  {"cmd": "sketch.circle", "sketch": "F1", "mode": "center", "center": [720, 0], "radius": 31.25},
+  {"cmd": "sketch.circle", "sketch": "F1", "mode": "center", "center": [600, 90], "radius": 15}
+]

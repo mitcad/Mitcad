@@ -65,6 +65,35 @@ pub(crate) fn name_walls<K: Kernel>(ctx: &EvalContext<'_, K>, message: &str) -> 
     super::name_walls(message, &|feature| ctx.feature_name(feature))
 }
 
+/// A sheet feature's refusal as a person and agents read it
+/// ([`super::worded`], mitcad#1942): walls and features by their names,
+/// the walls painted on hover, the ids in the detail. Every sheet
+/// feature's failure passes through it (`features/sheet_*.rs`).
+pub(crate) fn worded<K: Kernel>(ctx: &EvalContext<'_, K>, message: &str) -> String {
+    super::worded(message, &|feature| ctx.feature_name(feature))
+}
+
+/// The refusal of a sheet with an overlay ([`SheetState::overlay_refusal`],
+/// mitcad#1942): the fillet, chamfer or straight cut by its name and what
+/// it does.
+pub(crate) fn overlay_refusal<K: Kernel>(
+    ctx: &EvalContext<'_, K>,
+    state: &SheetState,
+    what: &str,
+) -> Result<(), String> {
+    state.overlay_refusal(
+        what,
+        &super::FeatureWords {
+            name: &|feature| ctx.feature_name(feature),
+            edges: &|feature| {
+                ctx.env
+                    .feature(feature)
+                    .map_or(super::EdgeChange::Other, |f| super::EdgeChange::of(&f.def))
+            },
+        },
+    )
+}
+
 pub(super) fn publish<K: Kernel>(
     ctx: &mut EvalContext<'_, K>,
     state: SheetState,

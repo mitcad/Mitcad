@@ -19,6 +19,7 @@
 #include <QEvent>
 #include <QJsonArray>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QRegularExpression>
 #include <QSet>
@@ -203,6 +204,18 @@ CommandSession::CommandSession(const CommandDef& def, CommandHost& host, const Q
   m_refineTimer.setInterval(kRefineDelayMs);
   connect(&m_refineTimer, &QTimer::timeout, this, &CommandSession::refinePreview);
   TestSync::watch(&m_refineTimer);
+  m_lightRestTimer.setSingleShot(true);
+  connect(&m_lightRestTimer, &QTimer::timeout, this, [this] {
+    if (m_done || m_cancelRequested || m_committing || m_commitRequested || m_suspended) {
+      return;
+    }
+    if (m_host.modelBusy() || m_asyncPending) {
+      m_lightRestTimer.start(50); // once the model is free (one request at most)
+      return;
+    }
+    runLightPreview();
+  });
+  TestSync::watch(&m_lightRestTimer);
   // A held drag of a motion's handle that rests asks for the exact preview
   // (mitcad#838).
   m_motionPause.setSingleShot(true);
@@ -947,6 +960,11 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   // keeps it ("12,5" becomes "12.5 mm"; mitcad#2), and a bare number gets
   // its unit ("15" becomes "15 mm", mitcad#656, as the value boxes do).
   actions.valueCommitted = [this](const QString& key) {
+    // What reads the value only once it is committed (InputDef::onCommit).
+    if (const auto slot = slotOf(key); !m_done && slot && slot->def->onCommit) {
+      slot->def->onCommit(m_state, m_host);
+      inputsChanged();
+    }
     const QString text = m_state.text(key).trimmed();
     const QString expression = m_state.expression(key);
     const bool bare = parsePlainNumber(text).has_value();
@@ -1309,7 +1327,8 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   // The box at the cursor of a value (mitcad#375) follows the mouse too.
   if (std::any_of(m_def.inputs.begin(), m_def.inputs.end(), [](const InputDef& input) {
         return !input.tabCycle.isEmpty() || static_cast<bool>(input.tabPicks) || input.cursorBox;
-      })) {
+      }) ||
+      m_def.backspace || m_def.undo) { // Backspace takes a route's last node back, Undo a session's change (mitcad#1713)
     if (auto* application = QCoreApplication::instance()) {
       application->installEventFilter(this);
     }
@@ -1575,12 +1594,18 @@ bool CommandSession::isReferable(const SelectionItem& item) const {
   return referable(item).has_value();
 }
 
-void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window) {
+void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click) {
   // Set aside, the panel takes no picks either (mitcad#1844: a drag where
   // a hidden handle was).
   if (m_suspended || (m_presenter && !m_presenter->inputEnabled(m_active))) { return; }
   if (m_host.modelBusy()) {
-    inputAction([this, items, modifiers, window] { picked(items, modifiers, window); });
+    inputAction([this, items, modifiers, window, click] { picked(items, modifiers, window, click); });
+    return;
+  }
+  // The view's click that clickedAt took already, on the command's plane or
+  // as the item under it (mitcad#1713): its own pick is the same click.
+  if (click != 0 && click == m_clickTaken) {
+    qDebug().noquote() << QStringLiteral("%1: the click's own pick is not taken again").arg(m_def.name);
     return;
   }
   ++m_generation;
@@ -1652,6 +1677,10 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
       }
     }
   } else if (!accepted.isEmpty()) {
+    // (Should clickedAt come after it, the click is taken: mitcad#1713.)
+    if (click != 0) {
+      m_clickTaken = click;
+    }
     // A click toggles; an input of one item takes the new one instead. A
     // Shift + click that places (mitcad#451) keeps the item picked already.
     const SelectionItem& item = accepted.first();
@@ -1716,6 +1745,13 @@ void CommandSession::picked(const Selection& items, Qt::KeyboardModifiers modifi
   moveKeyboardToValues();
   if (applyNow && !m_done) {
     qDebug().noquote() << QStringLiteral("%1 %2: Shift+click places at once").arg(m_def.name, input->label);
+    commit();
+    return;
+  }
+  // A click that ends the command (CommandDef::clickConfirms, mitcad#1713:
+  // a double click at a route's last node, an end on an end port).
+  if (!window && !m_done && input->onPick && m_def.clickConfirms && m_def.clickConfirms(m_state)) {
+    qDebug().noquote() << QStringLiteral("%1 %2: the click confirms").arg(m_def.name, input->label);
     commit();
   }
 }
@@ -2776,7 +2812,7 @@ void CommandSession::runPreview() {
     }
     if (!built.error.isEmpty()) {
       message = built.error;
-      error = true;
+      error = !built.asks; // what a command waits for next is a hint (mitcad#1713)
       // What the inputs make no definition of, for UI tests.
       qDebug().noquote() << QStringLiteral("Preview %1: not built: %2").arg(m_def.name, built.error);
     }
@@ -2796,6 +2832,11 @@ void CommandSession::runPreview() {
     m_rowsLeftOut.clear();
     m_failed = error;
     showPanelMessage(message, error ? NoticeLevel::Error : NoticeLevel::Hint);
+    if (built.asks) {
+      // The status line says the same (mitcad#1713: "Flex: select route."
+      // beside a panel that asked for a click on a pipe's end).
+      m_host.showHint(selectionHint(tr("%1: %2").arg(m_def.name, message)));
+    }
     m_presenter->setOkEnabled(false);
     if (m_def.modelCommand) {
       // A model command's rows read the model, not a preview (mitcad#1059:
@@ -3401,6 +3442,7 @@ QString CommandSession::okMessage(const QJsonObject& report) {
   if (message.isEmpty()) {
     message = report.value(QStringLiteral("warnings")).toVariant().toStringList();
   }
+  const bool warns = !message.isEmpty();
   // Then what is worth knowing of how it was built (mitcad#1106: a fillet
   // built 0.1 % smaller than asked), information unless there are warnings.
   message << report.value(QStringLiteral("infos")).toVariant().toStringList();
@@ -3418,9 +3460,15 @@ QString CommandSession::okMessage(const QJsonObject& report) {
         tr("%n profile(s) deleted from %1 left out.", nullptr, m_missingProfiles).arg(m_missingSketches));
   }
   if (m_def.note) {
-    // The command's own note first (mitcad#472: a gear's derived values).
+    // The command's own note first (mitcad#472: a gear's derived values),
+    // after the warnings when there are any: the panel's "Warning:" heads
+    // its first line (mitcad#1713: "Warning: Length: 84.3 mm" read as if
+    // the length were what was wrong).
     m_shownNote = m_def.note(m_state, m_host);
-    if (!m_shownNote.isEmpty()) {
+    if (!m_shownNote.isEmpty() && warns) {
+      message.append(m_shownNote);
+      qDebug().noquote() << QStringLiteral("Panel %1 note: %2").arg(m_def.name, m_shownNote);
+    } else if (!m_shownNote.isEmpty()) {
       message.prepend(m_shownNote);
       qDebug().noquote() << QStringLiteral("Panel %1 note: %2").arg(m_def.name, m_shownNote);
     }
@@ -3709,6 +3757,7 @@ void CommandSession::showPreview(const Preview& preview, const QString& operatio
     qDebug().noquote() << QStringLiteral("Preview %1 tool drawn as: %2").arg(m_def.name, toolLook);
   }
   exactPreviewShown(preview, bodies);
+  emit previewShown();
 }
 
 // The preview shown is drawn through stand-ins of the interactive tier
@@ -3723,7 +3772,7 @@ void CommandSession::scheduleRefinement() {
 
 void CommandSession::refinePreview() {
   if (m_done || m_refining || !m_previewOk || m_previewTimer.isActive() || m_asyncPending || m_committing ||
-      m_cancelRequested || (m_manipulators && m_manipulators->isDragging())) {
+      m_commitRequested || m_cancelRequested || (m_manipulators && m_manipulators->isDragging())) {
     return;
   }
   if (m_host.modelBusy()) {
@@ -4161,7 +4210,12 @@ void CommandSession::logVolumes(const QJsonObject& before) const {
 
 void CommandSession::inputAction(std::function<void()> action, bool invalidatesPreview,
                                  std::function<void()> rejected) {
-  if (m_done || m_cancelRequested || m_committing) {
+  // A commit requested while the model computes is the last input taken
+  // (resumePendingCommit): what comes after it would not be taken once the
+  // command had closed, and must not cancel the preview the commit waits
+  // for (mitcad#1713: the events a double click sends after its second
+  // click).
+  if (m_done || m_cancelRequested || m_committing || m_commitRequested) {
     if (rejected) { rejected(); }
     return;
   }
@@ -4283,6 +4337,7 @@ void CommandSession::presenterDetached() {
   }
   m_presenter = nullptr;
   m_previewTimer.stop();
+  m_lightRestTimer.stop();
   ++m_generation;
   if (!m_done && m_host.asynchronousPreviews()) {
     // A frontend may disappear while its worker still owns the document.
@@ -4302,14 +4357,44 @@ bool CommandSession::asyncPresenterAvailable() {
   return false;
 }
 
+// A commit requested while a job ran (Enter, OK or a click that confirms
+// while a preview computes, mitcad#1713: a double click's second click)
+// runs once the model is idle. It stays requested until it runs: inputs
+// that come meanwhile are not taken (inputAction), as they would not be
+// once the command had closed, and the job's end (the preview's own, a
+// refinement's, a pointer preview's) never drops it. Not by the generation:
+// the view's empty pick after a double click came between the preview's
+// end and this turn, and the item was never made.
 void CommandSession::resumePendingCommit() {
-  if (m_commitRequested && !m_asyncPending && !m_host.modelBusy() && !m_done) {
-    m_commitRequested = false;
-    const quint64 generation = m_generation;
-    TestSync::singleShot(0, this, [this, generation] {
-      if (generation == m_generation && !m_done && !m_cancelRequested) { commit(); }
-    });
+  if (!m_commitRequested || m_done || m_cancelRequested) {
+    return;
   }
+  if (m_asyncPending || m_host.modelBusy()) {
+    if (!m_commitWaitsForIdle) {
+      m_commitWaitsForIdle = true;
+      m_host.whenIdle(this, [this] {
+        m_commitWaitsForIdle = false;
+        resumePendingCommit();
+      });
+    }
+    return;
+  }
+  if (m_commitResumePosted) {
+    return;
+  }
+  m_commitResumePosted = true;
+  TestSync::singleShot(0, this, [this] {
+    m_commitResumePosted = false;
+    if (!m_commitRequested || m_done || m_cancelRequested) {
+      return;
+    }
+    if (m_asyncPending || m_host.modelBusy()) {
+      resumePendingCommit();
+      return;
+    }
+    m_commitRequested = false;
+    commit();
+  });
 }
 
 void CommandSession::commandSequenceAsync(const QJsonArray& commands,
@@ -4601,13 +4686,22 @@ bool CommandSession::commitAsync() {
   }
   if (m_asyncPending || m_host.modelBusy()) {
     m_commitRequested = true;
-    m_host.whenIdle(this, [this] { resumePendingCommit(); });
+    resumePendingCommit();
     return true;
+  }
+  // What only followed the pointer is dropped before OK, as commit() does
+  // (mitcad#1713: a route's node under the mouse).
+  if (m_def.confirming && m_def.confirming(m_state, m_host)) {
+    if (m_presenter) {
+      m_presenter->refresh(m_state);
+    }
+    m_shownKey.clear();
   }
   if (m_previewTimer.isActive() || m_shownKey.isEmpty()) {
     m_commitRequested = true;
     runPreview();
     if (m_asyncPending || m_host.modelBusy()) {
+      resumePendingCommit(); // at the preview's end, whatever it ends with
       return true;
     }
     m_commitRequested = false;
@@ -4872,16 +4966,23 @@ bool CommandSession::commit() {
     return false;
   }
   if (m_asyncPending || m_host.modelBusy()) {
-    if (!m_commitRequested) {
-      m_commitRequested = true;
-      m_host.whenIdle(this, [this] { resumePendingCommit(); });
-    }
+    m_commitRequested = true;
+    resumePendingCommit();
     return true;
+  }
+  // What only followed the pointer is dropped before OK (mitcad#1713: a
+  // route's node under the mouse); the preview is then of what OK adds.
+  if (m_def.confirming && m_def.confirming(m_state, m_host)) {
+    if (m_presenter) {
+      m_presenter->refresh(m_state);
+    }
+    m_shownKey.clear();
   }
   if (m_previewTimer.isActive() || m_shownKey.isEmpty()) {
     runPreview();
     if (m_asyncPending || m_host.modelBusy()) {
       m_commitRequested = true;
+      resumePendingCommit();
       return true;
     }
   }
@@ -5219,6 +5320,54 @@ bool CommandSession::eventFilter(QObject* watched, QEvent* event) {
   if (event->type() == QEvent::MouseMove && m_cursorBox && watched == viewer) {
     // The value box follows the cursor over the view (mitcad#375).
     moveCursorBox(static_cast<const QMouseEvent*>(event)->position().toPoint());
+  }
+  if (auto* over = qobject_cast<QWidget*>(watched); over != nullptr && (over == viewer || viewer->isAncestorOf(over))) {
+    if (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress) {
+      m_pointerOverView = true;
+    } else if (event->type() == QEvent::Leave && over == viewer) {
+      m_pointerOverView = false;
+    }
+  }
+  if (m_def.undo && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)) {
+    // The Undo key takes the session's last change back (mitcad#1713, as in
+    // sketch editing) anywhere in the window, unless a field is being typed
+    // in (its own undo).
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    auto* widget = qobject_cast<QWidget*>(watched);
+    const auto* field = qobject_cast<const QLineEdit*>(widget);
+    if (key->matches(QKeySequence::Undo) && widget != nullptr && widget->window() == viewer->window() &&
+        (field == nullptr || !field->isModified()) && !widget->inherits("QTextEdit") &&
+        !widget->inherits("QPlainTextEdit") &&
+        QApplication::activePopupWidget() == nullptr && QApplication::activeModalWidget() == nullptr) {
+      if (event->type() == QEvent::ShortcutOverride) {
+        event->accept(); // the window's Undo does not take it
+        return true;
+      }
+      undo();
+      return true;
+    }
+  }
+  if (m_def.backspace && (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride)) {
+    // Backspace takes the command's last click back (mitcad#1713) while
+    // the pointer is over the view, unless a field is being typed in: a
+    // value field that only got the keyboard by itself is none.
+    const auto* key = static_cast<const QKeyEvent*>(event);
+    auto* widget = qobject_cast<QWidget*>(watched);
+    const auto* field = qobject_cast<const QLineEdit*>(widget);
+    if (key->key() == Qt::Key_Backspace &&
+        (key->modifiers() & ~Qt::KeyboardModifiers(Qt::KeypadModifier)) == Qt::KeyboardModifiers() &&
+        widget != nullptr && widget->window() == viewer->window() && (viewer->underMouse() || m_pointerOverView) &&
+        (field == nullptr || !field->isModified()) && !widget->inherits("QTextEdit") &&
+        !widget->inherits("QPlainTextEdit") && QApplication::activePopupWidget() == nullptr &&
+        QApplication::activeModalWidget() == nullptr) {
+      if (event->type() == QEvent::ShortcutOverride) {
+        event->accept(); // no shortcut takes it (Delete's Backspace on macOS)
+        return true;
+      }
+      if (backspace()) {
+        return true;
+      }
+    }
   }
   if (event->type() == QEvent::KeyPress) {
     const auto* key = static_cast<const QKeyEvent*>(event);
@@ -5794,6 +5943,55 @@ bool CommandSession::escape() {
   // What the command's Esc changed (3D Print: the question ended, its rows
   // hidden; BUILD's chosen plane taken out, mitcad#1196): the inputs, the
   // highlights and the preview follow.
+  updateHighlights();
+  inputsChanged();
+  return true;
+}
+
+bool CommandSession::backspace() {
+  if (m_done || !m_def.backspace) {
+    return false;
+  }
+  if (m_host.modelBusy()) {
+    // Once the model is idle: the command may read it.
+    inputAction([this] { backspace(); });
+    return true;
+  }
+  if (!m_def.backspace(m_state, m_host)) {
+    return false;
+  }
+  qDebug().noquote() << QStringLiteral("%1: Backspace taken").arg(m_def.name);
+  ++m_generation;
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+  }
+  updateHighlights();
+  inputsChanged();
+  return true;
+}
+
+bool CommandSession::undo() {
+  return changeInputs(m_def.undo, QStringLiteral("Undo"));
+}
+
+bool CommandSession::changeInputs(std::function<bool(CommandState&, const CommandContext&)> change,
+                                  const QString& what) {
+  if (m_done || !change) {
+    return false;
+  }
+  if (m_host.modelBusy()) {
+    // Once the model is idle: the command may read it.
+    inputAction([this, change, what] { changeInputs(change, what); });
+    return true;
+  }
+  if (!change(m_state, m_host)) {
+    return false;
+  }
+  qDebug().noquote() << QStringLiteral("%1: %2 taken").arg(m_def.name, what);
+  ++m_generation;
+  if (m_presenter) {
+    m_presenter->refresh(m_state);
+  }
   updateHighlights();
   inputsChanged();
   return true;

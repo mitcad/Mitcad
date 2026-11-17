@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEvent>
@@ -1031,6 +1032,7 @@ CommandDef sectionCommand() {
   CommandDef def;
   def.id = QStringLiteral("inspect.section");
   def.name = QObject::tr("Section Analysis");
+  def.shortLabel = QCoreApplication::translate("RibbonLabel", "Section"); // under its button (mitcad#1936)
   def.icon = QStringLiteral("section-analysis");
   def.tooltip = QObject::tr("Shows the bodies cut at a plane, with the cut's area");
   def.group = QStringLiteral("INSPECT");

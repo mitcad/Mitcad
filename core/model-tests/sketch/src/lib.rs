@@ -103,3 +103,6 @@ mod sketch_move_text_1911_tests;
 // by a move and a scale, and held for a circular pattern's centre
 // (mitcad#1912).
 mod sketch_expression_points_1912_tests;
+// The sketch Rectangular Pattern's second direction at any angle, a
+// honeycomb of hexagons (mitcad#1969).
+mod sketch_pattern_direction2_1969_tests;

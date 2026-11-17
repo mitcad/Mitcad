@@ -1,0 +1,11 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the mitering UI test (mitcad#1940; tools/ui-build-end-meets-test.sh): two profiles placed apart meeting in an L. Upright (C1, Upright:1 O1, its derived part F1), the test library's 20 mm square profile (LIBRARY_URL, replaced by the test) placed by BUILD standing at the origin, 500 long; Arm (C2, Arm:1 O2, its derived part F2, its body F2.b0, its slider joint F3), the same profile 300 long on the upright's y+ side from end A at offset 480, so that its top is flush with the upright's end B (z = 480 to 500) and its end A stands on the side at y = 10. Both ends square. All geometry is synthetic."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-slot-test"},
+   "at": {"point": [0, 0, 0]}, "length": 500, "name": "Upright"},
+  {"cmd": "build_place", "part": {"source": "S1"},
+   "at": {"occurrence": "Upright:1", "geometry": {"mount": "F1:mount(slot_y+_1)"}, "offset": 480, "from": "a"},
+   "length": 300, "name": "Arm"},
+  {"expect": {"feature": "F3", "status": "ok"}},
+  {"expect": {"bodies": 2}}
+]

@@ -26,7 +26,8 @@ namespace mitcad::sketch {
 struct Snap {
   // BodyVertex, BodyMidpoint: a body vertex or the middle of a body edge in
   // the sketch plane (`bodyItem`), projected only when a point is placed
-  // there (mitcad#258).
+  // there (mitcad#258). BodyOnEdge: any point along a body edge in the
+  // plane, likewise (mitcad#1967).
   enum class Kind {
     None,
     Grid,
@@ -39,6 +40,7 @@ struct Snap {
     OnCurve,
     BodyVertex,
     BodyMidpoint,
+    BodyOnEdge,
   };
 
   Kind kind = Kind::None;
@@ -52,10 +54,14 @@ struct Snap {
   // (SketchOp::constrain).
   QString axis;
   QPointF screen; // where the cursor was
-  BodyItem bodyItem; // BodyVertex, BodyMidpoint: the vertex or the edge
+  BodyItem bodyItem; // BodyVertex, BodyMidpoint, BodyOnEdge: the vertex or the edge
 
   // On existing geometry (a new point there gets a constraint).
   bool onGeometry() const { return kind != Kind::None && kind != Kind::Grid; }
+  // Onto a curve or a body edge anywhere along it, not at a point of it.
+  bool alongCurve() const { return kind == Kind::OnCurve || kind == Kind::BodyOnEdge; }
+  // Onto a body vertex or edge (projected when a point is placed there).
+  bool onBody() const { return kind == Kind::BodyVertex || kind == Kind::BodyMidpoint || kind == Kind::BodyOnEdge; }
   // At an existing point, which a new curve can share.
   bool atPoint() const { return kind == Kind::Point || kind == Kind::Center; }
   QString describe() const;
@@ -68,9 +74,9 @@ struct SnapSettings {
   double gridStep = 1.0; // mm
   QSet<QString> skipPoints;
   QSet<QString> skipCurves;
-  // Body vertices and edge midpoints to snap to (mitcad#258): a tool's
-  // switch (SketchTool::bodySnaps), on for the Point tool only; none when
-  // null.
+  // Body vertices, edge midpoints and edges to snap to (mitcad#258,
+  // mitcad#1967): a tool's switch (SketchTool::bodySnaps), on for every
+  // drawing tool; none when null.
   const BodyGeometry* body = nullptr;
   // The sketch's x and y axes as lines across the view to snap onto
   // (mitcad#948), with the curves' tolerance; the sketch's own geometry and

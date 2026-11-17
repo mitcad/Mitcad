@@ -9,6 +9,10 @@
 #include <QObject>
 
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRep_Builder.hxx>
+#include <TopoDS_Compound.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Vec.hxx>
 
@@ -489,6 +493,27 @@ TopoDS_Shape boxAlong(const Frame& frame, double width, double height, double le
     return BRepPrimAPI_MakeBox(gp_Ax2(corner, z, x), width, height, std::abs(length)).Shape();
   } catch (...) {
     return TopoDS_Shape(); // OCCT's Standard_Failure: no preview then
+  }
+}
+
+TopoDS_Shape arrowAlong(const gp_Pnt& from, const gp_Dir& direction, double length) {
+  if (!(length > 0.0)) {
+    return TopoDS_Shape();
+  }
+  try {
+    // A shaft and a head a quarter of the length long.
+    const double head = length / 4.0;
+    const double shaft = length - head;
+    const gp_Ax2 at(from, direction);
+    const gp_Ax2 tip(from.Translated(gp_Vec(direction) * shaft), direction);
+    TopoDS_Compound arrow;
+    BRep_Builder builder;
+    builder.MakeCompound(arrow);
+    builder.Add(arrow, BRepPrimAPI_MakeCylinder(at, length / 30.0, shaft).Shape());
+    builder.Add(arrow, BRepPrimAPI_MakeCone(tip, length / 10.0, 0.0, head).Shape());
+    return arrow;
+  } catch (...) {
+    return TopoDS_Shape(); // OCCT's Standard_Failure: no arrow then
   }
 }
 

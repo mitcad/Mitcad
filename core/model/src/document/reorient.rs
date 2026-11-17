@@ -159,11 +159,22 @@ impl<K: Kernel> Document<K> {
             .count();
         let mut renamed: Vec<PieceRenames> = Vec::new();
         let mut resume = 0;
-        for _ in 0..=sketches + next.features.len() {
+        let mut probed = BTreeSet::new();
+        for _ in 0..=2 * sketches + next.features.len() {
             let mut whole = next.clone();
             whole.marker = all.max(next.features.len());
             let result = self.compute(&whole)?;
-            let fixes = frame_fixes(&next, &result, &old_frames, turn, &turned);
+            let mut fixes = frame_fixes(&next, &result, &old_frames, turn, &turned);
+            if fixes.is_empty() {
+                fixes = self.unsolved_frame_fix(
+                    &next,
+                    &result,
+                    &old_frames,
+                    turn,
+                    &turned,
+                    &mut probed,
+                )?;
+            }
             if !fixes.is_empty() {
                 for (uid, frame) in fixes {
                     set_sketch_frame(&mut next, uid, frame);
@@ -292,6 +303,54 @@ impl<K: Kernel> Document<K> {
             *state = next;
             Ok(("Reorient Design".to_owned(), report))
         })
+    }
+
+    /// The frame correction of the first sketch that solved before the
+    /// turn and does not solve in the turned design, which therefore gives
+    /// no frame to correct by: its projections and constraints hold only in
+    /// its turned frame (a projected line that a constraint keeps vertical
+    /// lies horizontal while its plane's frame is not yet corrected,
+    /// mitcad#1937). Its frame is read from the turned design up to it with
+    /// the sketch's constraints and dimensions left out. Each sketch is
+    /// probed once (`probed`), and one whose frame needs no correction (it
+    /// fails for another reason) or cannot be read either is passed over;
+    /// empty when none is left.
+    fn unsolved_frame_fix(
+        &mut self,
+        next: &DocState,
+        result: &Recomputed<K::Shape>,
+        old: &BTreeMap<FeatureUid, SketchFrame>,
+        turn: Turn,
+        turned: &BTreeSet<ComponentUid>,
+        probed: &mut BTreeSet<FeatureUid>,
+    ) -> Result<Vec<(FeatureUid, Option<FrameDef>)>, ModelError> {
+        for (index, entry) in next.features.iter().enumerate() {
+            if !matches!(entry.def, FeatureDef::Sketch(_))
+                || !turned.contains(&entry.component)
+                || !old.contains_key(&entry.uid)
+                || result.sketches.contains_key(&entry.uid)
+                || !probed.insert(entry.uid)
+            {
+                continue;
+            }
+            let mut free: FeatureEntry = (**entry).clone();
+            if let FeatureDef::Sketch(sketch) = &mut free.def {
+                sketch.constraints.clear();
+                sketch.dimensions.clear();
+            }
+            let mut probe = next.clone();
+            probe.features[index] = Arc::new(free);
+            probe.marker = index + 1;
+            let probed_result = self.compute(&probe)?;
+            // The own frame that corrects it, as for a sketch that solves
+            // (computed against the definition with its constraints).
+            let mut fixes = frame_fixes(next, &probed_result, old, turn, turned);
+            fixes.retain(|(uid, _)| *uid == entry.uid);
+            if !fixes.is_empty() {
+                return Ok(fixes);
+            }
+        }
+        Ok(Vec::new())
     }
 
     /// Each body of a recompute with its component, bounding box and
@@ -817,8 +876,14 @@ fn turn_state(
     // Values along the model axes (a Move's x, y, z) went with their axes;
     // those of an axis that now runs the other way are negated.
     negate_parameters(state, &negated)?;
-    // Imported bodies: a Move right after each base feature turns them.
+    // Imported bodies: a Move right after each base feature turns them. A
+    // base feature without bodies (an import's that keeps none of a
+    // component's stored bodies) has nothing to turn and gets none
+    // (mitcad#1937).
     for (uid, base) in bases {
+        if base.bodies.is_empty() {
+            continue;
+        }
         let name = add_base_move(state, uid, &base, turn)?;
         report.moves.push(name);
     }

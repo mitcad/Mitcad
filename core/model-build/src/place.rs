@@ -350,6 +350,11 @@ pub struct EditInput {
     /// A member along an edge (mitcad#1814): its edge, face and offsets.
     #[serde(default)]
     pub along: Option<crate::edge::AlongEdit>,
+    /// A shared miter at this end with the end of another part it meets
+    /// (mitcad#1940, `end_meets.rs`): both cut and moved as a corner
+    /// placement's shared miter.
+    #[serde(default)]
+    pub shared_mitre: Option<EndFrom>,
 }
 
 /// A hole at one of a part's ends.
@@ -3647,6 +3652,21 @@ pub trait EditBuild<K: Kernel> {
 impl<K: Kernel> EditBuild<K> for Document<K> {
     fn build_edit(&mut self, input: &EditInput) -> Result<Vec<String>, ModelError> {
         let component = self.component_by_ref(&input.component)?;
+        // A shared miter with the end it meets (mitcad#1940), on its own.
+        if let Some(end) = input.shared_mitre {
+            if input.ends.is_some()
+                || input.length.is_some()
+                || input.at.is_some()
+                || input.rotate.is_some()
+                || input.flip.is_some()
+                || input.tilt.is_some()
+            {
+                return Err(refuse(
+                    "a shared miter is edited on its own: send the other fields in another build_edit",
+                ));
+            }
+            return self.build_shared_mitre(component, end == EndFrom::B);
+        }
         // A timber frame is laid out again as one (mitcad#479).
         if let Some(frame) = &input.frame {
             return self
@@ -4468,7 +4488,8 @@ impl<K: Kernel> EditCrateOps<K> for Document<K> {
         {
             return Err(refuse(format!(
                 "{} is placed after {} in the timeline: a length is bound only to parts placed \
-                 before it",
+                 before it. To miter a corner instead, place the second part on the first one's \
+                 end (Miter Auto or Shared), or use Ends with Also the Component It Meets",
                 names(target),
                 names(part)
             )));

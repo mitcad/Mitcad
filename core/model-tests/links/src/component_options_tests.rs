@@ -455,6 +455,9 @@ fn the_configure_query_of_a_component_tries_its_values() {
     assert_eq!(answer["rows"], json!(["Standard"]));
     assert_eq!(answer["config"], Value::Null);
     assert_eq!(answer["default_row"], "Standard");
+    // An open table (mitcad#1950): the edit panel offers its options
+    // beside its rows.
+    assert_eq!(answer["closed"], false);
     // Its source's design for Open Source Design (mitcad#1812): the text
     // the design keeps; an unknown source is refused.
     let source = doc.component_options(board).unwrap().source;

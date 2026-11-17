@@ -55,6 +55,7 @@ search: type the start of a command's name and press Enter.
   - [Sweep](#sweep)
   - [Intersection Curve](#intersection-curve)
   - [Helix Curve](#helix-curve)
+  - [Flex](#flex)
   - [Loft](#loft)
   - [Rib](#rib)
   - [Web](#web)
@@ -602,6 +603,14 @@ Browser and the panels, and also the icons in menus, drop-down lists and
 text fields (on macOS the menu bar's menus keep the system's size). **Font** chooses the interface's font:
 **System** (the default) or any font installed on the computer, at the
 Text size. These too take effect when MitCad starts again.
+
+The toolbar's buttons show their icons only; the name of each is in its
+tooltip. To see a short name under every icon, choose **Preferences ›
+Display › Toolbar labels › Labels under icons** (**Icons only** is the
+default); it applies at once, in both layouts. Long names are shortened
+(Create Sketch shows Sketch), and the labels grow with the Icon size. The
+toolbar becomes a little higher, and in a narrow window its groups still
+fold to their names from the right.
 
 On macOS, the keys that say Ctrl in this guide are Cmd keys (Cmd+N,
 Cmd+S, Cmd+Z and so on). Refer to [Shortcuts](#shortcuts) for the
@@ -1233,6 +1242,16 @@ how the selection looks. Every open window uses them when you click OK
 
 In a command, the selection inputs keep their own colors.
 
+A selected item that a body hides still shows: its faces' boundaries,
+its edges and its sketch curves are drawn faint and dashed in the
+selection color through the bodies in front of them, a selected point
+as a faint ball, and a selected body as a faint fill without its edges.
+Thus you can see that a profile inside a body or a face on the far side
+of a body is selected. The full highlight stays where nothing hides the
+item, so you can still tell what is in front. A section analysis also
+cuts these copies. To draw the selection as before, turn off
+**View › Selection Through Bodies**; MitCad remembers the setting.
+
 To select something that lies behind other geometry, press the left
 mouse button over it and hold it still for about half a second. A list
 opens beside the pointer with everything under it that the filters let
@@ -1532,6 +1551,7 @@ submenus.
   - Mirror
 - Envelope ([Envelope](#envelope))
 - Form ([Form](#form))
+- Flex ([Flex](#flex))
 - Machine Elements ›
   - Gear ([Gears](#gears))
   - Pulley ([Pulleys](#pulleys))
@@ -1813,7 +1833,8 @@ any annotation whose pick is gone.
 **Export Face as DXF…** writes the outline of a flat part for a laser,
 waterjet or plasma cutter. Select a planar face of the body, choose the
 command in the Laser group (or right-click the face and choose it there)
-and save the file. MitCad looks at the body square to that face from
+and save the file. With no planar face selected, the command opens its
+panel: click the face there and choose **Export**. MitCad looks at the body square to that face from
 outside and writes its outline at 1:1 in the design's length unit, or in
 the unit you choose as the file type ([The unit of a DXF
 file](#the-unit-of-a-dxf-file)): the outer outline
@@ -2358,6 +2379,73 @@ Pattern on Path, or a construction plane or point along a path. Project
 and Intersect take it in a later sketch. It shows in the Browser in the
 Construction folder, with a light bulb.
 
+### Flex
+
+**Flex** (Create, after Envelope) lays a flexible item through the model:
+a wire, a cable, a hose, a flat cable, an LED or sealing strip. You click
+where it goes, and MitCad finds the route between the clicks: the
+shortest one that passes through no body and bends no more tightly than
+the item allows. On faces the item lies on the surface and goes over the
+edges between them.
+
+1. Start **Flex**. The panel opens with a *Type*: a ready-made item from
+   the library with its size, wall and bend radius. Choose another type,
+   or change the values under it. You do not need to change anything to
+   start.
+2. Click where the item starts. Move the pointer over a pipe or another
+   Flex item, and a ring with an arrow marks each of its ends. A click on
+   such an end starts the item at its middle, and the item leaves the way
+   the arrow points. It follows the pipe when the pipe changes. A click
+   on a face, an edge or a point starts the item there. A click beside
+   the model starts it free in space.
+   Such a click lands on a plane through the last node. MitCad chooses
+   the plane by the view. To choose it yourself, set *Free Nodes On* to
+   the XY, YZ or ZX plane, or press Tab to step through them.
+3. Click where the item goes next. Each click is a *node*. A node on a
+   face stays on that face, and the item rests on the face there. While
+   you move the pointer, the item is drawn along the route to it with its
+   length. When the pointer rests, the preview shows the solid item.
+4. End the item: press Enter, double-click the last node, or click an end
+   of a pipe or of another item. The item then ends at that end.
+
+Backspace takes the last node back. Esc cancels the command.
+
+- **Bend Radius** is the smallest radius that the item bends to. A flat
+  item has a second value, *Bend Radius on Edge*, for bending over its
+  edge. Leave a field of a flat item empty when the item does not bend
+  that way.
+- **Twist** shows for an item that is not round. It turns the section
+  about the route at the node that you placed last. Type `180` for half a
+  turn of a flat cable, or drag the ring in the view. To set the twist of
+  an earlier node, click that node: *Twist* is then that node's.
+- **Hollow** with a *Wall Thickness* makes a hose or a tube.
+- **Save as Type** keeps the values of the panel in your library under a
+  name. The type is then in the *Type* list of every design.
+
+When no clean route exists (a gap too narrow for the bend radius, for
+example), MitCad still makes the item on the nearest route and shows a
+warning. Move the pointer over the warning, and the view shows where the
+item passes through a body or bends too tightly.
+
+An item keeps a copy of its type. A later change of the type in the
+library does not change the items in your designs.
+
+**Let It Hang** (Assemble, or right-click a Flex item) lets a cable or
+hose hang under gravity. Its panel sets the way gravity pulls (*Direction
+From*: click a planar face or a plane, and gravity pulls against it; or an
+axis or a straight edge, and gravity pulls along it; *Reverse* turns it
+round), the item's *Length*, the *Damping* (how quickly it stops swinging)
+and whether its ends stay where they are. The nodes you placed on a face,
+an edge, a point or a port stay where they are too, as clips; only the
+nodes placed freely in space hang free. The item falls at once, lies on
+what is below it and wraps round what it meets. Drag it by any point in
+the view, or click a node to pin it or let it go. Change the direction
+while it hangs, and it settles again the new way. OK keeps the shape it
+rests in; Cancel puts it back. A design that has no direction of gravity
+yet asks for one in the panel. **Clear Gravity** takes the direction away.
+The small *g* marker in the corner of the view shows the way gravity pulls
+while the panel is open.
+
 ### Loft
 
 Each end of a **Loft** has a *Start Condition* or an *End Condition*.
@@ -2451,7 +2539,9 @@ the top, the rib fills the part the faces stop, up to the wall and up to
 the level of the top face, so that it meets the top face along the edge
 with no step, and nothing above or beside the body. If an end meets no face, it stays where
 it is drawn, and the rib shows a warning. Point to the warning to see
-that end in the view.
+that end in the view. If an end lies past a wall that the curves cross,
+outside the body, the rib is cut back to that wall instead, and the piece
+outside goes.
 
 **End Offset** (with Extend Ends) moves each end further along its
 direction, into the face it meets. Use it to sink a rib into a thin wall.
@@ -2494,8 +2584,9 @@ usual causes are:
 
 A **Web** makes thin walls along sketch curves, all grown out of the
 sketch plane along its normal. Each curve gets a wall of its own, and
-where the walls cross they join into one body with the bodies they reach.
-The **Thickness** of a wall is in the sketch plane, across its curve.
+where the walls cross or meet they join into one body with the bodies
+they reach. The **Thickness** of a wall is in the sketch plane, across
+its curve.
 
 ![A grid of webs on a plate](images/rib-web/web.png)
 
@@ -2503,10 +2594,10 @@ The **Thickness** of a wall is in the sketch plane, across its curve.
 or on a plane at the height where they start. Draw the walls as seen
 from above: lines and circular arcs, open, one for each wall, for
 example a grid of lines across a plate. Closed curves (a circle) and
-other curves (a spline, an ellipse) are not taken.
+other curves (a spline, an ellipse) are not taken. Curves may meet end
+to end: an L, a zigzag or the outline of a room drawn as separate lines.
 
-The panel has the inputs of the Rib panel, without Direction, Extend
-Ends and End Offset:
+The panel has the inputs of the Rib panel, without Direction:
 
 - **Curves** and **Chain Selection**, as for a rib. A web also takes a
   flat Intersection Curve made of lines and arcs, and the curves of a 3D
@@ -2521,8 +2612,39 @@ Ends and End Offset:
   from the floor of a box up to its lid. **Depth** grows them by the
   **Depth** that you give, from the sketch plane.
 - **Flip**: grows the walls against the sketch normal.
+- **Extend Ends** and **End Offset**: continue the free ends of the curves
+  to the faces (below).
 - **Objects**: the bodies that the walls join and stop at; none: all of
   them.
+
+**Corners.** Where two curves meet end to end, their walls meet in a
+mitered corner, like the corner of a picture frame, at any angle and with
+any Thickness Side. There is no notch on the outside of the corner. At a
+very sharp angle the point of the miter would run far out, so it is cut
+off a little past the walls. Curves joined end to end keep their walls on
+one side: with Side 1 or Side 2, the first curve you pick decides the
+side, even if you drew a later curve the other way round. Where three or
+more curves meet at one point (a Y), their walls are joined there into
+one piece. A curve that ends on another curve between its ends (the stem
+of a T) ends there as drawn.
+
+**Extend Ends** is on for a new web. A free end is one that touches no
+other curve of the web: not a corner, and not the stem of a T where it
+meets the bar. Each free end is continued along its curve until its wall
+meets the faces of the bodies, so you don't have to draw the lines all the
+way to the walls of a box. If a free end lies past a wall that its curve
+crosses, outside the box, the wall is cut back to that wall instead, and
+the piece outside goes. A free end that meets no face stays where it is
+drawn, and the web shows a warning. **End Offset** moves the free ends
+further into the faces, as for a rib. A web made before Extend Ends opens
+with it off, so it keeps its ends as drawn.
+
+**In a pattern** (with Adjust, the default), each copy of a web or a rib
+is built again where it lands: To Next finds the faces there, and Extend
+Ends continues or cuts back the ends to the walls there. So a row of walls
+patterned toward the narrow end of a box gets shorter with the box, and a
+row under a sloped lid or over a sloped floor gets taller or lower with
+it.
 
 **Rib or Web?** Use a **Rib** for one wall whose outline you draw from
 the side: a gusset with a slanted edge, a stiffener whose height changes
@@ -2543,6 +2665,13 @@ up from it.
   must close off every wall. Flip it, or give it a depth.
 - *There are no bodies for the web to reach*: To Next needs a body.
   Check Objects, or use Depth.
+- *A web curve is too short for the walls that meet at its ends*: the
+  miters at both ends of a short curve overlap. Make the curve longer or
+  the walls thinner.
+- *Two curves of the web run back along each other from a corner*: the
+  curves meet at an angle of zero. Remove one of them.
+- *An end meets no face* (a warning): Extend Ends found no face ahead of
+  that free end. The web is made, with that end as drawn.
 
 ### Hole
 
@@ -4260,11 +4389,14 @@ of Objects in rows and columns. The first direction is Direction: a line
 of the sketch that you pick, or the sketch's x or y axis (click the axis
 anywhere along the line drawn across the view; the field then names the
 axis). When you pick nothing, Direction is the x axis. A sketch that has
-only circles or points can thus copy them along y too. The second direction
-is not picked: it always runs across Direction, at right angles to it in
-the sketch (a quarter turn counterclockwise from Direction, so the y
-axis when Direction is the x axis). Quantity and Spacing set the copies
-along Direction, Quantity 2 and Spacing 2 those across it. Quantity 2
+only circles or points can thus copy them along y too. The second
+direction is Direction 2, also a line or an axis, at any angle to
+Direction but along it: a line at 60 degrees to Direction lays out a
+honeycomb. When you pick nothing, it runs across Direction, at right
+angles to it in the sketch (a quarter turn counterclockwise from
+Direction, so the y axis when Direction is the x axis). Quantity and
+Spacing set the copies along Direction, Quantity 2 and Spacing 2 those
+along the second direction. Quantity 2
 starts at 2, so the preview shows a grid at once; set it to 1 for a
 single row. In the view, an arrow at the first copy along each direction
 shows its spacing: drag an arrow to change Spacing or Spacing 2. The
@@ -4272,8 +4404,10 @@ arrows move in steps of the grid; hold Shift or Alt to drag freely.
 While Quantity 2 is 1, the second arrow is faint: it only shows where a
 second row would go. Flip and Flip 2 copy against a direction, and a
 Symmetric Direction Type puts the copies on both sides of the originals
-(an odd quantity). Edit Pattern changes the quantities and spacings
-later.
+(an odd quantity). Edit Pattern changes the quantities, spacings and
+the second direction later: turn off At Right Angles and pick a line or
+an axis as Direction 2 (empty, it keeps the pattern's own), or turn At
+Right Angles on to make the rows square to Direction again.
 
 **Mirror** (Create › Patterns) copies the curves and points of Objects
 to the other side of the Mirror Line. Each copy gets a Symmetry
@@ -4373,21 +4507,27 @@ a line from the origin along the X axis is horizontal, and its end stays
 on the axis. Horizontal and vertical are the directions of the axes, so
 the line tool needs no axis to infer them.
 
-**Point on a body:** the Point tool also snaps to the corners of visible
-bodies that lie in the sketch plane. It also snaps to the middles of
-their edges in the plane (lines and arcs). This includes the bodies of
-other components. The marker and the hint are those of a point or a midpoint.
-When a body and the sketch's own geometry are both under the pointer,
-the sketch's geometry wins. While the pointer only hovers, MitCad adds
-nothing.
+**On a body:** every drawing tool (Line, Rectangle, Circle, Arc,
+Polygon, Slot, Ellipse, Spline, Point and the others) also snaps to the
+corners of visible bodies that lie in the sketch plane. It also snaps to
+the middles of their edges in the plane (lines and arcs), and onto any
+point along those edges. This includes the bodies of other components.
+The marker is that of a point, a midpoint or a curve; the Point tool's
+hint also says what a click does. When a body and the sketch's own
+geometry are both under the pointer, the sketch's geometry wins, and so
+does an axis that runs along a body edge. While the pointer only hovers,
+MitCad adds nothing.
 
 A click projects the corner or the edge into the sketch, linked, as
-Project does it. Then it adds the point and holds it on the projected
-corner or at the middle of the projected edge. This is one undo step.
-Thus the point follows the body when the design changes. If the sketch
-already has a projection of the same corner or edge, MitCad uses that
-projection again. A click on a corner that already has a point does
-nothing.
+Project does it. Then the point that the tool places there is held on
+the projected corner (Coincident), at the middle of the projected edge
+(Midpoint) or on the projected edge (Coincident). Thus a line that you
+start at a body corner starts on the corner, and a rectangle's corner
+clicked on a body corner stays there. This is one undo step with the
+rest of the click. Thus the point follows the body when the design
+changes. If the sketch already has a projection of the same corner or
+edge, MitCad uses that projection again. A Point tool click on a corner
+that already has a point does nothing.
 
 **Auto constraint:** when the line, circle or arc tool has drawn its
 first entity, the palette shows an *Auto constraint* section. The
@@ -4436,6 +4576,13 @@ dimension. For example, draw a rectangle 10 × 5 and give its long side
 100: the rectangle becomes 100 × 50. The sketch keeps its shape and its
 constraints. Text heights scale too. The scale and the dimension are one
 undo step. A message tells the scale factor.
+
+The view moves with the sketch: the geometry that you dimension stays at
+its place on the screen, and the zoom does not change. For example, a
+circle that you drew far from the sketch origin (on a face whose origin
+is far away) stays under the pointer when its first dimension scales the
+sketch. The other geometry moves away from it or towards it by the scale
+factor.
 
 - This applies to a length, a distance, a radius or a diameter. It does
   not apply to an angle or to a driven dimension.
@@ -4739,9 +4886,9 @@ activates both.
 
 **Project** (P, in Create) projects references from the bodies into the
 sketch. Projected geometry is linked: it follows its source when the
-design changes. MitCad draws projected geometry purple. The Point tool
-snaps only to edges and corners in the sketch plane. Sketch Dimension
-also takes edges and corners that are not in the plane. The Point tool and
+design changes. MitCad draws projected geometry purple. The drawing
+tools snap only to edges and corners in the sketch plane. Sketch Dimension
+also takes edges and corners that are not in the plane. The drawing tools and
 Sketch Dimension project corners and edges of bodies as Project does it
 (refer to [Snaps and auto constraints](#snaps-and-auto-constraints) and
 [Dimensions](#dimensions)).
@@ -4973,7 +5120,7 @@ Each sketch edit starts with these defaults:
 | Row | Default |
 | --- | --- |
 | Sketch geometry, construction geometry, projected geometry | cross |
-| Dimensions and constraints, profiles, visible body edges | square |
+| Dimensions, constraints, profiles, visible body edges | square |
 | Occluded body edges, body faces, body vertices, bodies, components, planes/axes/points | empty |
 
 Thus a window selects the sketch's ordinary, construction and projected
@@ -4982,6 +5129,14 @@ sight selects it. A click on an edge behind faces does not. The view at
 the moment decides if an edge is in sight. When you orbit, this
 changes. For an edge that is partly hidden, the part that you click or
 that is inside the window counts.
+
+Dimensions and constraints have a row each, so that a window can select
+only the one or the other. Set **Dimensions** to a cross to select all
+the dimensions inside a window, or **Constraints** to select all the
+constraints. The fix symbols of fixed points and curves count as
+constraints. A click also follows each row: with Dimensions empty, a
+click on a dimension does not select it, but a click on a constraint
+does.
 
 The rows only concern the edited sketch. You cannot select the geometry
 of other sketches, except while Project or Intersect runs, and you cannot select
@@ -9215,11 +9370,38 @@ another size, remove them, or add them again.
 it, to the profile's center, or through it. It can also be bound to a face
 or a plane anywhere, plus an offset. Or it can be detached as a number.
 
-**Ends** sets an end's miter angle and the axis it turns about. *Also the
-Component It Meets* also cuts the end that meets it. *End Machining* sets a
-bore in the end, or none. The bore has a diameter, a depth and a thread,
-for a screw or an automatic connector. The other end's machining stays
-as it is.
+**Ends** sets an end's miter angle and which way the cut leans. While the
+panel is open, the ends of the profiles show *A* and *B* in the view.
+Click a profile near the end you want to cut: that end is chosen, and
+its label shows *> A* or *> B*. **About** says which way the cut leans.
+For an end that meets another profile, the choices are *Towards the
+component it meets*, *Away from the component it meets* and *Across the
+corner*, one way or the other. An arrow from the end shows the lean. For
+an end that meets nothing, the choices are the profile's own axes. *End
+Machining* sets a bore in the end, or none. The bore has a diameter, a
+depth and a thread, for a screw or an automatic connector. The other
+end's machining stays as it is.
+
+**Mitering two profiles.** Where two profiles meet in a corner, the
+easiest way is to place the second one on the first one's end. Click
+near an edge of the end face to turn the corner, and choose Miter
+*Shared*. MitCad cuts both on the bisector, and the outer corners meet.
+The view's hint says so while you pick the end.
+
+For profiles you placed apart, use **Ends**. Pick one profile near the
+corner and check *Also the Component It Meets*. It is offered when the
+other profile's end touches this end, overlaps it or comes within 5 mm.
+MitCad then makes the same shared miter as a corner placement. Both ends
+are cut on the bisector, and each profile runs on to the outer corner. A
+profile that stands on the other one's side moves through it to its
+outer side, and its far end stays where it is. When the choice is not
+offered, the panel says why: no end is near, the profiles are on one
+axis, a length is bound to another profile, or a profile is tilted.
+
+A length can be bound only to a profile placed before it. So you cannot
+run the first profile on to the second one's face when the second was
+placed later. MitCad refuses it and says to miter the corner in one of
+the two ways above.
 
 **Flip** and **Rotate 90°** apply to the components you select. Enter turns
 them again.
@@ -11577,6 +11759,16 @@ The filters change no component and are not saved in the design. They
 are in **Insert from Library**, **Components in This Design**, **Edit Options…**
 and the Build tab's component picker.
 
+A component that is cut to length, such as a slot profile, a rail, a
+shaft, a steel tube or a timber board of the parts library, has its
+length **L** as an option in
+**Insert from Library**, from its shortest to its longest. **Stock
+length** above it lists the lengths the supplier sells: choosing one
+sets the length, and it shows **Custom** for any other length. The
+component is inserted at that length, and **Derived Component** (a
+double-click on its feature in the timeline) changes the length later.
+In the Build tab, the length comes from the member as before.
+
 The name of the component follows the standard: with **DIN 912**, the
 M6 x 10 screw is `DIN 912 M6x10`. With **All**, it gets its first
 standard (`ISO 4762 M6x10`). A size of no standard is
@@ -12272,12 +12464,16 @@ the exports:
   bodies or of the selected bodies. STL has a refinement and a binary
   or text format. USDZ: [USDZ for AR and 3D
   viewers](#usdz-for-ar-and-3d-viewers).
-- A sketch as DXF. Export DXF in the sketch's context menu does the
-  same. The file holds the sketch's curves that make its profiles:
-  construction curves and center lines are left out, so that a cutting
-  program cuts only the part. Select **Include construction geometry**
-  to write them too, on the layer *construction*. Export DXF in the
-  context menu always leaves them out.
+- A sketch as DXF. Export DXF… in the sketch's context menu opens this
+  dialog on that sketch. The file holds the sketch's curves that make
+  its profiles: construction curves and center lines are left out, so
+  that a cutting program cuts only the part. Select **Include
+  construction geometry** to write them too, on the layer
+  *construction*. **Include points**, on unless you clear it, writes the
+  sketch's points that stand alone (not the ends or centers of its
+  curves), for example the hole positions a plasma table or a drill is
+  to mark, as points on the layer *POINTS*. Insert DXF reads them back
+  as sketch points.
 - The design as a web page that opens in any browser ([Web
   viewer](#web-viewer)).
 - glTF (`.glb` or `.gltf`) of all bodies or of the selected bodies, for
@@ -12294,8 +12490,8 @@ it takes a file per plate. Without plates, **On the print bed** puts each
 piece on its print bed face; **Center on Plate** and **Drop to Bed**
 place the pieces on the plate.
 
-The dialog starts with the type, the refinement, the STL format and
-Include construction geometry of your last export, so repeated exports
+The dialog starts with the type, the refinement, the STL format,
+Include construction geometry and Include points of your last export, so repeated exports
 for 3D printing keep 3MF and High.
 When you edit a sketch, or a sketch is selected, it starts with DXF
 instead; a sketch's DXF does not change the type remembered for the
@@ -12331,7 +12527,7 @@ you choose another: a sketch's DXF, Export Flat Pattern, Export Face as
 DXF, a cut sheet and a drawing as DXF. An inch design writes inches, a
 millimeter design millimeters. The Export dialog and Export Drawing have
 a **DXF unit** row; the save dialogs of Export Flat Pattern, Export Face
-as DXF, Export DXF and the Drawing tab's DXF… offer the units as file
+as DXF and the Drawing tab's DXF… offer the units as file
 types, such as *DXF drawing in inches (\*.dxf)*. The design's unit is the
 first one and is selected.
 
@@ -14850,9 +15046,11 @@ AppImage, `MitCad.AppImage cli <command>` runs it.
   one object. A `.usdz` file holds the shown bodies with their
   appearances, with the textures relative to the design's folder.
 - `export-sketch part.mitcad Sketch1 sketch.dxf [--unit in] [--r12]
-  [--construction]`: exports a sketch, in the design's length unit unless
-  `--unit` gives another. Construction curves and center lines are left
-  out unless `--construction` writes them, on the layer `construction`.
+  [--construction] [--no-points]`: exports a sketch, in the design's
+  length unit unless `--unit` gives another. Construction curves and
+  center lines are left out unless `--construction` writes them, on the
+  layer `construction`. The sketch's points that stand alone are written
+  as points on the layer `POINTS` unless `--no-points` leaves them out.
 - `render part.mitcad -o image.png [--view Front] [--size 1920x1080]
   [--samples 128] [--time-limit 60] [--format png|png16|jpeg|exr]
   [--transparent] [--no-denoise]`: renders the visible bodies as Render

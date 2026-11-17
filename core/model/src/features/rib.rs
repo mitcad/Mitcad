@@ -23,6 +23,14 @@
 //! without it keeps its ends as drawn. Its Direction ([`RibDirection`])
 //! grows it along the sketch's x or y or a picked line instead of at right
 //! angles to the chord.
+//!
+//! A web (mitcad#1968) joins walls whose curves meet end to end in mitred
+//! corners and walls meeting at a node by their union there; its Extend
+//! Ends continues each free end (one touching no other curve of the web)
+//! along its curve to the bodies, or cuts it back to the wall it crosses,
+//! as a rib's ends are cut back. Both rebuild their tool at each copy of a
+//! pattern ([`Evaluate::placed_tool`]), so that To Next and Extend Ends are
+//! solved again where the copy lands.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,10 +46,11 @@ use super::{
     CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References, ToolUse, is_false,
 };
 use crate::ids::{BodyUid, EntityUid, FeatureUid};
-use crate::kernel::Kernel;
+use crate::kernel::{Curve3, Kernel};
 use crate::parameters::ParamId;
 use crate::profile::SketchFrame;
 use crate::sweeps::{PathCurve, RibSpec, ThicknessLocation};
+use crate::transform::Transform;
 
 /// How far a rib or a web grows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -232,9 +241,10 @@ macro_rules! thin_feature {
             /// The bodies it reaches and joins; empty for all.
             #[serde(default, skip_serializing_if = "Vec::is_empty")]
             pub participants: Vec<BodyUid>,
-            /// A rib's open ends continued along their end tangents to the
-            /// faces of the bodies (mitcad#1746); absent: as drawn, as
-            /// ribs made before it.
+            /// The open ends continued along their end tangents to the
+            /// faces of the bodies (a rib's mitcad#1746, a web's free ends
+            /// mitcad#1968); absent: as drawn, as ribs and webs made before
+            /// it.
             #[serde(default, skip_serializing_if = "is_false")]
             pub extend_ends: bool,
             /// How much further each continued end goes along its tangent,
@@ -327,6 +337,15 @@ macro_rules! thin_feature {
             ) -> Result<FeatureOutput<K::Shape>, String> {
                 self.view().evaluate(ctx)
             }
+
+            fn placed_tool(
+                &self,
+                ctx: &mut EvalContext<'_, K>,
+                feature: FeatureUid,
+                placement: &Transform,
+            ) -> Option<Result<K::Shape, String>> {
+                self.view().placed_tool(ctx, feature, placement)
+            }
         }
     };
 }
@@ -339,7 +358,8 @@ thin_feature!(
     false
 );
 thin_feature!(
-    /// A web from sketch curves (lines and arcs), one wall per curve.
+    /// A web from sketch curves (lines and arcs), one wall per curve,
+    /// joined where the curves meet (mitcad#1968).
     WebDef,
     "web",
     "Web",
@@ -382,12 +402,6 @@ impl Thin<'_, ParamId> {
     }
 
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
-        if self.web && (self.extend_ends || self.end_offset.is_some()) {
-            return Err(
-                "a web's curves end where they are drawn: Extend Ends and End Offset are a rib's"
-                    .to_owned(),
-            );
-        }
         if self.web && !self.direction.is_perpendicular() {
             return Err("a web grows along the sketch normal: Direction is a rib's".to_owned());
         }
@@ -432,6 +446,64 @@ impl Thin<'_, ParamId> {
         &self,
         ctx: &mut EvalContext<'_, K>,
     ) -> Result<FeatureOutput<K::Shape>, String> {
+        let values = self.values(ctx)?;
+        let participants = participant_bodies(ctx, Operation::Join, self.participants)?;
+        let bodies = participants.iter().map(|(_, s)| s.clone()).collect();
+        let uid = ctx.uid;
+        let tool = self.tool(ctx, uid, &Transform::IDENTITY, &values, bodies)?;
+        // An end that could not be continued to the bodies (mitcad#1746).
+        ctx.warn_notes(&tool);
+        apply_operation(ctx, Operation::Join, participants, tool, self.what())
+    }
+
+    /// The tool rebuilt at a copy of a pattern (mitcad#1968): its curves
+    /// and sketch plane moved by `placement`, faces named after `feature`,
+    /// To Next and Extend Ends solved again against the bodies at the
+    /// pattern, so that a copy where the room is narrower or lower is cut
+    /// back to the walls and reaches the faces there. A depth without
+    /// Extend Ends depends on no body: the pattern moves the tool instead.
+    fn placed_tool<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        placement: &Transform,
+    ) -> Option<Result<K::Shape, String>> {
+        if matches!(self.extent, RibExtent::Depth { .. }) && !self.extend_ends {
+            return None;
+        }
+        let values = match self.values(ctx) {
+            Ok(values) => values,
+            Err(e) => return Some(Err(e)),
+        };
+        let bodies = if self.participants.is_empty() {
+            match participant_bodies(ctx, Operation::Join, self.participants) {
+                Ok(p) => p.into_iter().map(|(_, s)| s).collect(),
+                Err(e) => return Some(Err(e)),
+            }
+        } else {
+            // A participant merged into another is not there at the
+            // pattern; the body it went into, another participant, stands
+            // for it (as an extrusion's, mitcad#406).
+            let mut present = Vec::with_capacity(self.participants.len());
+            let mut missing = None;
+            for uid in self.participants {
+                match ctx.body(*uid) {
+                    Ok(shape) => present.push(shape),
+                    Err(e) => {
+                        missing.get_or_insert(e);
+                    }
+                }
+            }
+            match missing {
+                Some(e) if present.is_empty() => return Some(Err(e)),
+                _ => present,
+            }
+        };
+        Some(self.tool(ctx, feature, placement, &values, bodies))
+    }
+
+    /// The thickness, the depth (none: To Next) and the end offset, checked.
+    fn values<K: Kernel>(&self, ctx: &mut EvalContext<'_, K>) -> Result<Values, String> {
         let thickness = ctx.param(*self.thickness)?;
         let depth = match self.extent {
             RibExtent::ToNext => None,
@@ -450,9 +522,41 @@ impl Thin<'_, ParamId> {
                 depth.unwrap_or(f64::NAN)
             }
         })?;
-        let participants = participant_bodies(ctx, Operation::Join, self.participants)?;
+        Ok(Values {
+            thickness,
+            depth,
+            end_offset,
+        })
+    }
+
+    /// The kernel's tool from the curves moved by the rigid `placement`
+    /// (the identity for the feature itself), its faces named after
+    /// `feature`, reaching `bodies`.
+    fn tool<K: Kernel>(
+        &self,
+        ctx: &mut EvalContext<'_, K>,
+        feature: FeatureUid,
+        placement: &Transform,
+        values: &Values,
+        bodies: Vec<K::Shape>,
+    ) -> Result<K::Shape, String> {
         let (frame, curves) = self.curves.resolve(ctx)?;
         let direction = self.direction.resolve(ctx, &frame)?;
+        let (frame, curves, direction) = if placement.is_identity() {
+            (frame, curves, direction)
+        } else {
+            (
+                placement.apply_frame(&frame),
+                curves
+                    .into_iter()
+                    .map(|c| PathCurve {
+                        curve: moved_curve(placement, &c.curve),
+                        name: c.name,
+                    })
+                    .collect(),
+                direction.map(|d| placement.apply_vector(d)),
+            )
+        };
         let chains = if self.web {
             for curve in &curves {
                 if path::curve_ends(&curve.curve).is_none() {
@@ -468,22 +572,84 @@ impl Thin<'_, ParamId> {
             vec![chain]
         };
         let spec = RibSpec {
-            feature: ctx.uid,
+            feature,
             frame,
             web: self.web,
             chains: &chains,
-            thickness,
+            thickness: values.thickness,
             location: self.location,
-            depth,
+            depth: values.depth,
             flip: self.flip,
-            bodies: participants.iter().map(|(_, s)| s.clone()).collect(),
+            bodies,
             extend_ends: self.extend_ends,
-            end_offset,
+            end_offset: values.end_offset,
             direction,
         };
-        let tool = ctx.kernel.rib(&spec).map_err(|e| e.to_string())?;
-        // An end that could not be continued to the bodies (mitcad#1746).
-        ctx.warn_notes(&tool);
-        apply_operation(ctx, Operation::Join, participants, tool, self.what())
+        ctx.kernel.rib(&spec).map_err(|e| e.to_string())
+    }
+}
+
+/// The values of a rib or a web.
+struct Values {
+    thickness: f64,
+    depth: Option<f64>,
+    end_offset: f64,
+}
+
+/// A curve moved by a rigid motion.
+fn moved_curve(t: &Transform, curve: &Curve3) -> Curve3 {
+    match curve {
+        Curve3::Point(p) => Curve3::Point(t.apply_point(*p)),
+        Curve3::Line { start, end } => Curve3::Line {
+            start: t.apply_point(*start),
+            end: t.apply_point(*end),
+        },
+        Curve3::Conic {
+            center,
+            normal,
+            x_axis,
+            major,
+            minor,
+            start,
+            end,
+            closed,
+        } => Curve3::Conic {
+            center: t.apply_point(*center),
+            normal: t.apply_vector(*normal),
+            x_axis: t.apply_vector(*x_axis),
+            major: *major,
+            minor: *minor,
+            start: *start,
+            end: *end,
+            closed: *closed,
+        },
+        Curve3::BSpline {
+            degree,
+            poles,
+            weights,
+            knots,
+        } => Curve3::BSpline {
+            degree: *degree,
+            poles: poles.iter().map(|p| t.apply_point(*p)).collect(),
+            weights: weights.clone(),
+            knots: knots.clone(),
+        },
+        Curve3::Helix {
+            center,
+            axis,
+            x_axis,
+            radius,
+            pitch,
+            start,
+            end,
+        } => Curve3::Helix {
+            center: t.apply_point(*center),
+            axis: t.apply_vector(*axis),
+            x_axis: t.apply_vector(*x_axis),
+            radius: *radius,
+            pitch: *pitch,
+            start: *start,
+            end: *end,
+        },
     }
 }

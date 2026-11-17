@@ -30,3 +30,5 @@ mod design_package_tests;
 mod gltf_tests;
 // .serp files as bodies by layer, blocks as components (mitcad#1870).
 mod serp_tests;
+// A sketch's points in its DXF (mitcad#1963).
+mod sketch_dxf_points_1963_tests;

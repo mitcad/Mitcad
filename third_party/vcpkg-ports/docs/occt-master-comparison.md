@@ -30,7 +30,7 @@ taking single fixes from upstream. Back to the [port's README](../README.md).
 | fixed upstream | 10 |
 | partly | 2 |
 | still needed | 234 |
-| ours only | 65 |
+| ours only | 66 |
 
 - **Fixed upstream:** 0004 (package config relocation, OCCT#1644), 0014
   (a contact along a face's far edge, the consumed face, OCCT#1293 and
@@ -213,7 +213,7 @@ skipped).
 | 1661-1666 | none since mitcad#1899 (fixed, below): pipe/specific H4 H6 I5 I7 J6 J8 (1661), Z5 Z7 ZA8 ZB1 ZC2 ZC4 (1666, other face counts), bug32444 (1661), bug1477_11 (1666), bug32445 bug32807 (1664), bug1477_9 bug1477_10 (1663), bug32447_1 (1662) | mitcad#1899 |
 | 0620 | none since mitcad#1901 (fixed, below): chamfer/dist_angle_sequence B3 B4, equal_dist_sequence B3 (and no result for dist_dist B7, equal_dist B5 B7 where stock's was invalid) | mitcad#1901 |
 | 0025, 0057, 0074, 0077, 0593, 1601 | none since mitcad#1902 (fixed, below): bug32929, blend/simple S7, blend/encoderegularity A1, blend/complex B4, buc60555_3, boolean/bcutblend A1 | mitcad#1902 |
-| 0170 | blend/complex A6 (open, below) | mitcad#1902 |
+| 0170 | none since mitcad#1902 (0173, below): blend/complex A6 | mitcad#1902 |
 | 0026, 0281, 1090 | none worse than stock since mitcad#1902 (below): chamfer dist_dist and equal_dist_sequence B9, the three sequences' A5 (failing on stock too) | mitcad#1902 |
 
 Seven cases fail on both but now give a valid result where stock fails
@@ -313,18 +313,22 @@ With these (and mitcad#1898/#1901 merged), the blend, chamfer and boolean
 groups against the dataset run's patched results: we fix 21, the one break
 being B6 above; MitCad's geometry tests pass (170).
 
-**Left open (mitcad#1902).**
-
-- blend/complex A6 (0170) fails at scale 10 of its five scales: the walk of
-  the blend rolling on two edges takes not one step (each step too large,
-  down to the guide's tolerance) from where 0170's rolling-ball inverse
-  function (`BRepBlend_SurfCurvConstRadInv`) ended the surface/edge piece;
-  with OCCT's equations in that inverse function alone, A6 passes at all
-  five scales, but eight of MitCad's geometry tests then give no fillet
-  (fillet_overflow, fillet_rolling_ball, fillet_corners, dressup_takes_face,
-  fillet_lens_overflow, fillet_rolled_end_cut, fillet_fin_end_strips,
-  fillet_end_edge_turn). Without 0170's rolling ball, pivot and inverse,
-  thirteen fail. No narrower condition was found.
+**0170's blend/complex A6 (0173, mitcad#1902).** A6 failed at scale 10
+of its five scales: the walk of the blend rolling on two edges took not one
+step (each step too large, down to the guide's tolerance) from where 0170's
+rolling-ball inverse function (`BRepBlend_SurfCurvConstRadInv`) ended the
+surface/edge piece. OCCT's equations in that inverse function alone make A6
+at all five scales, but eight of MitCad's geometry tests then give no fillet
+(fillet_overflow, fillet_rolling_ball, fillet_corners, dressup_takes_face,
+fillet_lens_overflow, fillet_rolled_end_cut, fillet_fin_end_strips,
+fillet_end_edge_turn), and without 0170's rolling ball, pivot and inverse
+thirteen fail. So both are kept, in that order (owner 16.11.2026): 0173
+computes a stripe whose walk failed after walks with the rolling inverse
+function again with OCCT's equations in it. A6 passes at all five scales;
+against the run with mitcad#1900's and #1902's other fixes, the blend,
+chamfer and boolean groups change in A6 only (we fix 1, break 0; boolean/
+periodicity A2, a case without blends, lists its values in another order
+as in every run).
 
 **1661 to 1666 corrected for OCCT's pipes (mitcad#1899).** Each now acts
 only where OCCT's own route fails or does not apply: 1661 ends a seam at
@@ -657,3 +661,4 @@ run's patched results: we break 0, we fix 13; against stock no breaks.
 | 1690 | brepblend line points read by index in constant time | fixed upstream | OCCT#1634 (ec0167b409): BRepBlend_Line stores its points in an NCollection_LinearVector |
 | 1691 | intcurvesurface surface polyhedra made once per face | still needed | master unchanged at the patched code |
 | 1695 | inttools wline decomposition reads no point past the line ends | still needed | master unchanged at the patched code |
+| 1701 | chfi3d contact of no length joined with none and blends in no solid no result | ours only | patches code of 0950, 1655 (0950 fixed upstream) |

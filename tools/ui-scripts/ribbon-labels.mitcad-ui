@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MIT
+# Preferences › Display › Toolbar labels (mitcad#1936, GitHub
+# mitcad/Mitcad#356), run in the layout the wrapper starts (Floating and
+# Docked):
+#   1. Icons only by default.
+#   2. Labels under icons: the rows grow by the labels' height, the SOLID
+#      tab's Create group shows Sketch, Extrude, Revolve and Hole under its
+#      icons, and in a wide window the groups that do not fit collapse
+#      from the right.
+#   3. A narrow window: the groups fold from the right, as without labels
+#      (a group whose name is not narrower than its buttons stays whole).
+#   4. Icons only again: the rows as high as the buttons.
+# Preferences is a dialog on Windows and Linux (applied with OK) and the
+# Settings window on macOS (applied as it changes).
+wait-idle
+window-resize 1500 900
+wait-idle
+sleep 300
+mark
+click-logged '^Ribbon tab SOLID at '
+wait-idle
+
+# 1. Icons only by default.
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property ribbonLabels currentIndex 0
+
+# 2. Labels under icons.
+qt-choice ribbonLabels 'Labels under icons'
+key Return
+focus-main
+wait-log '^Preferences: ribbon labels labels$'
+wait-log '^Ribbon labels: labels [(]rows [0-9]+ px high, [1-9][0-9]* px for the labels[)]$'
+expect-log '^Ribbon group SOLID/CREATE labels: Sketch, Extrude, Revolve, Hole$'
+expect-log '^Ribbon group SOLID/MODIFY labels: .*Fillet'
+wait-idle
+sleep 300
+# Wide: the collapsed groups logged again after the change. fitGroups
+# goes from the right (Select first) and collapses a group only where its
+# name alone is narrower than its buttons (a group of few buttons stays
+# whole); Create collapses only after Modify. The window may be narrower
+# than asked (the Windows VM's 1024 x 768 desktop): which groups collapse
+# is not fixed.
+wait-log '^Ribbon collapsed SOLID: (none|(?!CREATE, (?!MODIFY)).*)$'
+
+# 3. Narrow: at least Insert, the first group from the right whose name is
+# narrower than its buttons, has collapsed. No mark: where the window was
+# already as narrow as it gets, the state logged after the change counts.
+window-resize 820 700
+wait-idle
+sleep 300
+wait-log '^Ribbon collapsed SOLID: (?!CREATE, (?!MODIFY)).*INSERT'
+
+# 4. Icons only again.
+window-resize 1500 900
+wait-idle
+mark
+command tools.preferences.display
+focus-dialog '^(Preferences|Settings)$'
+expect-widget-property ribbonLabels currentIndex 1
+qt-choice ribbonLabels 'Icons only'
+key Return
+focus-main
+wait-log '^Preferences: ribbon labels icons$'
+wait-log '^Ribbon labels: icons [(]rows [0-9]+ px high[)]$'
+wait-idle

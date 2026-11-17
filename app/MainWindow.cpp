@@ -15,6 +15,7 @@
 #include <QAbstractSpinBox>
 #include <QApplication>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -131,6 +132,7 @@
 #include "framework/EnterRepeat.hpp"
 #include "framework/MenuBarReveal.hpp"
 #include "framework/Ribbon.hpp"
+#include "framework/RibbonLabels.hpp"
 #include "framework/SectionPreview.hpp"
 #include "framework/SectionWorker.hpp"
 #include "framework/SelectionCreate.hpp"
@@ -149,6 +151,8 @@
 #include "platform/NativeDialogs.hpp"
 #endif
 #include "sketch/PaletteCreateTools.hpp"
+#include "flex/FlexEditController.hpp"
+#include "gravity/GravityController.hpp"
 #include "sketch/ShownDimensions.hpp"
 #include "sketch/Sketch3dController.hpp"
 #include "sketch/Sketch3dPalette.hpp"
@@ -908,6 +912,8 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   createRibbon();
   createPanels();
   setUpSketch3d(); // 3D sketches (mitcad#1524): their palette page and Create Sketch's kind row
+  setUpFlexEdit(); // a selected Flex item's handles in the view (mitcad#1713)
+  setUpGravity();  // gravity's marker and a Flex item let hang (mitcad#1713)
   m_controller->timeline()->setFeatureDetailsProvider([this](const QString& uid) {
     const auto* feature = m_snapshot.feature(uid);
     if (!feature) return QString();
@@ -1203,6 +1209,8 @@ void MainWindow::registerCommands() {
   sketch.group = QStringLiteral("CREATE");
   sketch.section = QStringLiteral("sketch"); // a section of its own (mitcad#579)
   sketch.pinned = true;
+  // Under its button with Ribbon labels (mitcad#1936).
+  sketch.shortLabel = QCoreApplication::translate("RibbonLabel", "Sketch");
   sketch.keywords = {QStringLiteral("new sketch"), QStringLiteral("draw")};
   // Alt+S, Option+S on macOS (mitcad#267): no menu has S as its mnemonic,
   // and S, Ctrl+S, Ctrl+Shift+S and Ctrl+Alt+S stay as they are.
@@ -1222,6 +1230,8 @@ void MainWindow::registerCommands() {
   m_registry->add(sketch3d);
   // The 3D sketch manipulator's keys (mitcad#1661).
   registerSketch3dKeys();
+  // Flex (mitcad#1713) after Envelope, in a section of its own.
+  registerFlexCommands(*m_registry, *this, *this);
   // Gear (mitcad#472) ends the CREATE group, in its Machine Elements
   // submenu (mitcad#579).
   registerGearCommands(*m_registry, *this, *this);
@@ -1236,6 +1246,8 @@ void MainWindow::registerCommands() {
   // SURFACE (mitcad#455).
   registerSurfaceCommands(*m_registry, *this);
   registerAssembleCommands(*m_registry, *this);
+  // Let It Hang, its panel with the direction of gravity (mitcad#1713).
+  registerGravityCommands();
   registerConstructCommands(*m_registry, *this);
   registerInspectCommands(*m_registry, *this, this, [this] { return m_selection; });
   // Center of Mass, after Physical Properties (mitcad#1094).
@@ -1769,6 +1781,10 @@ void MainWindow::createRibbon() {
   // A cut sheet's tab (mitcad#1008).
   addDrawingRibbonExtras();
   m_ribbon->build();
+  // Preferences › Display › Ribbon labels (mitcad#1936): every window's
+  // ribbon follows a change at once.
+  connect(&RibbonLabelsNotifier::instance(), &RibbonLabelsNotifier::labelsChanged, m_ribbon,
+          [ribbon = m_ribbon](bool underIcons) { ribbon->setButtonLabels(underIcons); });
   // A group menu row's Change Keyboard Shortcut… (mitcad#1001).
   connect(m_ribbon, &Ribbon::shortcutRequested, this, [this](const QString& id) { editShortcuts(id); });
   // The Make tab's body card and Browser markers (mitcad#1049) come and go
@@ -2574,6 +2590,10 @@ void MainWindow::trigger(const QString& id) {
     sketch::countPaletteTool(def->id);
   }
   if (def->kind == CommandDef::Kind::Feature) {
+    // Done without its panel when the selection completes it (mitcad#1963).
+    if (def->runsAtOnce && def->runsAtOnce()) {
+      return;
+    }
     startFeatureCommand(*def);
   } else if (def->run) {
     // The sketch tool it starts shows checked (markSketchTool).
@@ -2673,6 +2693,7 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     m_session = session;
     m_lastCommand = def.id;
     connect(session, &CommandSession::finished, this, &MainWindow::onCommandFinished);
+    connect(session, &CommandSession::previewShown, this, &MainWindow::flexSessionPreviewShown);
     session->startAsync(preselection, [this, guarded = QPointer<CommandSession>(session), sketchLeft,
                                        name = def.name](bool started, const QString& error) {
       if (!guarded || m_session != guarded) {
@@ -2732,6 +2753,9 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
   m_session = session;
   m_lastCommand = def.id;
   connect(session, &CommandSession::finished, this, &MainWindow::onCommandFinished);
+  // A Flex item's edit session: its handles read the previewed route again
+  // (mitcad#1713, owner 14.11.2026).
+  connect(session, &CommandSession::previewShown, this, &MainWindow::flexSessionPreviewShown);
   // A long panel scrolls rather than squeezing its rows or growing the
   // window.
   auto* scroll = new QScrollArea;
@@ -3077,6 +3101,9 @@ void MainWindow::cancel() {
     stopAnimation(QStringLiteral("Esc"));
     return;
   }
+  if (m_session && m_flexEdit != nullptr && m_flexEdit->inSession() && m_flexEdit->cancel()) {
+    return; // a Flex node's drag, "+" making the item longer, or the node in hand (owner 14.11.2026)
+  }
   if (m_session) {
     // The command's own Esc first (mitcad#857: 3D Print's bed face
     // choice: Esc ends the question, nothing sent).
@@ -3084,6 +3111,9 @@ void MainWindow::cancel() {
       m_session->cancel();
     }
     return;
+  }
+  if (m_flexEdit != nullptr && m_flexEdit->cancel()) {
+    return; // a Flex node's drag, or the node in hand (mitcad#1713)
   }
   if (cancelAnnotationPick()) {
     return; // an annotation's pick no longer waited for
@@ -3589,6 +3619,8 @@ double MainWindow::pixelSize(const gp_Pnt& point) const {
   return pixels > 1e-9 ? 1.0 / pixels : std::numeric_limits<double>::quiet_NaN();
 }
 
+Qt::KeyboardModifiers MainWindow::pointerModifiers() const { return m_viewer->pointerModifiers(); }
+
 std::optional<gp_Dir> MainWindow::towardViewer(const gp_Pnt& point) const {
   // Towards the eye (a perspective view), else against the view direction.
   const auto& camera = m_viewer->viewCamera();
@@ -3676,7 +3708,7 @@ std::shared_ptr<geometry::Shape> MainWindow::bodyShape(const QString& uid) const
 
 void MainWindow::clearModelPreview() {
   // Computes nothing: no job (and none may run now).
-  if (modelBusy()) {
+  if (modelBusy() && !m_documentSession->yieldRuntimeJob()) {
     throw ModelBusy();
   }
   m_document->clear_preview();
@@ -4111,6 +4143,11 @@ void MainWindow::refreshScene() {
   // Everything outside the active component as ghosts (mitcad#420), set
   // before the items are shown, which then take their look at once.
   m_viewer->setActiveScope(activeScopeOf(m_snapshot, editingSketchUid()));
+  // The direction of gravity's marker, and a hanging item the model let go
+  // (mitcad#1713), before the bodies are shown.
+  if (m_gravity != nullptr) {
+    m_gravity->reload();
+  }
 
   ScopedTiming bodies("refresh bodies");
   showBodies();
@@ -4135,6 +4172,9 @@ void MainWindow::refreshScene() {
   if (m_sketch3d != nullptr && m_sketch3d->isActive()) {
     m_sketch3d->reload(); // mitcad#1524
     logSketch3dEntities(); // what a tool drew, where a click picks it (mitcad#1525)
+  }
+  if (m_flexEdit != nullptr && m_flexEdit->isActive()) {
+    m_flexEdit->reload(); // the handles follow the item (mitcad#1713)
   }
   sketches.finish();
 
@@ -4483,7 +4523,10 @@ TopLoc_Location MainWindow::placementOf(const QString& occurrence) const {
 
 void MainWindow::showBodies() {
   ScopedTiming instances("bodies instances");
-  const std::vector<BodyDisplay> bodies = modelBodies();
+  std::vector<BodyDisplay> bodies = modelBodies();
+  if (m_gravity != nullptr) {
+    m_gravity->placeShown(bodies); // a hanging item's body faded (mitcad#1713)
+  }
   instances.finish();
   m_viewer->setBodies(bodies);
   showSectionCaps(bodies);
@@ -5197,15 +5240,15 @@ void MainWindow::setConstructionHidden(bool hidden) {
   showDatums();
 }
 
-void MainWindow::logPickPlaces(SelectFilter filter, bool again) {
+bool MainWindow::logPickPlaces(SelectFilter filter, bool again) {
   if (!(filter & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex | SelectKind::Profile)) ||
       !qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
     m_pickPlacesDeferred = false;
-    return;
+    return false;
   }
   if (!m_viewer->pickPointsReady()) {
     m_pickPlacesDeferred = true;
-    return;
+    return false;
   }
   m_pickPlacesDeferred = false;
   // Where a click picks each face, edge, vertex and profile the input
@@ -5213,7 +5256,7 @@ void MainWindow::logPickPlaces(SelectFilter filter, bool again) {
   // The points are clear of the cards over the view as they are now.
   const std::vector<std::pair<SelectionItem, QPoint>> places = m_viewer->pickPoints(filter);
   if (again && places.empty()) {
-    return; // picking suspended (a job): the places logged before stay
+    return false; // picking suspended (a job): the places logged before stay
   }
   qDebug().noquote() << "Pick places:";
   for (const auto& [item, at] : places) {
@@ -5231,6 +5274,22 @@ void MainWindow::logPickPlaces(SelectFilter filter, bool again) {
                                 .arg(point.y());
     }
   }
+  return true;
+}
+
+bool MainWindow::refreshLoggedPickPlaces() {
+  if (m_viewer == nullptr || !qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
+    return false;
+  }
+  // A fit can be pending until the next paint without an active navigation
+  // timer. Read pick places only after that camera has actually been fitted.
+  m_viewer->settleCamera();
+  logPickPlaces(m_pickPlacesFilter, true);
+  // Only a list that cannot be read yet (navigation or pointer input still
+  // pending) waits. With no active pick input (the command was cancelled)
+  // or picking suspended by a job, nothing new is logged and the places
+  // logged last stand, as before the refresh (mitcad#1943).
+  return !m_pickPlacesDeferred;
 }
 
 void MainWindow::inputActivated(SelectFilter filter) {
@@ -5790,19 +5849,19 @@ void MainWindow::deliverPendingPicks() {
   QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
 }
 
-void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window) {
+void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click) {
   if (m_nativeUi && m_session) {
     // The session invalidates an in-flight preview before queuing picks.
-    m_session->picked(items, modifiers, window);
+    m_session->picked(items, modifiers, window, click);
     return;
   }
   if (modelBusy()) {
     // A pick queued before a job began: it takes effect after the job.
-    whenIdle(this, [this, items, modifiers, window] { onPicked(items, modifiers, window); });
+    whenIdle(this, [this, items, modifiers, window, click] { onPicked(items, modifiers, window, click); });
     return;
   }
   if (m_session) {
-    m_session->picked(items, modifiers, window);
+    m_session->picked(items, modifiers, window, click);
     return;
   }
   // An annotation's pick or plane picked again (its editor's Pick Again…).
@@ -5844,6 +5903,11 @@ void MainWindow::onPicked(const Selection& items, Qt::KeyboardModifiers modifier
     return;
   }
   if (m_mode == Mode::Sketch && m_sketch->tool() != nullptr) {
+    return;
+  }
+  // A double-click on a Flex item opens its edit session (owner 14.11.2026);
+  // its first click selected it.
+  if (m_mode == Mode::Idle && !window && flexDoubleClicked(items, modifiers, click)) {
     return;
   }
   // A click selects, Ctrl or Shift adds or removes; a window
@@ -5972,6 +6036,8 @@ void MainWindow::updateIdleView() {
   updateDatumHandles(); // a selected construction plane's or axis's (mitcad#1748)
   updateMakeCard(); // the Make tab's body card (mitcad#1049)
   updateModeBanner();
+  updateFlexEdit(); // a selected Flex item's handles (mitcad#1713)
+  updateGravity();  // a hanging item goes back when a command or a sketch starts (mitcad#1713)
   if (m_mode == Mode::Command) {
     return;
   }
@@ -6042,7 +6108,12 @@ void MainWindow::updateIdleView() {
   } else if (m_mode == Mode::Sketch) {
     applySketchScope(drawing);
   } else {
-    m_viewer->setPickFilter(idleFilter());
+    if (m_flexEdit != nullptr && m_flexEdit->picking()) {
+      // A Flex node pulled: what it can be put on, whatever the idle filter takes (mitcad#1713).
+      m_viewer->setPickFilter(m_flexEdit->pickFilter());
+    } else {
+      m_viewer->setPickFilter(idleFilter());
+    }
     applyAnnotationPickFilter(); // an annotation's pick waited for
   }
   QElapsedTimer idleClock; // the Selection timing line's parts (mitcad#981)
@@ -6545,6 +6616,12 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
   };
 
   if (m_session) {
+    // Edit Form's edits on the picked cage edges (mitcad#1941).
+    if (formEditOpen()) {
+      addCall(QStringLiteral("form"), tr("Fill Hole"), [this] { applyFormEdit(QStringLiteral("fill_hole")); });
+      addCall(QStringLiteral("form"), tr("Bridge"), [this] { applyFormEdit(QStringLiteral("bridge")); });
+      menu.addSeparator();
+    }
     addCall(QStringLiteral("ok"), tr("OK"), [this] { confirm(); });
     addCall(QStringLiteral("cancel"), tr("Cancel"), [this] { cancel(); });
   } else if (m_mode == Mode::PickPlane) {
@@ -7038,8 +7115,17 @@ void MainWindow::keyPressEvent(QKeyEvent* event) {
     event->accept();
     return;
   }
+  if (remove && !editing && event->modifiers() == Qt::NoModifier && m_mode == Mode::Command && !modelBusy() &&
+      m_flexEdit != nullptr && m_flexEdit->inSession() && m_flexEdit->deleteSelectedNode()) {
+    // A Flex item's node in hand in its edit session (owner 14.11.2026).
+    event->accept();
+    return;
+  }
   if (remove && !editing && event->modifiers() == Qt::NoModifier && m_mode == Mode::Idle && !modelBusy()) {
-    m_controller->deleteSelection(m_selection);
+    // A Flex item's node in hand before the selection (mitcad#1713).
+    if (m_flexEdit == nullptr || !m_flexEdit->deleteSelectedNode()) {
+      m_controller->deleteSelection(m_selection);
+    }
     event->accept();
     return;
   }
@@ -7283,6 +7369,10 @@ void MainWindow::escapeSketch() {
 // Undo
 
 void MainWindow::undo() {
+  if (m_mode == Mode::Command && m_session) {
+    m_session->undo(); // a session's own undo (CommandDef::undo, mitcad#1713); nothing for others
+    return;
+  }
   if (m_mode == Mode::Command || m_mode == Mode::PickPlane) {
     return;
   }

@@ -274,6 +274,30 @@ named_enum! {
             #[serde(default)]
             preview: bool,
         },
+        "form.fill_hole" => FillHole {
+            form: FeatureUid,
+            /// An edge of the opening (a boundary edge of the cage).
+            edge: [i64; 2],
+            /// A grid of quads when the opening has an even number of
+            /// edges; else one face.
+            #[serde(default)]
+            quads: bool,
+            #[serde(default)]
+            preview: bool,
+        },
+        "form.bridge" => Bridge {
+            form: FeatureUid,
+            /// The boundary edges of both sides.
+            edges: Vec<[i64; 2]>,
+            /// Each edge stands for the whole opening it lies on.
+            #[serde(default)]
+            loops: bool,
+            /// Rows of quads across the strip.
+            #[serde(default = "one")]
+            segments: u32,
+            #[serde(default)]
+            preview: bool,
+        },
         "form.crease" => Crease {
             form: FeatureUid,
             #[serde(default)]
@@ -441,6 +465,14 @@ fn made_json(made: &Made) -> Value {
     })
 }
 
+/// What an edit that opens or closes the cage made, with whether the
+/// whole cage is closed now (mitcad#1941).
+fn closed_json(made: &Made, cage: &Cage) -> Value {
+    let mut value = made_json(made);
+    value["closed"] = json!(cage.full().closed());
+    value
+}
+
 /// Runs a cage edit as one undo step `<what> in <Form>`, or with `preview`
 /// on a copy: then the answer has `preview`, the edited `cage` (as the
 /// `form_cage` query gives it) and its `limit` mesh, and nothing changes.
@@ -584,6 +616,25 @@ pub(super) fn run_form_command<K: Kernel>(
             preview,
         } => edit_cage(doc, form, "Delete Faces", preview, move |cage| {
             edit::delete_faces(cage, &faces).map(|made| made_json(&made))
+        }),
+        FormCommand::FillHole {
+            form,
+            edge,
+            quads,
+            preview,
+        } => edit_cage(doc, form, "Fill Hole", preview, move |cage| {
+            let made = edit::fill_hole(cage, edge, quads)?;
+            Ok(closed_json(&made, cage))
+        }),
+        FormCommand::Bridge {
+            form,
+            edges,
+            loops,
+            segments,
+            preview,
+        } => edit_cage(doc, form, "Bridge", preview, move |cage| {
+            let made = edit::bridge(cage, &edges, loops, segments)?;
+            Ok(closed_json(&made, cage))
         }),
         FormCommand::Crease {
             form,

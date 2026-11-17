@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MIT
+# Mitering two profiles placed apart (mitcad#1940), on build-end-meets.json
+# with the profile library the runner makes: Upright:1 (C1, F1) standing
+# 500 long; Arm:1 (C2, its body F2.b0) 300 long on the upright's y+ side,
+# its top flush with the upright's end B, its end A on the side at y = 10:
+# an L whose ends do not meet at one point.
+#   1. Binding the upright's length to the arm, placed after it, is
+#      refused, and the refusal says how to miter the corner instead.
+#   2. Ends: every profile's ends are labelled A and B in the view; a click
+#      on the arm near the corner chooses its end A, which meets the
+#      upright's end B; About offers the turn towards it.
+#   3. Also the Component It Meets is offered; taken, OK makes the shared
+#      miter in one undo step: both ends cut at 45 degrees, the arm run
+#      through the upright to its outer side (320 long, its far end kept).
+# Run by tools/ui-build-end-meets-test.sh (Linux),
+# tools/ui-windows-build-end-meets-test.ps1 (Windows) and
+# tools/ui-macos-build-end-meets-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+command view.fit
+wait-idle
+capture-model-number arm '{"query": "build_parts"}' parts.1.length
+expect-near ${arm} 300
+
+# 1. A length bound to a part placed later: refused, with the way to miter.
+mark
+model-command-refused '{"cmd": "build_edit", "component": "C1", "length": {"bind": {"occurrence": "Arm:1", "geometry": {"mount": "F2:mount(end_b)"}}}}'
+wait-log '^Status error: .*placed after .*Miter Auto or Shared.*Also the Component It Meets' 20
+wait-idle
+
+# 2. Ends: the A and B labels, a click near the corner picks the arm's end A.
+mark
+command build.ends
+wait-log '^Command Ends started' 20
+wait-log '^View hint Ends: Click a component near the end to cut' 20
+wait-idle
+mark
+click-logged '^Panel Ends input part at '
+wait-log '^Pick places:' 20
+click-view-point 0,40,500
+wait-log '^BUILD ends of C2: end a picked, meets end b of C1$' 30
+wait-log '^Inspect Ends: C2 end a: .*; meets end b of C1; about .*; 4 end labels$' 30
+expect-choice-text tilt '^Towards the component it meets$'
+wait-idle
+
+# 3. Also the Component It Meets: the shared miter, in one undo step.
+mark
+click-logged '^Panel Ends input shared at '
+wait-log '^Inspect Ends: C2 end a: .*; meets end b of C1; about .*, shared; 4 end labels$' 30
+wait-idle
+capture-undo-depth start
+mark
+button '^OK$'
+wait-log '^Ends of Arm: end a shared miter with end b of C1$' 60
+wait-idle 30
+expect-undo-depth ${start} 1
+capture-model-number arm '{"query": "build_parts"}' parts.1.length
+expect-near ${arm} 320
+capture-model-number upright '{"query": "build_parts"}' parts.0.length
+expect-near ${upright} 500
+capture-model-number cut '{"query": "build_parts"}' parts.1.ends.a.angle
+expect-near ${cut} 0.785398
+capture-model-number cut '{"query": "build_parts"}' parts.0.ends.b.angle
+expect-near ${cut} 0.785398
+capture-model-number reach '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.1
+expect-near ${reach} -10
+expect-never 'TestDriver: FAIL'

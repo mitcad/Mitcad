@@ -1,0 +1,267 @@
+# SPDX-License-Identifier: MIT
+# Flex laid by clicks (mitcad#1713, app/COMMANDS.md "Flex") on flex.json: an
+# upright 8 mm pipe (Pipe1, body F2.b0), a 40 x 40 x 20 block (Box1, body
+# F3.b0) and a second upright pipe (Pipe2, body F5.b0):
+#   1. A hose from the pipe's end over two faces of the block: the first
+#      click on the pipe's cap starts at its end port and gives the item
+#      the pipe's size (the panel's Diameter 8 mm), a click on the
+#      block's top and one on a side are nodes on those faces; the preview
+#      follows and the panel shows the routed length; Enter adds Flex1 (F6).
+#   2. A click off the model places nothing without Alt (the status line
+#      says to hold Alt); with Alt held clicks off the model are free nodes
+#      on the placement plane, which Tab steps (Automatic to XY Plane); the
+#      pointer resting with Alt shows the route alone, the solid comes once
+#      the node is placed; Backspace takes the last node back; a double
+#      click ends the item (Flex2, F7), also while the preview it waits for
+#      computes.
+#   3. A flat section (Section: Rectangular) from the block's top onto
+#      Flex2's swept faces shows Twist for the node placed last; the pointer
+#      resting on Flex2 shows the route to it, the click there is one node;
+#      a click on the first node makes Twist that node's; a quarter turn
+#      typed there, Enter adds Flex3. Undo takes it back in one step.
+#   4. Esc cancels: nothing added.
+#   5. From Pipe1's end to Pipe2's end: the click on the second end port
+#      ends the item at once. Run first and undone (the item of 1 covers
+#      Pipe1's end).
+#   6. Flex1 edited from the timeline: the panel opens with its three
+#      nodes, another diameter, OK edits it.
+#   7. Save as Type: the panel's item saved to My library under a name.
+# Run by tools/ui-flex-test.sh (Linux) and tools/ui-windows-flex-test.ps1
+# (Windows), in the Docked and the Floating layout.
+expect-ever 'View area'
+wait-idle
+
+# The view as a person sets it before the clicks: fitted while Flex's panel
+# is up, into what the panels leave of it (in the Floating layout the panel
+# floats over the view's right side, and a fit before it opened left the
+# second pipe under it), and zoomed in two notches, so that the pipes' ends
+# are large enough to click.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+command view.fit
+wait-log '^Fit: everything shown'
+wait-idle
+wheel 50 50 2
+wait-idle
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+
+# 5. (First, and undone: the item of 1 begins at Pipe1's end and covers it
+# from then on, so that no click picks that end any more.) From one pipe's
+# end to the other's: the second end port ends the item.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+mark
+click-pick 'face F2[.]b0/F2:(start|end)'
+wait-log '^Flex: node 1 at an end port'
+mark
+click-pick 'face F5[.]b0/F5:(start|end)'
+wait-log '^Flex: node 2 at an end port'
+wait-log '^Flex Route: the click confirms'
+wait-log '^Added flex item .* through 2 node[(]s[)]' 60
+wait-idle
+mark
+command edit.undo
+wait-log '^Undo: Add Flex1'
+wait-idle
+
+# 1. From the pipe's end over the block's top and side.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Flex: [0-9]+ type[(]s[)], 4 end port[(]s[)]'
+wait-log '^Preview Flex: not built: Click where the item starts'
+expect-no-log '^Panel Flex error: '
+wait-log '^Pick places:' 20
+mark
+click-pick 'face F2[.]b0/F2:(start|end)'
+wait-log '^Flex: node 1 at an end port'
+wait-log '^Preview Flex: not built: Click where the item goes next'
+# Started at Pipe1's end: the item takes the 8 mm pipe's size.
+wait-log '^Flex: section of the end port of F2: round 8([.]0+)? mm'
+expect-input-text diameter '^8([.]0+)?( mm)?$'
+mark
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 2 on face F3:top'
+wait-log '^Preview Flex: ok' 60
+wait-log '^Panel Flex note: Length: [0-9.]+ mm'
+wait-idle
+mark
+click-pick 'face F3[.]b0/F3:(?!top)'
+wait-log '^Flex: node 3 on face F3:'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+key Return
+wait-log '^Added flex item .* through 3 node[(]s[)]' 60
+wait-log '^Added Flex as F6'
+wait-idle
+expect-ever '^Timeline Flex1 at '
+
+# 2. Free nodes on the chosen plane, the route under the pointer,
+# Backspace, a double click.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+mark
+key Tab
+wait-log '^Flex: (free nodes on xy|Tab steps Free Nodes On)'
+# (From the block's side: an item that began at the top's place covered
+# it, and the next sections click it.)
+mark
+click-pick 'face F3[.]b0/F3:side1'
+wait-log '^Flex: node 1 on face F3:side1'
+wait-idle
+# (Free nodes in the air below the model in both layouts, in front of the
+# block, where section 3 lays a flat cable onto this item.) Without Alt a
+# click there places nothing.
+mark
+click 36 75
+wait-log '^Flex: click in empty space not taken'
+wait-idle
+expect-no-log '^Flex: node 2 '
+# With Alt held the pointer resting there shows the route alone (no solid
+# before the node is placed), and the click is a free node.
+mark
+view-pointer move 35 75 none alt
+wait-idle
+view-pointer move 36 75 none alt
+wait-log '^Flex route under the pointer: 2 node[(]s[)]' 30
+wait-idle
+mark
+click 36 75 alt
+wait-log '^Flex: node 2 free'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+key BackSpace
+wait-log '^Flex: last node taken back, 1 left'
+wait-log '^Flex: Backspace taken'
+wait-idle
+mark
+click 36 75 alt
+wait-log '^Flex: node 2 free'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+# The double click while the item's preview computes (held): OK waits for
+# it and then makes the item; the events after the second click are not
+# taken, nor do they cancel the preview OK waits for.
+mark
+hold-model-preview true
+dblclick 30 80 alt
+wait-log '^Flex: node 3 free'
+wait-log '^Flex: a click on the last node ends the item at node 3'
+expect-model-busy true
+expect-no-log '^Added flex item '
+hold-model-preview false
+wait-log '^Added flex item .* through 3 node[(]s[)]' 60
+wait-log '^Added Flex as F7'
+wait-idle
+
+# 3. A flat section from the block's top onto Flex2, a flat cable onto a
+# swept wire: the last node's twist, then the first node's.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+qt-choice input_section Rectangular
+wait-log '^Flex: Section = Rectangular'
+mark
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 1 on face F3:top'
+wait-log '^Panel Flex input twist at '
+wait-idle
+# (Node 2 free in the air below the model, node 3 on Flex2 where 2
+# clicked its second node: not at Flex2's end, whose end port would end
+# this item.)
+mark
+click 22 74 alt
+wait-log '^Flex: node 2 free'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+# The pointer resting on Flex2 (a place a click makes a node of, no Alt
+# needed): the route to it. The click there: the click on the plane, the
+# item under it and the view's own pick are one click, one node; not a
+# second one at the same place, which would end the item.
+mark
+view-pointer move 36 75 none
+wait-log '^Flex route under the pointer: 3 node[(]s[)]' 30
+wait-idle
+mark
+click 36 75
+wait-log '^Flex: node 3 on (face|edge) [^ ]*F7' 30
+wait-log '^Preview Flex: ok' 60
+wait-idle
+expect-no-log '^Flex: (a click on the last node|node 4 )'
+mark
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 1 chosen for its twist'
+wait-log '^Panel Flex label twist: Twist at Node 1'
+wait-idle
+mark
+type-in '^Panel Flex input twist at ' '90'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+key Return
+wait-log '^Added flex item .* through 3 node[(]s[)]' 60
+wait-idle
+mark
+command edit.undo
+expect-log '^Undo: Add Flex3'
+wait-idle
+
+# 4. Esc cancels.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+click-pick 'face F3[.]b0/F3:top'
+wait-log '^Flex: node 1 on face F3:top'
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+
+# 6. Flex1 edited from the timeline.
+mark
+dblclick-logged '^Timeline Flex1 at '
+wait-log '^Editing F6 with Flex' 30
+wait-log '^Flex: editing an item of 3 node[(]s[)]'
+wait-log '^Preview Flex: ok' 60
+# Its edit session (owner 14.11.2026): the item's handles beside the panel.
+wait-log '^Flex edit shown: F6 ' 60
+wait-idle
+mark
+type-in '^Panel Flex input diameter at ' '3 mm'
+wait-log '^Preview Flex: ok' 60
+wait-idle
+mark
+key Return
+wait-log '^Edited F6' 60
+wait-log '^Flex edit hidden: F6'
+wait-idle
+
+# 7. Save as Type.
+mark
+command solid.flex
+wait-log '^Command Flex started'
+wait-log '^Pick places:' 20
+click-logged '^Panel Flex input saving at '
+wait-log '^Panel Flex input type_name at '
+type-in '^Panel Flex input type_name at ' 'Test hose'
+wait-log '^Panel Flex action save[.]0 at '
+mark
+click-logged '^Panel Flex action save[.]0 at '
+wait-log '^Flex: save action 0'
+wait-log '^Flex: saved type user/' 30
+wait-idle
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

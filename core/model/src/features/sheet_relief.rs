@@ -94,5 +94,6 @@ impl<K: Kernel> Evaluate<K> for SheetCornerReliefDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
         crate::sheet::folded::corner_relief(&d, ctx)
+            .map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

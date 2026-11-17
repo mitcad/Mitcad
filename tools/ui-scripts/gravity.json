@@ -1,0 +1,18 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Gravity and a hanging hose (mitcad#1713), tools/ui-gravity-test.sh and tools/ui-windows-gravity-test.ps1: a 200 x 80 x 10 plate (Box1, body F1.b0, its top at z = 10), a step on it (Box2, body F2.b0, x 0..60, its top at z = 22), a plank above the step's edge (Box3, body F3.b0, 90 x 30 x 8, x 30..120, y 25..55, z 70..78) and a hose 6 thick (Flex1, F4, body F4.b0) in an S from a free end at 100 above the step's far side, up over n2 and down under n3, to a free end at 120 above the plate's far end, about 215 long between ends 171 apart; the S is symmetric about its middle, so that the middle of its bounds (where the view logs the body, which a click there picks) lies on it. Let hang from its ends, its middle falls onto the plank and lies on it."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 200, "width": 80, "height": 10, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [0, 0],
+    "length": 60, "width": 80, "height": 22, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"origin": [0, 0, 70], "normal": [0, 0, 1]},
+    "corner": [30, 25], "length": 90, "width": 30, "height": 8, "operation": "new_body"}},
+  {"cmd": "add_feature", "def": {"type": "flex",
+    "item": {"name": "Hose 6", "section": {"type": "round", "diameter": 6}, "bend_radius": 20},
+    "nodes": [{"id": "n1", "at": [10, 40, 100]}, {"id": "n2", "at": [55, 40, 135]},
+              {"id": "n3", "at": [135, 40, 85]}, {"id": "n4", "at": [180, 40, 120]}]}},
+  {"expect": {"feature": "Box1", "status": "ok"}},
+  {"expect": {"feature": "Box2", "status": "ok"}},
+  {"expect": {"feature": "Box3", "status": "ok"}},
+  {"expect": {"feature": "Flex1", "status": "ok"}}
+]

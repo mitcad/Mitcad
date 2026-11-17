@@ -476,6 +476,28 @@ The fields of the block:
   sets the length. `min` and `max` are its limits. `stock` lists the
   stock lengths that the component is sold in. `default` (optional) is the
   length that the design has. A profile has `length`.
+- **The length as an option** (mitcad#1950): `make-profile-library.py`
+  makes `parameter` an option of an open configuration table, its `min`
+  and `max` the parameter's limits, so that Insert from Library and
+  Derived Component offer the length (`length_table`). Each `stock`
+  length is a row that sets the length, named by it (`1980 mm`), unless a
+  row of the group file sets it already; a component without rows also
+  gets a row of its design's length when that is no stock length, as its
+  default, so that it is inserted at that length as before. A tube of a
+  typed size has the length after its size and wall. Rows that set only
+  the length (a rail's `Stock` rows, `"values": {"L": "600 mm"}`) are its
+  rows of lengths, with their part numbers; every such row sets the
+  length. Rows that each set one other size (a panel's width `W`) make
+  that size an option too, limited to the rows' values by a rule (a
+  designation names it `{W}`). Rows that set several other sizes (a
+  timber board's or a steel tube's `sizes`) stay a closed table chosen by
+  its rows, with the length an **open option** beside them
+  (`"open": ["L"]`, [commands.md](../core/model-api/src/commands.md#open-options-of-a-closed-table)):
+  the rows leave it out, and the pickers offer the `stock` lengths, which
+  cannot be such rows, from `build.length`. BUILD gives a component its
+  length itself: its component picker leaves the length out of the
+  options and makes no tiles of the rows that set only the length, unless
+  a row has its own part number. Test: `cli.profile-length-options`.
 - `length.pitch`: for rails and racks,
   `{"distance": "60 mm", "first": "20 mm"}`. It is the hole spacing,
   kept from end A. The design's holes are a pattern that starts at
@@ -1188,7 +1210,7 @@ Three generators make the library with `mitcad-cli`:
 
 ```
 tools/libraries/make-parts-library.py --cli <mitcad-cli> --source <folder of the supplier's files>
-    --out <clone of the parts repository> [--groups <folder>] [--version 2.11.0] [--work <folder>]
+    --out <clone of the parts repository> [--groups <folder>] [--version 2.12.0] [--work <folder>]
     [--render-worker <mitcad-render>] [--no-render] [--rerender] [--commit]
 tools/libraries/make-fastener-library.py --cli <mitcad-cli> --out <folder> [--sizes M3,M5]
     [--standards iso4762,iso4032] [--version 1.0.0] [--render-worker <mitcad-render>] [--no-render]
@@ -1206,7 +1228,9 @@ tools/libraries/library_tags.py       the version tags: a tag the --out reposito
   `LICENSE`, `README.md` and `SOURCES.md`. Then it checks the folder.
   `--out` is a clone of the components repository, so that its versions
   stay. `--commit` records the result on top of them and tags it. The
-  default tag is `v2.11.0`, the next version to publish. 2.11.0 adds the
+  default tag is `v2.12.0`, the next version to publish. 2.12.0 gives every
+  part cut to length a length option with its stock lengths (mitcad#1950).
+  2.11.0 added the
   square and rectangular steel tubes to ASTM A500 (HSS) in inch sizes and
   the square and rectangular steel tubes of a typed size; the library's
   `README.md` lists what each recent version added.
@@ -1953,6 +1977,9 @@ wins.
 | project | `print-library/` in the project's folder | versioned with the project |
 | user | `print-library` in the platform's data folder under `Mitcad/Mitcad`, beside `libraries` (`MITCAD_PRINT_LIBRARY_DIR` replaces it) | the user's own |
 | base | MitCad's component library, its newest version fetched | read only |
+
+The user's and the project's folders also hold the Flex types, one file
+for a type in `flex-types/` (the model reference, "Flex types").
 
 The user's and the project's library are managed in the application by
 the Materials, Printers and Processes managers

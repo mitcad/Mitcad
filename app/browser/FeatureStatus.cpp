@@ -145,6 +145,9 @@ QString describeCell(const CellState& state, const CellLook& look) {
     words << (state.noted ? QStringLiteral("info") : QStringLiteral("ok"));
     break;
   }
+  if (state.acknowledged && state.state == FeatureState::Ok) {
+    words << QStringLiteral("acknowledged");
+  }
   if (state.selected) {
     words << QStringLiteral("selected");
   }
@@ -220,6 +223,10 @@ QString autoFixHint(int fixable) {
   // edit otherwise gave no hint of it (mitcad#1677).
   return fixable == 1 ? QObject::tr("Auto Fix (right-click) can fix this warning")
                       : QObject::tr("Auto Fix (right-click) can fix %1 of its warnings").arg(fixable);
+}
+
+QString acknowledgedWarningText(const QString& message) {
+  return QObject::tr("Acknowledged warning: %1").arg(message);
 }
 
 QString autoFixBadgeHint(int fixable) {

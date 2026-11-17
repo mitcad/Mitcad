@@ -227,10 +227,11 @@ void OcctViewer::choosePickListRow(int row, Qt::KeyboardModifiers modifiers) {
   m_pressModifiers = modifiers;
   m_windowPick = false;
   m_clickPickedNothing = false;
+  const quint64 click = ++m_clickSerial;
   if (!isCovered(position)) {
-    emit clickedAt(position, modifiers);
+    emit clickedAt(position, modifiers, click, Selection{item});
   }
-  emit picked(Selection{item}, modifiers, false);
+  emit picked(Selection{item}, modifiers, false, click);
 }
 
 } // namespace mitcad

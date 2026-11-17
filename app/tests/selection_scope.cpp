@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Sketch selection filters (mitcad#217): the three-state rows, the
 // sketch's and Project's defaults, Shift's wider clicks, windows, body
-// edges in sight and behind faces, and other sketches' geometry (only
-// Project's and Intersect's sources, mitcad#904, mitcad#1031).
+// edges in sight and behind faces, other sketches' geometry (only
+// Project's and Intersect's sources, mitcad#904, mitcad#1031), and
+// dimensions and constraints in rows of their own (GitHub #388).
 #include "UnitTests.hpp"
 #include "framework/SelectionScope.hpp"
 
@@ -115,8 +116,8 @@ void defaultTests() {
   CHECK(!sketch.has(FilterRow::OtherSketchGeometry));
   CHECK(sketch.describe() ==
         QStringLiteral("sketch-geometry=cross, construction-geometry=cross, projected-geometry=cross, "
-                       "annotations=square, profiles=square, visible-edges=square, occluded-edges=empty, "
-                       "faces=empty, vertices=empty, bodies=empty, components=empty, "
+                       "dimensions=square, constraints=square, profiles=square, visible-edges=square, "
+                       "occluded-edges=empty, faces=empty, vertices=empty, bodies=empty, components=empty, "
                        "reference-geometry=empty"));
   const SelectionScope project = SelectionScope::project();
   CHECK(project.describe() ==
@@ -220,6 +221,58 @@ void independentRowTests() {
   CHECK(takes(scope, item(SelectKind::SketchPoint, kSketch, QStringLiteral("p3")), click()));
   CHECK(!takes(scope, item(SelectKind::SketchPoint, kSketch, QStringLiteral("p3")), window()));
   CHECK(takes(scope, item(SelectKind::SketchPoint, kSketch, QStringLiteral("p1")), window()));
+}
+
+void annotationRowTests() {
+  // Dimensions and constraints are separate rows (GitHub #388), both a
+  // square by default: a click takes either, a window neither.
+  SelectionScope scope = SelectionScope::sketch();
+  const SelectionItem dimension = item(SelectKind::SketchDimension, kSketch, QStringLiteral("k1"));
+  const SelectionItem constraint = item(SelectKind::SketchConstraint, kSketch, QStringLiteral("k2"));
+  const SelectionItem fix = item(SelectKind::SketchConstraint, kSketch, QStringLiteral("fix:p1"));
+  CHECK(filterRowOf(dimension, kSketch, sketchRow) == FilterRow::Dimensions);
+  CHECK(filterRowOf(constraint, kSketch, sketchRow) == FilterRow::Constraints);
+  // A Fix symbol counts as a constraint.
+  CHECK(filterRowOf(fix, kSketch, sketchRow) == FilterRow::Constraints);
+  CHECK(scope.defaultState(FilterRow::Dimensions) == FilterState::Click);
+  CHECK(scope.defaultState(FilterRow::Constraints) == FilterState::Click);
+  CHECK(filterRowId(FilterRow::Dimensions) == QStringLiteral("dimensions"));
+  CHECK(filterRowId(FilterRow::Constraints) == QStringLiteral("constraints"));
+  CHECK(filterRowLabel(FilterRow::Dimensions) == QStringLiteral("Dimensions"));
+  CHECK(filterRowLabel(FilterRow::Constraints) == QStringLiteral("Constraints"));
+  CHECK(!filterRowFromId(QStringLiteral("annotations")).has_value());
+  for (const SelectionItem& each : {dimension, constraint, fix}) {
+    CHECK(takes(scope, each, click()));
+    CHECK(!takes(scope, each, window()));
+  }
+  // Only Dimensions a cross: a window takes dimensions, not constraints.
+  scope.setState(FilterRow::Dimensions, FilterState::Window);
+  CHECK(takes(scope, dimension, window()));
+  CHECK(!takes(scope, constraint, window()));
+  CHECK(!takes(scope, fix, window()));
+  CHECK(takes(scope, constraint, click()));
+  // Only Constraints a cross: the other way round, Fix symbols included.
+  scope.reset();
+  scope.setState(FilterRow::Constraints, FilterState::Window);
+  CHECK(!takes(scope, dimension, window()));
+  CHECK(takes(scope, constraint, window()));
+  CHECK(takes(scope, fix, window()));
+  // A click follows its own row: Dimensions empty leaves constraints
+  // clickable, and Shift still takes the dimension.
+  scope.reset();
+  scope.setState(FilterRow::Dimensions, FilterState::Off);
+  CHECK(!takes(scope, dimension, click()));
+  CHECK(takes(scope, dimension, click(true)));
+  CHECK(takes(scope, constraint, click()));
+  scope.reset();
+  scope.setState(FilterRow::Constraints, FilterState::Off);
+  CHECK(!takes(scope, constraint, click()));
+  CHECK(!takes(scope, fix, click()));
+  CHECK(takes(scope, fix, click(true)));
+  CHECK(takes(scope, dimension, click()));
+  // Neither row picks anything in the view: the overlay picks them.
+  CHECK(filterRowKinds(FilterRow::Dimensions) == SelectFilter());
+  CHECK(filterRowKinds(FilterRow::Constraints) == SelectFilter());
 }
 
 void edgeSightTests() {
@@ -371,6 +424,7 @@ int selectionScopeTests() {
   sketchWindowTests();
   clickTests();
   independentRowTests();
+  annotationRowTests();
   edgeSightTests();
   projectTests();
   intersectTests();

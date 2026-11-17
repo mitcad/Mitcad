@@ -26,7 +26,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use super::edit::{PointInput, SketchEdit};
-use super::geometry::{P2, add, norm, perp, scale, sub, unit};
+use super::geometry::{P2, add, cross, norm, perp, scale, sub, unit};
 use super::{ConstraintUid, Entity, EntityIndex, EntityKind, Ref, point_serde};
 use crate::ids::EntityUid;
 use crate::parameters::ParamId;
@@ -47,10 +47,15 @@ pub enum PatternKind<P> {
         angle: P,
     },
     /// Rows and columns: `count[0]` along `direction` (a unit vector in
-    /// sketch coordinates), `count[1]` a quarter turn from it, `spacing`
-    /// apart; a negative spacing goes against its direction.
+    /// sketch coordinates), `count[1]` along `direction2` or, without it, a
+    /// quarter turn from the first, `spacing` apart; a negative spacing goes
+    /// against its direction.
     Rectangular {
         direction: [f64; 2],
+        /// The second direction (a unit vector, not parallel to the first;
+        /// mitcad#1969); absent: a quarter turn from the first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction2: Option<[f64; 2]>,
         count: [u32; 2],
         spacing: [P; 2],
         /// Per direction: the originals are the middle instance (an odd
@@ -59,6 +64,23 @@ pub enum PatternKind<P> {
         #[serde(default, skip_serializing_if = "not_symmetric")]
         symmetric: [bool; 2],
     },
+}
+
+/// Directions closer than this (the sine of the angle between them) are
+/// parallel.
+const PARALLEL: f64 = 1e-6;
+
+/// A pattern's second direction, as a unit vector: refused when it is no
+/// direction or parallel to the first.
+fn second_direction(first: P2, second: P2) -> Result<P2, String> {
+    let second = unit(second);
+    if !(second.iter().all(|v| v.is_finite()) && norm(second) > 0.5) {
+        return Err("the second direction is not a direction".to_owned());
+    }
+    if cross(first, second).abs() < PARALLEL {
+        return Err("the second direction is parallel to the first".to_owned());
+    }
+    Ok(second)
 }
 
 fn not_symmetric(symmetric: &[bool; 2]) -> bool {
@@ -180,11 +202,13 @@ impl<P> SketchPattern<P> {
             },
             PatternKind::Rectangular {
                 direction,
+                direction2,
                 count,
                 spacing,
                 symmetric,
             } => PatternKind::Rectangular {
                 direction: *direction,
+                direction2: *direction2,
                 count: *count,
                 spacing: [f(&slots[0], &spacing[0])?, f(&slots[1], &spacing[1])?],
                 symmetric: *symmetric,
@@ -246,6 +270,7 @@ impl<P> SketchPattern<P> {
             }
             PatternKind::Rectangular {
                 direction,
+                direction2,
                 count,
                 symmetric,
                 ..
@@ -253,6 +278,18 @@ impl<P> SketchPattern<P> {
                 let total = count[0] as u64 * count[1] as u64;
                 if count.contains(&0) || !(2..=1000).contains(&total) {
                     return Err(format!("{what}: a pattern has 2 to 1000 instances"));
+                }
+                if let Some(d2) = direction2 {
+                    if !d2.iter().all(|v| v.is_finite()) || (norm(*d2) - 1.0).abs() > 1e-9 {
+                        return Err(format!(
+                            "{what}: the second direction must be a unit vector"
+                        ));
+                    }
+                    if cross(*direction, *d2).abs() < PARALLEL {
+                        return Err(format!(
+                            "{what}: the second direction is parallel to the first"
+                        ));
+                    }
                 }
                 if (0..2).any(|k| symmetric[k] && count[k].is_multiple_of(2)) {
                     return Err(format!("{what}: a symmetric direction has an odd count"));
@@ -551,12 +588,13 @@ impl SketchPattern<ParamId> {
             },
             PatternKind::Rectangular {
                 direction,
+                direction2,
                 count,
                 symmetric,
                 ..
             } => {
                 let d1 = *direction;
-                let d2 = perp(d1);
+                let d2 = direction2.unwrap_or_else(|| perp(d1));
                 let at = original_index(*count, *symmetric);
                 let from = |k: usize| index[k] as f64 - at[k] as f64;
                 Placement::Move(add(
@@ -594,6 +632,9 @@ pub struct PatternChange {
     pub angle: Option<ValueInput>,
     pub spacing: Option<[ValueInput; 2]>,
     pub direction: Option<P2>,
+    /// The second direction: `Some(None)` takes it away (a quarter turn
+    /// from the first again).
+    pub direction2: Option<Option<P2>>,
     pub center: Option<PointInput>,
     pub entities: Option<Vec<Ref>>,
 }
@@ -698,12 +739,14 @@ impl SketchEdit<'_> {
         Ok(id)
     }
 
-    /// Copies entities in rows and columns along `direction` and a quarter
-    /// turn from it (sketch Rectangular Pattern), `spacing` apart.
+    /// Copies entities in rows and columns along `direction` and
+    /// `direction2` or, without it, a quarter turn from the first (sketch
+    /// Rectangular Pattern), `spacing` apart.
     pub fn rectangular_pattern(
         &mut self,
         entities: &[Ref],
         direction: P2,
+        direction2: Option<P2>,
         count: [u32; 2],
         spacing: [&ValueInput; 2],
         symmetric: [bool; 2],
@@ -720,6 +763,9 @@ impl SketchEdit<'_> {
         if !(direction.iter().all(|v| v.is_finite()) && norm(direction) > 0.5) {
             return Err("the pattern needs a direction".to_owned());
         }
+        let direction2 = direction2
+            .map(|d| second_direction(direction, d))
+            .transpose()?;
         let id = self.constraint_id();
         let s1 = self.pattern_value(&format!("patterns[{id}].spacing1"), spacing[0], None)?;
         let s2 = self.pattern_value(&format!("patterns[{id}].spacing2"), spacing[1], None)?;
@@ -727,6 +773,7 @@ impl SketchEdit<'_> {
             id,
             kind: PatternKind::Rectangular {
                 direction,
+                direction2,
                 count,
                 spacing: [s1, s2],
                 symmetric,
@@ -784,7 +831,10 @@ impl SketchEdit<'_> {
                 count,
                 angle,
             } => {
-                if change.spacing.is_some() || change.direction.is_some() {
+                if change.spacing.is_some()
+                    || change.direction.is_some()
+                    || change.direction2.is_some()
+                {
                     return Err(format!(
                         "{id} is a circular pattern: no spacing or direction"
                     ));
@@ -811,6 +861,7 @@ impl SketchEdit<'_> {
             }
             PatternKind::Rectangular {
                 direction,
+                direction2,
                 count,
                 spacing,
                 symmetric,
@@ -846,8 +897,17 @@ impl SketchEdit<'_> {
                     }
                     None => direction,
                 };
+                let direction2 = match change.direction2 {
+                    Some(Some(d)) => Some(second_direction(direction, d)?),
+                    Some(None) => None,
+                    None => match direction2 {
+                        Some(d) => Some(second_direction(direction, d)?),
+                        None => None,
+                    },
+                };
                 PatternKind::Rectangular {
                     direction,
+                    direction2,
                     count,
                     spacing,
                     symmetric,
@@ -1007,10 +1067,18 @@ impl SketchEdit<'_> {
             .collect();
         let mut curve_ids = self.ids(missing.len()).into_iter();
         for o in originals.iter().filter(|r| r.is_point()) {
-            if copy.entities.contains_key(o) {
+            let at = place(self, self.at(o.uid())?)?;
+            if let Some(made) = copy.entities.get(o) {
+                // A kept copy starts where the pattern puts it now, so that
+                // a new direction or spacing moves the copies and not the
+                // originals (mitcad#1969: a free original stays put).
+                if let Some(e) = self.def.entity_mut(made.uid())
+                    && let EntityKind::Point { at: p } = &mut e.kind
+                {
+                    *p = at;
+                }
                 continue;
             }
-            let at = place(self, self.at(o.uid())?)?;
             let id = self.add_point(at);
             copy.entities.insert(*o, Ref::Point(id));
         }

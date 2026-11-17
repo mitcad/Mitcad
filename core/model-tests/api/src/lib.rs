@@ -101,3 +101,6 @@ mod mcp_schema_tests;
 // outline and its extrusion in one array, refusals and failed features
 // (mitcad#1897).
 mod array_refs_1897_tests;
+// Acknowledged warnings: kept with undo and in the file, lapsing when the
+// warning changes or the feature fails (mitcad#1935).
+mod acknowledged_warnings_tests;

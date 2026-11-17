@@ -130,6 +130,12 @@ class Sketch3dPalette;
 class SketchItemList; // in the timeline's place while sketching (mitcad#1492)
 class ShownDimensions; // a shown sketch's dimensions outside sketch mode (mitcad#1772)
 }
+namespace flex {
+class FlexEditController; // a Flex item's handles in the view (mitcad#1713)
+}
+namespace gravity {
+class GravityController; // gravity's marker and a Flex item let hang (mitcad#1713)
+}
 namespace mcp {
 class AgentIndicator;
 class ChatGate;
@@ -176,6 +182,11 @@ public:
   // are ("Window layout: ..."), which every UI test's clicks and
   // screenshots depend on (tools/ui-layout.sh, mitcad#412).
   void logLayout() const;
+  // Settle the camera and refresh the active input's diagnostic pick places.
+  // False only while the places cannot be read yet; true when they were
+  // logged again or the ones logged last stand (no active pick input, or
+  // picking suspended by a job).
+  bool refreshLoggedPickPlaces();
   // The window's own menu of its panels, which a right-click on a dock's
   // title, the Docked toolbar or the space between them opens (Qt's): the
   // docks' entries only, never the ribbon's toolbar (mitcad#1451), logged
@@ -257,6 +268,9 @@ public:
   bool asynchronousPreviews() const override { return true; }
   bool modelPreviewAsync(const QByteArray& request, const QString& name, QObject* context,
                          AsyncCompletion completion) override;
+  bool modelRuntimeCommandAsync(const QJsonObject& request, QObject* context, AsyncCompletion completion) override;
+  bool yieldModelJob() override { return m_documentSession->yieldRuntimeJob(); }
+  bool idleCallsWaiting() const override { return m_documentSession->idleCallsWaiting(); }
   void cancelModelJob() override { m_documentSession->cancelJob(); }
 #ifdef MITCAD_MACOS_NATIVE_UI
   bool asynchronousCommands() const override { return m_nativeUi; }
@@ -289,6 +303,7 @@ public:
   std::shared_ptr<void> itemShapeBatch() const override; // mitcad#679
   TopoDS_Shape analysisShape(const QJsonObject& request) const override;
   double pixelSize(const gp_Pnt& point) const override; // mitcad#417
+  Qt::KeyboardModifiers pointerModifiers() const override; // mitcad#1713
   std::optional<gp_Dir> towardViewer(const gp_Pnt& point) const override; // mitcad#525
   QStringList bodyUids() const override;
   std::vector<BodyDisplay> modelBodies() const override;
@@ -773,7 +788,7 @@ private:
   void stopAnimation(const QString& why);
 
   // Selection outside commands.
-  void onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window);
+  void onPicked(const Selection& items, Qt::KeyboardModifiers modifiers, bool window, quint64 click = 0);
   void updateIdleView();
   // Its two parts (mitcad#981): the view's highlights alone where only they
   // change (the print bed face shown while a face's context menu is open),
@@ -1026,6 +1041,45 @@ private:
   // Opens the edited sketch's other editor, keeping the sketch edit (its
   // undo depth, rolled-back marker and occurrence).
   void switchSketchEditor(bool spatial);
+
+  // Flex items edited directly in the view (mitcad#1713,
+  // MainWindowFlexEdit.cpp, flex/FlexEditController.hpp): while exactly one
+  // Flex item is selected outside a command and a sketch, its nodes are
+  // handles over the view. updateFlexEdit() shows or hides them for the
+  // selection (updateIdleView); Esc and Delete go to them first.
+  void setUpFlexEdit();
+  void updateFlexEdit();
+  // The one Flex item the selection is of (its row, its body, or faces,
+  // edges and vertices of its body); empty for anything else.
+  QString selectedFlexItem() const;
+  // The Flex item a view item is of (its body, a face, an edge or a vertex
+  // of it), when it is one before the marker; empty otherwise.
+  QString flexItemOf(const SelectionItem& item) const;
+  // A click of the view (onPicked): true when it was the second click of a
+  // double-click on a Flex item, which opened its edit session (owner
+  // 14.11.2026: a single click only selects it).
+  bool flexDoubleClicked(const Selection& items, Qt::KeyboardModifiers modifiers, quint64 click);
+  // The edit session's preview was drawn: the handles read it again.
+  void flexSessionPreviewShown();
+  QString m_flexClickUid;     // the Flex item the last click was on
+  quint64 m_flexClickNumber = 0;
+  QElapsedTimer m_flexClickTime;
+  flex::FlexEditController* m_flexEdit = nullptr;
+
+  // Let It Hang (mitcad#1713, MainWindowGravity.cpp,
+  // commands/GravityCommands.cpp, gravity/GravityController.hpp): a panel
+  // with the direction of gravity, the length, the damping and the end
+  // pins; the Flex item hangs in the view while it is open, is dragged and
+  // settles; OK keeps its shape (with the panel's direction changes, one
+  // undo step), Cancel puts it back. updateGravity() puts it back when
+  // another command or a sketch starts (updateIdleView).
+  void setUpGravity();
+  void registerGravityCommands();
+  void updateGravity();
+  gravity::GravityController* m_gravity = nullptr;
+  // The undo depth when the Let It Hang panel opened (-1 while it is not
+  // open): its direction changes are merged on OK and undone on Cancel.
+  int m_hangUndoDepth = -1;
 
   void undo();
   void redo();
@@ -1592,7 +1646,9 @@ private:
   // file's (mitcad#379): asked which to keep parametric, and the import run
   // again with them (`options`: those it ran with).
   void offerDeviations(const QString& path, const QJsonObject& result, QJsonObject options);
-  void exportFile();
+  // File › Export; with `sketch` (a sketch's context-menu Export DXF…,
+  // mitcad#1963) the dialog starts on that sketch's DXF, named after it.
+  void exportFile(const QString& sketch = QString());
   // Export Drawing (mitcad#471; files/MainWindowDrawing.cpp): the drawing
   // its dialog lays out is kept in the design and written (mitcad#707).
   void exportDrawing();
@@ -1642,7 +1698,7 @@ private:
   // input started may cover a place logged before (mitcad#1086).
   // `again`: a place list after the cards moved, left out when no item can
   // be tried now.
-  void logPickPlaces(SelectFilter filter, bool again = false);
+  bool logPickPlaces(SelectFilter filter, bool again = false);
   SelectFilter m_pickPlacesFilter;
   bool m_pickPlacesQueued = false;
   bool m_pickPlacesDeferred = false;
@@ -2251,7 +2307,10 @@ private:
   QJsonObject m_annotationPreviewView;  // the view's direction and up it was placed in
   QString m_loggedAnnotationPreview;    // "Annotation preview: …" as last logged
   void assignMaterial();
-  void exportFaceDxf();
+  // Export Face as DXF… of a planar face (mitcad#1049): its body's outline
+  // seen along it, to a DXF file the user names; false when cancelled or
+  // refused (its panel then stays open, mitcad#1963).
+  bool exportFaceDxf(const SelectionItem& face);
   // The selected body's card on the Make tab: made with the idle page,
   // shown and filled by updateMakeCard (logged "Make card: <summary>" or
   // "Make card: none"); its edits set the design's printer, or the
@@ -2322,8 +2381,8 @@ private:
   // profiles).
   FilterRow sketchRowOf(const SelectionItem& item) const;
   // What a window in sketch mode selects: what the view took (every kind
-  // the filter lets a window take) and the dimensions and constraints it
-  // holds when their row is a cross.
+  // the filter lets a window take) and the dimensions and the constraints
+  // it holds whose own row is a cross.
   Selection sketchWindowItems(const Selection& items) const;
   // A command starts or ends: a command with a selection filter context
   // (Project in sketch mode) shows its own rows in the control while it
@@ -2777,6 +2836,10 @@ private:
   // picked over the view while it is open, and where the Form's component
   // is seen (none: the root's).
   void registerFormCommands();
+  // Whether Edit Form is open; Fill Hole and Bridge (mitcad#1941) choose
+  // their edit (`action`) in it and apply it.
+  bool formEditOpen() const;
+  void applyFormEdit(const QString& action);
   void editForm(const QString& uid);
   void endFormEdit();
   std::optional<gp_Trsf> formPlacement() const;

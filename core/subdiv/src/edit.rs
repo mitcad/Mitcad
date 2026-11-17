@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //! Edits of a cage (mitcad#1757): moves, rotations and scalings of
 //! vertices, edges and faces, positions set directly (a drag), extrusion of
-//! faces, insertion and removal of edge loops, removal of faces, creases,
-//! corners and the symmetry plane.
+//! faces, insertion and removal of edge loops, removal of faces, openings
+//! filled and bridged (mitcad#1941), creases, corners and the symmetry
+//! plane.
 //!
 //! Elements are named by their ids in the whole cage ([`Cage::full`]): a
 //! negative id is the mirror image of the stored element with that id, an
@@ -924,6 +925,454 @@ pub fn delete_faces(cage: &mut Cage, faces: &[i64]) -> Result<Made, String> {
     })
 }
 
+/// A run along the cage's boundary: its vertices in the order the faces
+/// beside it run along it, closed when it goes round an opening.
+#[derive(Debug, Clone, PartialEq)]
+struct Run {
+    vertices: Vec<u32>,
+    closed: bool,
+}
+
+impl Run {
+    /// Its number of edges.
+    fn edges(&self) -> usize {
+        if self.closed {
+            self.vertices.len()
+        } else {
+            self.vertices.len() - 1
+        }
+    }
+}
+
+/// The cage's boundary edges by their keys, each as its one face runs
+/// along it (`x -> y`).
+fn boundary_edges(cage: &Cage) -> BTreeMap<[u32; 2], (u32, u32)> {
+    let edges = cage.edges();
+    let mut boundary = BTreeMap::new();
+    for face in &cage.faces {
+        let n = face.vertices.len();
+        for k in 0..n {
+            let (x, y) = (face.vertices[k], face.vertices[(k + 1) % n]);
+            let edge = edge_key(x, y);
+            if edges.get(&edge).is_some_and(|faces| faces.len() == 1) {
+                boundary.insert(edge, (x, y));
+            }
+        }
+    }
+    boundary
+}
+
+/// Checks that `a`, `b` is an edge of the cage on its boundary.
+fn on_boundary(cage: &Cage, a: u32, b: u32) -> Result<(), String> {
+    match cage.edges().get(&edge_key(a, b)) {
+        None => Err("a picked edge is not an edge of the cage".to_owned()),
+        Some(faces) if faces.len() != 1 => Err("a picked edge is not on an opening of the \
+                                                cage: it has a face on both sides"
+            .to_owned()),
+        Some(_) => Ok(()),
+    }
+}
+
+/// The opening the boundary edge `a`, `b` lies on, as a closed run.
+fn opening_of(cage: &Cage, a: u32, b: u32) -> Result<Run, String> {
+    on_boundary(cage, a, b)?;
+    let boundary = boundary_edges(cage);
+    let (x, y) = boundary[&edge_key(a, b)];
+    let mut from: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (p, q) in boundary.values() {
+        from.entry(*p).or_default().push(*q);
+    }
+    let mut vertices = vec![x];
+    let mut at = y;
+    while at != x {
+        let next = from.get(&at).map(Vec::as_slice).unwrap_or_default();
+        if next.len() != 1 || vertices.len() > boundary.len() {
+            return Err("two openings of the cage meet at a vertex: \
+                        the opening is not one loop of edges"
+                .to_owned());
+        }
+        vertices.push(at);
+        at = next[0];
+    }
+    Ok(Run {
+        vertices,
+        closed: true,
+    })
+}
+
+/// How sharply a closed loop turns at each of its points: 0 straight on,
+/// 2 straight back.
+fn turning(points: &[Vec3]) -> Vec<f64> {
+    let n = points.len();
+    (0..n)
+        .map(|k| {
+            let before = unit(sub(points[k], points[(k + n - 1) % n]));
+            let after = unit(sub(points[(k + 1) % n], points[k]));
+            match (before, after) {
+                (Some(u), Some(v)) => 1.0 - dot(u, v),
+                _ => 0.0,
+            }
+        })
+        .collect()
+}
+
+/// Fills a loop (its vertices as the new faces run round it) with a grid
+/// of quads: the loop of `n` edges taken as four sides of `a`, `b`, `a`
+/// and `b` edges (`a + b = n / 2`, its corners where the loop turns most),
+/// the inner vertices on the Coons patch of the sides.
+fn grid_fill(cage: &mut Cage, lp: &[u32], made: &mut Made) {
+    let n = lp.len();
+    let a = n / 4;
+    let b = n / 2 - a;
+    let points: Vec<Vec3> = lp
+        .iter()
+        .map(|v| cage.position(*v).expect("a vertex of the cage"))
+        .collect();
+    let turn = turning(&points);
+    let sharpness = |s: usize| -> f64 {
+        [s, s + a, s + a + b, s + 2 * a + b]
+            .iter()
+            .map(|k| turn[k % n])
+            .sum()
+    };
+    // The first of the sharpest.
+    let mut start = 0;
+    for s in 1..n {
+        if sharpness(s) > sharpness(start) + 1e-12 {
+            start = s;
+        }
+    }
+    let on = |k: usize| (start + k) % n;
+    // The grid's rim on the loop: j = 0 along the first side, i = a along
+    // the second, j = b back along the third, i = 0 back along the fourth.
+    let rim = |i: usize, j: usize| -> Option<usize> {
+        if j == 0 {
+            Some(on(i))
+        } else if i == a {
+            Some(on(a + j))
+        } else if j == b {
+            Some(on(a + b + (a - i)))
+        } else if i == 0 {
+            Some(on(2 * a + b + (b - j)))
+        } else {
+            None
+        }
+    };
+    let point = |i: usize, j: usize| points[rim(i, j).expect("a point of the rim")];
+    let mut grid = vec![vec![0_u32; b + 1]; a + 1];
+    let mut next_vertex = cage.next_vertex_id();
+    for (i, column) in grid.iter_mut().enumerate() {
+        for (j, cell) in column.iter_mut().enumerate() {
+            if let Some(k) = rim(i, j) {
+                *cell = lp[k];
+                continue;
+            }
+            let (u, w) = (i as f64 / a as f64, j as f64 / b as f64);
+            let (bottom, top) = (point(i, 0), point(i, b));
+            let (left, right) = (point(0, j), point(a, j));
+            let (p00, p10, p01, p11) = (point(0, 0), point(a, 0), point(0, b), point(a, b));
+            let at = std::array::from_fn(|c| {
+                (1.0 - w) * bottom[c] + w * top[c] + (1.0 - u) * left[c] + u * right[c]
+                    - ((1.0 - u) * (1.0 - w) * p00[c]
+                        + u * (1.0 - w) * p10[c]
+                        + (1.0 - u) * w * p01[c]
+                        + u * w * p11[c])
+            });
+            cage.vertices.push(CageVertex {
+                id: next_vertex,
+                at,
+            });
+            made.vertices.push(next_vertex);
+            *cell = next_vertex;
+            next_vertex += 1;
+        }
+    }
+    let mut next_face = cage.next_face_id();
+    for i in 0..a {
+        for j in 0..b {
+            cage.faces.push(CageFace {
+                id: next_face,
+                vertices: vec![
+                    grid[i][j],
+                    grid[i + 1][j],
+                    grid[i + 1][j + 1],
+                    grid[i][j + 1],
+                ],
+            });
+            made.faces.push(next_face);
+            next_face += 1;
+        }
+    }
+}
+
+/// Fills the opening `run` (as the faces beside it run along it): one
+/// face, or with `quads` and an even number of edges a grid of quads.
+fn fill_plain(cage: &mut Cage, run: &Run, quads: bool) -> Made {
+    // The new faces run round the opening the other way.
+    let lp: Vec<u32> = run.vertices.iter().rev().copied().collect();
+    let mut made = Made::default();
+    if quads && lp.len().is_multiple_of(2) {
+        grid_fill(cage, &lp, &mut made);
+    } else {
+        let id = cage.next_face_id();
+        cage.faces.push(CageFace { id, vertices: lp });
+        made.faces.push(id);
+    }
+    made
+}
+
+/// Fills the opening the boundary edge `edge` lies on, so that the cage
+/// closes there: with one face, or with `quads` and an even number of
+/// edges round the opening with a grid of quads, as edge loops across one
+/// face would leave. On a symmetric cage the mirrored opening is filled
+/// too; an opening across the symmetry plane is refused. Returns the new
+/// faces and vertices.
+pub fn fill_hole(cage: &mut Cage, edge: [i64; 2], quads: bool) -> Result<Made, String> {
+    cage.check()?;
+    cage.note_ids();
+    let before = cage.clone();
+    let made = match Expanded::of(cage) {
+        None => {
+            let (a, _) = vertex_ref(cage, edge[0])?;
+            let (b, _) = vertex_ref(cage, edge[1])?;
+            let run = opening_of(cage, a, b)?;
+            fill_plain(cage, &run, quads)
+        }
+        Some(mut whole) => {
+            let a = whole.vertex(cage, edge[0])?;
+            let b = whole.vertex(cage, edge[1])?;
+            let run = opening_of(&whole.cage, a, b)?;
+            let plane = whole.plane;
+            let side =
+                |v: &u32| plane.distance(whole.cage.position(*v).expect("a vertex of the cage"));
+            if run.vertices.iter().any(|v| side(v) > ON_PLANE)
+                && run.vertices.iter().any(|v| side(v) < -ON_PLANE)
+            {
+                return Err("the opening crosses the symmetry plane: \
+                            take the symmetry away to fill it"
+                    .to_owned());
+            }
+            let mut made = fill_plain(&mut whole.cage, &run, quads);
+            // The mirror image, unless the fill closed it already.
+            let (ma, mb) = (whole.mirror_vertex[&a], whole.mirror_vertex[&b]);
+            if boundary_edges(&whole.cage).contains_key(&edge_key(ma, mb)) {
+                let mirrored = opening_of(&whole.cage, ma, mb)?;
+                made.extend(fill_plain(&mut whole.cage, &mirrored, quads));
+            }
+            *cage = whole.fold()?;
+            made
+        }
+    };
+    cage.note_ids();
+    cage.check()?;
+    Ok(made.kept_in(cage, &before))
+}
+
+/// The picked boundary edges as runs along the boundary (the edges that
+/// follow one another), with `loops` each whole opening a picked edge lies
+/// on.
+fn boundary_runs(cage: &Cage, edges: &[[u32; 2]], loops: bool) -> Result<Vec<Run>, String> {
+    let boundary = boundary_edges(cage);
+    let mut picked: BTreeSet<[u32; 2]> = BTreeSet::new();
+    for &[a, b] in edges {
+        if loops {
+            let run = opening_of(cage, a, b)?;
+            let n = run.vertices.len();
+            for k in 0..n {
+                picked.insert(edge_key(run.vertices[k], run.vertices[(k + 1) % n]));
+            }
+        } else {
+            on_boundary(cage, a, b)?;
+            picked.insert(edge_key(a, b));
+        }
+    }
+    // Each vertex's way on and back along the picked edges, as the faces
+    // run along them.
+    let mut next: BTreeMap<u32, u32> = BTreeMap::new();
+    let mut previous: BTreeMap<u32, u32> = BTreeMap::new();
+    for edge in &picked {
+        let (x, y) = boundary[edge];
+        if next.insert(x, y).is_some() || previous.insert(y, x).is_some() {
+            return Err("two openings of the cage meet at a vertex of the picked edges".to_owned());
+        }
+    }
+    let mut left: BTreeSet<u32> = next.keys().copied().collect();
+    let mut runs = Vec::new();
+    while let Some(&first) = left.iter().next() {
+        // Back to where the run starts; round to `first` on a closed one.
+        let mut start = first;
+        let mut closed = false;
+        while let Some(&p) = previous.get(&start) {
+            if p == first {
+                closed = true;
+                break;
+            }
+            start = p;
+        }
+        if closed {
+            start = first;
+        }
+        let mut vertices = vec![start];
+        let mut at = start;
+        while let Some(&y) = next.get(&at) {
+            left.remove(&at);
+            if y == start {
+                break;
+            }
+            vertices.push(y);
+            at = y;
+        }
+        runs.push(Run { vertices, closed });
+    }
+    Ok(runs)
+}
+
+/// Joins two runs of the boundary of as many edges, both closed or both
+/// open, with a strip of quads `segments` rows across.
+fn bridge_plain(cage: &mut Cage, from: &Run, to: &Run, segments: u32) -> Result<Made, String> {
+    if from.closed != to.closed {
+        return Err(
+            "a bridge joins two openings or two runs of open edges, not one of each".to_owned(),
+        );
+    }
+    let k = from.edges();
+    if k != to.edges() {
+        return Err("the two sides of a bridge must have as many edges each".to_owned());
+    }
+    let at = |run: &Run| -> Vec<Vec3> {
+        run.vertices
+            .iter()
+            .map(|v| cage.position(*v).expect("a vertex of the cage"))
+            .collect()
+    };
+    let (pa, pb) = (at(from), at(to));
+    // The vertex of `to` each vertex of `from` is joined to: `to` runs the
+    // other way along the strip, so that the strip's faces run as the faces
+    // beside both sides do; round two openings, turned to where the joins
+    // are shortest.
+    let count = from.vertices.len();
+    let partner: Vec<usize> = if from.closed {
+        let length = |s: usize| -> f64 {
+            (0..count)
+                .map(|i| mitcad_vec3::distance(pa[i], pb[(s + count - i) % count]))
+                .sum()
+        };
+        let mut shift = 0;
+        for s in 1..count {
+            if length(s) < length(shift) - 1e-9 {
+                shift = s;
+            }
+        }
+        (0..count).map(|i| (shift + count - i) % count).collect()
+    } else {
+        (0..count).map(|i| count - 1 - i).collect()
+    };
+    let rows = segments as usize;
+    let mut made = Made::default();
+    let mut next_vertex = cage.next_vertex_id();
+    // The rows of vertices from `from` (0) across to `to` (rows).
+    let mut grid: Vec<Vec<u32>> = vec![from.vertices.clone()];
+    for r in 1..rows {
+        let t = r as f64 / rows as f64;
+        let mut row = Vec::with_capacity(count);
+        for (p, &j) in pa.iter().zip(&partner) {
+            cage.vertices.push(CageVertex {
+                id: next_vertex,
+                at: add(*p, scale(sub(pb[j], *p), t)),
+            });
+            made.vertices.push(next_vertex);
+            row.push(next_vertex);
+            next_vertex += 1;
+        }
+        grid.push(row);
+    }
+    grid.push(partner.iter().map(|j| to.vertices[*j]).collect());
+    let mut next_face = cage.next_face_id();
+    for r in 0..rows {
+        for i in 0..k {
+            let j = (i + 1) % count;
+            cage.faces.push(CageFace {
+                id: next_face,
+                vertices: vec![grid[r][j], grid[r][i], grid[r + 1][i], grid[r + 1][j]],
+            });
+            made.faces.push(next_face);
+            next_face += 1;
+        }
+    }
+    Ok(made)
+}
+
+/// Splits runs into the two sides of a bridge.
+fn two_sides(runs: Vec<Run>) -> Result<(Run, Run), String> {
+    match <[Run; 2]>::try_from(runs) {
+        Ok([a, b]) => Ok((a, b)),
+        Err(runs) => Err(format!(
+            "a bridge joins two openings or two runs of open edges: \
+             the picked edges make {} apart",
+            runs.len()
+        )),
+    }
+}
+
+/// Joins two openings, or two runs of open edges of as many edges each,
+/// with a strip of quads `segments` rows across. `edges` are the picked
+/// boundary edges of both sides; with `loops` each stands for the whole
+/// opening it lies on (one edge a side is enough). On a symmetric cage the
+/// mirror image is bridged too, unless the bridge is its own mirror image.
+/// Returns the new faces and vertices.
+pub fn bridge(
+    cage: &mut Cage,
+    edges: &[[i64; 2]],
+    loops: bool,
+    segments: u32,
+) -> Result<Made, String> {
+    cage.check()?;
+    cage.note_ids();
+    if edges.is_empty() {
+        return Err("no edges are picked: pick edges of the two openings to join".to_owned());
+    }
+    if !(1..=100).contains(&segments) {
+        return Err("a bridge has 1 to 100 segments across".to_owned());
+    }
+    let before = cage.clone();
+    let made = match Expanded::of(cage) {
+        None => {
+            let mut picked = Vec::with_capacity(edges.len());
+            for e in edges {
+                picked.push([vertex_ref(cage, e[0])?.0, vertex_ref(cage, e[1])?.0]);
+            }
+            let (a, b) = two_sides(boundary_runs(cage, &picked, loops)?)?;
+            bridge_plain(cage, &a, &b, segments)?
+        }
+        Some(mut whole) => {
+            let mut picked = Vec::with_capacity(edges.len());
+            for e in edges {
+                picked.push([whole.vertex(cage, e[0])?, whole.vertex(cage, e[1])?]);
+            }
+            let (a, b) = two_sides(boundary_runs(&whole.cage, &picked, loops)?)?;
+            let mut made = bridge_plain(&mut whole.cage, &a, &b, segments)?;
+            // The mirror image, unless the bridge joined it already.
+            let mirrored: Vec<[u32; 2]> = picked
+                .iter()
+                .map(|[x, y]| [whole.mirror_vertex[x], whole.mirror_vertex[y]])
+                .collect();
+            let boundary = boundary_edges(&whole.cage);
+            if mirrored
+                .iter()
+                .all(|[x, y]| boundary.contains_key(&edge_key(*x, *y)))
+            {
+                let (ma, mb) = two_sides(boundary_runs(&whole.cage, &mirrored, loops)?)?;
+                made.extend(bridge_plain(&mut whole.cage, &ma, &mb, segments)?);
+            }
+            *cage = whole.fold()?;
+            made
+        }
+    };
+    cage.note_ids();
+    cage.check()?;
+    Ok(made.kept_in(cage, &before))
+}
+
 /// Creases edges (a sharpness, none for sharp for good, zero for smooth
 /// again) and makes vertices corners (a sharpness of zero: no longer
 /// corners). A mirrored edge or vertex is its stored one's mirror image:
@@ -1282,5 +1731,205 @@ mod tests {
         assert_eq!(made.removed_faces, [top]);
         assert!(made.removed_vertices.is_empty());
         assert!(!cage.full().closed());
+    }
+
+    /// The faces of the cage that face up with their centre at `z`.
+    fn faces_up_at(cage: &Cage, z: f64) -> Vec<u32> {
+        cage.faces
+            .iter()
+            .filter(|f| {
+                let (normal, center) = cage.face_normal(f);
+                normal[2] > 0.99 && (center[2] - z).abs() < 1e-9
+            })
+            .map(|f| f.id)
+            .collect()
+    }
+
+    #[test]
+    fn an_opening_is_filled_with_one_face_or_with_quads() {
+        let mut cage = box_cage([0.0; 3], [20.0, 20.0, 20.0], [1, 1, 1]).unwrap();
+        let top = top_face(&cage);
+        let rim = cage.face(top).unwrap().vertices.clone();
+        delete_faces(&mut cage, &[i64::from(top)]).unwrap();
+        // An edge with a face on both sides is not on an opening.
+        let bottom = cage
+            .faces
+            .iter()
+            .find(|f| cage.face_normal(f).0[2] < -0.99)
+            .unwrap()
+            .vertices
+            .clone();
+        assert!(
+            fill_hole(
+                &mut cage.clone(),
+                [i64::from(bottom[0]), i64::from(bottom[1])],
+                false
+            )
+            .unwrap_err()
+            .contains("not on an opening")
+        );
+        let edge = [i64::from(rim[0]), i64::from(rim[1])];
+        let mut one = cage.clone();
+        let made = fill_hole(&mut one, edge, false).unwrap();
+        assert_eq!(made.faces.len(), 1);
+        assert!(made.vertices.is_empty());
+        assert!(one.full().closed());
+        // The new face faces out (up), as the one taken out did.
+        let face = one.face(made.faces[0]).unwrap();
+        assert!(one.face_normal(face).0[2] > 0.99);
+        // Four edges round it: one quad, as with one face.
+        let mut quads = cage.clone();
+        assert_eq!(fill_hole(&mut quads, edge, true).unwrap().faces.len(), 1);
+
+        // A top of 2 x 2 faces taken out: eight edges round the opening,
+        // filled with a grid of 2 x 2 quads round a new vertex in the middle.
+        let mut cage = box_cage([0.0; 3], [20.0, 20.0, 20.0], [2, 2, 2]).unwrap();
+        let tops = faces_up_at(&cage, 10.0);
+        assert_eq!(tops.len(), 4);
+        let ids: Vec<i64> = tops.iter().map(|f| i64::from(*f)).collect();
+        delete_faces(&mut cage, &ids).unwrap();
+        let edge = *boundary_edges(&cage).keys().next().unwrap();
+        let edge = [i64::from(edge[0]), i64::from(edge[1])];
+        let mut one = cage.clone();
+        let made = fill_hole(&mut one, edge, false).unwrap();
+        assert_eq!(made.faces.len(), 1);
+        assert_eq!(one.face(made.faces[0]).unwrap().vertices.len(), 8);
+        assert!(one.full().closed());
+        let made = fill_hole(&mut cage, edge, true).unwrap();
+        assert_eq!(made.faces.len(), 4);
+        assert_eq!(made.vertices.len(), 1);
+        let middle = cage.position(made.vertices[0]).unwrap();
+        assert!(
+            mitcad_vec3::distance(middle, [0.0, 0.0, 10.0]) < 1e-9,
+            "{middle:?}"
+        );
+        assert!(cage.full().closed());
+        assert_eq!(faces_up_at(&cage, 10.0).len(), 4);
+    }
+
+    #[test]
+    fn a_symmetric_cage_fills_both_openings_and_refuses_one_across_the_plane() {
+        let mut cage = box_cage([0.0; 3], [40.0, 20.0, 20.0], [4, 1, 1]).unwrap();
+        set_symmetry(&mut cage, Some(x_plane())).unwrap();
+        assert_eq!(cage.faces.len(), 9);
+        // The top face away from the plane.
+        let outer = cage
+            .faces
+            .iter()
+            .find(|f| {
+                let (normal, center) = cage.face_normal(f);
+                normal[2] > 0.99 && center[0] > 10.0
+            })
+            .unwrap()
+            .clone();
+        delete_faces(&mut cage, &[i64::from(outer.id)]).unwrap();
+        assert!(!cage.full().closed());
+        // Picked on the mirrored half: both are filled.
+        let mut filled = cage.clone();
+        let made = fill_hole(
+            &mut filled,
+            [-i64::from(outer.vertices[0]), -i64::from(outer.vertices[1])],
+            false,
+        )
+        .unwrap();
+        assert_eq!(made.faces.len(), 1);
+        assert_eq!(filled.faces.len(), 9);
+        assert_symmetric(&filled);
+
+        // The top face beside the plane: the opening runs across it.
+        let mut cage = box_cage([0.0; 3], [20.0, 20.0, 20.0], [2, 1, 1]).unwrap();
+        set_symmetry(&mut cage, Some(x_plane())).unwrap();
+        let top = top_face(&cage);
+        let rim = cage.face(top).unwrap().vertices.clone();
+        delete_faces(&mut cage, &[i64::from(top)]).unwrap();
+        let off_plane: Vec<u32> = rim
+            .iter()
+            .copied()
+            .filter(|v| cage.position(*v).unwrap()[0] > 1.0)
+            .collect();
+        let error = fill_hole(
+            &mut cage,
+            [i64::from(off_plane[0]), i64::from(off_plane[1])],
+            false,
+        )
+        .unwrap_err();
+        assert!(error.contains("crosses the symmetry plane"), "{error}");
+    }
+
+    /// Two tubes (cylinders without one cap each) in one cage, their open
+    /// ends facing each other.
+    fn two_tubes() -> Cage {
+        let mut cage = crate::primitive::cylinder_cage([0.0; 3], 20.0, 10.0, 8, 1).unwrap();
+        let upper = crate::primitive::cylinder_cage([0.0, 0.0, 30.0], 20.0, 10.0, 8, 1).unwrap();
+        // The lower tube's top cap and the upper one's bottom cap go.
+        cage.faces.retain(|f| f.id != 2);
+        cage.vertices
+            .extend(upper.vertices.iter().map(|v| CageVertex {
+                id: v.id + 100,
+                at: v.at,
+            }));
+        cage.faces
+            .extend(upper.faces.iter().filter(|f| f.id != 1).map(|f| CageFace {
+                id: f.id + 100,
+                vertices: f.vertices.iter().map(|v| v + 100).collect(),
+            }));
+        cage.check().unwrap();
+        cage
+    }
+
+    #[test]
+    fn two_openings_are_bridged() {
+        let mut cage = two_tubes();
+        // The lower tube's top ring is 9 to 16, the upper one's bottom ring
+        // 101 to 108: one edge of each with `loops`, two rows across.
+        let made = bridge(&mut cage, &[[9, 10], [101, 102]], true, 2).unwrap();
+        assert_eq!(made.faces.len(), 16);
+        assert_eq!(made.vertices.len(), 8);
+        assert!(cage.full().closed());
+        // The middle row half way up, on the tubes' radius.
+        for v in &made.vertices {
+            let p = cage.position(*v).unwrap();
+            assert!((p[2] - 15.0).abs() < 1e-9, "{p:?}");
+            assert!(
+                ((p[0] * p[0] + p[1] * p[1]).sqrt() - 10.0).abs() < 1e-9,
+                "{p:?}"
+            );
+        }
+        // The rings picked edge by edge: the same.
+        let mut picked = two_tubes();
+        let ring = |first: i64| (0..8).map(move |k| [first + k, first + (k + 1) % 8]);
+        let edges: Vec<[i64; 2]> = ring(9).chain(ring(101)).collect();
+        let made = bridge(&mut picked, &edges, false, 1).unwrap();
+        assert_eq!(made.faces.len(), 8);
+        assert!(picked.full().closed());
+
+        // Runs of open edges: two edges of each ring, one row across.
+        let mut runs = two_tubes();
+        let made = bridge(
+            &mut runs,
+            &[[9, 10], [10, 11], [101, 102], [102, 103]],
+            false,
+            1,
+        )
+        .unwrap();
+        assert_eq!(made.faces.len(), 2);
+        assert!(!runs.full().closed());
+        // Sides of different lengths, one side only, an edge inside.
+        let mut cage = two_tubes();
+        assert!(
+            bridge(&mut cage, &[[9, 10], [10, 11], [101, 102]], false, 1)
+                .unwrap_err()
+                .contains("as many edges")
+        );
+        assert!(
+            bridge(&mut cage, &[[9, 10]], false, 1)
+                .unwrap_err()
+                .contains("make 1 apart")
+        );
+        assert!(
+            bridge(&mut cage, &[[1, 9], [101, 102]], false, 1)
+                .unwrap_err()
+                .contains("not on an opening")
+        );
     }
 }

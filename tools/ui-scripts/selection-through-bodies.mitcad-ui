@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: MIT
+# The selection through the bodies (mitcad#1956, GitHub mitcad/Mitcad#395)
+# on selection-through-bodies.json: a block (F1.b0) and Sketch1 (F2) on the
+# XZ plane through it, a rectangle whose profile's lower part lies inside
+# the block. Seen from the front, the block's front face hides that part.
+#   1. Selection Through Bodies off (the preference saved): with no command
+#      active, a click on the profile's part above the block selects it,
+#      and no copy is drawn.
+#   2. On again: the profile's faint dashed copy is drawn through the
+#      block, nothing meshed for it.
+#   3. A click on a face of the block selects it; seen from the back, the
+#      face is turned away and the block hides it: its copy is drawn
+#      through.
+#   4. Off with the face turned away: no copy; on again (the default).
+# The profile is clicked in the first view only: there a middle of one of
+# its triangles lies above the block, where click-visible-item finds it.
+# Run by tools/ui-selection-through-bodies-test.sh (Linux),
+# tools/ui-windows-selection-through-bodies-test.ps1 (Windows) and
+# tools/ui-macos-selection-through-bodies-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+command view.front
+command view.fit
+expect-model-bodies 1 32000
+wait-idle
+wait-log '^Sketches shown: F2$'
+
+# 1. Off: the profile selected outside any command gets no copy.
+mark
+command view.selection_through
+wait-log '^View selection through bodies: off$'
+wait-log '^Selection through the bodies: off$'
+expect-setting view/selectionThroughBodies false
+wait-idle
+mark
+click-visible-item profile
+wait-idle
+expect-no-log '^Selection through the bodies: '
+screenshot '${MITCAD_TEST_WORK}/selection-through-off.png'
+
+# 2. On: the buried profile drawn through.
+mark
+command view.selection_through
+wait-log '^View selection through bodies: on$'
+wait-log '^Selection through the bodies: profile F2/r\{c1\[c4,c2\],c2\[c1,c3\],c3\[c2,c4\],c4\[c3,c1\]\}; 1 copies, nothing meshed$'
+expect-setting view/selectionThroughBodies true
+wait-idle
+screenshot '${MITCAD_TEST_WORK}/selection-through-profile.png'
+
+# 3. A face of the block, turned away once the view is from the back.
+mark
+key Escape
+wait-log '^Selection through the bodies: none$'
+wait-idle
+mark
+click-visible-face
+wait-log '^Selection through the bodies: face F1\.b0/.*; 1 copies, nothing meshed$'
+wait-idle
+command view.back
+wait-idle
+expect-no-log '^Selection through the bodies: none$'
+screenshot '${MITCAD_TEST_WORK}/selection-through-face.png'
+
+# 4. Off with the face turned away: no copy; on again.
+mark
+command view.selection_through
+wait-log '^View selection through bodies: off$'
+wait-log '^Selection through the bodies: off$'
+expect-setting view/selectionThroughBodies false
+wait-idle
+mark
+command view.selection_through
+wait-log '^View selection through bodies: on$'
+wait-log '^Selection through the bodies: face F1\.b0/.*; 1 copies, nothing meshed$'
+expect-setting view/selectionThroughBodies true
+wait-idle
+expect-never 'OCCT view event failed|Recompute failed|TestDriver: FAIL'

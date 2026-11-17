@@ -404,9 +404,9 @@ EOF
   ui_fail "cannot pack the FreeCAD document with a history"
 ui_mark
 ui_step "open the history (Ctrl+O)"        open_fcstd "$WORK/history.FCStd"
-ui_expect_new "Import report: history.FCStd: 5 items (1 body, 0 component, 0 occurrence, 2 parametric, 0 partial, 1 fallback, 0 included, 1 skipped), 1 bodies" \
-  "the Body, its sketch and pad parametric, the helix a fallback, the spreadsheet no body" 120
-ui_expect_new "Import report summary: history.FCStd (FreeCAD 1.0R39319 (Git)) 5 objects: 1 body, 0 component, 0 occurrence, 2 parametric, 0 partial, 1 fallback, 0 included, 1 skipped. 1 bodies; of the history's 2 features, 1 were replayed as MitCad features (checked against the shapes FreeCAD stored), 1 came in as their stored shapes (fallback) and 0 were skipped. 2 parameters (1 of FreeCAD's expressions, 1 of its values); of the document's 2 expressions, 1 were translated, 1 kept FreeCAD's value and 0 drive nothing the import carries over." \
+ui_expect_new "Import report: history.FCStd: 5 items (1 body, 0 component, 0 occurrence, 2 parametric, 0 partial, 1 fallback, 1 included, 0 skipped), 1 bodies" \
+  "the Body, its sketch and pad parametric, the helix a fallback, the spreadsheet included as parameters" 120
+ui_expect_new "Import report summary: history.FCStd (FreeCAD 1.0R39319 (Git)) 5 objects: 1 body, 0 component, 0 occurrence, 2 parametric, 0 partial, 1 fallback, 1 included, 0 skipped. 1 bodies; of the history's 2 features, 1 were replayed as MitCad features (checked against the shapes FreeCAD stored), 1 came in as their stored shapes (fallback) and 0 were skipped. 2 parameters (1 of FreeCAD's expressions, 1 of its values); of the document's 2 expressions, 1 were translated, 1 kept FreeCAD's value and 0 drive nothing the import carries over." \
   "the report: the history replayed, one fallback; the parameters and expressions"
 ui_expect_new "Import report kept: Helix.Height = Params.Length * Params.Ratio: Helix was not replayed" \
   "the expression kept as FreeCAD's value, with the reason"

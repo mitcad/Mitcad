@@ -169,7 +169,9 @@ void ReportCenter::startUp() {
   connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] { scanCrashes(false); });
   m_offerTimer = new QTimer(this);
   m_offerTimer->setInterval(250);
-  connect(m_offerTimer, &QTimer::timeout, this, &ReportCenter::offerNext);
+  // Leave timer delivery before a modal report enters its nested event loop:
+  // other Qt timers must keep running while the report waits for input.
+  connect(m_offerTimer, &QTimer::timeout, this, &ReportCenter::offerNext, Qt::QueuedConnection);
   QTimer::singleShot(0, this, [this] {
     scanCrashes(g_offerEarlier);
     offerEndedSession();

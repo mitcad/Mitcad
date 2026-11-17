@@ -529,6 +529,10 @@ PickerPart pickerPart(const build::Part& source) {
   part.rowPreview = source.ownPreview;
   part.defaultRow = source.defaultRow;
   part.table = source.table;
+  // BUILD gives a part cut to length its length: not an option chosen in
+  // the picker (mitcad#1950).
+  part.lengthParameter =
+      str(source.build.value(QStringLiteral("length")).toObject(), "parameter");
   part.name = source.name;
   part.designation = source.designation;
   part.supplier = source.supplier;
@@ -2193,11 +2197,16 @@ void PartPicker::showOptions(const QString& key, const QJsonObject& parameters) 
     }
   }
   m_optionsFor = key;
-  if (shown == nullptr || !isOpenTable(shown->table) || !shown->refused.isEmpty()) {
+  // A BUILD part's length is BUILD's (mitcad#1950): a part whose only
+  // option it is has no options here.
+  const QStringList hidden =
+      shown == nullptr || shown->lengthParameter.isEmpty() ? QStringList() : QStringList{shown->lengthParameter};
+  if (shown == nullptr || !isOpenTable(shown->table, hidden) || !shown->refused.isEmpty()) {
     m_options->hide();
     return;
   }
   m_showingOptions = true;
+  m_options->setHiddenOptions(hidden);
   m_options->setOptionsQuery(libraryOptionsQuery(libraryCommand, shown->url, shown->library, shown->rev,
                                                  shown->component, [this] { return m_options->standard(); }));
   // The Standard and Supplier filters above the options (mitcad#949): the
@@ -2270,12 +2279,16 @@ void PartPicker::choose(const QString& key) {
     if (listed.libraryEntry) {
       return;
     }
-    // A part of an open table: with the options under the grid (mitcad#810).
-    if (isOpenTable(listed.table) && m_optionsFor != key) {
+    // A part of an open table: with the options under the grid (mitcad#810),
+    // a BUILD part's length left to BUILD (mitcad#1950).
+    const QStringList hidden =
+        listed.lengthParameter.isEmpty() ? QStringList() : QStringList{listed.lengthParameter};
+    if (isOpenTable(listed.table, hidden) && m_optionsFor != key) {
       showOptions(key);
     }
     m_chosenTile = key;
-    if (m_optionsFor == key && m_options->isOpen()) {
+    // (Hidden: the part has no options here, whatever the last table was.)
+    if (m_optionsFor == key && m_options->isOpen() && !m_options->isHidden()) {
       PickerPart withOptions = listed;
       withOptions.config = m_options->row();
       withOptions.key = build::optionsKey(key, withOptions.config, m_options->parameters());

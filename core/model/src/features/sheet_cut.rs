@@ -160,9 +160,10 @@ impl FeatureInfo for SheetCutDef {
 impl<K: Kernel> Evaluate<K> for SheetCutDef {
     fn evaluate(&self, ctx: &mut EvalContext<'_, K>) -> Result<FeatureOutput<K::Shape>, String> {
         let d = self.map_params(&mut |_, p| ctx.param(*p))?;
-        match d.mode {
+        let cut = match d.mode {
             SheetCutMode::Developed => crate::sheet::folded::cut(&d, ctx),
             SheetCutMode::Straight => crate::sheet::folded::cut::straight_cut(&d, ctx),
-        }
+        };
+        cut.map_err(|e| crate::sheet::folded::worded(ctx, &e))
     }
 }

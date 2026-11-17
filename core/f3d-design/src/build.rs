@@ -46,6 +46,8 @@ mod sheet;
 mod derive;
 // Drafts: drafted faces, neutral plane, parting tool (mitcad#1363).
 mod drafts;
+// The design's length unit and named views (mitcad#1937).
+pub(crate) mod settings;
 
 /// Helpers for the decoder's tests.
 #[cfg(test)]
@@ -3904,6 +3906,10 @@ pub fn build(seg: &Segment, dec: &Decoded, file: &str, segment_dir: &str) -> Dum
             }),
             component_count: Some(comps.len() as i64),
             root_component: root,
+            // The design's length unit and its named views, which tell
+            // its modelling orientation (mitcad#1937).
+            default_length_units: settings::length_unit(seg),
+            named_views: Some(settings::named_views(seg)).filter(|v| !v.is_empty()),
             ..Document::default()
         }),
         parameters: Some(Parameters {

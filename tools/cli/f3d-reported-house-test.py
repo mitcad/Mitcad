@@ -28,6 +28,10 @@ Imported with mitcad-cli import-f3d (saved, with its JSON report), then:
   expectations give it) are placeholders (mitcad#1808);
 - every sketch can be hidden from its light bulb: a script hides every
   sketch of the imported design and then none is shown.
+- the design, modelled with Y up and in inches, comes in in inches and
+  turned to stand on Z up (the report's `upright`, mitcad#1937): the turn
+  takes the file's Front view (along -Z, +Y up) onto MitCad's (along +Y,
+  +Z up), and the occurrences are compared turned with it.
 
 The failures name the bodies by their ids in the import and in the file
 (their names stay in the private files). Skipped when the folder, the
@@ -171,13 +175,39 @@ def main():
     fail("bodies not in the file's body folder", unfoldered)
     fail("bodies shown otherwise than the file shows them", visibility)
 
-    # The occurrences placed as the file places them.
+    # The design was modelled with Y up: it comes in turned to stand on Z
+    # up, so that its front faces MitCad's Front view (looking along +Y
+    # with +Z up; the file's Front looks along -Z with +Y up), and in its
+    # inch units (mitcad#1937).
+    upright = report.get("upright") or {}
+    turn = upright.get("matrix")
+    if not upright.get("turned") or upright.get("up") != "+Y" or turn is None:
+        failures.append(f"the Y-up design was not stood on Z up: {upright}")
+        turn = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+    def turned(v):
+        return [sum(turn[i][k] * v[k] for k in range(3)) for i in range(3)]
+
+    if turned([0, 0, -1]) != [0, 1, 0] or turned([0, 1, 0]) != [0, 0, 1]:
+        failures.append(f"the file's Front view is not MitCad's after the turn {turn}")
+    if doc.get("units", {}).get("length") != "in":
+        failures.append(f"the design's length unit is not inches: {doc.get('units')}")
+
+    # The occurrences placed as the file places them, turned with the
+    # design: R · T · R⁻¹ (mitcad#1937).
+    def turned_placement(t):
+        linear = [[sum(turn[i][k] * t[k][m] * turn[j][m] for k in range(3) for m in range(3))
+                   for j in range(3)] for i in range(3)]
+        move = turned([t[k][3] for k in range(3)])
+        return [linear[i] + [move[i]] for i in range(3)]
+
     placed = []
     for uid, name in components.items():
         wanted = expect["occurrences"].get(name)
         occurrence = occurrences.get(uid)
         if wanted is None or occurrence is None:
             continue
+        wanted = turned_placement(wanted)
         have = occurrence.get("transform", [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
         worst = max(abs(have[i][j] - wanted[i][j]) * (1.0 if j == 3 else 1000.0)
                     for i in range(3) for j in range(4))

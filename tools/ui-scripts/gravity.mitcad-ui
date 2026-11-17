@@ -1,0 +1,210 @@
+# SPDX-License-Identifier: MIT
+# Let It Hang and its panel's direction of gravity (mitcad#1713,
+# app/COMMANDS.md "Hanging cables") on gravity.json: a plate (Box1, body
+# F1.b0), a step on it (Box2, F2.b0), a plank above the step's edge (Box3,
+# F3.b0) and a hose (Flex1, F4, body F4.b0) over them in an S from two free
+# ends, its middle on the middle of its bounds; the design has no direction
+# of gravity:
+#   1. The context menu on the hose offers Let It Hang; its panel opens
+#      and asks for a direction (no marker before the panel, no hanging
+#      yet).
+#   2. The plate's top face picked in Direction From: the direction down
+#      -Z, the marker in the view, and the hose falls from its pinned ends,
+#      its middle onto the plank where it rests (no row of gravity in the
+#      browser). A left press beside it is the view's.
+#   3. Its middle node pinned with a click on its handle, then let go with
+#      another: it settles each time. The damping changed in its field.
+#   4. Dragged by its middle a little up (and back over the plank) and
+#      released: it follows and settles again, lying on the plank.
+#   5. OK keeps its shape as its nodes: the direction and the shape one undo
+#      step; the marker goes with the panel. Undo takes both back.
+#   6. Let It Hang from the ribbon with the hose selected, a face picked:
+#      its length made longer (applied once the field is left, not while
+#      it is typed) and its end let go (End pinned), dragged; Esc puts it
+#      back and takes the direction back: no undo step left.
+#   7. Once more: Clear Gravity puts it back and the field asks again; a
+#      face picked again hangs it again; Esc leaves the design as it was.
+# Run by tools/ui-gravity-test.sh (Linux), tools/ui-windows-gravity-test.ps1
+# (Windows), in the Docked and the Floating layout, and by
+# tools/ui-macos-gravity-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+command view.fit
+wait-log '^Fit: everything shown'
+wait-idle
+expect-no-log '^Gravity marker: arrow '
+
+# 1. The context menu on the hose: Let It Hang. Its panel asks for a
+#    direction; nothing hangs yet.
+mark
+click-logged '^Body F4[.]b0 at ' right
+wait-log '^Context menu: .*Let It Hang' 10
+mark
+popup 'Let It Hang'
+wait-log '^Command Let It Hang started'
+wait-log '^Hang panel opened'
+wait-log '^Preview Let It Hang: not built: Pick a planar face, a plane or an axis' 20
+wait-log '^Pick places:' 20
+wait-idle
+expect-no-log '^Hang started '
+capture-undo-depth start
+
+# 2. The plate's top face: the direction, the marker, and the hose falls
+#    from its ends, its middle onto the plank.
+mark
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Gravity direction: 0[.]000,0[.]000,-1[.]000 from face'
+wait-log '^Gravity marker: arrow '
+wait-log '^Hang started F4 [(]Hose 6[)]: points [0-9]+, touching 0, pins n1,n4, length '
+wait-log '^Hang rest F4: points [0-9]+, touching [1-9][0-9]*, pins n1,n4, .*at rest yes' 60
+wait-log '^Hang node F4 n2 free at '
+wait-log '^Hang middle of F4 at '
+wait-log '^Panel Let It Hang action clear[.]0 at ' 20
+wait-idle
+expect-no-log '^Browser gravity: '
+expect-undo-depth ${start} 1
+
+# 2b. A left press beside the hose (at the gravity marker in the view's
+#     corner) is the view's: nothing grabbed.
+mark
+click-logged '^Gravity marker: arrow '
+wait-log '^Hang press beside F4: the view.s'
+wait-idle
+expect-no-log '^Hang drag of F4 started'
+
+# 3. The middle node pinned, then let go: it settles each time. The
+#    damping in its field.
+mark
+click-logged '^Hang node F4 n2 free at '
+wait-log '^Hang pin n2 pinned'
+wait-log '^Hang rest F4: .*pins n1,n2,n4, ' 60
+wait-log '^Hang node F4 n2 pinned at '
+wait-idle
+mark
+click-logged '^Hang node F4 n2 pinned at '
+wait-log '^Hang pin n2 let go'
+wait-log '^Hang rest F4: .*pins n1,n4, .*at rest yes' 60
+wait-idle
+mark
+type-in '^Panel Let It Hang input damping at ' '0.8'
+wait-log '^Hang damping 0[.]800'
+wait-idle
+expect-undo-depth ${start} 1
+
+# 4. Dragged by its middle up and released: it settles again, on the
+#    plank. The drag moves in the plane facing the view, and straight up on
+#    the screen of the isometric view is also away from the viewer (+Y),
+#    which would carry the hose off the plank's long side; up and to the
+#    left keeps it over the plank (the same Y, up in Z and back from the
+#    plank's end in X). A few millimetres only: the hose lies pulled tight
+#    over the plank, and dropped from high up the least sideways offset
+#    makes it roll off the plank's edge and hang beside it, its lowest
+#    rest.
+mark
+drag-from '^Hang middle of F4 at ' -9 -15
+wait-log '^Hang drag of F4 started at '
+wait-log '^Hang drag of F4 released after [1-9][0-9]* step[(]s[)]: it settles'
+wait-log '^Hang rest F4: points [0-9]+, touching [1-9][0-9]*, .*at rest yes; [1-9][0-9]* drag step[(]s[)]' 60
+wait-idle
+expect-undo-depth ${start} 1
+
+# 5. OK keeps its shape: the direction and the shape one undo step, the
+#    marker gone with the panel; Undo takes both back.
+mark
+click-logged '^Panel Let It Hang OK at '
+wait-log '^Hang locked F4: nodes n1,.*,n4, deviation '
+wait-log '^Let It Hang: its steps merged into Edit Flex1'
+wait-log '^Done Let It Hang'
+wait-log '^Hang panel closed'
+wait-log '^Gravity marker: none'
+wait-idle
+expect-undo-depth ${start} 1
+mark
+command edit.undo
+wait-log '^Undo: Edit Flex1'
+wait-log '^Gravity direction: none'
+wait-idle
+expect-undo-depth ${start} 0
+
+# 6. From the ribbon with the hose selected: a face picked, the length made
+#    longer and its end let go, dragged; Esc puts it back and takes the
+#    direction back.
+mark
+click-logged '^Body F4[.]b0 at '
+wait-idle
+mark
+command assemble.flex_hang
+wait-log '^Command Let It Hang started'
+wait-log '^Pick places:' 20
+wait-idle
+mark
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Hang started F4 '
+wait-log '^Hang rest F4: ' 60
+wait-idle
+mark
+type-in '^Panel Let It Hang input length at ' '200'
+# Typed, the length is not applied yet: only once committed (the field
+# left with Tab).
+sleep 500
+expect-no-log '^Hang length '
+key Tab
+wait-log '^Hang length 200[.]000 mm'
+wait-log '^Hang rest F4: .*length 200[.]0, ' 60
+wait-idle
+mark
+click-logged '^Panel Let It Hang input end_pinned at '
+wait-log '^Hang ends pinned free'
+wait-log '^Hang rest F4: .*pins n1, ' 60
+wait-log '^Hang middle of F4 at '
+wait-idle
+mark
+drag-from '^Hang middle of F4 at ' 20 -40
+wait-log '^Hang drag of F4 released after '
+mark
+key Escape
+wait-log '^Hang cancelled: F4 put back'
+wait-log '^Command Let It Hang cancelled'
+wait-log '^Let It Hang: 1 direction change[(]s[)] taken back'
+wait-log '^Gravity direction: none'
+wait-idle
+expect-undo-depth ${start} 0
+
+# 7. Once more: Clear Gravity puts it back and the field asks again; a face
+#    picked again hangs it again; Esc leaves the design as it was.
+mark
+click-logged '^Body F4[.]b0 at '
+wait-idle
+mark
+command assemble.flex_hang
+wait-log '^Command Let It Hang started'
+wait-log '^Pick places:' 20
+wait-idle
+mark
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Hang started F4 '
+wait-log '^Panel Let It Hang action clear[.]0 at ' 20
+wait-idle
+mark
+click-logged '^Panel Let It Hang action clear[.]0 at '
+wait-log '^Let It Hang: clear action 0'
+wait-log '^Hang: F4 let go: gravity cleared'
+wait-log '^Gravity cleared'
+wait-log '^Gravity direction: none'
+wait-log '^Gravity marker: none'
+wait-log '^Preview Let It Hang: not built: Pick a planar face, a plane or an axis' 20
+wait-idle
+expect-no-log '^Command Let It Hang cancelled'
+mark
+click-pick 'face F1[.]b0/F1:top'
+wait-log '^Gravity direction: 0[.]000,0[.]000,-1[.]000 from face'
+wait-log '^Hang started F4 '
+wait-idle
+mark
+key Escape
+wait-log '^Command Let It Hang cancelled'
+wait-log '^Let It Hang: 3 direction change[(]s[)] taken back'
+wait-log '^Gravity direction: none'
+wait-idle
+expect-undo-depth ${start} 0

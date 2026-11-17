@@ -83,6 +83,9 @@ struct ViewSettings {
   // Every shown sketch drawn through the bodies outside sketch mode
   // (mitcad#1931, `view/sketchesThroughBodies`): on by default.
   bool sketchesThroughBodies = true;
+  // The selection drawn through the bodies (mitcad#1956,
+  // `view/selectionThroughBodies`): on by default.
+  bool selectionThroughBodies = true;
   static constexpr int kMinFocalLength = 20;
   static constexpr int kMaxFocalLength = 70;
 

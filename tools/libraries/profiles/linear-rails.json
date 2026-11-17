@@ -10,10 +10,10 @@
     "supplier_url": "https://www.motedis.com/en/Rail-AR-HR15-N-L-600mm",
     "designation": "Rail AR/HR15-N L={L}",
     "rows": [
-      {"name":"600","select":{"Stock":"600"},"values":{},"part_number":"AR-HR15-N-600"},
-      {"name":"960","select":{"Stock":"960"},"values":{},"part_number":"AR-HR15-N-960","source":"dynamic-m/Rail-AR-HR15-N-L-960mm/Motedis_AR-HR15-N-960-Rail.stp"},
-      {"name":"1320","select":{"Stock":"1320"},"values":{},"part_number":"AR-HR15-N-1320","source":"dynamic-m/Linear-guide-rail-AR-HR15-N-L-1320mm/Motedis_AR-HR15-N-1320-Rail.stp"},
-      {"name":"1980","select":{"Stock":"1980"},"values":{},"part_number":"AR-HR15-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR15-N-L-1980mm/Motedis_AR-HR15-N-1980-Rail.stp"}
+      {"name":"600","select":{"Stock":"600"},"values":{"L":"600 mm"},"part_number":"AR-HR15-N-600"},
+      {"name":"960","select":{"Stock":"960"},"values":{"L":"960 mm"},"part_number":"AR-HR15-N-960","source":"dynamic-m/Rail-AR-HR15-N-L-960mm/Motedis_AR-HR15-N-960-Rail.stp"},
+      {"name":"1320","select":{"Stock":"1320"},"values":{"L":"1320 mm"},"part_number":"AR-HR15-N-1320","source":"dynamic-m/Linear-guide-rail-AR-HR15-N-L-1320mm/Motedis_AR-HR15-N-1320-Rail.stp"},
+      {"name":"1980","select":{"Stock":"1980"},"values":{"L":"1980 mm"},"part_number":"AR-HR15-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR15-N-L-1980mm/Motedis_AR-HR15-N-1980-Rail.stp"}
     ],
     "build": {
       "role": "linear",
@@ -50,10 +50,10 @@
     "supplier_url": "https://www.motedis.com/en/Linear-guide-rail-AR-HR20-N-L-600mm",
     "designation": "Rail AR/HR20-N L={L}",
     "rows": [
-      {"name":"600","select":{"Stock":"600"},"values":{},"part_number":"AR-HR20-N-600"},
-      {"name":"960","select":{"Stock":"960"},"values":{},"part_number":"AR-HR20-N-960","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-960mm/Motedis_AR-HR20-N-960-Rail.stp"},
-      {"name":"1320","select":{"Stock":"1320"},"values":{},"part_number":"AR-HR20-N-1320","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-1320mm/Motedis_AR-HR20-N-1320-Rail.stp"},
-      {"name":"1980","select":{"Stock":"1980"},"values":{},"part_number":"AR-HR20-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-1980mm/Motedis-AR-HR20-N-1980-Rail/Motedis_AR-HR20-N-1980-Rail.stp"}
+      {"name":"600","select":{"Stock":"600"},"values":{"L":"600 mm"},"part_number":"AR-HR20-N-600"},
+      {"name":"960","select":{"Stock":"960"},"values":{"L":"960 mm"},"part_number":"AR-HR20-N-960","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-960mm/Motedis_AR-HR20-N-960-Rail.stp"},
+      {"name":"1320","select":{"Stock":"1320"},"values":{"L":"1320 mm"},"part_number":"AR-HR20-N-1320","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-1320mm/Motedis_AR-HR20-N-1320-Rail.stp"},
+      {"name":"1980","select":{"Stock":"1980"},"values":{"L":"1980 mm"},"part_number":"AR-HR20-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR20-N-L-1980mm/Motedis-AR-HR20-N-1980-Rail/Motedis_AR-HR20-N-1980-Rail.stp"}
     ],
     "build": {
       "role": "linear",
@@ -90,10 +90,10 @@
     "supplier_url": "https://www.motedis.com/en/Linear-guide-rail-AR-HR25-N-L-600mm",
     "designation": "Rail AR/HR25-N L={L}",
     "rows": [
-      {"name":"600","select":{"Stock":"600"},"values":{},"part_number":"AR-HR25-N-600"},
-      {"name":"960","select":{"Stock":"960"},"values":{},"part_number":"AR-HR25-N-960","source":"dynamic-m/Rail-AR-HR25-N-L-960mm/AR-HR25-N,L=960mm.stp"},
-      {"name":"1320","select":{"Stock":"1320"},"values":{},"part_number":"AR-HR25-N-1320","source":"dynamic-m/Rail-AR-HR25-N-L-1320mm/AR-HR25-N,L=1320mm.stp"},
-      {"name":"1980","select":{"Stock":"1980"},"values":{},"part_number":"AR-HR25-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR25-N-L-1980mm/AR-HR25-N,L=1980mm.stp"}
+      {"name":"600","select":{"Stock":"600"},"values":{"L":"600 mm"},"part_number":"AR-HR25-N-600"},
+      {"name":"960","select":{"Stock":"960"},"values":{"L":"960 mm"},"part_number":"AR-HR25-N-960","source":"dynamic-m/Rail-AR-HR25-N-L-960mm/AR-HR25-N,L=960mm.stp"},
+      {"name":"1320","select":{"Stock":"1320"},"values":{"L":"1320 mm"},"part_number":"AR-HR25-N-1320","source":"dynamic-m/Rail-AR-HR25-N-L-1320mm/AR-HR25-N,L=1320mm.stp"},
+      {"name":"1980","select":{"Stock":"1980"},"values":{"L":"1980 mm"},"part_number":"AR-HR25-N-1980","source":"dynamic-m/Linear-guide-rail-AR-HR25-N-L-1980mm/AR-HR25-N,L=1980mm.stp"}
     ],
     "build": {
       "role": "linear",
@@ -274,10 +274,10 @@
     "supplier_url": "https://www.motedis.com/en/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-300mm",
     "designation": "Rail miniature MR12M-N, stainless steel L={L}",
     "rows": [
-      {"name":"300","select":{"Stock":"300"},"values":{},"part_number":"MR12M-N-300"},
-      {"name":"400","select":{"Stock":"400"},"values":{},"part_number":"MR12M-N-400","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-400mm/Motedis_MR12M-N-400-Rail.stp"},
-      {"name":"500","select":{"Stock":"500"},"values":{},"part_number":"MR12M-N-500","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-500mm/Motedis_MR12M-N-500-Rail.stp"},
-      {"name":"600","select":{"Stock":"600"},"values":{},"part_number":"MR12M-N-600","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-600mm/Motedis_MR12M-N-600-Rail.stp"}
+      {"name":"300","select":{"Stock":"300"},"values":{"L":"300 mm"},"part_number":"MR12M-N-300"},
+      {"name":"400","select":{"Stock":"400"},"values":{"L":"400 mm"},"part_number":"MR12M-N-400","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-400mm/Motedis_MR12M-N-400-Rail.stp"},
+      {"name":"500","select":{"Stock":"500"},"values":{"L":"500 mm"},"part_number":"MR12M-N-500","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-500mm/Motedis_MR12M-N-500-Rail.stp"},
+      {"name":"600","select":{"Stock":"600"},"values":{"L":"600 mm"},"part_number":"MR12M-N-600","source":"dynamic-m/Stainless-steel-linear-guide-rail-Miniature-MR12M-N-L-600mm/Motedis_MR12M-N-600-Rail.stp"}
     ],
     "build": {
       "role": "linear",
@@ -314,9 +314,9 @@
     "supplier_url": "https://www.motedis.com/en/Supported-Rail-SBS20-600mm",
     "designation": "Supported rail SBS20 L={L}",
     "rows": [
-      {"name":"600","select":{"Stock":"600"},"values":{},"part_number":"SBS20-600"},
-      {"name":"800","select":{"Stock":"800"},"values":{},"part_number":"SBS20-800","source":"dynamic-m/Supported-Rail-SBS20-800mm/Motedis-SBS20-800/Motedis_SBS20-800.stp"},
-      {"name":"1000","select":{"Stock":"1000"},"values":{},"part_number":"SBS20-1000","source":"dynamic-m/Supported-Rail-SBS20-1000mm/Motedis-SBS20-1000/Motedis_SBS20-1000.stp"}
+      {"name":"600","select":{"Stock":"600"},"values":{"L":"600 mm"},"part_number":"SBS20-600"},
+      {"name":"800","select":{"Stock":"800"},"values":{"L":"800 mm"},"part_number":"SBS20-800","source":"dynamic-m/Supported-Rail-SBS20-800mm/Motedis-SBS20-800/Motedis_SBS20-800.stp"},
+      {"name":"1000","select":{"Stock":"1000"},"values":{"L":"1000 mm"},"part_number":"SBS20-1000","source":"dynamic-m/Supported-Rail-SBS20-1000mm/Motedis-SBS20-1000/Motedis_SBS20-1000.stp"}
     ],
     "build": {
       "role": "linear",

@@ -389,6 +389,16 @@ void CommandSession::setHiddenText(const QString& key, const QString& text) {
                             .arg(m_def.name, key, text.isEmpty() ? QStringLiteral("none") : text);
 }
 
+void CommandSession::showRefusal(const QString& message) {
+  if (m_done || message.isEmpty()) {
+    return;
+  }
+  QString logged = message;
+  logged.replace(QLatin1Char('\n'), QStringLiteral(" "));
+  qDebug().noquote() << QStringLiteral("Panel %1 refused: %2").arg(m_def.name, logged);
+  showPanelMessage(message, NoticeLevel::Error);
+}
+
 void CommandSession::updateActivationOffer() {
   const QJsonObject offer = m_done || isEditing() ? QJsonObject() : m_host.activationOffer(*this);
   if (offer == m_activationOffer) {

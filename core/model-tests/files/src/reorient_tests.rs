@@ -482,6 +482,80 @@ fn a_sketch_on_a_face_keeps_its_place_on_the_face() {
 }
 
 #[test]
+fn a_base_feature_without_bodies_turns_without_a_move() {
+    // An import keeps a base feature that holds none of a component's
+    // stored bodies (the commands make none; the design file has it); it
+    // has nothing to turn (mitcad#1937).
+    // Base2 (F9) brings a body that Base3 (F10) replaces with none.
+    let mut doc = design();
+    let brep = serde_json::to_value(mitcad_model::features::Brep::new(b"6 box".to_vec())).unwrap();
+    run(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "base", "bodies": [{"brep": brep}]}}),
+    );
+    let mut saved: Value = serde_json::from_str(&doc.to_json()).unwrap();
+    saved["features"].as_array_mut().unwrap().push(json!({
+        "uid": "F10", "name": "Base3", "type": "base", "bodies": [], "replaces": ["F9.b0"]
+    }));
+    let mut doc = Document::from_json(&saved.to_string(), MockKernel::default()).unwrap();
+    doc.recompute();
+    assert_eq!(doc.status(uid("F10")), Some(&FeatureStatus::Ok));
+    assert!(doc.body_shape(body("F9.b0")).is_none());
+    let before = boxes(&doc);
+    let turned = run(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "x", "degrees": 90}),
+    );
+    // Base1's and Base2's bodies are moved, Base3 has none.
+    assert_eq!(
+        turned["moves"].as_array().map(Vec::len),
+        Some(2),
+        "{turned}"
+    );
+    let turn = Turn::about(TurnAxis::X, 1);
+    let after = boxes(&doc);
+    for (b, old) in &before {
+        assert!(near(&after[b], &turned_box(turn, old)), "{b}");
+    }
+}
+
+#[test]
+fn a_move_faces_motion_turns_with_the_design() {
+    // mitcad#1937: the top face moved 5 up turns into a move 5 along -Y.
+    let mut doc = Document::new(MockKernel::default());
+    run(&mut doc, json!({"cmd": "sketch.create"}));
+    run(
+        &mut doc,
+        json!({"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10}),
+    );
+    run(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "extrude",
+            "profiles": [{"sketch": "F1", "region": RECT}],
+            "extent": {"type": "distance", "distance": 5}, "operation": "new_body"}}),
+    );
+    run(
+        &mut doc,
+        json!({"cmd": "add_feature", "def": {"type": "move_face", "body": "F2.b0",
+            "faces": [format!("F2:end({RECT})")],
+            "transform": {"type": "free",
+                          "matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 5]]}}}),
+    );
+    run(
+        &mut doc,
+        json!({"cmd": "reorient_design", "axis": "x", "degrees": 90}),
+    );
+    let FeatureDef::MoveFace(m) = &entry(&doc, "F3").def else {
+        panic!("a move face");
+    };
+    let mitcad_model::features::moves::MoveSpec::Free { matrix } = &m.transform else {
+        panic!("a free move");
+    };
+    let translation: Vec<f64> = matrix.iter().map(|row| row[3] + 0.0).collect();
+    assert_eq!(translation, [0.0, -5.0, 0.0]);
+}
+
+#[test]
 fn a_base_feature_that_joins_is_refused() {
     let mut doc = design();
     let brep = serde_json::to_value(mitcad_model::features::Brep::new(b"6 box".to_vec())).unwrap();

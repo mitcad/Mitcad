@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MIT
+# Screenshots of Flex items edited in their edit session (mitcad#1713, owner
+# 14.11.2026: the Flex panel on the item and its handles beside it) on
+# flex-shots-edit.json (a block with a 6 mm hose over its top, a cylinder
+# with a flat cable round half of it, half twisted), for a reviewer: not a
+# test. Run by tools/ui-windows-flex-shots.ps1 in each layout; the files
+# are ${FLEX_SHOTS}/NN-${FLEX_LAYOUT}-what${FLEX_END}.
+#   05 the flat cable with its half twist on the cylinder
+#   06 the hose's edit session: the panel, its node handles, a node taken
+#      and its length
+#   07 a node dragged: dashed lines from the nodes beside it, its body faded
+#   08 the flat cable's node taken in its session: its twist ring
+expect-ever 'View area'
+wait-idle
+mark
+command view.fit
+wait-log '^Fit: everything shown'
+wait-idle
+screenshot ${FLEX_SHOTS}/05-${FLEX_LAYOUT}-flat-cable-twist${FLEX_END}
+
+mark
+dblclick-logged '^Timeline Flex1 at '
+wait-log '^Editing F2 with Flex' 30
+wait-log '^Flex edit shown: F2 ' 60
+wait-idle
+# (In the Floating layout a card may cover the item's right end: the view
+# moves it clear, and the handles' places are logged again.)
+sleep 1500
+mark
+click-logged '^Flex node n2 face at '
+wait-log '^Flex node selected: n2'
+wait-log '^Flex edit badge: Length '
+wait-idle
+screenshot ${FLEX_SHOTS}/06-${FLEX_LAYOUT}-item-session${FLEX_END}
+
+mark
+pointer-logged press '^Flex node n1 free at ' left
+pointer-logged move '^Flex node n1 free at ' left -6 -5
+pointer-logged move '^Flex node n1 free at ' left -20 -15
+pointer-logged move '^Flex node n1 free at ' left -40 -30
+wait-log '^Flex edit drag: started n1'
+sleep 800
+screenshot ${FLEX_SHOTS}/07-${FLEX_LAYOUT}-node-dragged${FLEX_END}
+mark
+pointer-logged release '^Flex node n1 free at ' left -40 -30
+wait-log '^Flex edit drag n1: in the session' 60
+wait-log '^Preview Flex: ok' 60
+wait-idle
+key Escape
+wait-log '^Flex node selected: none'
+key Escape
+wait-log '^Command Flex cancelled'
+wait-log '^Flex edit hidden: F2'
+wait-idle
+
+mark
+dblclick-logged '^Timeline Flex2 at '
+wait-log '^Editing F4 with Flex' 30
+wait-log '^Flex edit shown: F4 ' 60
+wait-idle
+sleep 1500
+mark
+click-logged '^Flex node n2 face at '
+wait-log '^Flex node selected: n2'
+wait-log '^Flex twist knob n2 at '
+wait-idle
+screenshot ${FLEX_SHOTS}/08-${FLEX_LAYOUT}-twist-ring${FLEX_END}
+key Escape
+key Escape
+wait-log '^Command Flex cancelled'
+wait-idle
+expect-never 'Recompute failed|TestDriver: FAIL'

@@ -920,8 +920,9 @@ fn ribs_and_webs_join_the_bodies() {
 }
 
 /// Extend Ends and End Offset (mitcad#1746) reach the kernel; a rib saved
-/// without them keeps its ends as drawn, and a web refuses them. An end the
-/// kernel could not continue is the rib's warning.
+/// without them keeps its ends as drawn, and so does a web (mitcad#1968),
+/// which takes them too. An end the kernel could not continue is the rib's
+/// warning.
 #[test]
 fn rib_ends_extend_to_the_bodies() {
     let (mut b, _) = with_path();
@@ -982,18 +983,96 @@ fn rib_ends_extend_to_the_bodies() {
     );
     assert!(b.doc.warnings(plain).is_empty());
 
-    // A web's curves end where they are drawn.
-    let message = add(
+    // A web takes them too (mitcad#1968); one saved without them keeps its
+    // ends as drawn.
+    let web = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}, "extend_ends": true,
+               "end_offset": 1}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, web), FeatureStatus::Ok);
+    assert!(
+        last_spec(&b.doc).starts_with("web ")
+            && last_spec(&b.doc).ends_with("extend_ends offset 1"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    let saved = saved_def(&b.doc, web);
+    assert_eq!(saved["extend_ends"], json!(true), "{saved}");
+    let old_web = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}}),
+    )
+    .unwrap();
+    assert_eq!(status(&b.doc, old_web), FeatureStatus::Ok);
+    assert!(
+        !last_spec(&b.doc).contains("extend_ends"),
+        "{}",
+        last_spec(&b.doc)
+    );
+    assert!(saved_def(&b.doc, old_web).get("extend_ends").is_none());
+}
+
+/// A pattern's Adjust (the default) builds a rib's and a web's tool again
+/// at each copy when it depends on the bodies (To Next, Extend Ends), so
+/// that each copy reaches the faces where it lands and is cut back to the
+/// walls there (mitcad#1968); a web by a depth without Extend Ends is the
+/// tool moved.
+#[test]
+fn patterned_ribs_and_webs_are_rebuilt_at_each_copy() {
+    let (mut b, _) = with_path();
+    let specs = |doc: &Document<MockKernel>, prefix: &str| -> usize {
+        doc.kernel()
+            .specs
+            .borrow()
+            .iter()
+            .filter(|s| s.starts_with(prefix))
+            .count()
+    };
+    let pattern = |feature: FeatureUid| {
+        json!({"type": "rectangular_pattern",
+               "objects": {"type": "features", "features": [feature]},
+               "direction1": {"axis": {"type": "origin", "axis": "y"}, "quantity": 3,
+                              "distance": 5},
+               "distance_type": "spacing"})
+    };
+    let rib = add(
+        &mut b.doc,
+        json!({"type": "rib", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 4, "extent": {"type": "to_next"}, "flip": true}),
+    )
+    .unwrap();
+    let before = specs(&b.doc, &format!("rib {rib} "));
+    let ribs = add(&mut b.doc, pattern(rib)).unwrap();
+    assert_eq!(status(&b.doc, ribs), FeatureStatus::Ok);
+    // Built again for each of the two copies.
+    assert_eq!(specs(&b.doc, &format!("rib {rib} ")), before + 2);
+
+    let web = add(
         &mut b.doc,
         json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
                "thickness": 2, "extent": {"type": "depth", "depth": 10}, "extend_ends": true}),
     )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        message.contains("Extend Ends and End Offset are a rib's"),
-        "{message}"
-    );
+    .unwrap();
+    let before = specs(&b.doc, &format!("web {web} "));
+    let webs = add(&mut b.doc, pattern(web)).unwrap();
+    assert_eq!(status(&b.doc, webs), FeatureStatus::Ok);
+    assert_eq!(specs(&b.doc, &format!("web {web} ")), before + 2);
+
+    // A depth without Extend Ends does not depend on the bodies: moved.
+    let plain = add(
+        &mut b.doc,
+        json!({"type": "web", "curves": {"sketch": "F3", "curves": ["c1"]},
+               "thickness": 2, "extent": {"type": "depth", "depth": 10}}),
+    )
+    .unwrap();
+    let before = specs(&b.doc, &format!("web {plain} "));
+    let moved = add(&mut b.doc, pattern(plain)).unwrap();
+    assert_eq!(status(&b.doc, moved), FeatureStatus::Ok);
+    assert_eq!(specs(&b.doc, &format!("web {plain} ")), before);
 }
 
 /// A rib's Direction (mitcad#1746): the sketch's axes and a picked line or

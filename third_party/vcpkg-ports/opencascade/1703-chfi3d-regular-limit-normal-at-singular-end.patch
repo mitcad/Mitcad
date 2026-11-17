@@ -1,0 +1,39 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Use the regular one-sided normal at a rank-deficient fillet contour end.
+TangentExtremity already samples inside an edge when its support has no
+normal at the vertex. A numerically defined normal can still be unstable
+where the first-derivative cross product is below the existing surface
+properties resolution. Reject that endpoint normal and use the same
+existing inward samples until the derivatives are regular.
+
+On Apple Silicon the block-on-post lens test's vanishing vertex gave an
+angle0.0011074 at cross magnitude1.02e-13, but1.04e-5 just inside the edge
+at cross magnitude1.18e-9. The bad endpoint defeated the unchanged5e-4
+angular criterion and carried the contour through a zero-width section.
+The chain now uses the limiting normal to recognise the tangency there.
+No angular tolerance, walking limit, output check or test is relaxed.
+The original fillet_lens_overflow test covers this vanishing vertex and
+its validity, endpoints, quarter volumes and symmetry; the near-tangent
+contour and OCCT cases preserve finite-angle crossings.
+
+Upstream: new.
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_1.cxx
+@@ -806,8 +806,13 @@
+     for (int k = 0; k <= 3; k++)
+     {
+       const gp_Pnt2d    uv = pc->Value(k == 0 ? p : p + aStep * std::pow(10., k - 1));
+-      BRepLProp_SLProps aProp(*hs, uv.X(), uv.Y(), 1, 1.e-9);
+-      if (aProp.IsNormalDefined())
++      constexpr double aNormalResolution = 1.e-9;
++      BRepLProp_SLProps aProp(*hs, uv.X(), uv.Y(), 1, aNormalResolution);
++      // At a rank-deficient end a numerically defined normal can be
++      // unstable. Take the one-sided limit from a regular point instead,
++      // using the same resolution as the surface properties above.
++      if (aProp.D1U().Crossed(aProp.D1V()).Magnitude() > aNormalResolution
++          && aProp.IsNormalDefined())
+       {
+         n.SetXYZ(aProp.Normal().XYZ());
+         if (O == TopAbs_REVERSED)

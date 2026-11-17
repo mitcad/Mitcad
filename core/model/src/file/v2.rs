@@ -164,6 +164,9 @@ struct FileOut<'a> {
     // Filament changes at print heights (mitcad#1596), when there are any.
     #[serde(skip_serializing_if = "<[crate::print_changes::ChangeSchedule]>::is_empty")]
     filament_changes: &'a [crate::print_changes::ChangeSchedule],
+    // The direction of gravity (mitcad#1713), when the design has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gravity: &'a Option<crate::gravity::Gravity>,
     // CAM setups, their operations and the machines they use
     // (mitcad#1013), when there are any.
     #[serde(skip_serializing_if = "crate::cam::CamState::is_empty")]
@@ -323,6 +326,9 @@ struct FeatureOut<'a> {
     /// What the importer that made it said (mitcad#170).
     #[serde(skip_serializing_if = "Option::is_none")]
     import_note: Option<&'a str>,
+    /// The text of its warning the user acknowledged (mitcad#1935).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    acknowledged_warning: Option<&'a str>,
     /// What it remembers of the pieces it split bodies into (mitcad#408).
     #[serde(skip_serializing_if = "Option::is_none")]
     split_pieces: Option<&'a [crate::features::PieceGroup]>,
@@ -471,6 +477,7 @@ pub(super) fn save_with(
                 visible: state.feature_visibility.get(&f.uid).copied(),
                 display_size: state.datum_display_sizes.get(&f.uid).copied(),
                 import_note: state.import_notes.get(&f.uid).map(String::as_str),
+                acknowledged_warning: state.acknowledged_warnings.get(&f.uid).map(String::as_str),
                 split_pieces: state.split_pieces.get(&f.uid).map(|g| &g[..]),
                 def: f
                     .def
@@ -572,6 +579,7 @@ pub(super) fn save_with(
         next_comment: next_comment_out(state),
         print_plates: &state.print_plates,
         filament_changes: &state.filament_changes,
+        gravity: &state.gravity,
         cam: &state.cam,
         statistics,
         preview,
@@ -884,6 +892,8 @@ struct FeatureIn {
     display_size: Option<f64>,
     /// What the importer that made it said (mitcad#170).
     import_note: Option<String>,
+    /// The text of its warning the user acknowledged (mitcad#1935).
+    acknowledged_warning: Option<String>,
     /// What it remembers of the pieces of its splits (mitcad#408).
     split_pieces: Vec<crate::features::PieceGroup>,
     def: FeatureDef<String>,
@@ -893,7 +903,7 @@ struct FeatureIn {
     shapes: Option<Value>,
 }
 
-const TOP_FIELDS: [&str; 45] = [
+const TOP_FIELDS: [&str; 46] = [
     "format",
     "version",
     "units",
@@ -960,6 +970,8 @@ const TOP_FIELDS: [&str; 45] = [
     "next_occurrence",
     // Filament changes at print heights (mitcad#1596).
     "filament_changes",
+    // The direction of gravity (mitcad#1713).
+    "gravity",
     // CAM setups, operations and machines (mitcad#1013).
     "cam",
 ];
@@ -1064,6 +1076,15 @@ fn feature_in(i: usize, value: Value) -> Result<FeatureIn, FileError> {
             )));
         }
     };
+    let acknowledged_warning = match fields.remove("acknowledged_warning") {
+        None => None,
+        Some(Value::String(text)) => Some(text).filter(|t| !t.is_empty()),
+        Some(_) => {
+            return Err(schema(format!(
+                "features[{i}] ({name}): \"acknowledged_warning\" must be a string"
+            )));
+        }
+    };
     let split_pieces = match fields.remove("split_pieces") {
         None => Vec::new(),
         Some(value) => serde_json::from_value(value)
@@ -1081,6 +1102,7 @@ fn feature_in(i: usize, value: Value) -> Result<FeatureIn, FileError> {
         visible,
         display_size,
         import_note,
+        acknowledged_warning,
         split_pieces,
         def,
         shapes,
@@ -1594,6 +1616,19 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
             )));
         }
     }
+    // The direction of gravity (mitcad#1713): a unit vector, and what it
+    // was taken from.
+    let gravity = match top.remove("gravity") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let gravity = serde_json::from_value::<crate::gravity::Gravity>(value)
+                .map_err(|e| schema(format!("gravity: {e}")))?;
+            gravity
+                .check()
+                .map_err(|e| invalid(format!("gravity: {e}")))?;
+            Some(gravity)
+        }
+    };
     // CAM (mitcad#1013): read tolerantly, so that fields a newer MitCad
     // adds inside the section are ignored; each machine and setup checked.
     // An input whose body or sketch is gone is kept (its toolpath says so).
@@ -1780,6 +1815,9 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
         }
         if let Some(note) = &f.import_note {
             state.import_notes.insert(f.uid, note.clone());
+        }
+        if let Some(text) = &f.acknowledged_warning {
+            state.acknowledged_warnings.insert(f.uid, text.clone());
         }
         if !f.split_pieces.is_empty() {
             state
@@ -2092,6 +2130,7 @@ pub(super) fn load(value: Value) -> Result<(DocState, Vec<String>), FileError> {
     state.purge_volumes = purge_volumes;
     state.print_plates = print_plates;
     state.filament_changes = filament_changes;
+    state.gravity = gravity;
     state.cam = cam;
     for (i, drawing) in drawings.iter().enumerate() {
         if !state.assembly.exists(drawing.component) {

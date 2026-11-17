@@ -105,9 +105,9 @@ public:
   virtual void paint(ToolPreview& preview) const { (void)preview; }
   // Drawing tools snap the cursor; picking tools do not.
   virtual bool snaps() const { return true; }
-  // Snapping also to body vertices and edge midpoints in the sketch plane
-  // (mitcad#258): the Point tool's; other drawing tools may opt in later.
-  virtual bool bodySnaps() const { return false; }
+  // Snapping also to body vertices, edge midpoints and edges in the sketch
+  // plane (mitcad#258, mitcad#1967): every tool that snaps.
+  virtual bool bodySnaps() const { return snaps(); }
   // What the tool makes, for the sketch palette's Auto constraint section
   // (mitcad#189); None: the tool takes no auto constraints.
   virtual AutoKind autoKind() const { return AutoKind::None; }

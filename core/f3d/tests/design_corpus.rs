@@ -610,6 +610,10 @@ const DECODER_ONLY: &[&str] = &[
     // The faces a move face moves (mitcad#343), which the reference decoder
     // did not read; the import finds them by their face inputs.
     ".timeline.items[].detail.faces",
+    // The design's length unit and its named views (mitcad#1937), which the
+    // reference decoder did not read.
+    ".document.default_length_units",
+    ".document.named_views",
 ];
 
 /// Fields this decoder fills where the reference decoder has an empty

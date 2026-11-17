@@ -47,7 +47,7 @@ $menus = [ordered]@{
     ' | - | Stitch | Unstitch | Thicken'
   'ASSEMBLE' = ('New Component' +
     ' | - | Joint | As-Built Joint | Joint Origin | Rigid Group | Assembly Constraint' +
-    ' | - | Drive Joint | Motion Link | Contact Set | Animate Joint | Motion Study...' +
+    ' | - | Drive Joint | Motion Link | Contact Set | - | Let It Hang | - | Animate Joint | Motion Study...' +
     ' | - | Insert Component | Insert from Library').Replace('...', $e)
   'CONSTRUCT' = 'Offset Plane | Plane at Angle | Tangent Plane | Midplane | Plane Through Two Edges' +
     ' | Plane Through Three Points | Plane Tangent to Face at Point | Plane Along Path' +

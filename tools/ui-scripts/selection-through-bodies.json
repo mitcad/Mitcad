@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/selection-through-bodies.mitcad-ui (mitcad#1956): a block 40 x 40 x 20 mm centred on the origin (F1.b0, z from -10 to 10) and Sketch1 (F2) on the XZ plane through it with a 20 x 38 rectangle from x -10 to 10 and z -8 to 30 (the XZ frame's y is -Z): the lower part of its profile lies inside the block, the upper part above it, where a click with no command active selects it (one of its two triangles' middles is there)."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"origin": [0, 0, -10], "normal": [0, 0, 1]},
+    "corner": [-20, -20], "length": 40, "width": 40, "height": 20, "operation": "new_body"}},
+  {"cmd": "sketch.create", "plane": "xz"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F2", "corner": [-10, -30], "width": 20, "height": 38},
+  {"expect": {"instances": 1, "world_volume": 32000}}
+]

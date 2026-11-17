@@ -1852,9 +1852,19 @@ QString conditionBulbTip(const QString& name, bool visible, const QString& condi
 } // namespace
 
 bool BrowserPanel::markLevel(QTreeWidgetItem* row, const DocumentSnapshot::Feature& feature) {
-  const FeatureState state = featureState(feature.status);
+  // An acknowledged warning is shown as ok (mitcad#1935): its tooltip still
+  // tells it, marked acknowledged.
+  const FeatureState state = featureState(feature.shownStatus());
   const QString path = m_nodes.value(row).path;
-  const QString level = state == FeatureState::Ok ? QString() : noticeLevelName(featureStateLevel(state));
+  QString level;
+  if (state != FeatureState::Ok) {
+    level = noticeLevelName(featureStateLevel(state));
+  } else if (feature.warningAcknowledged()) {
+    level = QStringLiteral("acknowledged");
+  }
+  if (feature.warningAcknowledged()) {
+    row->setToolTip(kName, QStringLiteral("%1: %2").arg(feature.name, acknowledgedWarningText(feature.error)));
+  }
   if (m_loggedLevels.value(path) != level) {
     m_loggedLevels.insert(path, level);
     qDebug().noquote() << QStringLiteral("Browser level %1: %2")

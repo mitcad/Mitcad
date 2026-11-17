@@ -36,6 +36,8 @@ pub(crate) mod gap;
 pub(crate) mod edge;
 // Side snaps in line with the frame's other profiles (mitcad#1886).
 pub(crate) mod lineup;
+// Ends that meet and their shared miter (mitcad#1940).
+pub(crate) mod end_meets;
 
 // What the design file keeps of BUILD: the sources, the records and the
 // libraries' `build` blocks (mitcad#777).
@@ -64,6 +66,8 @@ pub use wood::EndInput;
 pub use edge::{AlongEdge, AlongEdit, AlongPart, along_of};
 // A side placement's offset from its reference (mitcad#1885).
 pub use place::side_offset;
+// Ends that meet and their shared miter (mitcad#1940).
+pub use end_meets::{EndMeet, EndMeetsBuild, NEAR, PartEnd};
 
 // The document's BUILD methods (mitcad#777).
 pub use connect::{ConnectBuild, SetMembersBuild};
@@ -111,6 +115,8 @@ pub mod prelude {
     pub(crate) use super::wood::WoodCrateOps;
     // Members along an edge (mitcad#1814).
     pub(crate) use super::edge::{AlongCrateOps, AlongEditCrateOps};
+    // Ends that meet (mitcad#1940).
+    pub use super::end_meets::EndMeetsBuild;
 }
 
 /// Items other Mitcad crates use; not part of this crate's API.

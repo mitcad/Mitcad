@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -169,6 +170,22 @@ public:
   // Returns false if a job is already running. Completion always runs on
   // the session's thread and is dropped if its context has been destroyed.
   bool commandAsync(const QJsonObject& request, QObject* context, Completion completion);
+  // A command that changes only the document's runtime state, never the
+  // design (a hanging Flex item's step, flex.hang_step, mitcad#1713, many
+  // times a second): on the worker without anything shown or done around
+  // it (no wait, progress, "Computing" line, display meshes, busyChanged,
+  // changed, jobFinished or document query; the model's time in a "Timing
+  // runtime command" line). While it runs the session is busy, but it
+  // gives way to any other job (waited for, not cancelled: runJob,
+  // startAsync, yieldBackgroundJob), and the UI thread's reads wait for
+  // it (idleDocument); its completion is then queued. False when a job
+  // runs or the session computes in place.
+  bool runtimeCommandAsync(const QJsonObject& request, QObject* context, Completion completion);
+  // A runtime command in flight is waited for and ended (its completion
+  // queued); true when no job runs afterwards.
+  bool yieldRuntimeJob();
+  // Calls wait for the idle point (whenIdle).
+  bool idleCallsWaiting() const { return !m_idleCalls.empty(); }
   bool previewAsync(const QByteArray& request, const QString& name, QObject* context, Completion completion);
   bool inspectionAsync(const QString& name, QObject* context, InspectionTask task,
                        InspectionCompletion completion);
@@ -261,6 +278,9 @@ private:
   // completeAsync's work; with `queueCompletion` the completion runs later,
   // queued (yieldBackgroundJob).
   void finishAsync(bool queueCompletion);
+  // A runtime command's end (runtimeCommandAsync): only its completion.
+  bool runtimeJobRunning() const;
+  void finishRuntimeJob(std::unique_ptr<AsyncJob> finished, const std::exception_ptr& error, bool queueCompletion);
   void runIdleCalls();
   void scheduleIdleCalls();
   void finishJob(const QString& label, bool cancelled, const QString& error);

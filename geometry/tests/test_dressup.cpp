@@ -1552,26 +1552,14 @@ void test_fillets_at_strips_within_the_tolerance() {
 void test_convex_and_concave_roundings_overlapping_on_a_step() {
   // mitcad#235: a step 0.5 high on the block's top (a 60 x 20 x 0.5 box
   // joined on its front half), both edges of the riser rounded 0.3. The
-  // roundings overlap on the riser (0.6 > 0.5) and OCCT's fillet fails; the
-  // convex rounding is built first, then the concave one, whose ball rolls
-  // on the convex rounding: an S-shaped section, the riser gone.
+  // roundings overlap on the riser (0.6 > 0.5); the concave rounding's ball
+  // rolls on the convex rounding: an S-shaped section, the riser gone.
+  // OCCT's fillet alone builds it too (the port's patch 1720, mitcad#1926:
+  // the rider rolls tangent on the other blend), the same section.
   const ShapePtr step = extrude("F3", {rectangle(5, 0, 0, 60, 20)}, 20, 20.5);
   const ShapePtr body = boolean(BooleanOp::Join, {block().get()}, *step).pieces.at(0).shape;
   const std::string top = edge(end_cap("F3", 5), side("F3", 5, 2));
   const std::string foot = edge(end_cap("F2", 1), side("F3", 5, 2));
-  {
-    const ShapePtr copy = mitcad::geometry::detail::working_copy(*body);
-    BRepFilletAPI_MakeFillet plain(copy->occt());
-    plain.Add(0.3, copy->edge(copy->find_edges(top).at(0)));
-    plain.Add(0.3, copy->edge(copy->find_edges(foot).at(0)));
-    plain.Build();
-    CHECK(!plain.IsDone()); // why the roundings are built in order; if OCCT learns it, this check can go
-  }
-  const ShapePtr rounded = fillet("F5", *body, {top, foot}, 0.3);
-  CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));
-  CHECK(faces_named(*rounded, "F5:fillet(" + top + ")") == 1);
-  CHECK(faces_named(*rounded, "F5:fillet(" + foot + ")") == 1);
-  CHECK(faces_named(*rounded, side("F3", 5, 2)) == 0);
   // The section, the riser at y = 0 and its foot at z = 0: the convex arc
   // about (-r, h - r), the concave one about (y2, r) at 2r from it, the
   // arcs meeting half-way between their centres.
@@ -1580,7 +1568,27 @@ void test_convex_and_concave_roundings_overlapping_on_a_step() {
   const double yt = (y2 - r) / 2;
   const auto segment = [r](double u) { return (u * std::sqrt(r * r - u * u) + r * r * std::asin(u / r)) / 2; };
   const double change = (h - r) * (yt + r) + segment(yt + r) + r * (y2 - yt) + segment(yt - y2) - r * h;
-  CHECK_NEAR_TOL(accurate_volume(*rounded), 48000.0 + 60 * 20 * h + change * 60, 1e-6);
+  const double expected = 48000.0 + 60 * 20 * h + change * 60;
+  {
+    const ShapePtr copy = mitcad::geometry::detail::working_copy(*body);
+    BRepFilletAPI_MakeFillet plain(copy->occt());
+    plain.Add(0.3, copy->edge(copy->find_edges(top).at(0)));
+    plain.Add(0.3, copy->edge(copy->find_edges(foot).at(0)));
+    plain.Build();
+    CHECK(plain.IsDone());
+    if (plain.IsDone()) {
+      CHECK(mitcad::geometry::detail::is_valid(plain.Shape()));
+      GProp_GProps props;
+      BRepGProp::VolumeProperties(plain.Shape(), props);
+      CHECK_NEAR_TOL(props.Mass(), expected, 1e-6);
+    }
+  }
+  const ShapePtr rounded = fillet("F5", *body, {top, foot}, 0.3);
+  CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));
+  CHECK(faces_named(*rounded, "F5:fillet(" + top + ")") == 1);
+  CHECK(faces_named(*rounded, "F5:fillet(" + foot + ")") == 1);
+  CHECK(faces_named(*rounded, side("F3", 5, 2)) == 0);
+  CHECK_NEAR_TOL(accurate_volume(*rounded), expected, 1e-6);
 }
 
 // A ring wall between radii 112 and 115 with a window from z = -20 to -5

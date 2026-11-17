@@ -413,7 +413,11 @@ on the body's material. The order of the moment values is unconfirmed.
 (`"ParametricDesignType"` or `"DirectDesignType"`), `default_length_units`
 (e.g. `"mm"`), `distance_display_units`, `root_component`,
 `component_count`, `data_file` (`{id, name, versionNumber,
-fileExtension}` or null).
+fileExtension}` or null), `named_views` (`[{name, eye, target, up}]`, cm;
+the stream decoder writes the design's named views, among them the
+standard `TOP`, `FRONT`, `RIGHT` and `HOME`, whose Front view tells the
+design's up direction, mitcad#1937). The stream decoder writes
+`default_length_units` too (`mm`, `cm`, `m`, `in`, `ft`).
 
 ### 5.2 parameters, components, occurrences
 

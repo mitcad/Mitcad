@@ -40,6 +40,15 @@ use mitcad_model_base::sweeps::{LoftEndKind, PathCurve};
 use mitcad_model_base::topo::{EdgeName, FaceBoundaryRef, FaceName, RoleKey, SegmentKey};
 use mitcad_model_base::transform::{Instance, PrimitiveShape, PrimitiveSpec, Transform};
 
+// Flex (mitcad#1713).
+use mitcad_model_base::flex::{
+    EndPort, FlexRoute, FlexRouteSpec, FlexSection, FlexSolidSpec, RouteNode, RouteSample,
+};
+// Flex drape (mitcad#1713).
+use mitcad_model_base::flex_drape::{
+    DrapeContact, DrapeNodes, DrapeNodesSpec, DrapeStep, DrapeStepSpec,
+};
+
 /// Temporary folders of a test's own (mitcad#1017).
 pub mod temp;
 pub use temp::{remove_temp, unique_temp_dir, unique_temp_path};
@@ -251,6 +260,9 @@ pub struct MockKernel {
     /// mass by the density; the print estimate, mitcad#620); otherwise the
     /// kernel has none.
     pub physical: Cell<bool>,
+    /// `interferences` of the bounding boxes (the gravity tool's tests,
+    /// mitcad#1713); otherwise the kernel has none.
+    pub box_interferences: Cell<bool>,
     /// Measure (mitcad#646): `measure` names the selection's kind,
     /// `measure_between` gives the closest points of the selections' boxes
     /// (a planar face's box flattened onto its plane) and the angle of two
@@ -387,6 +399,12 @@ pub struct MockKernel {
     /// whose bounds overlap the tool's by volume, as a tool that only meets
     /// a target's face leaves it as it was; the others as without this.
     pub cuts_by_bounds: Cell<bool>,
+    /// Flex routes (mitcad#1713): the problems `flex_route` gives with its
+    /// straight route through the nodes; none unless set.
+    pub flex_problems: RefCell<Vec<mitcad_model_base::flex::RouteProblem>>,
+    /// End ports (mitcad#1713): what `end_port` gives by the name of the
+    /// cap face; without one it is unsupported for the face.
+    pub end_ports: RefCell<BTreeMap<String, EndPort>>,
     /// Edges `edges` lists after the shape's face pairs, by name, on any
     /// shape that has faces (mitcad#1784: the pieces of an edge a model
     /// change split, which a projection's lost source may have become).
@@ -3790,6 +3808,8 @@ impl Kernel for MockKernel {
             copies_by_bounds: self.copies_by_bounds.clone(),
             face_gaps: self.face_gaps.clone(),
             cuts_by_bounds: self.cuts_by_bounds.clone(),
+            flex_problems: self.flex_problems.clone(),
+            end_ports: self.end_ports.clone(),
             box_edges: self.box_edges.clone(),
             cavities: self.cavities.clone(),
             silhouettes: self.silhouettes.clone(),
@@ -4243,6 +4263,50 @@ impl Kernel for MockKernel {
             });
         }
         Ok(volumes)
+    }
+
+    /// With `box_interferences`: the pairs whose bounding boxes overlap by
+    /// more than `min_volume`
+    /// (boxes that overlap by 0.01 or less along an axis only touch), the
+    /// overlap as a box (the gravity tool's tests, mitcad#1713).
+    fn interferences(
+        &self,
+        bodies: &[&MockShape],
+        min_volume: f64,
+    ) -> Result<Vec<mitcad_model_base::analysis::Interference<MockShape>>, KernelError> {
+        if !self.box_interferences.get() {
+            return Err(KernelError::Unsupported("interference"));
+        }
+        self.call("interferences")?;
+        let mut found = Vec::new();
+        for (i, a) in bodies.iter().enumerate() {
+            for (j, b) in bodies.iter().enumerate().skip(i + 1) {
+                let (Some(a), Some(b)) = (a.bounds, b.bounds) else {
+                    continue;
+                };
+                let min: [f64; 3] = std::array::from_fn(|k| a.min[k].max(b.min[k]));
+                let max: [f64; 3] = std::array::from_fn(|k| a.max[k].min(b.max[k]));
+                if (0..3).any(|k| max[k] - min[k] <= 0.01) {
+                    continue;
+                }
+                let volume: f64 = (0..3).map(|k| max[k] - min[k]).product();
+                if volume > min_volume {
+                    found.push(mitcad_model_base::analysis::Interference {
+                        first: i,
+                        second: j,
+                        volume,
+                        shape: MockShape {
+                            history: format!("common({i},{j})"),
+                            faces: Vec::new(),
+                            edges: Vec::new(),
+                            bounds: Some(BoundingBox { min, max }),
+                            parts: Vec::new(),
+                        },
+                    });
+                }
+            }
+        }
+        Ok(found)
     }
 
     // Emboss (mitcad#458).
@@ -6201,6 +6265,160 @@ impl Kernel for MockKernel {
         }
     }
 
+    // Flex (mitcad#1713).
+
+    /// A straight route through the nodes in order: a line between each
+    /// two neighbours that are apart and a sample at every node, its
+    /// normal the face normal of the node (else the z axis, or the x axis,
+    /// made square to the route) and its face that of the node when a
+    /// neighbour lies on the same face. Records the nodes, the number of
+    /// obstacles, the resting distance and the bend radii in `specs`, and
+    /// gives `flex_problems` as the problems of the route. Nodes all at
+    /// one point are an error.
+    fn flex_route(&self, spec: &FlexRouteSpec<'_, MockShape>) -> Result<FlexRoute, KernelError> {
+        use mitcad_model_base::kernel::Curve3;
+        self.call("flex_route")?;
+        let point = |p: [f64; 3]| format!("{},{},{}", number(p[0]), number(p[1]), number(p[2]));
+        let nodes: Vec<String> = spec
+            .nodes
+            .iter()
+            .map(|node| {
+                let mut text = point(node.point);
+                if let Some(face) = &node.face {
+                    text.push_str(&format!(" on {}", face.face));
+                }
+                if let Some(direction) = node.direction {
+                    text.push_str(&format!(" along {}", point(direction)));
+                }
+                if node.twist != 0.0 {
+                    text.push_str(&format!(" twist {}", number(node.twist)));
+                }
+                text
+            })
+            .collect();
+        self.specs.borrow_mut().push(format!(
+            "flex_route {} nodes [{}] obstacles {} resting {} bend {:?} {:?}",
+            spec.feature,
+            nodes.join("; "),
+            spec.obstacles.len(),
+            number(spec.resting),
+            spec.bend_radius,
+            spec.bend_radius_edge
+        ));
+        let same_face = |a: &RouteNode<'_>, b: Option<&RouteNode<'_>>| match (a.face, b) {
+            (Some(on), Some(other)) => other
+                .face
+                .is_some_and(|there| there.obstacle == on.obstacle && there.face == on.face),
+            _ => false,
+        };
+        let mut curve = Vec::new();
+        let mut samples: Vec<RouteSample> = Vec::new();
+        let mut along = 0.0;
+        for (i, node) in spec.nodes.iter().enumerate() {
+            let before = i.checked_sub(1).and_then(|k| spec.nodes.get(k));
+            let after = spec.nodes.get(i + 1);
+            if let Some(before) = before {
+                let step = mitcad_vec3::distance(before.point, node.point);
+                if step > 1e-12 {
+                    curve.push(Curve3::Line {
+                        start: before.point,
+                        end: node.point,
+                    });
+                }
+                along += step;
+            }
+            let from = before.map_or(node.point, |n| n.point);
+            let to = after.map_or(node.point, |n| n.point);
+            let tangent = mitcad_vec3::unit(mitcad_vec3::sub(to, from)).unwrap_or([1.0, 0.0, 0.0]);
+            let up = if tangent[2].abs() < 0.9 {
+                [0.0, 0.0, 1.0]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            let square = mitcad_vec3::cross(mitcad_vec3::cross(tangent, up), tangent);
+            let normal = match node.face {
+                Some(face) => face.normal,
+                None => mitcad_vec3::unit(square).unwrap_or(up),
+            };
+            let on = match node.face {
+                Some(face) if same_face(node, before) || same_face(node, after) => {
+                    Some((face.obstacle, face.face.clone()))
+                }
+                _ => None,
+            };
+            samples.push(RouteSample {
+                along,
+                point: node.point,
+                tangent,
+                normal,
+                node: Some(i),
+                on,
+            });
+        }
+        if curve.is_empty() {
+            return Err(KernelError::failed("the nodes are all at one point"));
+        }
+        Ok(FlexRoute {
+            curve,
+            samples,
+            problems: self.flex_problems.borrow().clone(),
+        })
+    }
+
+    /// A shape with the faces `side<i>` (one of a round section, four of a
+    /// rectangle, one for each segment of the outer loop of an outline),
+    /// `inner<i>` likewise with a wall, `start` and `end`; records the kind
+    /// of the section (a round one with its diameter), the wall and the
+    /// number of samples in `specs`.
+    fn flex_solid(&self, spec: &FlexSolidSpec<'_>) -> Result<MockShape, KernelError> {
+        self.call("flex_solid")?;
+        let (kind, sides) = match spec.section {
+            FlexSection::Round { diameter } => (format!("round {}", number(*diameter)), 1),
+            FlexSection::Rectangular { .. } => ("rectangular".to_owned(), 4),
+            FlexSection::Outline { loops } => {
+                ("outline".to_owned(), loops.first().map_or(0, Vec::len))
+            }
+        };
+        let names: Vec<&str> = spec.path.iter().map(|p| p.name.as_str()).collect();
+        self.specs.borrow_mut().push(format!(
+            "flex_solid {} path {} {kind} wall {:?} samples {}",
+            spec.feature,
+            names.join(","),
+            spec.wall,
+            spec.samples.len()
+        ));
+        let mut faces: Vec<FaceName> = (0..sides)
+            .map(|i| FaceName::new(spec.feature, &format!("side{i}"), None))
+            .collect();
+        if spec.wall.is_some() {
+            faces.extend(
+                (0..sides).map(|i| FaceName::new(spec.feature, &format!("inner{i}"), None)),
+            );
+        }
+        faces.extend(["start", "end"].map(|role| FaceName::new(spec.feature, role, None)));
+        Ok(MockShape {
+            history: format!("flex({}:{})", spec.feature, names.join(",")),
+            faces,
+            edges: Vec::new(),
+            bounds: None,
+            parts: Vec::new(),
+        })
+    }
+
+    /// The port set in `end_ports` for the cap face; a face the shape
+    /// lacks is an error, one without a port set is unsupported.
+    fn end_port(&self, shape: &MockShape, cap: &FaceName) -> Result<EndPort, KernelError> {
+        self.call("end_port")?;
+        if !shape.has_face(cap) {
+            return Err(KernelError::failed(format!("the body has no face {cap}")));
+        }
+        self.end_ports
+            .borrow()
+            .get(&cap.to_string())
+            .copied()
+            .ok_or(KernelError::Unsupported("end ports"))
+    }
+
     // Curve tools (mitcad#1777).
 
     /// Records the helix in `specs`; the curve as lines between its points
@@ -6691,6 +6909,131 @@ impl Kernel for MockKernel {
             curves
         } else {
             Vec::new()
+        })
+    }
+
+    // Flex drape (mitcad#1713).
+
+    /// A stand-in of the chain: a grabbed point goes to its target, every
+    /// other point that is not pinned moves 100 mm a second along gravity,
+    /// and with gravity along -z stops on the top of an obstacle's bounds
+    /// below it (the chain's resting distance above it), lying on the
+    /// obstacle's `top` face (else its first). The chain rests once no
+    /// point moved for 0.3 s. Records the points, the pinned ones, the
+    /// grab and the number of obstacles in `specs`.
+    fn flex_drape_step(
+        &self,
+        spec: &DrapeStepSpec<'_, MockShape>,
+    ) -> Result<DrapeStep, KernelError> {
+        self.call("flex_drape_step")?;
+        let pinned: Vec<String> = (0..spec.points.len())
+            .filter(|i| spec.pinned.get(*i).copied().unwrap_or(false))
+            .map(|i| i.to_string())
+            .collect();
+        self.specs.borrow_mut().push(format!(
+            "flex_drape_step points {} pinned [{}] grab {:?} obstacles {} segment {} seconds {} damping {}",
+            spec.points.len(),
+            pinned.join(","),
+            spec.grab.map(|(i, _)| i),
+            spec.obstacles.len(),
+            number(round(spec.segment)),
+            number(round(spec.seconds)),
+            number(round(spec.damping))
+        ));
+        if spec.points.len() < 2 || !(spec.segment > 0.0 && spec.segment.is_finite()) {
+            return Err(KernelError::failed(
+                "a hanging item needs two points or more",
+            ));
+        }
+        let drop = 100.0 * spec.seconds;
+        let mut moved = false;
+        let mut points = spec.points.to_vec();
+        let mut contacts: Vec<Option<DrapeContact>> = vec![None; points.len()];
+        for (i, point) in points.iter_mut().enumerate() {
+            if let Some((grabbed, target)) = spec.grab
+                && grabbed == i
+            {
+                moved |= mitcad_vec3::distance(*point, target) > 1e-12;
+                *point = target;
+                continue;
+            }
+            if spec.pinned.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            let mut to = mitcad_vec3::add(*point, mitcad_vec3::scale(spec.gravity, drop));
+            if spec.gravity == [0.0, 0.0, -1.0] {
+                for (k, shape) in spec.obstacles.iter().enumerate() {
+                    let Some(bounds) = shape.bounds else {
+                        continue;
+                    };
+                    let over = (bounds.min[0]..=bounds.max[0]).contains(&point[0])
+                        && (bounds.min[1]..=bounds.max[1]).contains(&point[1]);
+                    let floor = bounds.max[2] + spec.resting;
+                    if over && point[2] >= floor - 1e-9 && to[2] <= floor {
+                        to[2] = floor;
+                        let face = shape
+                            .faces
+                            .iter()
+                            .find(|f| f.role == "top")
+                            .or(shape.faces.first())
+                            .cloned();
+                        contacts[i] = Some(DrapeContact {
+                            obstacle: k,
+                            face,
+                            normal: [0.0, 0.0, 1.0],
+                        });
+                    }
+                }
+            }
+            moved |= mitcad_vec3::distance(*point, to) > 1e-12;
+            *point = to;
+        }
+        let still = if moved {
+            0.0
+        } else {
+            spec.still + spec.seconds
+        };
+        let count = points.len();
+        Ok(DrapeStep {
+            points,
+            velocities: vec![[0.0; 3]; count],
+            normals: vec![[0.0, 0.0, 1.0]; count],
+            contacts,
+            still,
+            at_rest: still >= 0.3,
+            time: spec.seconds,
+            carry: 0.0,
+        })
+    }
+
+    /// The points to keep, the ends and every fourth point between them;
+    /// records the points, the kept ones and the ports in `specs`.
+    fn flex_drape_nodes(
+        &self,
+        spec: &DrapeNodesSpec<'_, MockShape>,
+    ) -> Result<DrapeNodes, KernelError> {
+        self.call("flex_drape_nodes")?;
+        let count = spec.points.len();
+        if count < 2 {
+            return Err(KernelError::failed(
+                "a hanging item needs two points or more",
+            ));
+        }
+        self.specs.borrow_mut().push(format!(
+            "flex_drape_nodes points {count} keep {:?} ports {} {} tolerance {}",
+            spec.keep,
+            spec.start_port.is_some(),
+            spec.end_port.is_some(),
+            number(round(spec.tolerance))
+        ));
+        let mut nodes: Vec<usize> = (0..count).step_by(4).collect();
+        nodes.extend(spec.keep.iter().copied().filter(|k| *k < count));
+        nodes.push(count - 1);
+        nodes.sort_unstable();
+        nodes.dedup();
+        Ok(DrapeNodes {
+            nodes,
+            deviation: Some(0.0),
         })
     }
 }

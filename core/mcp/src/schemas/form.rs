@@ -21,6 +21,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "form.insert_loop",
     "form.delete_loop",
     "form.delete_faces",
+    "form.fill_hole",
+    "form.bridge",
     "form.crease",
     "form.symmetry",
     "form.set_cage",
@@ -233,6 +235,29 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             },
             "required": ["form", "faces"],
             "examples": [{"cmd": "form.delete_faces", "form": "F1", "faces": [6]}]
+        }),
+        "form.fill_hole" => json!({
+            "description": "Fills the opening a boundary edge of the cage lies on, so that the cage closes there: one face, or with quads and an even number of edges round it a grid of quads. On a symmetric cage the mirrored opening is filled too; an opening across the symmetry plane is refused. Result: faces, vertices (the new ones), closed; undo step Fill Hole in <Form>.",
+            "properties": {
+                "form": form(),
+                "edge": edge("An edge of the opening (boundary true in form_cage)"),
+                "quads": flag(false, "A grid of quads, as edge loops across one face would leave, when the opening has an even number of edges"),
+                "preview": preview()
+            },
+            "required": ["form", "edge"],
+            "examples": [{"cmd": "form.fill_hole", "form": "F1", "edge": [5, 6]}, {"cmd": "form.fill_hole", "form": "F1", "edge": [5, 6], "quads": true}]
+        }),
+        "form.bridge" => json!({
+            "description": "Joins two openings, or two runs of open edges of as many edges each, with a strip of quads. On a symmetric cage the mirror image is bridged too. Result: faces, vertices (the new ones), closed; undo step Bridge in <Form>.",
+            "properties": {
+                "form": form(),
+                "edges": edges("The boundary edges of both sides; the runs they make along the boundary are the two sides"),
+                "loops": flag(false, "Each edge stands for the whole opening it lies on: one edge a side is enough"),
+                "segments": {"type": "integer", "minimum": 1, "maximum": 100, "default": 1, "description": "Rows of quads across the strip"},
+                "preview": preview()
+            },
+            "required": ["form", "edges"],
+            "examples": [{"cmd": "form.bridge", "form": "F1", "edges": [[9, 10], [101, 102]], "loops": true, "segments": 2}]
         }),
         "form.crease" => json!({
             "description": "Creases cage edges and makes vertices corners, or smooths them again; undo step Crease in <Form>.",

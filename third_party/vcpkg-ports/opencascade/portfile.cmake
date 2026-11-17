@@ -322,6 +322,19 @@ vcpkg_from_github(
         1695-inttools-wline-decomposition-reads-no-point-past-the-line-ends.patch
         1700-chfi3d-walked-end-runs-on-over-the-flat-stretch-beyond-a-curved-wall.patch
         1082-brepmesh-delabella-cocircular-start-beyond-any-contour-edge.patch
+        1703-chfi3d-regular-limit-normal-at-singular-end.patch
+        1701-chfi3d-contact-of-no-length-joined-with-none-and-blends-in-no-solid-no-result.patch
+        1710-chfi3d-overlapping-chains-judged-by-the-spine-edges-their-blends-are-on.patch
+        1711-chfi3d-corner-parse-meeting-an-edge-twice-fails.patch
+        0173-chfi3d-stripe-computed-again-with-occt-inverse-where-rolling-walk-fails.patch
+        1720-chfi3d-rounding-rides-tangent-on-an-earlier-roundings-blend.patch
+        1721-chfi3d-rounding-rides-tangent-on-an-earlier-roundings-blend-part-of-the-way.patch
+        1722-chfi3d-tangent-ride-ending-at-a-corner-with-one-more-rounding.patch
+        1723-chfi3d-tangent-ride-corner-of-three-blends.patch
+        1724-chfi3d-tangent-ride-between-two-crossings.patch
+        1725-chfi3d-tangent-ride-between-two-crossings-of-a-closed-rider.patch
+        1726-chfi3d-under-anothers-ball-only-where-its-own-ball-is-found.patch
+        1727-chfi3d-ride-onto-the-corner-at-the-other-stripes-other-end.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

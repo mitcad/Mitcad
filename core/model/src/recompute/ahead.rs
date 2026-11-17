@@ -227,6 +227,7 @@ impl<S> Cache<S> {
                     Read::PrintLayer(bits) => {
                         state.design_layer_height().map(f64::to_bits) == *bits
                     }
+                    Read::Gravity(bits) => super::gravity_bits(state) == *bits,
                     // A later flange's definition (mitcad#1776).
                     Read::WallFlange(plane, key) => {
                         crate::sheet::folded::wall_flange_key(
@@ -323,6 +324,8 @@ fn role<S>(
                 | FeatureDef::BoundLength(_)
                 | FeatureDef::EdgeFrame(_)
                 | FeatureDef::BodyTransfer(_)
+                // A Flex item measures its length (mitcad#1713).
+                | FeatureDef::Flex(_)
         )
         || matches!(def, FeatureDef::Extrude(e) if e.active_cut_scope().is_some())
         || matches!(def, FeatureDef::Sketch(s) if s.dimensions.iter().any(|d| d.reference.is_some()))

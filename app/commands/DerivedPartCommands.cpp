@@ -212,8 +212,9 @@ void load(const QJsonObject& def, CommandState& state, const CommandContext& con
                                                             .toObject(),
                                                         "parameter");
   const bool cut = !placed.isEmpty() && !lengthParameter.isEmpty();
-  // The parameters the part sets, then an open table's options it does not
-  // (a source with rows is chosen by its row).
+  // The parameters the part sets, then an open table's options it does not,
+  // also beside the rows of an open table (mitcad#1950: a part cut to
+  // length's L beside its stock rows); a closed table is chosen by its row.
   const QJsonObject values = def.value(QStringLiteral("parameters")).toObject();
   QStringList parameters;
   for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
@@ -222,10 +223,20 @@ void load(const QJsonObject& def, CommandState& state, const CommandContext& con
     }
   }
   QJsonObject optionExpressions;
-  if (rows.isEmpty()) {
+  // A closed table's open options (mitcad#1950: a timber board's length
+  // beside its sizes) too.
+  const bool closed = !rows.isEmpty() && configure.value(QStringLiteral("closed")).toBool();
+  QStringList open;
+  for (const QJsonValue& value : configure.value(QStringLiteral("open")).toArray()) {
+    open << value.toString();
+  }
+  if (!closed || !open.isEmpty()) {
     for (const QJsonValue& value : configure.value(QStringLiteral("options")).toArray()) {
       const QJsonObject option = value.toObject();
       const QString name = str(option, "name");
+      if (closed && !open.contains(name)) {
+        continue;
+      }
       if (!name.isEmpty() && name != lengthParameter && !parameters.contains(name)) {
         parameters << name;
         optionExpressions.insert(name, str(option, "expression"));

@@ -760,6 +760,8 @@ pub fn referenced_occurrences(def: &FeatureDef) -> Vec<OccurrenceUid> {
             out.extend(&e.occurrence.0);
             Vec::new()
         }
+        // A Flex item's nodes on other components' geometry (mitcad#1713).
+        FeatureDef::Flex(f) => f.links.values().chain(f.datum_links.values()).collect(),
         _ => Vec::new(),
     };
     for link in links {

@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -20,6 +21,7 @@ class QWidget;
 namespace mitcad {
 
 class CommandContext;
+class CommandState;
 class CommandRegistry;
 class DocumentHost;
 struct CommandDef;
@@ -142,7 +144,54 @@ struct FormEditHooks {
 // (MainWindow::editForm) and passes the view's picks to its hidden input
 // "picked" and a vertex's drag to "drag" (DocumentHost::chooseInCommand).
 inline const char* const kFormEditCommand = "solid.form_edit";
+// Fill Hole and Bridge (mitcad#1941): actions while Edit Form is open (the
+// view's context menu, the command search) that choose the edit and apply
+// it to the picks (MainWindowForm.cpp).
+inline const char* const kFormFillHoleCommand = "solid.form_fill_hole";
+inline const char* const kFormBridgeCommand = "solid.form_bridge";
 void registerFormEditCommand(CommandRegistry& registry, const CommandContext& context, DocumentHost& host,
                              FormEditHooks hooks);
+
+// Flex (mitcad#1713, FlexCommands.cpp): a wire, cable, hose or strip laid
+// through the model by clicks; after Envelope in the CREATE group, in a
+// section of its own.
+void registerFlexCommands(CommandRegistry& registry, const CommandContext& context, DocumentHost& host);
+// A Flex item's edit session (mitcad#1713, owner 14.11.2026): its panel
+// with the item's handles in the view beside it (flex/FlexEditController).
+// Whether the Flex panel's state edits an item; its nodes as the handles
+// take them ({"type": "flex", "nodes": [...]}, each with its id, `at`,
+// `on` or `port` and `twist`; empty when it edits none); and the nodes the
+// handles changed put into the panel (a node's reference may say where it
+// was picked with `occurrence` and `context`), false when it edits none or
+// fewer than two nodes are given.
+bool isFlexEditSession(const CommandState& state);
+QJsonObject flexSessionDefinition(const CommandState& state);
+bool setFlexSessionNodes(CommandState& state, const CommandContext& model, const QJsonArray& nodes);
+
+// Let It Hang (mitcad#1713, GravityCommands.cpp; the ASSEMBLE group): the
+// panel of a Flex item let hang, with the design's direction of gravity
+// (Direction From, Reverse, Clear), the item's length, the damping and its
+// end pins. The main window registers it (MainWindowGravity.cpp) with
+// what drives the hanging item in the view (gravity/GravityController).
+struct LetItHangHooks {
+  // The Flex item (its uid) a pick is of; empty when it is of none.
+  std::function<QString(const SelectionItem&)> flexOf;
+  // The panel's definition made so (gravity::HangWish's JSON; an empty
+  // object: the inputs are not complete, the item hangs on as it is);
+  // empty when done, else the words of what was refused.
+  std::function<QString(const QJsonObject&)> apply;
+  // The Clear button: gravity.clear (the item put back first).
+  std::function<void()> clear;
+  // OK: the shape kept; false when the model refused it (the panel stays).
+  std::function<bool()> lock;
+  // The panel opened (its undo depth noted) and ended, with whether OK
+  // ended it.
+  std::function<void()> opened;
+  std::function<void(bool committed)> ended;
+};
+CommandDef letItHangCommand(const CommandContext& context, LetItHangHooks hooks);
+// The panel's Start pinned and End pinned set (a click on an end's handle
+// in the view); false when they were so already.
+bool setLetItHangEnds(CommandState& state, bool start, bool end);
 
 } // namespace mitcad

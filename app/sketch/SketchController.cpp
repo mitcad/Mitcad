@@ -257,13 +257,26 @@ bool SketchOp::run(const QJsonObject& command, QJsonObject* result) {
     // A dimension asks for the first-dimension rule while the preference
     // is on (mitcad#860): the dimension tool's and a drawing tool's typed
     // value's alike.
-    const QJsonObject answer = m_c.runModel(withFirstDimensionScale(command));
+    const QJsonObject asked = withFirstDimensionScale(command);
+    // Where the dimensioned geometry is before the rule may scale the
+    // sketch about its origin, for the view to follow it (mitcad#1948). The
+    // sketch as last read: not read again here, so that what a tool holds
+    // of it stays valid; geometry made in this action is not in it, and the
+    // view then stays.
+    std::optional<V2> anchor;
+    if (asked.value(QStringLiteral("scale_sketch")).toBool()) {
+      anchor = dimensionAnchor(m_c.model(), command);
+    }
+    const QJsonObject answer = m_c.runModel(asked);
     if (m_label.isEmpty()) {
       m_label = m_c.undoLabel();
     }
     m_stale = true;
     noteImplied(command, answer);
     noteScaled(answer);
+    if (anchor && answer.value(QStringLiteral("scaled")).isDouble()) {
+      followScale(*anchor, answer.value(QStringLiteral("scaled")).toDouble());
+    }
     if (result != nullptr) {
       *result = answer;
     }
@@ -340,16 +353,56 @@ void SketchOp::noteScaled(const QJsonObject& answer) {
   m_notices << QObject::tr("The sketch was scaled by %1 to its first dimension").arg(times);
 }
 
+std::optional<V2> SketchOp::dimensionAnchor(const SketchModel& model, const QJsonObject& command) {
+  const QJsonObject dimension = command.value(QStringLiteral("dimension")).toObject();
+  V2 sum{0.0, 0.0};
+  int count = 0;
+  for (auto it = dimension.begin(); it != dimension.end(); ++it) {
+    const QString id = it.value().toString();
+    if (it.key() == QStringLiteral("type") || id.isEmpty() || model.isAxisOrOrigin(id)) {
+      continue;
+    }
+    if (const std::optional<V2> at = model.anchorAt(id)) {
+      sum = sum + *at;
+      ++count;
+    }
+  }
+  if (count == 0) {
+    return std::nullopt;
+  }
+  return sum / static_cast<double>(count);
+}
+
+void SketchOp::followScale(const V2& anchor, double factor) {
+  if (!(std::isfinite(factor) && factor > 0.0)) {
+    return;
+  }
+  // The scale is about the sketch origin (the model's first-dimension
+  // rule), and the new dimension holds after it: the anchor went to
+  // `factor` times where it was. The frame stays.
+  const SketchModel& sketch = m_c.model();
+  const gp_Pnt before = sketch.place(anchor);
+  const gp_Pnt after = sketch.place(anchor * factor);
+  OcctViewer& view = m_c.viewer();
+  // The camera at rest, so that the place before and after are of one view.
+  view.settleCamera();
+  const QPointF shown = view.toWidgetF(before);
+  const gp_Vec move(before, after);
+  view.shiftView(move);
+  m_viewShift += move;
+  const QPointF now = view.toWidgetF(after);
+  qDebug().noquote() << QStringLiteral("Sketch view moved with the scaled sketch by %1 mm: the dimensioned "
+                                       "geometry at %2,%3 px stays at %4,%5 px")
+                            .arg(move.Magnitude(), 0, 'f', 3)
+                            .arg(shown.x(), 0, 'f', 1)
+                            .arg(shown.y(), 0, 'f', 1)
+                            .arg(now.x(), 0, 'f', 1)
+                            .arg(now.y(), 0, 'f', 1);
+}
+
 QJsonValue SketchOp::pointInput(const Snap& snap) {
   if (snap.atPoint()) {
     return snap.point;
-  }
-  if (snap.kind == Snap::Kind::BodyVertex) {
-    // A body vertex: the point its projection gives (mitcad#258).
-    const QString projected = projectBody(snap.bodyItem).point;
-    if (!projected.isEmpty()) {
-      return projected;
-    }
   }
   if (snap.kind == Snap::Kind::Origin) {
     const QString origin = model().originPoint();
@@ -427,16 +480,30 @@ void SketchOp::constrain(const QString& point, const Snap& snap) {
     coincident(snap.curve2);
     break;
   case Snap::Kind::BodyVertex:
-    // On the projected vertex, which follows the body (mitcad#258).
-    coincident(projectBody(snap.bodyItem).point);
-    break;
-  case Snap::Kind::BodyMidpoint: {
-    // At the middle of the projected edge.
-    const QString edge = projectBody(snap.bodyItem).curve;
-    if (!edge.isEmpty()) {
-      addConstraint({{QStringLiteral("type"), QStringLiteral("midpoint")},
-                     {QStringLiteral("point"), point},
-                     {QStringLiteral("curve"), edge}});
+  case Snap::Kind::BodyMidpoint:
+  case Snap::Kind::BodyOnEdge: {
+    // On the projected vertex, at the middle of the projected edge or on
+    // it (mitcad#258, mitcad#1967): the projection follows the body.
+    const ProjectedItem projected = projectBody(snap.bodyItem);
+    const bool middle = snap.kind == Snap::Kind::BodyMidpoint;
+    const QString entity = snap.kind == Snap::Kind::BodyVertex ? projected.point : projected.curve;
+    if (entity.isEmpty() || entity == point) {
+      break;
+    }
+    QJsonObject constraint{{QStringLiteral("point"), point}};
+    constraint.insert(QStringLiteral("type"), middle ? QStringLiteral("midpoint") : QStringLiteral("coincident"));
+    constraint.insert(middle ? QStringLiteral("curve") : QStringLiteral("entity"), entity);
+    QJsonObject cmd = command(QStringLiteral("sketch.add_constraint"));
+    cmd.insert(QStringLiteral("constraint"), constraint);
+    if (attempt(cmd)) {
+      // For UI tests: what holds the point on the body.
+      QString what = QStringLiteral("on %1, the projected edge");
+      if (snap.kind == Snap::Kind::BodyVertex) {
+        what = QStringLiteral("coincident with %1, the projected corner");
+      } else if (middle) {
+        what = QStringLiteral("at the midpoint of %1, the projected edge");
+      }
+      qDebug().noquote() << QStringLiteral("Held %1 %2 %3").arg(point, what.arg(entity), snap.bodyItem.source);
     }
     break;
   }
@@ -676,6 +743,11 @@ void SketchOp::rollback() {
     } catch (const std::exception&) {
       break;
     }
+  }
+  // The view goes back with the scale it followed (mitcad#1948).
+  if (m_viewShift.Magnitude() > 0.0) {
+    m_c.viewer().shiftView(m_viewShift.Reversed());
+    m_viewShift = gp_Vec(0.0, 0.0, 0.0);
   }
   m_c.host().refreshScene();
 }
@@ -3030,7 +3102,7 @@ void SketchController::updateCursor(const QPointF& position) {
     m_snap.screen = position;
   }
   // Snapped to a point (not onto a curve or the grid): the cursor shows it.
-  m_viewer.setSketchSnapping(m_tool && m_snap.onGeometry() && m_snap.kind != Snap::Kind::OnCurve);
+  m_viewer.setSketchSnapping(m_tool && m_snap.onGeometry() && !m_snap.alongCurve());
   setPointerText(pointerTextAt(m_snap.at));
 }
 

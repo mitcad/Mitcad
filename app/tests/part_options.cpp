@@ -205,6 +205,20 @@ void tableTests() {
   CHECK(tableOptions(old) == (QStringList{QStringLiteral("Size"), QStringLiteral("Length")}));
   CHECK(rowOptionText(old.value(QStringLiteral("rows")).toArray().first().toObject(), QStringLiteral("Size")) ==
         QStringLiteral("M5"));
+  // A closed table with an open option (mitcad#1950): chosen by the
+  // choosers, its rows choose the others; BUILD, which gives the length,
+  // keeps it a closed table of tiles.
+  const QJsonObject board = parse(R"({"options": ["Size", "L"], "closed": true, "open": ["L"],
+    "selectors": ["Size"], "rows": [{"name": "22x100", "select": {"Size": "22x100"}}]})");
+  CHECK(isOpenTable(board));
+  CHECK(tableOptions(board) == QStringList{QStringLiteral("Size")});
+  CHECK(isOpenTable(board, QStringList{QStringLiteral("Size")}));
+  CHECK(!isOpenTable(board, QStringList{QStringLiteral("L")}));
+  // An open table whose only option BUILD gives.
+  const QJsonObject profile = parse(R"({"options": ["L"], "closed": false,
+    "rows": [{"name": "1000 mm", "values": {"L": "1000 mm"}}]})");
+  CHECK(isOpenTable(profile));
+  CHECK(!isOpenTable(profile, QStringList{QStringLiteral("L")}));
 }
 
 void valueTests() {

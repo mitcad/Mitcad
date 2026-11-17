@@ -218,7 +218,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
                                           snapshot.namedViews, display, snapshot.analyses, snapshot.joints,
                                           snapshot.sheets, snapshot.motionStudies, snapshot.contactSets,
                                           snapshot.measurements, snapshot.drawings, snapshot.imageReferences,
-                                          snapshot.centerOfMass, snapshot.camSetups, snapshot.camMachines})
+                                          snapshot.centerOfMass, snapshot.camSetups,
+                                          snapshot.camMachines})
                      .toJson(QJsonDocument::Compact);
   // The values Show When conditions use (mitcad#863): a parameter changed
   // without changing what is shown still changes the light bulbs' tooltips.
@@ -300,6 +301,8 @@ DocumentSnapshot DocumentSnapshot::read(const CommandContext& model) {
     feature.autoFixChoices = f.value(QStringLiteral("auto_fix_choices")).toArray();
     // Linked projections Project Again repairs (mitcad#1303).
     feature.projectAgain = f.value(QStringLiteral("project_again")).toInt();
+    // Its warning acknowledged (mitcad#1935).
+    feature.acknowledged = f.value(QStringLiteral("acknowledged")).toBool();
     // A joint origin's light bulb is construction geometry's (mitcad#55).
     if (feature.isAnySketch() || feature.isConstruction() || feature.type == QStringLiteral("joint_origin")) {
       snapshot.featureShown.insert(feature.uid, feature.visible);
@@ -537,13 +540,24 @@ QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::failures() const {
 QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::warnings() const {
   // Those built with warnings; an import note alone is information
   // (mitcad#1040) and no longer counts.
+  // An acknowledged one is not counted (mitcad#1935).
   QVector<const Feature*> warned;
   for (const Feature& feature : features) {
-    if (feature.status == QStringLiteral("warning")) {
+    if (feature.warned()) {
       warned.append(&feature);
     }
   }
   return warned;
+}
+
+QVector<const DocumentSnapshot::Feature*> DocumentSnapshot::acknowledgedWarnings() const {
+  QVector<const Feature*> seen;
+  for (const Feature& feature : features) {
+    if (feature.warningAcknowledged()) {
+      seen.append(&feature);
+    }
+  }
+  return seen;
 }
 
 QJsonObject DocumentSnapshot::shownAnalysis() const {
@@ -796,6 +810,8 @@ QString featureIcon(const QString& type) {
       {QStringLiteral("form"), QStringLiteral("form")},
       // Fill Cavity (mitcad#1818).
       {QStringLiteral("fill_cavity"), QStringLiteral("fill-cavity")},
+      // Flex (mitcad#1713): a wire, cable, hose or strip.
+      {QStringLiteral("flex"), QStringLiteral("flex")},
   };
   return icons.value(type, QStringLiteral("feature"));
 }

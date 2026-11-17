@@ -1,0 +1,51 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a stripe is under another one's ball (patches 0700 and 1060)
+only where that ball is found, of that stripe's own radius (mitcad#1926).
+
+A U-shaped fin standing on a plate, its arms' tops sloping down into the
+plate, the fin's outer foot rounded with 3 (its arms' outer sides lower
+than 3 at their ends, so that its walked ends run on over those sides'
+planes and are cut by the top grown out to them, patch 1700), and inside
+the U a pit whose edge with the plate (a 45-degree face) is rounded with
+5: the pit's rounding was missing from the result, which came out valid
+and done, with the foot's rounding alone.
+
+- edgesUnderBlend (ChFi3d_Builder_Trim.cxx): 1060's ball through the
+  point's section is SA's, of SA's radius; it was sought with the radius
+  of the stripe whose edges are tested (5 for the pit's edge under the
+  foot's rounding of 3), so that no ball was found and the test was
+  skipped. Where no ball is found at all (a piece whose other line is no
+  contact but a cut, as the foot's run-on ends cut by the grown top), the
+  point is not taken for one under the blend: the pit's edge, within four
+  radii of the foot's contact on the plate but beyond the arm, no longer
+  made 0700 drop the pit's stripe.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
+index 6884b94d..fa9444c9 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_Trim.cxx
+@@ -404,9 +404,20 @@ bool edgesUnderBlend(const TopOpeBRepDS_DataStructure&     DStr,
+               BRep_Tool::Surface(TopoDS::Face(DStr.Shape(D->Index(3 - s))));
+             gp_Pnt Pc, Po, Pn;
+             double tb = 0.;
+-            if (ballAt(DStr, FI, So, FN, Sn, R, t, Pc, Po, Pn, tb))
++            // (The ball is SA's own, of SA's radius; where the piece has no
++            // ball's section there, its other line being no contact but a
++            // cut by that face, as a walked end run on over a lower wall's
++            // plane and cut by a face grown out to it, the point is not
++            // known to be under it.)
++            const occ::handle<ChFiDS_FilSpine> aFsA = occ::down_cast<ChFiDS_FilSpine>(SA->Spine());
++            const double RA = !aFsA.IsNull() && aFsA->IsConstant() ? aFsA->Radius() : R;
++            if (ballAt(DStr, FI, So, FN, Sn, RA, t, Pc, Po, Pn, tb))
+             {
+-              found = gp_Vec(Pn, Q).Dot(gp_Vec(Pn, Pc)) >= -0.01 * R * R;
++              found = gp_Vec(Pn, Q).Dot(gp_Vec(Pn, Pc)) >= -0.01 * RA * RA;
++            }
++            else
++            {
++              found = false;
+             }
+           }
+           if (found)

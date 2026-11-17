@@ -399,6 +399,10 @@ QString actionKey(Action action) {
     return QStringLiteral("delete_faces");
   case Action::Symmetry:
     return QStringLiteral("symmetry");
+  case Action::FillHole:
+    return QStringLiteral("fill_hole");
+  case Action::Bridge:
+    return QStringLiteral("bridge");
   }
   return QStringLiteral("move");
 }
@@ -406,7 +410,7 @@ QString actionKey(Action action) {
 std::optional<Action> actionOf(const QString& key) {
   for (const Action action : {Action::Move, Action::Rotate, Action::Scale, Action::Extrude, Action::InsertLoop,
                               Action::DeleteLoop, Action::Crease, Action::Uncrease, Action::DeleteFaces,
-                              Action::Symmetry}) {
+                              Action::Symmetry, Action::FillHole, Action::Bridge}) {
     if (actionKey(action) == key) {
       return action;
     }
@@ -421,6 +425,8 @@ std::optional<Kind> onlyKind(Action action) {
     return Kind::Faces;
   case Action::InsertLoop:
   case Action::DeleteLoop:
+  case Action::FillHole:
+  case Action::Bridge:
     return Kind::Edges;
   default:
     return std::nullopt;
@@ -465,6 +471,10 @@ QString stepName(Action action) {
     return QStringLiteral("Delete Faces");
   case Action::Symmetry:
     return QStringLiteral("Symmetry");
+  case Action::FillHole:
+    return QStringLiteral("Fill Hole");
+  case Action::Bridge:
+    return QStringLiteral("Bridge");
   }
   return QString();
 }
@@ -565,6 +575,35 @@ QJsonObject editCommand(const QString& form, const Edit& edit, const Picked& pic
     command.insert(QStringLiteral("faces"), idsJson(picked.faces));
     return command;
   }
+  case Action::FillHole: {
+    // The opening the picked edge lies on (mitcad#1941).
+    if (picked.edges.size() != 1) {
+      return {};
+    }
+    const EdgeIds& edge = picked.edges.first();
+    command.insert(QStringLiteral("cmd"), QStringLiteral("form.fill_hole"));
+    command.insert(QStringLiteral("edge"),
+                   QJsonArray{static_cast<double>(edge[0]), static_cast<double>(edge[1])});
+    if (edit.quads) {
+      command.insert(QStringLiteral("quads"), true);
+    }
+    return command;
+  }
+  case Action::Bridge: {
+    const double segments = std::round(edit.segments);
+    if (picked.edges.size() < 2 || !(segments >= 1.0 && segments <= 100.0)) {
+      return {};
+    }
+    command.insert(QStringLiteral("cmd"), QStringLiteral("form.bridge"));
+    command.insert(QStringLiteral("edges"), edgesJson(picked.edges));
+    if (edit.loops) {
+      command.insert(QStringLiteral("loops"), true);
+    }
+    if (segments > 1.0) {
+      command.insert(QStringLiteral("segments"), static_cast<int>(segments));
+    }
+    return command;
+  }
   case Action::Symmetry: {
     command.insert(QStringLiteral("cmd"), QStringLiteral("form.symmetry"));
     const QString plane = edit.plane;
@@ -620,6 +659,18 @@ QString editRefusal(const Edit& edit, const Picked& picked) {
     return edit.plane == QStringLiteral("picked") && !edit.planePicked
                ? QObject::tr("Pick a plane or a planar face for the mirror plane.")
                : QString();
+  case Action::FillHole:
+    return picked.edges.size() != 1 ? QObject::tr("Pick one edge of the opening to fill.") : QString();
+  case Action::Bridge:
+    if (picked.edges.size() < 2) {
+      return edit.loops ? QObject::tr("Pick an edge of each of the two openings to join.")
+                        : QObject::tr("Pick the edges of the two sides to join.");
+    }
+    if (!(std::isfinite(edit.segments) && std::abs(edit.segments - std::round(edit.segments)) < 1e-9 &&
+          edit.segments >= 1.0 && edit.segments <= 100.0)) {
+      return QObject::tr("Segments must be a whole number from 1 to 100.");
+    }
+    return QString();
   }
   return QString();
 }

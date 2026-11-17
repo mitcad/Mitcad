@@ -133,11 +133,13 @@ enum class Action {
   Uncrease,
   DeleteFaces,
   Symmetry,
+  FillHole, // mitcad#1941
+  Bridge,
 };
 QString actionKey(Action action); // "move", "rotate", ...: the choice's values
 std::optional<Action> actionOf(const QString& key);
 // The kind of element an edit takes, when it takes one kind only (Extrude:
-// faces, Insert Edge Loop: edges); none when the Select choice says
+// faces, Insert Edge Loop, Fill Hole, Bridge: edges); none when the Select choice says
 // (Move, Rotate, Scale: any; Crease, Uncrease: edges or vertices) or the
 // edit takes none (Symmetry).
 std::optional<Kind> onlyKind(Action action);
@@ -166,6 +168,13 @@ struct Edit {
   bool planePicked = false;
   Point planeOrigin{};
   Point planeNormal{};
+  // Fill Hole (mitcad#1941): a grid of quads when the opening has an even
+  // number of edges, else one face.
+  bool quads = false;
+  // Bridge: each picked edge stands for its whole opening (one a side is
+  // enough), and the rows of quads across the strip (1 to 100).
+  bool loops = true;
+  double segments = 1;
 };
 
 // The `form.*` command of an edit of Form `form` on the picks (with

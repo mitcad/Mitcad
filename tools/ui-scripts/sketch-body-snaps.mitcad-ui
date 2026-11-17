@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MIT
+# Every drawing tool snaps to body corners and edges in the sketch plane
+# (mitcad#1967, GitHub mitcad/Mitcad#392), on sketch-body-snaps.json
+# (a 60 x 40 x 20 block; Sketch2 on its top face, empty):
+#   1. Line from near the block's corner (60, 0) to (40, 25): the corner is
+#      projected (linked), and the line's start is a new point held on the
+#      projected corner by a Coincident constraint.
+#   2. 2-Point Rectangle from near the corner (0, 40) to (15, 30): that
+#      corner projected likewise, the rectangle's corner held on it.
+#   3. Line from the back edge at (40, 40), not its middle (30, 40), to
+#      (35, 20): the edge is projected (linked) and the line's start held
+#      on the projected edge by a Coincident constraint.
+#   Each click is one undo step with its projection; nothing is refused.
+# The corners are clicked 0.2 mm off: within the point snap's pixels at
+# the fit's zoom, also in session 0's 1024x768 window on Windows. The top
+# right of the view (the orientation cube) is left alone.
+# Run by tools/ui-sketch-body-snaps-test.sh (Linux),
+# tools/ui-windows-sketch-body-snaps-test.ps1 (Windows) and
+# tools/ui-macos-sketch-body-snaps-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+mark
+dblclick-logged '^Timeline Sketch2 at '
+wait-log '^Editing sketch F3 \(Sketch2\)'
+key F6
+wait-idle
+capture-undo-depth baseline
+
+# 1. A line from a body corner.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-click 59.8 0.2
+sketch-click 40 25
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-log '^Projected the body vertex V\{'
+expect-log '^Held p[0-9]+ coincident with p[0-9]+, the projected corner V\{'
+expect-log '^Sketch Sketch2: 1 linked projection\(s\)'
+expect-no-log ' not added: '
+expect-undo-depth ${baseline} 1
+wait-idle
+
+# 2. A rectangle's corner on a body corner.
+mark
+command sketch.rectangle
+wait-log '^Sketch tool 2-Point Rectangle'
+wait-idle
+sketch-click 0.2 39.8
+sketch-click 15 30
+wait-log '^Added rectangle '
+key Escape
+wait-log '^Sketch tool ended: 2-Point Rectangle'
+expect-log '^Projected the body vertex V\{'
+expect-log '^Held p[0-9]+ coincident with p[0-9]+, the projected corner V\{'
+expect-log '^Sketch Sketch2: 2 linked projection\(s\)'
+expect-no-log ' not added: '
+expect-undo-depth ${baseline} 2
+wait-idle
+
+# 3. A line from a body edge, away from its middle.
+mark
+command sketch.line
+wait-log '^Sketch tool Line'
+wait-idle
+sketch-click 40 39.8
+sketch-click 35 20
+wait-log '^Added line c[0-9]+ from '
+key Escape
+key Escape
+wait-log '^Sketch tool ended: Line'
+expect-log '^Projected the body edge E\{'
+expect-log '^Held p[0-9]+ on c[0-9]+, the projected edge E\{'
+expect-log '^Sketch Sketch2: 3 linked projection\(s\)'
+expect-no-log ' not added: '
+expect-no-log 'the projected corner'
+expect-no-log 'at the midpoint of'
+expect-undo-depth ${baseline} 3
+wait-idle
+
+mark
+command sketch.finish
+wait-log '^Sketch finished'
+expect-never 'TestDriver: FAIL'

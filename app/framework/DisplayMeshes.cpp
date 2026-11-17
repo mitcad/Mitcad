@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -78,6 +79,79 @@ bool readyForDisplay(const geometry::Shape& shape) {
 bool displayMeshStore() {
   const QByteArray given = qgetenv("MITCAD_DISPLAY_MESH_STORE");
   return given != "0" && given != "off";
+}
+
+// io::mesh_all_in_place of `shapes` for the view, each by the section of the
+// body it is drawn for (`sections`, geometry::Shape::display_section,
+// io::MeshOptions::section: a Flex item, mitcad#1713): one joint meshing of
+// the shapes without a section with `options`, and one of each section's
+// with `swept` (the view's final options in both tiers, so that a stand-in's
+// meshes are the final tier's: meshForDisplay). How many were meshed.
+std::size_t meshForView(const std::vector<TopoDS_Shape>& shapes, const std::vector<double>& sections,
+                        const io::MeshOptions& options, const io::MeshOptions& swept,
+                        const Message_ProgressRange& range, io::MeshReport* report) {
+  std::map<double, std::vector<TopoDS_Shape>> groups;
+  for (std::size_t i = 0; i < shapes.size(); ++i) {
+    const double section = i < sections.size() ? sections[i] : 0.0;
+    groups[section > 0.0 ? section : 0.0].push_back(shapes[i]);
+  }
+  const auto optionsOf = [&](double section) {
+    io::MeshOptions own = section > 0.0 ? swept : options;
+    own.section = section;
+    return own;
+  };
+  if (groups.size() == 1) {
+    return io::mesh_all_in_place(groups.begin()->second, optionsOf(groups.begin()->first), range, report);
+  }
+  Message_ProgressScope scope(range, nullptr, static_cast<double>(groups.size()));
+  std::size_t meshed = 0;
+  for (const auto& [section, members] : groups) {
+    if (scope.UserBreak()) {
+      break;
+    }
+    meshed += io::mesh_all_in_place(members, optionsOf(section), scope.Next(), report);
+  }
+  return meshed;
+}
+
+// The sections of the bodies `shapes` are drawn for (meshForView).
+std::vector<double> sectionsOf(const std::vector<std::shared_ptr<geometry::Shape>>& bodies) {
+  std::vector<double> sections;
+  sections.reserve(bodies.size());
+  for (const std::shared_ptr<geometry::Shape>& body : bodies) {
+    sections.push_back(body ? body->display_section() : 0.0);
+  }
+  return sections;
+}
+
+// A Flex item's body (geometry::Shape::display_section) drawn through a
+// stand-in meshed with the final options (meshForView) gets the stand-in's
+// triangulations, the same the final tier would make, instead of being
+// meshed again (mitcad#1713: 0.8-1.4 s a hose, at the preview's refinement
+// and again at OK before it); whether it did.
+bool takeStandInMeshes(const geometry::Shape& shape) {
+  if (!(shape.display_section() > 0.0) || shape.display_meshed()) {
+    return false;
+  }
+  const std::shared_ptr<geometry::Shape> standIn = shape.display_stand_in();
+  if (!standIn || !standIn->display_meshed() || !io::has_triangulation(standIn->occt())) {
+    return false;
+  }
+  try {
+    // Copies (through their bytes): the view draws the stand-in meanwhile,
+    // and the body's faces share no triangulation with it.
+    io::restore_triangulations(shape.occt(), io::triangulation_bytes(standIn->occt()));
+  } catch (const Standard_Failure&) {
+    return false;
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (!io::has_triangulation(shape.occt())) {
+    return false;
+  }
+  shape.set_display_meshed();
+  shape.set_display_stand_in(nullptr);
+  return true;
 }
 
 // A display mesh request of the document: the bodies and the options.
@@ -259,7 +333,12 @@ DisplayShapes previewShapes(const Document& document, const QJsonObject& report)
   for (const QJsonValue& value : report.value(QStringLiteral("instances")).toArray()) {
     add(value.toObject().value(QStringLiteral("body")).toString());
   }
-  addShape(shapes, document.preview_tool_shape());
+  // The tool once: a new body's tool is the body's own shape (a Flex item's,
+  // mitcad#1713), which was meshed twice, each in a copy of its own.
+  std::shared_ptr<geometry::Shape> tool = document.preview_tool_shape();
+  if (std::find(shapes.begin(), shapes.end(), tool) == shapes.end()) {
+    addShape(shapes, std::move(tool));
+  }
   return shapes;
 }
 
@@ -306,6 +385,11 @@ DisplayMeshing meshForDisplay(const DisplayShapes& shapes, ModelJob& job, Displa
       continue;
     }
     if (tier == DisplayTier::Final) {
+      if (takeStandInMeshes(*shape)) {
+        ++meshing.ready;
+        ++meshing.fromStandIns;
+        continue;
+      }
       pending.push_back(occt);
       meshed.push_back(shape);
       bodies.push_back(shape);
@@ -349,7 +433,8 @@ DisplayMeshing meshForDisplay(const DisplayShapes& shapes, ModelJob& job, Displa
         }
       }
       const io::MeshOptions options = tier == DisplayTier::Final ? viewMeshOptions() : previewMeshOptions();
-      meshing.bodies = io::mesh_all_in_place(pending, options, progress->Start(), &meshing.report);
+      meshing.bodies =
+          meshForView(pending, sectionsOf(bodies), options, viewMeshOptions(), progress->Start(), &meshing.report);
       // Meshed to the end: a face still without a triangulation is one
       // OCCT's mesher fails on. The view draws the others and does not
       // mesh the body again on the UI thread, where meshing such a face
@@ -433,8 +518,8 @@ DisplayRemeshing remeshForDisplay(const DisplayShapes& shapes, ModelJob& job) {
   job.setStage(QCoreApplication::translate("DisplayMeshes", "Meshing the bodies for display"));
   const occ::handle<JobBreak> progress = new JobBreak(job);
   try {
-    const std::size_t meshed =
-        io::mesh_all_in_place(copies, viewMeshOptions(), progress->Start(), &remeshing.report);
+    const std::size_t meshed = meshForView(copies, sectionsOf(remeshing.bodies), viewMeshOptions(), viewMeshOptions(),
+                                           progress->Start(), &remeshing.report);
     if (meshed == copies.size() && !job.control().is_cancelled() && remeshing.report.abandoned == 0) {
       for (const TopoDS_Shape& copy : copies) {
         remeshing.meshes.push_back(io::capture_triangulations(copy));
@@ -473,7 +558,9 @@ std::size_t giveRemeshed(const DisplayRemeshing& remeshing) {
     }
     // Not its copy's after all: meshed here, so that the view draws it.
     try {
-      io::mesh_in_place(occt, viewMeshOptions());
+      io::MeshOptions options = viewMeshOptions();
+      options.section = remeshing.bodies[i]->display_section();
+      io::mesh_in_place(occt, options);
     } catch (const Standard_Failure&) {
     } catch (const std::exception&) {
     }
@@ -971,7 +1058,12 @@ void RecomputeMeshing::run() {
     std::vector<Body> meshed;
     std::size_t failed = 0;
     try {
-      const std::size_t count = io::mesh_all_in_place(pending, m_options, progress->Start(), &report);
+      std::vector<double> sections;
+      sections.reserve(batch.size());
+      for (const Body& body : batch) {
+        sections.push_back(body.shape ? body.shape->display_section() : 0.0);
+      }
+      const std::size_t count = meshForView(pending, sections, m_options, m_options, progress->Start(), &report);
       if (count == pending.size() && report.abandoned == 0 && !m_stopping && !m_job.control().is_cancelled()) {
         for (std::size_t i = 0; i < batch.size(); ++i) {
           try {
@@ -1111,6 +1203,12 @@ void logDisplayMeshing(const DisplayMeshing& meshing, const QString& label) {
   }
   for (const QString& error : meshing.storeErrors) {
     qWarning().noquote() << QStringLiteral("Display meshes of %1: not stored: %2").arg(label, error);
+  }
+  if (meshing.fromStandIns > 0) {
+    qDebug().noquote() << QStringLiteral("Display meshes of %1: %2 bodies took their preview's meshes in %3 ms")
+                              .arg(label)
+                              .arg(static_cast<qulonglong>(meshing.fromStandIns))
+                              .arg(meshing.milliseconds);
   }
   if (meshing.bodies > 0) {
     qDebug().noquote() << QStringLiteral("Display meshes of %1: %2 bodies in %3 ms on the model's thread%4")
