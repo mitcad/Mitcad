@@ -1169,8 +1169,9 @@ class McpTest(unittest.TestCase):
             self.assertAlmostEqual(float(written["nozzle_temperature"][0]), 223)
             client.finish()
 
-    def test_print_export_without_a_profile_says_how_to_import_one(self):
-        """mitcad#1727: no printer profile, no material: PLA and a warning naming the step."""
+    def test_print_export_without_a_profile_is_geometry_only(self):
+        """mitcad#2008: nothing chosen is geometry-only delivery: no project
+        settings, no stand-in printer, process or PLA, so no profile warning."""
         with Session(self.workspace) as client:
             client.initialize()
             document = client.tool("document_create", {})["document"]
@@ -1178,16 +1179,12 @@ class McpTest(unittest.TestCase):
             exported = client.tool("model_export", {
                 "document": document, "path": "no-profile.3mf", "format": "3mf",
                 "dialect": "bambu_studio"})["result"]
-            warnings = exported["warnings"]
-            self.assertTrue(any("import_print_profile" in w for w in warnings), exported)
-            # What the application shows names no command.
-            shown = exported["warning_messages"]
-            self.assertEqual(len(shown), len(warnings), exported)
-            self.assertFalse(any("import_print_profile" in w for w in shown), exported)
+            self.assertEqual(exported["delivery"], "geometry", exported)
+            self.assertFalse(any("import_print_profile" in w for w in exported["warnings"]), exported)
             with zipfile.ZipFile(self.workspace / "no-profile.3mf") as package:
-                written = json.loads(package.read("Metadata/project_settings.config"))
-            self.assertEqual(written["filament_settings_id"], ["PLA Plastic"])
-            self.assertEqual(written["filament_type"], ["PLA"])
+                names = package.namelist()
+            self.assertNotIn("Metadata/project_settings.config", names)
+            self.assertIn("Metadata/model_settings.config", names)
             client.finish()
 
     def test_workspace_slicer_presets_keep_confined_inherited_values(self):

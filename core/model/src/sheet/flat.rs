@@ -541,8 +541,10 @@ pub(crate) fn evaluate<K: Kernel>(
 }
 
 impl<S> FlatPattern<S> {
-    pub fn json(&self) -> Value {
-        let (min, max) = super::folded::bounds(&SheetPatch {
+    /// The box of its outline in flat coordinates: lower left and upper
+    /// right corners (the Sheet Metal list's flat size, mitcad#1980).
+    pub fn bounds(&self) -> Option<([f64; 2], [f64; 2])> {
+        super::folded::bounds(&SheetPatch {
             domain: SheetDomainRef::Panel(self.def.stationary),
             regions: self.regions.clone(),
             embedding: SheetEmbedding::Plane {
@@ -550,7 +552,11 @@ impl<S> FlatPattern<S> {
                 front_to_back_sign: MaterialParity::Positive,
             },
         })
-        .unwrap_or(([f64::NAN; 2], [f64::NAN; 2]));
+        .ok()
+    }
+
+    pub fn json(&self) -> Value {
+        let (min, max) = self.bounds().unwrap_or(([f64::NAN; 2], [f64::NAN; 2]));
         json!({
             "body": self.body,
             "status": "valid",

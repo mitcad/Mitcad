@@ -59,6 +59,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use super::source;
 use crate::print_keys::{Dialect, PrintSet};
 
 /// Which platform's folders the slicers use.
@@ -721,6 +722,13 @@ pub struct ResolvedPreset {
     pub chain: Vec<String>,
     /// The base the chain names last but that was not found.
     pub missing: Option<String>,
+    /// The templates the chain includes (`include`, mitcad#2008) whose
+    /// values were filled in, in the order applied.
+    pub templates: Vec<String>,
+    /// The templates the chain names but that were not found: their
+    /// values are not in [`ResolvedPreset::map`], whose `include` names
+    /// them.
+    pub missing_templates: Vec<String>,
 }
 
 impl ResolvedPreset {
@@ -759,11 +767,16 @@ fn preset_name(own: &Map<String, Value>, path: &Path) -> String {
 /// values it inherits filled in: from the preset it names in `inherits`
 /// (the user's own of its account, else a system preset, one of the
 /// vendor folder the chain is in first), and so on up the chain, the
-/// nearer preset's value winning, for every key. The result is named as
-/// the preset and says its kind (`type` and the slicer's id key of its
-/// kind), and has no `inherits` when the whole chain was found; a base
-/// that is missing leaves `inherits` naming it, so that the import
-/// reports the values not read.
+/// nearer preset's value winning, for every key; each preset of the chain
+/// with the templates it includes (`include`, mitcad#2008: found by name
+/// as its bases are) under its own values, a later template's over an
+/// earlier one's. The result is named as the preset and says its kind
+/// (`type` and the slicer's id key of its kind), and has no `inherits`
+/// when the whole chain was found and no `include` when every template
+/// was; a base that is missing leaves `inherits` naming it, templates that
+/// are missing leave `include` naming them, so that the import reports
+/// the values not read. Templates that include each other in a loop, or
+/// nest deeper than the resolver follows, are an error.
 pub fn resolved_preset(folder: &Path, path: &Path) -> Result<Map<String, Value>, String> {
     resolve_preset(folder, path).map(|resolved| resolved.map)
 }
@@ -830,31 +843,26 @@ pub fn resolve_preset_from_files(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn resolve_in_files(
-    folder: &Path,
-    own: Map<String, Value>,
-    name: String,
-    set: Option<PrintSet>,
-    account: Option<&Path>,
-    mut vendor: Option<PathBuf>,
-    files: Option<&BTreeMap<PathBuf, Map<String, Value>>>,
-) -> Result<ResolvedPreset, String> {
-    let read = |path: &Path| match files {
-        Some(files) => files.get(path).cloned(),
-        None => read_preset_file(path),
-    };
-    let mut chain = vec![own];
-    let mut names = Vec::new();
-    let mut bases: Option<Bases> = None;
-    let mut missing = None;
-    while let Some(base) = chain.last().and_then(|m| text_of(m, "inherits")) {
-        if chain.len() > MAX_INHERITS {
-            return Err(format!(
-                "{name}: the presets it inherits from inherit in a loop"
-            ));
+/// The presets of a data folder by name, read from the folder or from a
+/// caller's snapshot of it ([`resolve_preset_from_files`]).
+struct Lookup<'a> {
+    folder: &'a Path,
+    account: Option<&'a Path>,
+    files: Option<&'a BTreeMap<PathBuf, Map<String, Value>>>,
+    bases: Option<Bases>,
+}
+
+impl Lookup<'_> {
+    fn read(&self, path: &Path) -> Option<Map<String, Value>> {
+        match self.files {
+            Some(files) => files.get(path).cloned(),
+            None => read_preset_file(path),
         }
-        let index = bases.get_or_insert_with(|| match files {
+    }
+
+    fn index(&mut self) -> &Bases {
+        let (folder, account, files) = (self.folder, self.account, self.files);
+        self.bases.get_or_insert_with(|| match files {
             None => Bases::of(folder, account),
             Some(files) => {
                 let in_tree = |path: &Path, root: &Path, depth: usize| {
@@ -875,16 +883,149 @@ fn resolve_in_files(
                         .collect(),
                 }
             }
-        });
-        let found = index.find(&base, vendor.as_deref()).map(Path::to_path_buf);
-        match found.as_deref().and_then(read) {
-            Some(map) => {
-                // A system preset's bases in its own vendor's folder first.
-                if let Some(dir) = found.as_deref().and_then(|p| vendor_dir(folder, p)) {
-                    vendor = Some(dir);
+        })
+    }
+
+    /// The preset named `name` (one in the folder `vendor` first): its
+    /// file and fields.
+    fn find(&mut self, name: &str, vendor: Option<&Path>) -> Option<(PathBuf, Map<String, Value>)> {
+        let path = self.index().find(name, vendor)?.to_path_buf();
+        let map = self.read(&path)?;
+        Some((path, map))
+    }
+
+    /// The vendor folder a found preset is in, else `vendor`.
+    fn vendor_of(&self, path: &Path, vendor: Option<&Path>) -> Option<PathBuf> {
+        vendor_dir(self.folder, path).or_else(|| vendor.map(Path::to_path_buf))
+    }
+}
+
+/// The deepest nesting of templates followed (a template that includes or
+/// inherits another, mitcad#2008).
+const MAX_TEMPLATES: usize = 8;
+
+/// What resolving a preset's templates found (mitcad#2008).
+#[derive(Default)]
+struct Templates {
+    /// The templates whose values were filled in, in the order applied.
+    found: Vec<String>,
+    /// Those named but not found.
+    missing: Vec<String>,
+}
+
+/// The values a preset's `include` templates give it (mitcad#2008): each
+/// template in the order the preset names them, a later one's values over
+/// an earlier one's, and each template with what it inherits and includes
+/// itself under its own values; the templates' own bookkeeping (their
+/// names, kinds, `instantiation`) left out. `stack` holds the presets and
+/// templates being resolved: a template among them is a loop, an error.
+fn include_layer(
+    lookup: &mut Lookup<'_>,
+    own: &Map<String, Value>,
+    vendor: Option<&Path>,
+    stack: &mut Vec<String>,
+    templates: &mut Templates,
+) -> Result<Map<String, Value>, String> {
+    let mut layer = Map::new();
+    for name in source::include_names(own.get("include")) {
+        let found = template_layer(lookup, &name, vendor, stack, templates)?;
+        if let Some(values) = found {
+            templates.found.push(name);
+            layer.extend(values);
+        } else if !templates.missing.contains(&name) {
+            templates.missing.push(name);
+        }
+    }
+    Ok(layer)
+}
+
+/// A template's values by its name (mitcad#2008): what it inherits, then
+/// what it includes, then its own, without its bookkeeping; None when no
+/// preset has the name.
+fn template_layer(
+    lookup: &mut Lookup<'_>,
+    name: &str,
+    vendor: Option<&Path>,
+    stack: &mut Vec<String>,
+    templates: &mut Templates,
+) -> Result<Option<Map<String, Value>>, String> {
+    let first = stack.first().cloned().unwrap_or_default();
+    if stack.iter().any(|s| s == name) {
+        return Err(format!(
+            "{first}: the templates it includes include or inherit {name} in a loop"
+        ));
+    }
+    if stack.len() > MAX_TEMPLATES {
+        return Err(format!(
+            "{first}: its templates nest more than {MAX_TEMPLATES} deep"
+        ));
+    }
+    let Some((path, template)) = lookup.find(name, vendor) else {
+        return Ok(None);
+    };
+    let vendor = lookup.vendor_of(&path, vendor);
+    stack.push(name.to_owned());
+    let mut layer = Map::new();
+    if let Some(base) = text_of(&template, "inherits") {
+        match template_layer(lookup, &base, vendor.as_deref(), stack, templates)? {
+            Some(values) => layer.extend(values),
+            None => {
+                if !templates.missing.contains(&base) {
+                    templates.missing.push(base);
                 }
+            }
+        }
+    }
+    layer.extend(include_layer(
+        lookup,
+        &template,
+        vendor.as_deref(),
+        stack,
+        templates,
+    )?);
+    stack.pop();
+    layer.extend(
+        template
+            .into_iter()
+            .filter(|(key, _)| !source::PRESET_METADATA.contains(&key.as_str())),
+    );
+    Ok(Some(layer))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_in_files(
+    folder: &Path,
+    own: Map<String, Value>,
+    name: String,
+    set: Option<PrintSet>,
+    account: Option<&Path>,
+    vendor: Option<PathBuf>,
+    files: Option<&BTreeMap<PathBuf, Map<String, Value>>>,
+) -> Result<ResolvedPreset, String> {
+    let mut lookup = Lookup {
+        folder,
+        account,
+        files,
+        bases: None,
+    };
+    // The chain, each preset with the vendor folder its bases are looked
+    // for in first.
+    let mut chain = vec![(own, vendor)];
+    let mut names = Vec::new();
+    let mut missing = None;
+    while let Some(base) = chain.last().and_then(|(m, _)| text_of(m, "inherits")) {
+        if chain.len() > MAX_INHERITS {
+            return Err(format!(
+                "{name}: the presets it inherits from inherit in a loop"
+            ));
+        }
+        let vendor = chain.last().and_then(|(_, v)| v.clone());
+        match lookup.find(&base, vendor.as_deref()) {
+            Some((path, map)) => {
+                // A system preset's bases in its own vendor's folder first.
+                let vendor = lookup.vendor_of(&path, vendor.as_deref());
                 names.push(base);
-                chain.push(map);
+                chain.push((map, vendor));
             }
             None => {
                 missing = Some(base);
@@ -892,13 +1033,29 @@ fn resolve_in_files(
             }
         }
     }
-    // The farthest first, each nearer one's values over it; but a nearer
-    // preset's empty `compatible_printers` names no printer, so that the
-    // printers of the preset it inherits from stay its own (mitcad#1216:
-    // the printers a process or filament is for).
+    // The farthest first, each nearer one's values over it, and each
+    // preset's included templates under its own values (mitcad#2008: the
+    // order the family's loader applies them: the base, the templates in
+    // order, the preset's own keys); but a nearer preset's empty
+    // `compatible_printers` names no printer, so that the printers of the
+    // preset it inherits from stay its own (mitcad#1216: the printers a
+    // process or filament is for).
+    let mut templates = Templates::default();
     let mut merged = Map::new();
-    for map in chain.into_iter().rev() {
+    for (map, vendor) in chain.into_iter().rev() {
+        let mut stack = vec![name.clone()];
+        let included = include_layer(
+            &mut lookup,
+            &map,
+            vendor.as_deref(),
+            &mut stack,
+            &mut templates,
+        )?;
+        merged.extend(included);
         for (key, value) in map {
+            if key == "include" {
+                continue;
+            }
             if key == "compatible_printers"
                 && compatible_of(Some(&value)).is_empty()
                 && !compatible_of(merged.get(&key)).is_empty()
@@ -917,6 +1074,12 @@ fn resolve_in_files(
             merged.remove("inherits");
         }
     }
+    // Templates not found stay named, so that the import reports the
+    // values not read (mitcad#2008).
+    merged.remove("include");
+    if !templates.missing.is_empty() {
+        merged.insert("include".to_owned(), json!(templates.missing));
+    }
     if let Some(set) = set {
         let (kind, id_key, id) = match set {
             PrintSet::Printer => ("machine", "printer_settings_id", json!(name)),
@@ -930,6 +1093,8 @@ fn resolve_in_files(
         map: merged,
         chain: names,
         missing,
+        templates: templates.found,
+        missing_templates: templates.missing,
     })
 }
 
@@ -955,13 +1120,20 @@ pub fn data_folder_of(path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether a preset's fields name a preset it inherits from (`inherits`)
+/// or templates it includes (`include`, mitcad#2008).
+pub fn builds_on_another(own: &Map<String, Value>) -> bool {
+    text_of(own, "inherits").is_some() || !source::include_names(own.get("include")).is_empty()
+}
+
 /// A preset file with what it inherits filled in (mitcad#1053): one in a
 /// slicer's data folder through that folder ([`resolve_preset`]), another
 /// (a preset exported or copied elsewhere) through the system presets of
 /// the data folders `folders` (the installed slicers'), those of
-/// `dialect` first, the first that has the preset's base. None when the
-/// file inherits nothing, or no folder has its base: then it is read as
-/// it is and the import reports the values it inherits as not read.
+/// `dialect` first, the first that has the preset's base (or one of its
+/// templates). None when the file inherits and includes nothing, or no
+/// folder has its base or templates: then it is read as it is and the
+/// import reports the values it inherits as not read.
 pub fn resolve_preset_file(
     path: &Path,
     folders: &[SlicerFolder],
@@ -969,7 +1141,7 @@ pub fn resolve_preset_file(
 ) -> Result<Option<ResolvedPreset>, String> {
     let shown = path.display();
     let own = read_preset_file(path).ok_or_else(|| format!("{shown} is no preset file"))?;
-    if text_of(&own, "inherits").is_none() {
+    if !builds_on_another(&own) {
         return Ok(None);
     }
     if let Some(folder) = data_folder_of(path) {
@@ -980,7 +1152,7 @@ pub fn resolve_preset_file(
     let others = folders.iter().filter(|f| Some(f.dialect) != dialect);
     for slicer in mine.chain(others) {
         let resolved = resolve_in(&slicer.folder, own.clone(), name.clone(), None, None, None)?;
-        if !resolved.chain.is_empty() {
+        if !resolved.chain.is_empty() || !resolved.templates.is_empty() {
             return Ok(Some(resolved));
         }
     }
@@ -1035,6 +1207,142 @@ mod tests {
         files.remove(&folder.join("system/vendor/machine/base.json"));
         let missing = resolve_preset_from_files(folder, &path, &files).unwrap();
         assert_eq!(missing.missing.as_deref(), Some("Base"));
+    }
+
+    /// mitcad#2008: a printer that includes templates (as a two-extruder
+    /// printer of the family names its machine G-code) gets their values
+    /// over those of the presets it inherits from, its own over theirs, a
+    /// later template's over an earlier one's; a template's own templates
+    /// and base under its values; the templates' bookkeeping never. A
+    /// template not found stays named in `include`, a loop is an error.
+    #[test]
+    fn included_templates_are_resolved_between_the_base_and_the_preset() {
+        let folder = Path::new("synthetic-slicer");
+        let vendor = folder.join("system/Acme/machine");
+        let path = vendor.join("Acme Duo 0.4 nozzle.json");
+        let object = |value: Value| value.as_object().unwrap().clone();
+        let mut files = BTreeMap::new();
+        files.insert(
+            vendor.join("common.json"),
+            object(json!({"name": "acme_common", "instantiation": "false",
+                          "machine_start_gcode": "G28 ; generic start",
+                          "machine_end_gcode": "M84 ; generic end",
+                          "layer_change_gcode": "; generic layer",
+                          "nozzle_diameter": ["0.4"]})),
+        );
+        files.insert(
+            vendor.join("start.json"),
+            object(
+                json!({"name": "Acme Duo template start", "instantiation": "false",
+                          "include": ["Acme Duo template header"],
+                          "machine_start_gcode": ";===== machine: Duo\nG28"}),
+            ),
+        );
+        files.insert(
+            vendor.join("header.json"),
+            object(
+                json!({"name": "Acme Duo template header", "instantiation": "false",
+                          "machine_start_gcode": "; header only",
+                          "time_lapse_gcode": "; duo timelapse"}),
+            ),
+        );
+        files.insert(
+            vendor.join("end.json"),
+            object(
+                json!({"name": "Acme Duo template end", "instantiation": "false",
+                          "type": "machine", "setting_id": "T1",
+                          "machine_end_gcode": ";===== duo end",
+                          "layer_change_gcode": "; template layer"}),
+            ),
+        );
+        files.insert(
+            path.clone(),
+            object(json!({"type": "machine", "name": "Acme Duo 0.4 nozzle",
+                          "inherits": "acme_common", "setting_id": "M1",
+                          "include": ["Acme Duo template start", "Acme Duo template end"],
+                          "nozzle_diameter": ["0.4", "0.4"],
+                          "layer_change_gcode": "; own layer"})),
+        );
+        let resolved = resolve_preset_from_files(folder, &path, &files).unwrap();
+        let map = &resolved.map;
+        // The template's own over the one it includes, over the base.
+        assert_eq!(map["machine_start_gcode"], ";===== machine: Duo\nG28");
+        assert_eq!(map["time_lapse_gcode"], "; duo timelapse");
+        assert_eq!(map["machine_end_gcode"], ";===== duo end");
+        // The preset's own over its templates'.
+        assert_eq!(map["layer_change_gcode"], "; own layer");
+        assert_eq!(map["nozzle_diameter"], json!(["0.4", "0.4"]));
+        // The preset's bookkeeping, not the templates'.
+        assert_eq!(map["setting_id"], "M1");
+        assert_eq!(map["name"], "Acme Duo 0.4 nozzle");
+        assert_eq!(map["type"], "machine");
+        assert!(!map.contains_key("include") && !map.contains_key("inherits"));
+        assert_eq!(resolved.chain, vec!["acme_common"]);
+        assert_eq!(
+            resolved.templates,
+            vec![
+                "Acme Duo template header",
+                "Acme Duo template start",
+                "Acme Duo template end"
+            ]
+        );
+        assert!(resolved.missing_templates.is_empty());
+
+        // A template not found: reported, its values not made up.
+        files.remove(&vendor.join("end.json"));
+        let resolved = resolve_preset_from_files(folder, &path, &files).unwrap();
+        assert_eq!(resolved.missing_templates, vec!["Acme Duo template end"]);
+        assert_eq!(resolved.map["include"], json!(["Acme Duo template end"]));
+        assert_eq!(resolved.map["machine_end_gcode"], "M84 ; generic end");
+        assert_eq!(
+            resolved.map["machine_start_gcode"],
+            ";===== machine: Duo\nG28"
+        );
+
+        // Templates that include each other: an error, not a hang.
+        files.insert(
+            vendor.join("header.json"),
+            object(json!({"name": "Acme Duo template header",
+                          "include": "Acme Duo template start"})),
+        );
+        let error = resolve_preset_from_files(folder, &path, &files).unwrap_err();
+        assert!(error.contains("loop"), "{error}");
+        // A template that includes itself, too.
+        files.insert(
+            vendor.join("header.json"),
+            object(json!({"name": "Acme Duo template header",
+                          "include": ["Acme Duo template header"]})),
+        );
+        assert!(resolve_preset_from_files(folder, &path, &files).is_err());
+
+        // A chain of templates deeper than followed: an error.
+        let mut deep = files.clone();
+        for i in 0..=MAX_TEMPLATES + 1 {
+            deep.insert(
+                vendor.join(format!("deep{i}.json")),
+                object(json!({"name": format!("deep {i}"),
+                              "include": [format!("deep {}", i + 1)]})),
+            );
+        }
+        deep.insert(
+            path.clone(),
+            object(json!({"type": "machine", "name": "Acme Duo 0.4 nozzle",
+                          "include": ["deep 0"]})),
+        );
+        let error = resolve_preset_from_files(folder, &path, &deep).unwrap_err();
+        assert!(error.contains("deep"), "{error}");
+    }
+
+    /// mitcad#2008: a preset that includes templates but inherits nothing
+    /// is resolved too.
+    #[test]
+    fn a_preset_of_templates_only_builds_on_another() {
+        let own = json!({"name": "T", "include": ["a"]});
+        assert!(builds_on_another(own.as_object().unwrap()));
+        let own = json!({"name": "T", "include": "a;b"});
+        assert!(builds_on_another(own.as_object().unwrap()));
+        let own = json!({"name": "T", "include": []});
+        assert!(!builds_on_another(own.as_object().unwrap()));
     }
 
     #[test]

@@ -1,0 +1,148 @@
+{
+  "format": "solidcraft/57",
+  "name": "Format 57 holes threads revolve",
+  "units": "mm",
+  "params": [
+    {"name": "cx", "expr": "60 mm", "unit": "mm"}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Base", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [40.0, 0.0], "fixed": true},
+          {"id": "p3", "pos": [40.0, 20.0], "fixed": true},
+          {"id": "p4", "pos": [0.0, 20.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 2, "name": "Slab", "type": "extrude", "body_names": ["Slab"],
+      "param_names": ["d1", "d2"],
+      "sketch": 1, "profiles": {"type": "all"},
+      "extent": {"distance": "-2 mm", "distance2": "6 mm", "direction": "positive"},
+      "operation": "new_body"
+    },
+    {
+      "id": 3, "name": "Pin1", "type": "cylinder",
+      "param_names": ["d3", "d4"],
+      "base": [30, 5, -2], "axis": [0, 0, 1], "radius": "3", "height": "10",
+      "operation": "join"
+    },
+    {
+      "id": 4, "name": "Pin2", "type": "cylinder",
+      "param_names": ["d5", "d6"],
+      "base": [30, 15, -2], "axis": [0, 0, 1], "radius": "3", "height": "10",
+      "operation": "join"
+    },
+    {
+      "id": 5, "name": "Tapped", "type": "hole",
+      "param_names": ["d7"],
+      "position": [10.0, 10.0, -2.0], "direction": [0.0, 0.0, -1.0],
+      "diameter": "4.2 mm", "hole": {"type": "simple"},
+      "thread": "M5", "thread_class": "6H"
+    },
+    {
+      "id": 6, "name": "Counterbored", "type": "hole",
+      "param_names": ["d8", "d9", "d10"],
+      "position": [20.0, 10.0, -2.0], "direction": [0.0, 0.0, -1.0],
+      "diameter": "3 mm",
+      "hole": {"type": "counterbore", "cb_diameter": "6 mm", "cb_depth": "1 mm"}
+    },
+    {
+      "id": 7, "name": "Pin threads", "type": "thread",
+      "face": [33.0, 5.0, 3.0], "additional_faces": [[33.0, 15.0, 3.0]],
+      "target_bodies": ["Slab", "Slab"],
+      "designation": "M6", "continuous_flanks": true
+    },
+    {
+      "id": 8, "name": "Ring profile", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [50.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [54.0, 0.0], "fixed": true},
+          {"id": "p3", "pos": [54.0, 10.0], "fixed": true},
+          {"id": "p4", "pos": [50.0, 10.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 9, "name": "Ring", "type": "revolve", "body_names": ["Ring"],
+      "param_names": ["d11"],
+      "sketch": 8, "profiles": {"type": "all"},
+      "axis": {"type": "line", "origin": ["cx", 0, 0], "dir": [0, 1, 0]},
+      "angle": "360 deg",
+      "operation": "new_body"
+    },
+    {
+      "id": 10, "name": "Axis", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [80.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [80.0, 10.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 11, "name": "Collar profile", "type": "sketch",
+      "plane": {"type": "origin", "name": "XY"},
+      "sketch": {
+        "points": [
+          {"id": "origin", "pos": [0.0, 0.0], "fixed": true},
+          {"id": "p1", "pos": [84.0, 0.0], "fixed": true},
+          {"id": "p2", "pos": [86.0, 0.0], "fixed": true},
+          {"id": "p3", "pos": [86.0, 10.0], "fixed": true},
+          {"id": "p4", "pos": [84.0, 10.0], "fixed": true}
+        ],
+        "curves": [
+          {"id": "l1", "type": "line", "a": 1, "b": 2},
+          {"id": "l2", "type": "line", "a": 2, "b": 3},
+          {"id": "l3", "type": "line", "a": 3, "b": 4},
+          {"id": "l4", "type": "line", "a": 4, "b": 1}
+        ],
+        "constraints": []
+      }
+    },
+    {
+      "id": 12, "name": "Collar", "type": "revolve", "body_names": ["Collar"],
+      "param_names": ["d12"],
+      "sketch": 11, "profiles": {"type": "all"},
+      "axis": {"type": "sketch_line", "curve": "l1", "sketch": 10},
+      "angle": "360 deg",
+      "operation": "new_body"
+    },
+    {
+      "id": 13, "name": "Cube", "type": "box", "body_names": ["Cube"],
+      "param_names": ["d13", "d14", "d15"],
+      "corner": [100, 0, 0], "length": "10", "width": "10", "height": "10",
+      "centred": true,
+      "operation": "new_body"
+    }
+  ],
+  "next_id": 14
+}

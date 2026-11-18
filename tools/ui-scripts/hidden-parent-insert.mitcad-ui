@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: MIT
+# Inserting into a component under a hidden parent (mitcad#1995, GitHub
+# mitcad/Mitcad#430), the shared input script of
+# tools/ui-hidden-parent-insert-test.sh (Linux),
+# tools/ui-windows-hidden-parent-insert-test.ps1 (Windows) and
+# tools/ui-macos-hidden-parent-insert-test.sh (macOS), on the design
+# tools/ui-scripts/hidden-parent-insert.json makes: Fairlead:1 (O1) in the
+# root with Body1, and Post:1 (O2), empty, in Fairlead. The runners put the
+# absolute path of the design to insert (hidden-parent-insert-part.json's)
+# in place of @PART@ in a copy of this script.
+#   1. Fairlead:1 hidden by its light bulb: Post:1's and Body1's rows,
+#      their light bulbs on, have the dimmed closed eye ("hidden with").
+#   2. Post:1 active, a design inserted into it (Insert Component's model
+#      command): Fairlead:1 is shown in the same undo step, and the status
+#      bar says so in words; undo hides it again with the insert.
+#   3. New Component in Post:1: Fairlead:1 shown and said so again, one
+#      undo step.
+#   4. A click on Post:1's dimmed eye shows Fairlead:1, Post:1's light
+#      bulb as it was.
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+expect-ever '^Browser eye Root/Fairlead:1 at ' 30
+expect-ever '^Browser radio Root/Fairlead:1/Post:1 at ' 30
+
+# --- 1. Fairlead:1 hidden: the rows in it are hidden with it.
+mark
+click-logged '^Browser eye Root/Fairlead:1 at '
+wait-log '^Visibility Root/Fairlead:1: hidden$' 20
+wait-log '^Browser eye Root/Fairlead:1/Post:1: hidden with Fairlead:1$' 20
+wait-log '^Browser eye Root/Fairlead:1/Bodies/Body1: hidden with Fairlead:1$' 20
+expect-no-log '^Browser eye Root/Fairlead:1: hidden with '
+wait-idle
+
+# --- 2. Post:1 active, a design inserted into it.
+mark
+click-logged '^Browser radio Root/Fairlead:1/Post:1 at '
+wait-log '^Activated Post$' 20
+wait-idle
+capture-undo-depth baseline
+mark
+model-command '{"cmd":"insert_component","path":"@PART@","link":false,"name":"Bracket"}'
+wait-log '^Hidden parents shown: Fairlead:1 [(]by insert_component[)]$' 30
+wait-log 'Fairlead:1 was hidden; shown so the new component can be seen[.]' 20
+wait-log '^Browser eye Root/Fairlead:1/Post:1: not hidden with a parent$' 20
+wait-idle
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-log '^Browser eye Root/Fairlead:1/Post:1: hidden with Fairlead:1$' 20
+wait-idle
+expect-undo-depth ${baseline} 0
+
+# --- 3. New Component in Post:1.
+mark
+command solid.new_component
+wait-log '^Command New Component started' 20
+wait-idle
+button '^OK$'
+wait-log '^Hidden parents shown: Fairlead:1 [(]by create_component[)]$' 30
+wait-log '^Done New Component' 30
+wait-log 'Fairlead:1 was hidden; shown so the new component can be seen[.]' 20
+wait-idle
+expect-undo-depth ${baseline} 1
+mark
+key ctrl+z
+wait-log '^Undo: ' 20
+wait-log '^Browser eye Root/Fairlead:1/Post:1: hidden with Fairlead:1$' 20
+wait-idle
+
+# --- 4. Post:1's dimmed eye shows Fairlead:1.
+expect-ever '^Browser eye Root/Fairlead:1/Post:1 at ' 30
+mark
+click-logged '^Browser eye Root/Fairlead:1/Post:1 at '
+wait-log '^Visibility Root/Fairlead:1/Post:1: shown with its parents [(]O1[)]$' 20
+wait-log '^Browser eye Root/Fairlead:1/Post:1: not hidden with a parent$' 20
+expect-no-log '^Visibility Root/Fairlead:1/Post:1: hidden'
+wait-idle
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

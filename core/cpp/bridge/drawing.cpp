@@ -38,6 +38,7 @@ DrawingProjection project_view(const ShapeList& shapes, const DrawingView& view)
   }
   spec.deflection = view.deflection;
   spec.quick_deviation = view.quick_deviation;
+  spec.quick_chord_angle = view.quick_chord_angle;
   const geometry::DrawnView drawn = geometry::project_view(shapes.items(), spec);
   DrawingProjection out;
   out.polygonal = drawn.polygonal;

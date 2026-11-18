@@ -39,7 +39,10 @@
 //!   faces; it ran 300 s without returning in a fillet's retry,
 //!   mitcad#1337) and a body built from its boundary (the IFC import's
 //!   breps, healed by OCCT's ShapeFix, which has no range; its repair of
-//!   intersecting wires once never returned, mitcad#495).
+//!   intersecting wires once never returned, mitcad#495);
+//! - drawings' views: OCCT's hidden-line removal (`HLRBRep_Algo`,
+//!   `HLRBRep_PolyAlgo`) has no range, and a large view's ran for over a
+//!   minute (mitcad#1997).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

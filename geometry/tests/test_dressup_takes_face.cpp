@@ -31,6 +31,12 @@
 // The same wall's top, a strip 2 wide closed off at its end by a face at 45
 // degrees, rounded along the outer wall with 3: the strip goes, the ball
 // rolling on the inner wall's edge, cut by the slope (mitcad#1926).
+// Blocks rounded on all their edges by half their side, where the corners
+// at both ends of an edge meet, are the block's core swept by the ball: the
+// cube of 10 at 5 the ball, the block of 20 the capsule, the cube at 4.9998
+// the exact rounded cube; the stepped block rounded so on its sides' and
+// steps' edges a bent half cylinder with quarter balls at its ends, and with
+// the step's inner edge too refused in words (GitHub #403, mitcad#1954).
 
 #include <algorithm>
 #include <cmath>
@@ -861,27 +867,102 @@ double common_volume(const Shape& shape, const TopoDS_Shape& tool) {
   return volume_of(BRepAlgoAPI_Common(BRepBuilderAPI_Copy(shape.occt()).Shape(), tool).Shape());
 }
 
-// A cube of 10 rounded on all its edges by `radius` at (or within 2e-4 of)
-// half its side (GitHub #353's third design at 5 mm): the corners' balls at
-// both ends of each edge meet in its middle, every face taken away; the
-// geometry kernel's fillet never returned there and a cancel did not reach
-// it. Refused before the kernel (corners_meet), it is built 0.1 % smaller,
-// with the warning that says so, at once: the volume of the cube rounded
-// by 0.999 `radius`, 1000 - 12 (10 - 2r) r^2 (1 - pi/4) - 8 r^3 (1 - pi/6).
-void test_cube_rounded_at_half_its_side(double radius) {
-  const ShapePtr cube = extrude("F1", {rectangle(1, 0, 0, 10, 10)}, 0, 10);
+// Every face of the shape has a name.
+bool every_face_named(const Shape& shape) {
+  for (int f = 0; f < shape.face_count(); ++f) {
+    if (shape.face_names(f).empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A block of 10 x 10 x `height` rounded on all its edges by `radius` at (or
+// within 2e-4 of) half its side (GitHub #353's third design at 5 mm, a cube):
+// the corners' balls at both ends of each edge of 10 meet in its middle;
+// the geometry kernel's fillet never returned there and a cancel did not
+// reach it. Never given to the kernel (corners_meet), it is built exactly
+// as the block's core swept by the ball (mitcad#1954): at 5 the cube is the
+// ball of 5 and the block of 20 the capsule (a cylinder of 5 and 10 long
+// with half balls on its ends); at 4.9998 the cube rounded by 4.9998, its
+// faces squares of 4e-4: valid, every face named, no note or information,
+// the volume the core's box (a = 10 - 2r square, c = h - 2r long) swept
+// by the ball, a^2 c + (2 a^2 + 4 a c) r + (2 a + c) pi r^2 + 4/3 pi r^3.
+void test_block_rounded_at_half_its_side(double radius, double height) {
+  const ShapePtr block = extrude("F1", {rectangle(1, 0, 0, 10, 10)}, 0, height);
   FilletSet round;
-  for (int e = 0; e < cube->edge_count(); ++e) {
-    round.edges.push_back(cube->edge_name(e));
+  for (int e = 0; e < block->edge_count(); ++e) {
+    round.edges.push_back(block->edge_name(e));
   }
   CHECK(round.edges.size() == 12);
   round.radius = radius;
-  const ShapePtr rounded = fillet("F2", *cube, {round});
+  const ShapePtr rounded = fillet("F2", *block, {round});
   CHECK(valid(*rounded));
-  CHECK(!rounded->notes().empty());
-  const double r = radius * (1.0 - 1.0e-3);
-  const double expected = 1000.0 - 12 * (10 - 2 * r) * fillet_loss(r) - 8 * r * r * r * (1 - kPi / 6);
+  CHECK(rounded->notes().empty() && rounded->infos().empty());
+  CHECK(every_face_named(*rounded));
+  const double r = radius;
+  const double a = 10.0 - 2.0 * r;
+  const double c = height - 2.0 * r;
+  const double expected =
+      a * a * c + (2.0 * a * a + 4.0 * a * c) * r + (2.0 * a + c) * kPi * r * r + 4.0 / 3.0 * kPi * r * r * r;
   CHECK_NEAR_TOL(volume_of(*rounded), expected, 1e-6);
+  if (radius == 5.0) {
+    // The ball or the capsule: no plane left.
+    for (int f = 0; f < rounded->face_count(); ++f) {
+      CHECK(BRepAdaptor_Surface(rounded->face(f)).GetType() != GeomAbs_Plane);
+    }
+  }
+}
+
+// GitHub #403's fourth design, the stepped block (x 0..10; the lower half
+// y 0..5 z 0..5, the upper y 5..10 z 0..10) rounded by 5 on every edge of
+// its two sides but their bottom and back edges, the front's top edge and
+// the step's top edge (mitcad#1954): the corners at both ends of the
+// front's top edge and the step's top edge meet in their middles. Built as
+// the block's core swept by the ball: the core is the bent line along the
+// bottom from below the front's top edge to the back and up the back to
+// the step's height (the sides moved in by 5 meet in the middle, x = 5;
+// the corner of the core inside the step mitred, as the kernel's roundings
+// meet there below 5), cut by the bottom and the back: a quarter ball at
+// each end, half a cylinder along each leg, their common part once,
+// 250 pi / 3 + 125 pi - 500 / 3 = (625 pi - 500) / 3. Valid, every face
+// named, no face under 0.01 mm2, no note. With the inner edge between the
+// lower top and the step's wall rounded too (the fifth design), the core's
+// corner would be a rounding of its own: refused in words, before any
+// smaller retry, the largest radius that leaves some of the edges to round
+// said; at 2.4 that design builds.
+void test_stepped_block_rounded_where_corners_meet() {
+  const std::vector<gp_Pnt> middles{gp_Pnt(0, 0, 2.5),  gp_Pnt(0, 2.5, 5),  gp_Pnt(0, 5, 7.5),  gp_Pnt(0, 7.5, 10),
+                                    gp_Pnt(10, 0, 2.5), gp_Pnt(10, 2.5, 5), gp_Pnt(10, 5, 7.5), gp_Pnt(10, 7.5, 10),
+                                    gp_Pnt(5, 0, 5),    gp_Pnt(5, 5, 10)};
+  const ShapePtr body = stepped_block();
+  FilletSet round;
+  for (const gp_Pnt& m : middles) {
+    round.edges.push_back(edge_at(*body, m));
+    CHECK(!round.edges.back().empty());
+  }
+  round.radius = 5;
+  const ShapePtr rounded = fillet("F3", *body, {round});
+  CHECK(valid(*rounded));
+  CHECK(narrowest_face(*rounded) > 0.01);
+  CHECK(rounded->notes().empty() && rounded->infos().empty());
+  CHECK(every_face_named(*rounded));
+  CHECK_NEAR_TOL(volume_of(*rounded), (625.0 * kPi - 500.0) / 3.0, 1e-6);
+  FilletSet inner = round;
+  inner.edges.push_back(edge_at(*body, gp_Pnt(5, 5, 5)));
+  CHECK(!inner.edges.back().empty());
+  bool refused = false;
+  try {
+    fillet("F3", *body, {inner});
+  } catch (const std::invalid_argument& error) {
+    const std::string said = error.what();
+    refused = said.find("inner corner") != std::string::npos && said.find("4.999 mm or less") != std::string::npos;
+  }
+  CHECK(refused);
+  inner.radius = 2.4;
+  const ShapePtr smaller = fillet("F3", *body, {inner});
+  CHECK(valid(*smaller));
+  CHECK(smaller->notes().empty());
 }
 
 // GitHub #375: the stepped block rounded by 5 on both sides (as GitHub
@@ -1189,10 +1270,12 @@ void dressup_takes_face_tests() {
   guarded("strip with many faces beside it stays", test_strip_with_many_faces_beside_it_stays);
   guarded("stepped block rounded to the far edges", test_stepped_block_rounded_to_the_far_edges);
   guarded("bore rim chamfered against a shelf", [] { test_bore_rim_chamfered_against_a_shelf(); });
-  guarded("cube rounded at half its side", [] {
-    test_cube_rounded_at_half_its_side(5);
-    test_cube_rounded_at_half_its_side(4.9998);
+  guarded("block rounded at half its side", [] {
+    test_block_rounded_at_half_its_side(5, 10);
+    test_block_rounded_at_half_its_side(4.9998, 10);
+    test_block_rounded_at_half_its_side(5, 20);
   });
+  guarded("stepped block rounded where corners meet", test_stepped_block_rounded_where_corners_meet);
   guarded("stepped block rounded then its back edge dressed", test_stepped_block_rounded_then_its_back_edge_dressed);
   guarded("bore rim rounded against a shelf", [] {
     test_bore_rim_rounded_against_a_shelf(1);

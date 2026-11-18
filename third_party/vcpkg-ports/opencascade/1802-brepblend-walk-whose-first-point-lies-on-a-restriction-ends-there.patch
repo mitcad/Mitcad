@@ -1,0 +1,81 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a walk whose first point lies on a restriction within the guide's
+tolerance ends there on the restriction, as from any later point
+(mitcad#2018).
+
+The bent guide of 1801 with its bend radius between 23.5 and 24.5: the
+rounding of the outer sloped edge of the rib nearest each end starts its
+walk 0.0024 from the spine's end, where the reframed first section's
+contact on the rib's sloped side lies on that side's edge with the tube
+(the side's lower edge, within 6e-5). The walk back towards the spine's
+end left the face at its first step; BRepBlend_Walking::InternalPerform
+takes any first step that leaves a face for a step too large and halves
+it, down to the guide's tolerance, and then ends the walk at the first
+point with no point on the restriction. ChFi3d's ComputeData took that for
+a walk that drags (the first point 0.0024 from the spine's end, more than
+ten times the guide's tolerance, on no restriction) and the rounding failed
+("the walk between the two faces fails"). At 23 and 25 a halved step
+happened to land inside the face, and the next step found the restriction.
+
+- BRepBlend_Walking::InternalPerform: a first step that leaves a face is
+  halved as before, except the last one the guide's tolerance allows (a
+  step under twice that tolerance) where it leaves one face, the other's
+  point inside its face: that step goes on to the reframing on the
+  restriction, as a step from any later point does, and where that gives a
+  point on the one restriction past the first point, the walk ends there.
+  Otherwise (the reframing fails or gives the first point itself, as for a
+  walk starting where an earlier one ended on that restriction) the step is
+  halved as before. Taken at the first point itself, the walk looped
+  without end in OCCT's case blend/encoderegularity/A1; taken where both
+  points left their faces or the reframing failed, the corners of
+  geometry.suite.fillet_corners (a vault's end rounded into the face it
+  runs into) and geometry.fillet_still_ball_corners failed or hung.
+- No catch is added.
+
+Test: geometry.fillet_corner_walk_over_vertex (the case's second body) and
+cli.fcstd_bend_reported (the bend radius set to 24).
+
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index edd8f305..094125f3 100644
+--- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
++++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+@@ -2306,7 +2306,19 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+         }
+       }
+     }
+-    if (bonpoint && line->NbPoints() == 1 && (situ1 != TopAbs_IN || situ2 != TopAbs_IN))
++    // (Unless the step is the last one the guide's tolerance allows and it
++    // leaves one face, the other's point inside: the first point then lies
++    // on that face's restriction within the tolerance, and the walk ends
++    // there on the restriction, as from any later point, where that
++    // restriction's point lies past the first point. Before, it ended at
++    // the first point with no point on the restriction, as though it had
++    // dragged.)
++    const bool aFirstOut =
++      bonpoint && line->NbPoints() == 1 && (situ1 != TopAbs_IN || situ2 != TopAbs_IN);
++    const bool aLastFirstStep = aFirstOut && std::abs(stepw) < 2. * tolgui
++                                && ((situ1 == TopAbs_OUT && situ2 == TopAbs_IN)
++                                    || (situ1 == TopAbs_IN && situ2 == TopAbs_OUT));
++    if (aFirstOut && !aLastFirstStep)
+     {
+       State    = Blend_StepTooLarge;
+       bonpoint = false;
+@@ -2646,6 +2658,16 @@ void BRepBlend_Walking::InternalPerform(Blend_Function& Func,
+       Drawsect(surf1, surf2, sol, param, Func, State);
+     }
+ #endif
++    // (Only a point on a restriction past the first point ends the walk so;
++    // otherwise, a failed reframing or the restriction's point at the first
++    // point itself (the walk starting where an earlier one ended on that
++    // restriction), the step is halved as before.)
++    if (aLastFirstStep
++        && !((State == Blend_OnRst1 || State == Blend_OnRst2)
++             && std::abs(param - parprec) > Precision::PConfusion()))
++    {
++      State = Blend_StepTooLarge;
++    }
+     switch (State)
+     {
+       case Blend_OK: {

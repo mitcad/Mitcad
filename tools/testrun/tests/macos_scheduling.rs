@@ -427,6 +427,13 @@ set_tests_properties(app.ui-macos-desktop PROPERTIES RESOURCE_LOCK macos_desktop
                 "0",
                 "--sensitive",
                 "app.ui-*",
+                // These synthetic barrier commands do no GUI work. Keep
+                // the sensitive concurrency cap under test, but admit the
+                // desktop participant at the same CPU load as the others;
+                // the real desktop default otherwise makes this depend on
+                // unrelated load while the headless participants wait.
+                "--sensitive-load",
+                "1",
                 "--sensitive-max",
                 "1",
                 "--ui-max",

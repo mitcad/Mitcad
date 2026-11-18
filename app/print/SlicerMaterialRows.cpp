@@ -167,4 +167,20 @@ QString filamentRowTooltip(const FilamentGroup& group) {
   return QObject::tr("%1: %2").arg(filamentRowText(group, 1), names);
 }
 
+QString bodyRowText(const FilamentGroup& group) {
+  if (!group.chosen) {
+    return QObject::tr("None (slicer's own)");
+  }
+  return group.variant.isEmpty() ? group.name : QObject::tr("%1 for %2").arg(group.name, group.variant);
+}
+
+QString bodyRowTooltip(const FilamentGroup& group) {
+  const QString names = group.bodyNames.join(QStringLiteral(", "));
+  if (!group.chosen) {
+    return QObject::tr("%1 goes to the slicer without a material: the slicer prints it with its own filament.")
+        .arg(names);
+  }
+  return QObject::tr("%1: %2").arg(bodyRowText(group), names);
+}
+
 } // namespace mitcad

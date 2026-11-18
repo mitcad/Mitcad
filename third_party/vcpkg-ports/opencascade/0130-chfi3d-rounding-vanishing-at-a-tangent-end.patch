@@ -19,15 +19,23 @@ micrometres whose wire intersects itself).
   curves are
   B-splines ending there (a walked blend), the end of the contact curves
   (in 3d and on the faces) is moved to the vertex (their end poles), their
-  tolerance raised to cover the blend surface's own end, and both common
+  tolerance raised by the distance their end moved, and both common
   points of the end become the vertex, on the arcs that hold it at its
-  parameter. The stripe's end is then degenerate, and the corner is the
+  parameter. (The raise, derived (mitcad#1986; it was 1.01 times the
+  larger end's distance): moving a B-spline's end pole by d moves each of
+  its points by d times that pole's basis function there, at most d, so a
+  curve that kept to the blend surface's boundary within its tolerance
+  keeps to it within that tolerance plus d, the whole of it at its end.) The stripe's end is then degenerate, and the corner is the
   singular one (PerformSingularCorner): the blend ends in a point at the
   vertex, with a degenerated edge, as where the walk reaches it exactly.
 - ChFi3d_BSplineEndingAt: the non-periodic B-spline a curve is or trims,
   and the index of its pole at a given end.
+
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_corners.cpp (an
+arch whose radius misses the walls by a micrometre).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 91b41b1..11134cb 100644
+index 91b41b19..2a17ab2c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -23,6 +23,9 @@
@@ -50,7 +58,7 @@ index 91b41b1..11134cb 100644
  
  #ifdef OCCT_DEBUG
    #include <OSD_Chronometer.hxx>
-@@ -1534,6 +1540,167 @@ void ChFi3d_Builder::PerformSingularCorner(const int Index)
+@@ -1534,6 +1540,171 @@ void ChFi3d_Builder::PerformSingularCorner(const int Index)
    }
  }
  
@@ -190,8 +198,12 @@ index 91b41b1..11134cb 100644
 +    const TopoDS_Face&       aFace = TopoDS::Face(DStr.Shape(Fd->Index(k + 1)));
 +    aC3d[k]->SetPole(aPole3d[k], PV);
 +    aC2d[k]->SetPole(aPole2d[k], BRep_Tool::Parameters(Vtx, aFace));
++    // Moving a B-spline's end pole by d moves each point of it by d times
++    // the pole's basis function there, d at most: the curve keeps to the
++    // blend surface's boundary within its tolerance before and d.
++    const double        aMoved = (k == 0 ? CV1 : CV2).Point().Distance(PV);
 +    TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(aFi.LineIndex());
-+    aCurve.Tolerance(std::max(aCurve.Tolerance(), 1.01 * aTol));
++    aCurve.Tolerance(aCurve.Tolerance() + aMoved);
 +  }
 +  for (ChFiDS_CommonPoint* aCV : {&CV1, &CV2})
 +  {
@@ -218,7 +230,7 @@ index 91b41b1..11134cb 100644
  //=================================================================================================
  
  void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
-@@ -1558,6 +1725,14 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -1558,6 +1729,14 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
      int num                       = ChFi3d_IndexOfSurfData(Vtx, stripe, sens);
      isfirst                       = (sens == 1);
      Fd                            = stripe->SetOfSurfData()->Sequence().Value(num);

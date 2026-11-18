@@ -850,13 +850,24 @@ const QHash<QString, QString> kPlaceIcons = {{QStringLiteral("auto"), QStringLit
                                              {QStringLiteral("side"), QStringLiteral("build-place-side")},
                                              {QStringLiteral("end"), QStringLiteral("build-place-end")},
                                              {QStringLiteral("plane"), QStringLiteral("build-place-plane")}};
-// A ground placement's axis (at.direction): X, Y or Z of the host.
-const Choices kAxes = {{QStringLiteral("x"), QStringLiteral("Along X")},
+// A ground placement's axis (at.direction): +X, +Y, +Z, -X, -Y or -Z of
+// the host, or a picked face's outward normal (mitcad#2000: no
+// at.direction; offered while a face is picked, and chosen by the pick).
+const QString kFaceNormal = QStringLiteral("normal");
+const Choices kAxes = {{kFaceNormal, QStringLiteral("Face normal: out of the picked face")},
+                       {QStringLiteral("x"), QStringLiteral("Along X")},
                        {QStringLiteral("y"), QStringLiteral("Along Y")},
-                       {QStringLiteral("z"), QStringLiteral("Along Z (standing)")}};
-const QHash<QString, QString> kAxisIcons = {{QStringLiteral("x"), QStringLiteral("build-axis-x")},
+                       {QStringLiteral("z"), QStringLiteral("Along Z (standing)")},
+                       {QStringLiteral("-x"), QStringLiteral("Along -X")},
+                       {QStringLiteral("-y"), QStringLiteral("Along -Y")},
+                       {QStringLiteral("-z"), QStringLiteral("Along -Z (hanging)")}};
+const QHash<QString, QString> kAxisIcons = {{kFaceNormal, QStringLiteral("build-axis-normal")},
+                                            {QStringLiteral("x"), QStringLiteral("build-axis-x")},
                                             {QStringLiteral("y"), QStringLiteral("build-axis-y")},
-                                            {QStringLiteral("z"), QStringLiteral("build-axis-z")}};
+                                            {QStringLiteral("z"), QStringLiteral("build-axis-z")},
+                                            {QStringLiteral("-x"), QStringLiteral("build-axis-minus-x")},
+                                            {QStringLiteral("-y"), QStringLiteral("build-axis-minus-y")},
+                                            {QStringLiteral("-z"), QStringLiteral("build-axis-minus-z")}};
 // An end placement's axis (at.direction, mitcad#417): Auto (the click's
 // zone of the end face decides), Straight, or one of the four turns square
 // to the part it meets (`end.turns` of the preview, "turn0".."turn3").
@@ -957,6 +968,20 @@ Against against(const Shared& shared, const QString& role, const CommandState& s
     return Against::End;
   }
   return isEndFace(items.first()) ? Against::End : Against::Side;
+}
+
+// A face picked for a ground placement (mitcad#2000): Direction offers
+// Face normal, and Rotate turns the part on it.
+bool groundFace(const Shared& shared, const QString& role, const CommandState& state) {
+  const Selection& items = state.items(kAt);
+  return !items.isEmpty() && items.first().kind == SelectKind::Face &&
+         against(shared, role, state) == Against::Ground;
+}
+
+// A planar face there: the part goes to its centre of area, its sides
+// along its longest straight edge (the model's, without at.point).
+bool snapsToFaceCentre(const Shared& shared, const QString& role, const CommandState& state) {
+  return groundFace(shared, role, state) && state.items(kAt).first().geometry == QStringLiteral("plane");
 }
 
 // The first part on a chosen plane (mitcad#1196; Profile and Linear
@@ -1343,8 +1368,22 @@ Placement placement(const Shared& shared, const QString& role, const CommandStat
   }
   if (result.how == Against::Ground) {
     // On the picked plane, face or point, else (Enter) at the origin,
-    // along X, Y or Z; a timber member flat or on edge (mitcad#485).
-    at->insert(QStringLiteral("direction"), axisVector(state.choice(QStringLiteral("axis"))));
+    // along +X, +Y, +Z, -X, -Y or -Z, or a face's outward normal (no
+    // direction, mitcad#2000); a timber member flat or on edge
+    // (mitcad#485).
+    const QString axis = state.choice(QStringLiteral("axis"));
+    if (axis != kFaceNormal) {
+      at->insert(QStringLiteral("direction"), axisVector(axis));
+    }
+    // A planar face: at its centre of area, its sides along its longest
+    // straight edge; Rotate turns it on the face (mitcad#2000).
+    if (snapsToFaceCentre(shared, role, state)) {
+      at->remove(QStringLiteral("point"));
+    }
+    const QString turn = state.choice(QStringLiteral("rotate"));
+    if (groundFace(shared, role, state) && !turn.isEmpty() && turn != QStringLiteral("0")) {
+      fields.insert(QStringLiteral("rotate"), angleValue(turn));
+    }
     if (role == QStringLiteral("timber")) {
       const QString lie = state.choice(QStringLiteral("lie"));
       fields.insert(QStringLiteral("lie"), lie.isEmpty() ? QStringLiteral("flat") : lie);
@@ -1508,6 +1547,19 @@ QString snapText(const QString& kind) {
     return QObject::tr("flush");
   }
   return kind;
+}
+
+// How a part stands across a side with several slots (mitcad#2002): the
+// preview's side.across, "middle" or "slot"; empty on a side with one slot.
+QString acrossText(const QJsonObject& side) {
+  const QString across = str(side, "across");
+  if (across == QStringLiteral("middle")) {
+    return QObject::tr("centered on the side");
+  }
+  if (across == QStringLiteral("slot")) {
+    return QObject::tr("on a slot");
+  }
+  return {};
 }
 
 // How many line-ups with other profiles a side's preview marks, the
@@ -1828,10 +1880,22 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     const QString from = fromText(shown.from);
     lines << (kind.isEmpty() ? QObject::tr("%1 mm from %2").arg(shown.offset, 0, 'f', 1).arg(from)
                              : QObject::tr("%1 mm from %2 (%3)").arg(shown.offset, 0, 'f', 1).arg(from, snapText(side)));
+    // Across a side with several slots (mitcad#2002), apart from the snap
+    // along it: centered between the slots, or on the slot nearest the
+    // click.
+    const QString across = acrossText(side);
+    if (!across.isEmpty()) {
+      lines << (str(side, "across") == QStringLiteral("middle")
+                    ? QObject::tr("Across: centered on the side (click near a slot to place on it)")
+                    : QObject::tr("Across: on a slot (click near the side's center line to center it)"));
+    }
     sideLog = QStringLiteral("; snap %1 at %2 mm from %3")
                   .arg(kind.isEmpty() ? QStringLiteral("none") : kind)
                   .arg(shown.offset, 0, 'f', 1)
                   .arg(shown.from);
+    if (!across.isEmpty()) {
+      sideLog += QStringLiteral("; across %1").arg(str(side, "across"));
+    }
     // A tilt (mitcad#444): its handle at the foot.
     const double tilt = answer.value(QStringLiteral("tilt")).toDouble(0.0) * 180.0 / kPi;
     if (std::abs(tilt) > 1e-9) {
@@ -1912,6 +1976,16 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
     if (placed.fields.contains(QStringLiteral("lie"))) {
       result.log += QStringLiteral(", %1").arg(str(placed.fields, "lie"));
     }
+    // Where it runs from end A and its frame's x (mitcad#2000: on a face
+    // along its normal, its sides along the face's longest edge), to a
+    // thousandth, no negative zero.
+    if (frame.valid) {
+      const auto unitText = [](const gp_Dir& d) {
+        const auto one = [](double v) { return QString::number(std::round(v * 1000.0) / 1000.0 + 0.0, 'f', 3); };
+        return QStringLiteral("%1, %2, %3").arg(one(d.X()), one(d.Y()), one(d.Z()));
+      };
+      result.log += QStringLiteral("; runs %1; x %2").arg(unitText(frame.z), unitText(frame.x));
+    }
   }
   // How a member lies (mitcad#485): the design's axis its thickness (the
   // section's smaller side) runs along.
@@ -1985,8 +2059,19 @@ Inspection inspectPlacement(const SharedPtr& shared, const QString& role, const 
       markers.append(marker(snapText(lineUps[i].second), *point));
     }
   }
-  if (standsAt && !str(side, "kind").isEmpty()) {
-    markers.append(marker(QStringLiteral("> %1").arg(snapText(side)), *standsAt));
+  // The snap taken along the side and, on a side with several slots, how
+  // the part stands across it (mitcad#2002).
+  if (standsAt) {
+    QStringList taken;
+    if (!str(side, "kind").isEmpty()) {
+      taken << snapText(side);
+    }
+    if (const QString across = acrossText(side); !across.isEmpty()) {
+      taken << across;
+    }
+    if (!taken.isEmpty()) {
+      markers.append(marker(QStringLiteral("> %1").arg(taken.join(QStringLiteral(", "))), *standsAt));
+    }
   }
   if (!end.isEmpty() && !state.items(kAt).isEmpty() && isEndFace(state.items(kAt).first())) {
     addEndMarkers(markers, end, state.items(kAt).first(), context);
@@ -2141,6 +2226,20 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
             } else {
               state.setObject(kOnPlane, {});
             }
+            // A face for a ground placement runs along its outward normal
+            // by default (mitcad#2000); another pick takes Z for it. Timber
+            // keeps its own Direction (lying, as remembered, mitcad#485).
+            if (role != QStringLiteral("timber") && against(*shared, role, state) == Against::Ground) {
+              if (item.kind == SelectKind::Face) {
+                state.setChoice(QStringLiteral("axis"), kFaceNormal);
+                qInfo().noquote() << QStringLiteral("BUILD face picked: Direction Face normal%1")
+                                         .arg(snapsToFaceCentre(*shared, role, state)
+                                                  ? QStringLiteral(", at the face's center along its longest edge")
+                                                  : QString());
+              } else if (state.choice(QStringLiteral("axis")) == kFaceNormal) {
+                state.setChoice(QStringLiteral("axis"), QStringLiteral("z"));
+              }
+            }
             fillFromClick(*shared, role, profile, state, context);
           },
                       true)
@@ -2215,6 +2314,10 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
       choiceInput(QStringLiteral("axis"), QObject::tr("Direction"), kAxes, QStringLiteral("z"))
           .withChoiceIcons(kAxisIcons)
           .withVisible(ground)
+          // Face normal while a face is picked (mitcad#2000).
+          .withChoiceOffered([shared, role](const CommandState& state, const QString& axis) {
+            return axis != kFaceNormal || groundFace(*shared, role, state);
+          })
           .withTooltip(QObject::tr("The axis the component runs along from where it goes")),
       // On an end (mitcad#417): the click's zone of the end face decides
       // (its inner half straight on, the band along an edge turned towards
@@ -2269,8 +2372,11 @@ QVector<InputDef> placementInputs(const SharedPtr& shared, const QString& role, 
                     })
                     .withTooltip(QObject::tr("What the offset is measured from; the component stays bound to it when "
                                              "what it is on changes length")));
+  // On a part, and on a face picked for a ground placement (mitcad#2000).
   inputs.append(choiceInput(QStringLiteral("rotate"), QObject::tr("Rotate"), kRotations, QStringLiteral("0"))
-                    .withVisible(onPart)
+                    .withVisible([onPart, shared, role](const CommandState& state) {
+                      return onPart(state) || groundFace(*shared, role, state);
+                    })
                     .withTooltip(QObject::tr("About the component's axis, in 90 degree steps")));
   if (profile) {
     // On a side (mitcad#444): a brace leaning along the part it stands on,
@@ -5148,7 +5254,8 @@ CommandDef timberCommand(const SharedPtr& shared, DocumentHost& host) {
         !state.text(QStringLiteral("length")).trimmed().isEmpty()) {
       shared->timber.length = state.text(QStringLiteral("length")).trimmed();
     }
-    if (!state.choice(QStringLiteral("axis")).isEmpty()) {
+    // A face's normal is the pick's, not a direction to keep (mitcad#2000).
+    if (!state.choice(QStringLiteral("axis")).isEmpty() && state.choice(QStringLiteral("axis")) != kFaceNormal) {
       shared->timber.axis = state.choice(QStringLiteral("axis"));
     }
     if (!state.choice(kLie).isEmpty()) {

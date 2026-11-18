@@ -51,6 +51,15 @@ each rounding on the other's edge; the concave one found no start.
 - ChFi3d_CutBetween and ChFi3d_WidenedFace: 0772's cut of a blend by a
   face between two points and 0820's face widened around a face, shared.
 
+The condition (mitcad#1986) is the lens's, not the case's: a face of two
+edges, one concave and one convex, both rounded with constant radii wider
+than the face, the concave stripe failing (DeferLensRoundings); it holds
+for any such crescent (a key's arc on a shaft, a boss's cylinder running
+into a bore, two cylinders of other radii), whatever the faces beside it.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_lens_overflow.cpp
+(the key on a shaft).
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index 8d2944b..757619f 100644

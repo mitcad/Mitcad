@@ -25,11 +25,17 @@ mod meta;
 // What BUILD reads of a placed part; the parts list and the properties
 // use it (mitcad#777).
 pub(crate) mod part_info;
+// The middle of a profile's side between its slots (mitcad#2002).
+mod side_middle;
 pub(crate) mod sources;
 
 pub(crate) use geometry::*;
 pub use library_material::{library_material, library_material_density, library_material_name};
 pub use meta::*;
+pub use side_middle::{
+    frame_or_side_middle, frame_side, same_lane, side_middle_frame, side_middle_name,
+    side_middle_side, side_middles, slot_frame_side,
+};
 pub use sources::{LibrarySourceDef, LibrarySources, SourceDesign};
 
 use std::fmt;

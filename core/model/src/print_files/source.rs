@@ -234,9 +234,17 @@ pub(crate) fn layer_keys(dialect: Dialect, set: PrintSet) -> BTreeSet<&'static s
     keys
 }
 
-/// Keys that describe a slicer's file or preset, not a setting: neither
-/// read nor kept.
-pub(crate) const BOOKKEEPING: &[&str] = &[
+/// Keys of a slicer's preset file that describe the preset, not a
+/// setting (mitcad#2008): its name and kind, its version and where it
+/// comes from, the vendor's and the user's ids of the preset, the presets
+/// and templates it builds on (`inherits`, `include`: the import fills
+/// their values in, [`super::installed`]) and its description. The Bambu
+/// family's loader reads each as one text of the preset's own (an array
+/// where it wants text stops its load of a project: "type must be string,
+/// but is array"), and a project holds none of them: neither read nor
+/// kept, and never written into a project. A preset's `filament_id` is
+/// one too, but a project carries it in its own form ([`PROJECT_FORM`]).
+pub(crate) const PRESET_METADATA: &[&str] = &[
     "name",
     "version",
     "from",
@@ -246,11 +254,69 @@ pub(crate) const BOOKKEEPING: &[&str] = &[
     "base_id",
     "user_id",
     "updated_time",
+    "is_custom_defined",
+    "url",
+    "description",
+    "renamed_from",
+    "inherits",
+    "include",
+];
+
+/// Keys a project keeps about the presets it names: the export writes
+/// them from the design's presets, never from a kept text.
+pub(crate) const PROJECT_METADATA: &[&str] = &[
     "inherits_group",
     "inherits_cummulative",
     "different_settings_to_system",
-    "is_custom_defined",
 ];
+
+/// Preset metadata that a Bambu-family project carries in a form of its
+/// own (mitcad#2008), as (the preset's key, the project's key): a filament
+/// preset's `filament_id` (its one filament's id, a text) is the project's
+/// `filament_ids` (a list, an entry per filament). The import keeps it
+/// under the project's key, and the export writes a kept preset key (a
+/// design imported before) as the project's.
+pub(crate) const PROJECT_FORM: &[(&str, &str)] = &[("filament_id", "filament_ids")];
+
+/// Whether a key is bookkeeping of a preset or a project, not a setting:
+/// [`PRESET_METADATA`] or [`PROJECT_METADATA`].
+pub(crate) fn is_bookkeeping(key: &str) -> bool {
+    PRESET_METADATA.contains(&key) || PROJECT_METADATA.contains(&key)
+}
+
+/// A key as a Bambu-family project names it ([`PROJECT_FORM`]).
+pub(crate) fn project_key(key: &str) -> &str {
+    PROJECT_FORM
+        .iter()
+        .find(|(preset, _)| *preset == key)
+        .map_or(key, |(_, project)| project)
+}
+
+/// Keys of a filament preset that say which printers and processes it is
+/// for: the preset's applicability (a material's variants by printer,
+/// mitcad#1054), not a setting of its filament slot. A project's own are
+/// its process's, never one per filament, so a material's are not written.
+pub(crate) const PRESET_APPLICABILITY: &[&str] = &[
+    "compatible_printers",
+    "compatible_printers_condition",
+    "compatible_prints",
+    "compatible_prints_condition",
+];
+
+/// The templates a Bambu-family preset includes (`include`, mitcad#2008):
+/// a list of their names, or a text of names separated by `;`.
+pub(crate) fn include_names(value: Option<&Value>) -> Vec<String> {
+    let names: Vec<String> = match value {
+        Some(Value::Array(items)) => items.iter().filter_map(json_text).collect(),
+        Some(Value::String(text)) => text.split(';').map(str::to_owned).collect(),
+        _ => Vec::new(),
+    };
+    names
+        .into_iter()
+        .map(|n| n.trim().trim_matches('"').trim().to_owned())
+        .filter(|n| !n.is_empty())
+        .collect()
+}
 
 /// The layer a key the map does not have most likely belongs to, by its
 /// name: filament keys and printer keys by their words, the rest the

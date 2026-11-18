@@ -42,9 +42,13 @@ wire had a gap of 1e-4 there.
 On the reported design's stored body before the item, the rounding takes
 14.152982 mm3 against the file's 14.152911 (5e-6 relative; before
 14.147664 and not valid), its new faces on the file's within 1e-6 mm.
+The vertices' candidates are kept in NCollection_List (OCCT's containers,
+mitcad#1986).
 
+Test: geometry/tests/test_fillet_rim_down_to_foot.cpp
+(geometry.fillet_rim_down_to_foot).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 07ba8dfd..5ede4c90 100644
+index 714fb8d9..e8f18c89 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -26,6 +26,7 @@
@@ -55,16 +59,7 @@ index 07ba8dfd..5ede4c90 100644
  #include <BRepLib.hxx>
  #include <BRepTools.hxx>
  #include <BRepTopAdaptor_HVertex.hxx>
-@@ -92,6 +93,8 @@
- #include <TopOpeBRepDS_InterferenceIterator.hxx>
- #include <TopOpeBRepDS_SolidSurfaceInterference.hxx>
- 
-+#include <vector>
-+
- #ifdef OCCT_DEBUG
- extern bool   ChFi3d_GetcontextFORCEBLEND();
- extern bool   ChFi3d_GettraceDRAWINT();
-@@ -3534,6 +3537,165 @@ static TopoDS_Vertex chainVertexOnContact(const occ::handle<Geom_Curve>&   C,
+@@ -3557,6 +3558,166 @@ static TopoDS_Vertex chainVertexOnContact(const occ::handle<Geom_Curve>&   C,
    return aBest;
  }
  
@@ -138,8 +133,8 @@ index 07ba8dfd..5ede4c90 100644
 +    double        t;
 +    int           side;
 +  };
-+  std::vector<Cand> aCands;
-+  std::vector<double> anInner; // (every vertex of F inside the contact on C)
++  NCollection_List<Cand>   aCands;
++  NCollection_List<double> anInner; // (every vertex of F inside the contact on C)
 +  for (int iv = 1; iv <= aVE.Extent(); iv++)
 +  {
 +    const TopoDS_Vertex& V = TopoDS::Vertex(aVE.FindKey(iv));
@@ -152,7 +147,7 @@ index 07ba8dfd..5ede4c90 100644
 +    {
 +      continue;
 +    }
-+    anInner.push_back(t);
++    anInner.Append(t);
 +    NCollection_List<TopoDS_Shape> anEdges;
 +    bool                           onSpine = false;
 +    for (NCollection_List<TopoDS_Shape>::Iterator it(aVE(iv)); it.More() && !onSpine; it.Next())
@@ -195,7 +190,8 @@ index 07ba8dfd..5ede4c90 100644
 +    {
 +      continue;
 +    }
-+    aCands.push_back({V, t, to > t ? 1 : -1});
++    const Cand aCand = {V, t, to > t ? 1 : -1};
++    aCands.Append(aCand);
 +  }
 +  TopoDS_Vertex aBest;
 +  double        aBestDist = RealLast();
@@ -230,7 +226,7 @@ index 07ba8dfd..5ede4c90 100644
  void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
                                     const occ::handle<ChFiDS_Stripe>& CorDat,
                                     const ChFiDS_Map&                 EFMap,
-@@ -3586,6 +3748,25 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
+@@ -3609,6 +3770,25 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
            }
          }
        }

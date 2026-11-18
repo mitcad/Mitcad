@@ -1,6 +1,7 @@
 [
-  {"comment": "SPDX-License-Identifier: MIT. GitHub #353's third design (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake) at the reporter's 5 mm: the cube of 10 rounded on all its edges by half its side, the corners' balls at both ends of each edge meeting in its middle. The geometry kernel's fillet never returned there (and a cancel did not reach it). The meeting corners are refused before the kernel, and the 0.1 % smaller retry builds it at once with its warning: the cube rounded by 4.995."},
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #353's third design (mitcad#1819; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake) at the reporter's 5 mm: the cube of 10 rounded on all its edges by half its side, the corners' balls at both ends of each edge meeting in its middle. The geometry kernel's fillet never returned there (and a cancel did not reach it). The meeting corners are never given to the kernel: the fillet is built exactly as the cube's core (its middle point) swept by the ball (mitcad#1954), the ball of 5, one face, no warning or information."},
   {"cmd": "set_parameter", "name": "d4", "value": 5},
-  {"expect": {"feature": "Fillet1", "status": "warning", "error_contains": "0.1 % smaller"}},
-  {"expect": {"body": "Body1", "volume": 524.3840320}}
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 523.5987756, "faces": 1}}
 ]

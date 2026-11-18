@@ -39,6 +39,7 @@
 #include <HLRBRep_PolyAlgo.hxx>
 #include <HLRBRep_PolyHLRToShape.hxx>
 #include <NCollection_IndexedMap.hxx>
+#include <OSD_Parallel.hxx>
 #include <Precision.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
@@ -57,6 +58,7 @@
 #include <gp_Vec.hxx>
 
 #include "mitcad/analysis/section.hpp"
+#include "mitcad/geometry/trimmed_box.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -106,6 +108,31 @@ const TraceMode& trace_mode() {
 }
 
 using Clock = std::chrono::steady_clock;
+
+// Runs job(k) for each k below `count` on OCCT's threads (mitcad#1997: a
+// view of hundreds of parts boxed or meshed one part after another took
+// seconds on one core); once all have run, the first failure in the order
+// of k is thrown as it was, so that a projection falls back as it did
+// when its parts were taken in turn. Each job works on parts of its own.
+template <class Job> void for_each_part(std::size_t count, const Job& job) {
+  std::vector<std::exception_ptr> errors(count);
+  OSD_Parallel::For(
+      0, static_cast<int>(count),
+      [&](int i) {
+        const auto k = static_cast<std::size_t>(i);
+        try {
+          job(k);
+        } catch (...) {
+          errors[k] = std::current_exception();
+        }
+      },
+      count < 2);
+  for (const std::exception_ptr& error : errors) {
+    if (error) {
+      std::rethrow_exception(error);
+    }
+  }
+}
 
 std::string milliseconds(Clock::duration time) {
   char text[32];
@@ -772,6 +799,7 @@ constexpr double kFitted = 1.5;
 // lines and squared corners in an enlarged view of it); at least the
 // view's deflection.
 double quick_deflection(const std::vector<TopoDS_Shape>& parts, const DrawingViewSpec& spec) {
+  // A loose box, for speed: only its size's order matters here.
   Bnd_Box box;
   for (const TopoDS_Shape& part : parts) {
     BRepBndLib::Add(part, box);
@@ -782,6 +810,21 @@ double quick_deflection(const std::vector<TopoDS_Shape>& parts, const DrawingVie
     deviation = std::min(deviation, spec.quick_deviation / kFitted);
   }
   return std::max(spec.deflection, deviation);
+}
+
+// The angle the polygonal algorithm's triangulation may turn through
+// between two chords of a curve, and between two triangles across a
+// curved face: the view's (DrawingViewSpec::quick_chord_angle, coarser on
+// a view reduced on its sheet, mitcad#2014), at most a twelfth of a turn
+// so that a round edge stays an arc to the fitting (a whole circle five
+// points at least, a quarter of one three chords), at least the full size
+// one.
+double quick_chord_angle(const DrawingViewSpec& spec) {
+  const double angle = spec.quick_chord_angle;
+  if (!std::isfinite(angle) || angle <= 0.0) {
+    return 0.2;
+  }
+  return std::min(std::max(angle, 0.2), kPi / 6.0);
 }
 
 // Whether the exact algorithm is slow on the parts, so that a view takes
@@ -841,13 +884,15 @@ struct ViewBox {
   }
 };
 
-// `tight`: the box of the shape's surfaces themselves, not of their
-// tolerances (or B-splines' poles), so that shapes that only touch do not
-// overlap; else a quicker box around them.
+// `tight`: the box of the shape's trimmed faces themselves, not of their
+// tolerances (or B-splines' poles) or their surfaces beyond their
+// boundaries (mitcad#2020), so that shapes that only touch do not overlap;
+// else a quicker, looser box around them, for speed where a box that holds
+// the shape is enough.
 ViewBox view_box(const TopoDS_Shape& part, const ViewFrame& frame, bool tight) {
   Bnd_Box box;
   if (tight) {
-    BRepBndLib::AddOptimal(part, box, false, false);
+    box = trimmed_box(part);
   } else {
     BRepBndLib::Add(part, box, false);
   }
@@ -891,11 +936,10 @@ std::vector<bool> exact_parts(const std::vector<TopoDS_Shape>& parts, const std:
   if (queue.empty() || queue.size() == n) {
     return std::vector<bool>(n, false);
   }
-  std::vector<ViewBox> boxes;
-  boxes.reserve(n);
-  for (std::size_t i = 0; i < n; ++i) {
-    boxes.push_back(view_box(parts[i], frame, exact[i]));
-  }
+  // Each part's box on its own thread: the tight ones take OCCT's search
+  // for each curved face's extremes (mitcad#1997: 10 s for 884 parts).
+  std::vector<ViewBox> boxes(n);
+  for_each_part(n, [&](std::size_t i) { boxes[i] = view_box(parts[i], frame, exact[i]); });
   while (!queue.empty()) {
     const std::size_t q = queue.back();
     queue.pop_back();
@@ -1049,23 +1093,30 @@ void project_polygonal(const std::vector<TopoDS_Shape>& parts, const std::vector
                        const HLRAlgo_Projector& projector, const DrawingViewSpec& spec, DrawnView& view,
                        ViewTrace& trace) {
   const double deflection = quick_deflection(parts, spec);
+  const double angle = quick_chord_angle(spec);
   if (trace.on()) {
-    char text[48];
-    std::snprintf(text, sizeof text, "deflection=%.4g", deflection);
+    char text[64];
+    std::snprintf(text, sizeof text, "deflection=%.4g angle=%.3g", deflection, angle);
     trace.note(text);
   }
   occ::handle<HLRBRep_PolyAlgo> algo = new HLRBRep_PolyAlgo();
   // The copies as loaded: each shape's lines are asked for by its copy.
-  std::vector<TopoDS_Shape> loaded;
-  for (const TopoDS_Shape& part : parts) {
+  // Each part is copied and meshed on its own thread (mitcad#1997: one
+  // part after another, a view of 884 parts meshed for 8 s); the copies
+  // share no geometry, and each is meshed as it was alone.
+  std::vector<TopoDS_Shape> loaded(parts.size());
+  for_each_part(parts.size(), [&](std::size_t i) {
+    const TopoDS_Shape& part = parts[i];
     const bool mesh = detail::has_mesh_faces(part);
     TopoDS_Shape copy = BRepBuilderAPI_Copy(part, true, mesh).Shape();
     if (!mesh) {
       encode_regularity(copy);
-      BRepMesh_IncrementalMesh mesher(copy, deflection, false, 0.2, true);
+      BRepMesh_IncrementalMesh mesher(copy, deflection, false, angle, true);
     }
+    loaded[i] = copy;
+  });
+  for (const TopoDS_Shape& copy : loaded) {
     algo->Load(copy);
-    loaded.push_back(copy);
   }
   trace.mark("mesh");
   algo->Projector(projector);

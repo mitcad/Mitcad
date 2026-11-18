@@ -562,7 +562,11 @@ profile the same way:
   Their names are `slot_<side>_<n>`. `side` is the outward direction
   (`x+`, `x-`, `y+`, `y-`). `n` counts the slots of that side from the
   side's lower coordinate. A square profile has 1. The long sides of a
-  30x60 have 1 and 2. A closed side has no frame.
+  30x60 have 1 and 2. A closed side has no frame. MitCad works out the
+  middle of a side with two or more slots from these frames itself
+  (`side_x+`, midway between the side's first and last slot,
+  mitcad#2002): a profile placed on it stands centred across the side.
+  A library does not list it.
 - `end_a` points along −Z at the origin. `end_b` points along +Z at
   z = L. Both have x along +X.
 - `core` is the central bore's axis at z = 0. It points out of end A, as

@@ -335,6 +335,17 @@ vcpkg_from_github(
         1725-chfi3d-tangent-ride-between-two-crossings-of-a-closed-rider.patch
         1726-chfi3d-under-anothers-ball-only-where-its-own-ball-is-found.patch
         1727-chfi3d-ride-onto-the-corner-at-the-other-stripes-other-end.patch
+        1728-chfi3d-ride-on-the-other-stripe-at-an-end-where-the-face-between-narrows-to-nothing.patch
+        1729-chfi3d-end-inside-the-stretch-another-blend-takes-away-fails.patch
+        1730-chfi3d-kpart-contact-end-at-a-vertex-only-within-its-own-tolerance.patch
+        1760-blendfunc-constrad-ball-beyond-its-support-walked-in-the-guides-normal-plane.patch
+        1770-chfi3d-start-of-a-rounding-along-a-knife-edge.patch
+        1780-chfi3d-convex-and-concave-roundings-crossing-before-ends-joined-by-a-sharp-edge.patch
+        1781-chfi3d-corners-of-three-stripes-before-corners-of-two.patch
+        1790-chfi3d-corner-where-a-knife-edge-runs-on-along-its-line-refused.patch
+        1800-chfi3d-analytic-line-round-the-period-outside-a-blends-domain-passed-over.patch
+        1801-chfi3d-corner-set-back-past-a-short-sharp-edge-walks-over-its-vertex.patch
+        1802-brepblend-walk-whose-first-point-lies-on-a-restriction-ends-there.patch
 )
 
 if (VCPKG_LIBRARY_LINKAGE STREQUAL "dynamic")

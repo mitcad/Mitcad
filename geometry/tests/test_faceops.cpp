@@ -6,12 +6,18 @@
 #include <cmath>
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_NurbsConvert.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepGProp.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <GProp_GProps.hxx>
 #include <GeomConvert.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
@@ -23,6 +29,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/face_extrude.hpp"
+#include "mitcad/geometry/user_error.hpp"
 
 namespace test {
 namespace {
@@ -313,6 +320,349 @@ void test_offset_split_faces() {
   const ShapePtr both = offset_faces("F8", *split, {piece, top + "#1"}, -1);
   CHECK_NEAR(volume(*both), kBlock - 60.0 * 40.0);
   CHECK(faces_named(*both, step) == 0);
+}
+
+// The name of the face of the shape on which the point lies (the first of
+// its names), empty when there is none.
+std::string face_at(const Shape& shape, const gp_Pnt& point) {
+  const TopoDS_Vertex vertex = BRepBuilderAPI_MakeVertex(point).Vertex();
+  for (int i = 0; i < shape.face_count(); ++i) {
+    BRepExtrema_DistShapeShape distance(vertex, shape.face(i));
+    if (distance.IsDone() && distance.Value() < 1.0e-6 && !shape.face_names(i).empty()) {
+      return shape.face_names(i).front();
+    }
+  }
+  return {};
+}
+
+// The faces named as steps after the moved face: <feature>:step(<face>),
+// or with #k when it has several.
+int steps_of(const Shape& shape, const std::string& face) {
+  const std::string step = "F9:step(" + face + ")";
+  int count = 0;
+  for (int i = 0; i < shape.face_count(); ++i) {
+    for (const std::string& name : shape.face_names(i)) {
+      if (name == step || name.rfind(step + "#", 0) == 0) {
+        ++count;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+// Two pieces of split faces that meet at a corner of the body, offset
+// together (mitcad#1947): each piece moves along its own normal, the
+// pieces' new positions are extended or trimmed to each other at the
+// corner, and their other sides step down to the pieces that stay. By
+// `t` in, the body loses t·(A1 + A2) less what the two slabs share at the
+// corner, t²·L·tan(θ/2) (θ the angle between the pieces' normals, L the
+// corner's length); by `t` out it gains t·(A1 + A2) and the corner's
+// wedge, t²·L·tan(θ/2). At a concave corner tan(θ/2) is negative.
+void check_corner(const Shape& body, const std::string& a, const std::string& b, double area,
+                  double corner) {
+  const double before = volume(body);
+  for (const double t : {1.0, 4.5}) {
+    for (const double sign : {-1.0, 1.0}) {
+      const ShapePtr moved = offset_faces("F9", body, {a, b}, sign * t);
+      CHECK_NEAR(volume(*moved), before + sign * t * area + t * t * corner);
+      CHECK(faces_named(*moved, a) == 1);
+      CHECK(faces_named(*moved, b) == 1);
+      // Each step is named after the moved face whose seam is nearest; steps
+      // in one plane are one face.
+      CHECK(steps_of(*moved, a) + steps_of(*moved, b) >= 1);
+      CHECK(edge_names_unique(*moved));
+    }
+  }
+}
+
+void test_offset_split_corners() {
+  // A convex corner at 90 degrees: the top and the side x = 0 split at
+  // y = 20, the pieces at y < 20 (60 x 20 and 20 x 20) moved.
+  const std::string top = end_cap("F2", 1);
+  const std::string left = side("F2", 1, 3);
+  const Tool at_y20 = Tool::of_plane(gp_Pln(gp_Pnt(0, 20, 0), gp_Dir(0, 1, 0)));
+  const ShapePtr convex = split_faces("F7", *block(), {top, left}, at_y20);
+  const std::string top_piece = face_at(*convex, gp_Pnt(30, 10, 20));
+  const std::string left_piece = face_at(*convex, gp_Pnt(0, 10, 10));
+  CHECK(top_piece.rfind(top + "#", 0) == 0 && left_piece.rfind(left + "#", 0) == 0);
+  check_corner(*convex, top_piece, left_piece, 1200.0 + 400.0, 20.0);
+
+  // A concave corner: a 30 mm wide, 10 mm deep rebate along the block's
+  // end; its floor and wall split at y = 20, the pieces at y < 20 (30 x 20
+  // and 20 x 10) moved. The slabs miss the corner's square going in and
+  // share it going out.
+  const ShapePtr cutter = extrude("F4", {rectangle(5, 30, -1, 40, 42)}, 10, 30);
+  const ShapePtr rebate = boolean(BooleanOp::Cut, {block().get()}, *cutter).pieces.at(0).shape;
+  const std::string floor = face_at(*rebate, gp_Pnt(45, 20, 10));
+  const std::string wall = face_at(*rebate, gp_Pnt(30, 20, 15));
+  CHECK(!floor.empty() && !wall.empty());
+  const ShapePtr concave = split_faces("F7", *rebate, {floor, wall}, at_y20);
+  check_corner(*concave, face_at(*concave, gp_Pnt(45, 10, 10)), face_at(*concave, gp_Pnt(30, 10, 15)),
+               600.0 + 200.0, -20.0);
+
+  // A convex corner at 110 degrees: the side y = 0 drafted 20 degrees about
+  // the base; the top and the side split at x = 20 and the side's piece
+  // again at z = 5, so that all the pieces' other sides are steps or meet
+  // faces square to them. The pieces at x < 20 above z = 5 moved.
+  DraftSpec slant;
+  slant.faces = {side("F2", 1, 0)};
+  slant.plane = Tool::of_plane(plane(0, 0, 0, 0, 0, 1));
+  slant.angle = 20.0 * kPi / 180.0;
+  const ShapePtr drafted = draft("F4", *block(), slant);
+  const double lean = std::tan(slant.angle);
+  // The side runs from y = 0 at the base to y = 20·tan(20°) at the top, or
+  // the other way.
+  const bool narrower = !face_at(*drafted, gp_Pnt(10, 20.0 * lean / 2.0, 10)).empty();
+  const double y_at = narrower ? 1.0 : -1.0;
+  const Tool at_x20 = Tool::of_plane(gp_Pln(gp_Pnt(20, 0, 0), gp_Dir(1, 0, 0)));
+  const std::string slanted = face_at(*drafted, gp_Pnt(10, y_at * 10.0 * lean, 10));
+  CHECK(!slanted.empty());
+  const ShapePtr halves = split_faces("F7", *drafted, {top, slanted}, at_x20);
+  const Tool at_z5 = Tool::of_plane(gp_Pln(gp_Pnt(0, 0, 5), gp_Dir(0, 0, 1)));
+  const ShapePtr quarters =
+      split_faces("F8", *halves, {face_at(*halves, gp_Pnt(10, y_at * 10.0 * lean, 10))}, at_z5);
+  const std::string slant_piece = face_at(*quarters, gp_Pnt(10, y_at * 12.0 * lean, 12));
+  const std::string top_half = face_at(*quarters, gp_Pnt(10, 30, 20));
+  CHECK(!slant_piece.empty() && !top_half.empty());
+  // The top's piece is 20 wide and as deep as the top; the side's piece
+  // 20 wide and 15 / cos(20°) high; the normals 90 ∓ 20 degrees apart
+  // (70 where the top is the narrower end: the corner is 110 degrees).
+  const double depth = narrower ? 40.0 - 20.0 * lean : 40.0 + 20.0 * lean;
+  const double theta = (narrower ? 90.0 - 20.0 : 90.0 + 20.0) * kPi / 180.0;
+  check_corner(*quarters, top_half, slant_piece, 20.0 * depth + 20.0 * 15.0 / std::cos(slant.angle),
+               20.0 * std::tan(theta / 2.0));
+
+  // A piece of a cylindrical face: a 10 mm hole's wall split at x = 30,
+  // the half at x < 30 moved away from the axis (the hole widens there)
+  // and towards it; the seams become two flat 1 x 20 steps.
+  const ShapePtr drill = extrude("F4", {circle(5, 30, 20, 5)}, -5, 30);
+  const ShapePtr holed = boolean(BooleanOp::Cut, {block().get()}, *drill).pieces.at(0).shape;
+  const Tool at_x30 = Tool::of_plane(gp_Pln(gp_Pnt(30, 0, 0), gp_Dir(1, 0, 0)));
+  const ShapePtr halved = split_faces("F7", *holed, {"F4:side(c5)"}, at_x30);
+  const std::string half = face_at(*halved, gp_Pnt(25, 20, 10));
+  CHECK(half.rfind("F4:side(c5)#", 0) == 0);
+  const ShapePtr wider = offset_faces("F9", *halved, {half}, -1);
+  CHECK_NEAR(volume(*wider), volume(*holed) - 20.0 * kPi * (36.0 - 25.0) / 2.0);
+  CHECK(faces_named(*wider, half) == 1);
+  CHECK(steps_of(*wider, half) == 2);
+  const ShapePtr narrower_hole = offset_faces("F9", *halved, {half}, 1);
+  CHECK_NEAR(volume(*narrower_hole), volume(*holed) + 20.0 * kPi * (25.0 - 16.0) / 2.0);
+
+  // A pocket inside a moved piece keeps its wall and floor: the top split
+  // at x = 20 with an 8 mm pocket 5 mm deep in the piece at x < 20; the
+  // piece 1 mm in makes the pocket 1 mm shallower, 1 mm out 1 mm deeper.
+  const ShapePtr cup = extrude("F4", {circle(5, 10, 20, 4)}, 15, 30);
+  const ShapePtr pocketed = boolean(BooleanOp::Cut, {block().get()}, *cup).pieces.at(0).shape;
+  const Tool at_x20_top = Tool::of_plane(gp_Pln(gp_Pnt(20, 0, 0), gp_Dir(1, 0, 0)));
+  const ShapePtr cut_top = split_faces("F7", *pocketed, {end_cap("F2", 1)}, at_x20_top);
+  const std::string rim = face_at(*cut_top, gp_Pnt(2, 2, 20));
+  CHECK(rim.rfind(end_cap("F2", 1) + "#", 0) == 0);
+  for (const double distance : {-1.0, 1.0}) {
+    const ShapePtr moved = offset_faces("F9", *cut_top, {rim}, distance);
+    CHECK_NEAR(volume(*moved), volume(*pocketed) + distance * (20.0 * 40.0 - kPi * 16.0));
+    CHECK(faces_named(*moved, rim) == 1);
+    CHECK(faces_named(*moved, "F4:side(c5)") == 1);
+    CHECK(faces_named(*moved, "F4:start(r{c5})") == 1);
+  }
+
+  // That half moved to the axis or past it cannot be built: the refusal
+  // says why in words, the face goes to its places.
+  bool refused = false;
+  try {
+    offset_faces("F9", *halved, {half}, 5);
+  } catch (const std::exception& error) {
+    refused = true;
+    const std::string message = error_message(error.what());
+    CHECK(message.find("a curved face would shrink to nothing") != std::string::npos);
+    CHECK(message.find("F4") == std::string::npos && message.find("#") == std::string::npos);
+    CHECK(std::string(error.what()).find("\"name\":\"" + half + "\"") != std::string::npos);
+  }
+  CHECK(refused);
+}
+
+// A piece of a split face that meets a face that stays at a sharp edge
+// which is not square to it (mitcad#1973): the face that stays extends or
+// trims along its own surface to the piece's new position, as for a whole
+// face, going in and out.
+void test_offset_split_slanted_neighbours() {
+  // The side y = 0 drafted 30 degrees either way about the base, so that
+  // it meets the top at 120 or 60 degrees; the top split at x = 20 and the
+  // piece at x < 20 moved. The side runs y = s·z (s = ±tan 30°), so the
+  // piece is 20 x (40 - 20 s) and by t in the body loses
+  // 20·(t·(40 - 20 s) + s·t²/2); by t out it gains 20·(t·(40 - 20 s) - s·t²/2).
+  const std::string top = end_cap("F2", 1);
+  const Tool at_x20 = Tool::of_plane(gp_Pln(gp_Pnt(20, 0, 0), gp_Dir(1, 0, 0)));
+  for (const double degrees : {30.0, -30.0}) {
+    DraftSpec slant;
+    slant.faces = {side("F2", 1, 0)};
+    slant.plane = Tool::of_plane(plane(0, 0, 0, 0, 0, 1));
+    slant.angle = degrees * kPi / 180.0;
+    const ShapePtr drafted = draft("F4", *block(), slant);
+    const double lean = std::tan(30.0 * kPi / 180.0);
+    const double s = !face_at(*drafted, gp_Pnt(10, 10.0 * lean, 10)).empty() ? lean : -lean;
+    CHECK(!face_at(*drafted, gp_Pnt(10, 10.0 * s, 10)).empty());
+    const ShapePtr split = split_faces("F7", *drafted, {top}, at_x20);
+    const std::string piece = face_at(*split, gp_Pnt(10, 30, 20));
+    CHECK(piece.rfind(top + "#", 0) == 0);
+    const double width = 40.0 - 20.0 * s;
+    for (const double t : {1.0, 4.5}) {
+      for (const double sign : {-1.0, 1.0}) {
+        const ShapePtr moved = offset_faces("F9", *split, {piece}, sign * t);
+        CHECK_NEAR(volume(*moved), volume(*drafted) + sign * 20.0 * t * width - 20.0 * s * t * t / 2.0);
+        CHECK(faces_named(*moved, piece) == 1);
+        CHECK(faces_named(*moved, side("F2", 1, 0)) == 1);
+        CHECK(steps_of(*moved, piece) == 1);
+        CHECK(edge_names_unique(*moved));
+      }
+    }
+  }
+
+  // A face that stays on a cylinder: a round bar of radius 20 along z,
+  // 60 long, cut flat at x = 10, so that its flat meets the round at 120
+  // degrees; the flat split at z = 20 and the piece at z < 20 moved. The
+  // round extends or trims along itself: by t in the bar loses 20 times the
+  // segment of the circle between x = 10 - t and 10, by t out gains the one
+  // between 10 and 10 + t (F(x) = x·√(400 - x²) + 400·asin(x / 20) the
+  // segment's area from x = 0).
+  const ShapePtr bar = extrude("F2", {circle(1, 0, 0, 20)}, 0, 60);
+  const ShapePtr cutter = extrude("F3", {rectangle(5, 10, -30, 30, 60)}, -1, 61);
+  const ShapePtr flat = boolean(BooleanOp::Cut, {bar.get()}, *cutter).pieces.at(0).shape;
+  const std::string face = face_at(*flat, gp_Pnt(10, 0, 30));
+  CHECK(!face.empty());
+  const Tool at_z20 = Tool::of_plane(gp_Pln(gp_Pnt(0, 0, 20), gp_Dir(0, 0, 1)));
+  const ShapePtr halves = split_faces("F7", *flat, {face}, at_z20);
+  const std::string piece = face_at(*halves, gp_Pnt(10, 0, 10));
+  CHECK(piece.rfind(face + "#", 0) == 0);
+  const auto segment = [](double x) { return x * std::sqrt(400.0 - x * x) + 400.0 * std::asin(x / 20.0); };
+  for (const double t : {1.0, 4.5}) {
+    const ShapePtr in = offset_faces("F9", *halves, {piece}, -t);
+    CHECK_NEAR(volume(*in), volume(*flat) - 20.0 * (segment(10.0) - segment(10.0 - t)));
+    const ShapePtr out = offset_faces("F9", *halves, {piece}, t);
+    CHECK_NEAR(volume(*out), volume(*flat) + 20.0 * (segment(10.0 + t) - segment(10.0)));
+    for (const ShapePtr& moved : {in, out}) {
+      CHECK(faces_named(*moved, piece) == 1);
+      CHECK(faces_named(*moved, "F2:side(c1)") == 1);
+      CHECK(steps_of(*moved, piece) == 1);
+    }
+  }
+}
+
+double solid_volume(const TopoDS_Shape& shape) {
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(shape, props);
+  return props.Mass();
+}
+
+// The volume of `a` outside `b`, on copies (a boolean widens its inputs'
+// tolerances).
+double volume_outside(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+  return solid_volume(BRepAlgoAPI_Cut(BRepBuilderAPI_Copy(a).Shape(), BRepBuilderAPI_Copy(b).Shape()).Shape());
+}
+
+// A piece of a rounding whose ends meet the next roundings at mitres
+// (mitcad#1974): the block's top edges at y = 0, x = 0 and x = 60 rounded
+// with r = 5, so that the rounding along y = 0 (its axis y = 5, z = 15)
+// meets the other two at mitres in the planes x = y and x = 60 - y; the
+// rounding split at z = 18 and the piece above, from its tangent edge to
+// the top (an angle of 0 from the vertical about the axis) to the split
+// (φ1 = acos 0.6), moved. Along each mitre the faces turn tangent at the
+// top and meet at acos(cos²φ1) = 69° at the split.
+//
+// Inward the roundings that stay are trimmed back along their own
+// cylinders to the piece's new position, up to the top, where the step
+// along the piece's tangent edge closes against them: the result is the
+// body less the part of the sector 0 ≤ φ ≤ φ1 about the piece's axis
+// farther than r − t from it, exactly (the walls along the piece's normal
+// at the mitres are gone). Outward a rounding that stays would have to
+// extend past the line where it turns tangent to the top, where it has no
+// surface to extend along; there the sides stay steps along the piece's
+// normal, so the body gains the slab between r and r + t over
+// 0 ≤ φ ≤ φ1, from x = r − r sin φ to 60 − r + r sin φ:
+// ((r + t)² − r²) / 2 · (50 φ1 + 10 (1 − cos φ1)).
+void test_offset_split_mitre() {
+  const double r = 5.0;
+  const std::string top = end_cap("F2", 1);
+  const std::string front_edge = edge(top, side("F2", 1, 0));
+  const ShapePtr rounded =
+      fillet("F5", *block(), {front_edge, edge(top, side("F2", 1, 3)), edge(top, side("F2", 1, 1))}, r);
+  const std::string front = "F5:fillet(" + front_edge + ")";
+  CHECK(faces_named(*rounded, front) == 1);
+  const Tool at_z18 = Tool::of_plane(gp_Pln(gp_Pnt(0, 0, 18), gp_Dir(0, 0, 1)));
+  const ShapePtr split = split_faces("F7", *rounded, {front}, at_z18);
+  const double phi1 = std::acos(0.6);
+  const std::string piece = face_at(*split, gp_Pnt(30, r - r * std::sin(0.3), 15 + r * std::cos(0.3)));
+  CHECK(piece.rfind(front + "#", 0) == 0);
+  // The sector 0 ≤ φ ≤ φ1 about the piece's axis, φ from the vertical
+  // towards y = 0.
+  const gp_Ax2 axis(gp_Pnt(-10, r, 20 - r), gp_Dir(1, 0, 0), gp_Dir(0, 0, 1));
+  for (const double t : {1.0, 4.5}) {
+    const ShapePtr in = offset_faces("F9", *split, {piece}, -t);
+    const TopoDS_Shape far = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(axis, r + 1, 80, phi1).Shape(),
+                                             BRepPrimAPI_MakeCylinder(axis, r - t, 80).Shape())
+                                 .Shape();
+    const TopoDS_Shape trimmed = BRepAlgoAPI_Cut(BRepBuilderAPI_Copy(split->occt()).Shape(), far).Shape();
+    CHECK_NEAR(volume(*in), solid_volume(trimmed));
+    CHECK(volume_outside(in->occt(), trimmed) < 1.0e-6);
+    CHECK(volume_outside(trimmed, in->occt()) < 1.0e-6);
+    CHECK(steps_of(*in, piece) == 2);
+
+    const ShapePtr out = offset_faces("F9", *split, {piece}, t);
+    CHECK_NEAR(volume(*out),
+               volume(*split) + ((r + t) * (r + t) - r * r) / 2.0 * (50.0 * phi1 + 10.0 * (1.0 - std::cos(phi1))));
+    CHECK(steps_of(*out, piece) == 4);
+    for (const ShapePtr& moved : {in, out}) {
+      CHECK(faces_named(*moved, piece) == 1);
+      CHECK(faces_named(*moved, "F5:fillet(" + edge(top, side("F2", 1, 3)) + ")") == 1);
+      CHECK(faces_named(*moved, "F5:fillet(" + edge(top, side("F2", 1, 1)) + ")") == 1);
+      CHECK(edge_names_unique(*moved));
+    }
+  }
+
+  // The same in a pocket: its floor edges at y = 10, x = 10 and x = 50
+  // rounded with 3 (concave roundings, the one along y = 10 about the axis
+  // y = 13, z = 13), split at z = 11.2 and the piece next to the floor,
+  // from its tangent edge to the floor (ψ = 0 from straight down about the
+  // axis) to the split (ψ1 = acos 0.6), moved. A concave rounding that stays
+  // curves away from the piece's new position going in: it would have to
+  // extend, so the sides at the mitres stay steps and the body loses the
+  // slab between 3 and 3 + t over 0 ≤ ψ ≤ ψ1, from x = 13 − 3 sin ψ to
+  // 47 + 3 sin ψ. Going out the roundings that stay are trimmed back to the
+  // piece's new position: the body gains the part of the sector closer than
+  // 3 to the axis and farther than 3 − t that was empty, exactly.
+  const ShapePtr cutter = extrude("F4", {rectangle(5, 10, 10, 40, 20)}, 10, 21);
+  const ShapePtr pocket = boolean(BooleanOp::Cut, {block().get()}, *cutter).pieces.at(0).shape;
+  const std::string floor = start_cap("F4", 5);
+  const std::string wall_edge = edge(floor, side("F4", 5, 0));
+  const ShapePtr hollow = fillet(
+      "F5", *pocket, {wall_edge, edge(floor, side("F4", 5, 3)), edge(floor, side("F4", 5, 1))}, 3);
+  const std::string wall_rounding = "F5:fillet(" + wall_edge + ")";
+  const Tool at_z = Tool::of_plane(gp_Pln(gp_Pnt(0, 0, 11.2), gp_Dir(0, 0, 1)));
+  const ShapePtr cut = split_faces("F7", *hollow, {wall_rounding}, at_z);
+  const std::string low = face_at(*cut, gp_Pnt(30, 13 - 3 * std::sin(0.3), 13 - 3 * std::cos(0.3)));
+  CHECK(low.rfind(wall_rounding + "#", 0) == 0);
+  const gp_Ax2 wall_axis(gp_Pnt(55, 13, 13), gp_Dir(-1, 0, 0), gp_Dir(0, 0, -1));
+  for (const double t : {0.5, 1.0}) {
+    const ShapePtr in = offset_faces("F9", *cut, {low}, -t);
+    CHECK_NEAR(volume(*in), volume(*cut) - ((3 + t) * (3 + t) - 9) / 2.0 * (34.0 * phi1 + 6.0 * (1.0 - std::cos(phi1))));
+    CHECK(steps_of(*in, low) == 4);
+
+    const ShapePtr out = offset_faces("F9", *cut, {low}, t);
+    const TopoDS_Shape slab = BRepAlgoAPI_Cut(BRepPrimAPI_MakeCylinder(wall_axis, 3, 50, phi1).Shape(),
+                                              BRepPrimAPI_MakeCylinder(wall_axis, 3 - t, 50).Shape())
+                                  .Shape();
+    const TopoDS_Shape filled = BRepAlgoAPI_Fuse(BRepBuilderAPI_Copy(cut->occt()).Shape(), slab).Shape();
+    CHECK_NEAR(volume(*out), solid_volume(filled));
+    CHECK(volume_outside(out->occt(), filled) < 1.0e-6);
+    CHECK(volume_outside(filled, out->occt()) < 1.0e-6);
+    CHECK(steps_of(*out, low) == 2);
+    for (const ShapePtr& moved : {in, out}) {
+      CHECK(faces_named(*moved, low) == 1);
+      CHECK(faces_named(*moved, "F5:fillet(" + edge(floor, side("F4", 5, 3)) + ")") == 1);
+      CHECK(faces_named(*moved, "F5:fillet(" + edge(floor, side("F4", 5, 1)) + ")") == 1);
+      CHECK(edge_names_unique(*moved));
+    }
+  }
 }
 
 void test_delete_faces() {
@@ -710,6 +1060,9 @@ void faceops_tests() {
   guarded("test_draft", test_draft);
   guarded("test_offset_faces", test_offset_faces);
   guarded("test_offset_split_faces", test_offset_split_faces);
+  guarded("test_offset_split_corners", test_offset_split_corners);
+  guarded("test_offset_split_slanted_neighbours", test_offset_split_slanted_neighbours);
+  guarded("test_offset_split_mitre", test_offset_split_mitre);
   guarded("test_delete_faces", test_delete_faces);
   guarded("test_replace_faces", test_replace_faces);
   guarded("test_replace_curved_faces", test_replace_curved_faces);

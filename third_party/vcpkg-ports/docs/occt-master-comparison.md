@@ -514,7 +514,7 @@ run's patched results: we break 0, we fix 13; against stock no breaks.
 | 0772 | chfi3d stripes joined across a corner of the solid | still needed | master only refactored near the patched code |
 | 0790 | chfi3d tangent end face cuts the blend back along the stripe | still needed | master only refactored near the patched code |
 | 0800 | chfi3d onsame cap points in one period of a stored cylinder | still needed | master unchanged at the patched code |
-| 0801 | chfi3d tangent faces within ten times the edge tolerance | still needed | master keeps 1.5 x the edge tolerance for the loose tangency test (ConstructionContinuityTolerance) |
+| 0801 | chfi3d tangent faces within seven (was ten) times the edge tolerance | still needed | master keeps 1.5 x the edge tolerance for the loose tangency test (ConstructionContinuityTolerance) |
 | 0802 | chfi3d contact on its own edge near a vertex passes it | still needed | master only refactored near the patched code |
 | 0803 | chfi3d onsame cap leaving the prolongation tangentially | still needed | master only refactored near the patched code |
 | 0820 | chfi3d stripes joined across a corner one face each | still needed | master unchanged at the patched code |

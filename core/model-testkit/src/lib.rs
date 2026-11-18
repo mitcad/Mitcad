@@ -305,6 +305,9 @@ pub struct MockKernel {
     /// made from a triangulation (`polygonal`), as the kernel's quick path
     /// does; otherwise as exact.
     pub projects_polygonal: Cell<bool>,
+    /// Drawings (mitcad#1997): the scale each `project_view` call was
+    /// given (`ViewSpec::scale`), in order.
+    pub projected_scales: RefCell<Vec<Option<f64>>>,
     /// Drawings (mitcad#1286): lines in the model (polylines through
     /// these points) that `project_view` draws as visible in every view
     /// besides the boxes' edges, as the kernel draws the rim of a hole the
@@ -3406,7 +3409,8 @@ impl Kernel for MockKernel {
 
     /// Box letters of "Mock Sans" (any other family falls back to it): a
     /// 0.5 x 0.7 em block; `O`-like letters have one counter, `B` and `8`
-    /// two, `C` and `S` a curved top (a quadratic piece); 0.7 em advance.
+    /// two, `C` and `S` a curved top (a quadratic piece), `~` an outline
+    /// with a gap (bounds no profile); 0.7 em advance.
     fn font_glyphs(&self, request: &FontRequest<'_>) -> Result<FontGlyphs, KernelError> {
         self.call("font_glyphs")?;
         let rect = |x0: f64, y0: f64, x1: f64, y1: f64, ccw: bool| {
@@ -3437,6 +3441,13 @@ impl Kernel for MockKernel {
                         vec![[0.1, 0.0], [0.6, 0.0]],
                         vec![[0.6, 0.0], [0.6, 0.7]],
                         vec![[0.6, 0.7], [0.35, 0.95], [0.1, 0.7]],
+                        vec![[0.1, 0.7], [0.1, 0.0]],
+                    ]],
+                    // An outline whose pieces do not join (mitcad#1993).
+                    '~' => vec![vec![
+                        vec![[0.1, 0.0], [0.6, 0.0]],
+                        vec![[0.6, 0.1], [0.6, 0.7]],
+                        vec![[0.6, 0.7], [0.1, 0.7]],
                         vec![[0.1, 0.7], [0.1, 0.0]],
                     ]],
                     _ => vec![outer],
@@ -4598,14 +4609,17 @@ impl Kernel for MockKernel {
                         return Err(KernelError::failed(format!("the body has no edge {edge}")));
                     }
                 }
-                format!(
-                    "edges {}",
-                    edges
+                // Free edges beside the named ones (mitcad#1955): each
+                // opening's index and how many points pick its edges.
+                let mut parts: Vec<String> = edges.iter().map(ToString::to_string).collect();
+                parts.extend(
+                    spec.openings
                         .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                )
+                        .map(|o| format!("opening {} at {}", o.index, o.at.len())),
+                );
+                // Sketch curves in the loop (mitcad#1972), by name.
+                parts.extend(spec.curves.iter().map(|c| format!("curve {}", c.name)));
+                format!("edges {}", parts.join(" "))
             }
             mitcad_model_base::surfaces::PatchBoundary::Opening(index) => {
                 if index >= self.open_boundaries(spec.body)?.len() {
@@ -4752,6 +4766,7 @@ impl Kernel for MockKernel {
         self.projected
             .borrow_mut()
             .push(shapes.iter().map(|s| s.history.clone()).collect());
+        self.projected_scales.borrow_mut().push(spec.scale);
         let mut projection = ViewProjection {
             polygonal: self.projects_polygonal.get(),
             ..ViewProjection::default()

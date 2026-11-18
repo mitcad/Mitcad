@@ -338,6 +338,20 @@ pub fn follows(ctx: &Context<'_>, item: ConstraintUid, set: &[SolverItem]) -> Op
     })
 }
 
+/// A redundant constraint or dimension that still takes `taken` degrees of
+/// freedom away (mitcad#1992, `SketchDef::freedom_taken`), in words: "the
+/// Symmetry between two points about an axis partly repeats the others; it
+/// still removes one degree of freedom". Information, not a warning: it
+/// changed the sketch. None for an id the sketch does not have.
+pub fn partly(ctx: &Context<'_>, item: ConstraintUid, taken: usize) -> Option<String> {
+    let (_, what) = ctx.phrase(item)?;
+    Some(if taken == 1 {
+        format!("{what} partly repeats the others; it still removes one degree of freedom")
+    } else {
+        format!("{what} partly repeats the others; it still removes {taken} degrees of freedom")
+    })
+}
+
 /// An edit refused for a conflict, in words: the constraints and
 /// dimensions that block `change` (the first few named, the rest counted);
 /// without any, the fixed geometry `change` cannot hold with.

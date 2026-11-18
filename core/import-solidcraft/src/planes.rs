@@ -21,6 +21,7 @@
 
 use mitcad_model::{ComponentUid, Datum, GeomRef, Kernel};
 use mitcad_solidcraft::Feature;
+use mitcad_solidcraft::document::{Mat, apply_point, apply_vector, mat_mul};
 use mitcad_solidcraft::inputs::Kind;
 use mitcad_solidcraft::kinds::{GeoRef, Plane, PlaneRef};
 use serde_json::{Value, json};
@@ -99,7 +100,7 @@ impl Frame {
 }
 
 /// SolidCraft's origin planes (`crates/geom/src/plane.rs`).
-fn origin_frame(name: &str) -> Option<(&'static str, Frame)> {
+pub(crate) fn origin_frame(name: &str) -> Option<(&'static str, Frame)> {
     match name.to_ascii_uppercase().as_str() {
         "XY" | "TOP" => Some(("xy", Frame::XY)),
         "XZ" | "FRONT" => Some((
@@ -271,11 +272,47 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 axis_dir,
                 angle,
                 line,
+                direction_only,
+                pivot,
             } => {
                 let name = names.next();
                 let base = self.plane_ref(base, names, component, None)?;
                 notes.extend(base.notes);
                 let a = self.params.value(self.doc, angle.as_str(), Kind::Angle)?;
+                // Only the axis's direction, projected onto the base, about
+                // the line through the pivot or the base's origin (format
+                // 51): that line, fixed where it is now.
+                let (axis_origin, axis_dir, line) = if *direction_only {
+                    let w = base
+                        .world
+                        .ok_or("a plane turned about a direction, on a plane without a frame")?;
+                    let n = w.normal();
+                    let d = unit(sub(*axis_dir, scale(n, dot(*axis_dir, n))))
+                        .ok_or("the turn's direction is square to the plane")?;
+                    let p = match pivot.as_deref() {
+                        None => w.o,
+                        Some(GeoRef::Point { p }) => *p,
+                        Some(GeoRef::Origin) => [0.0; 3],
+                        Some(GeoRef::Vertex { at, .. }) => *at,
+                        Some(_) => {
+                            return Err(
+                                "a plane turned about a direction through a pivot of a kind this import does not resolve"
+                                    .to_owned(),
+                            );
+                        }
+                    };
+                    if pivot
+                        .as_deref()
+                        .is_some_and(|g| matches!(g, GeoRef::Vertex { .. }))
+                    {
+                        notes.push("the point it turns about is fixed where it is now".to_owned());
+                    }
+                    let o = sub(p, scale(n, dot(sub(p, w.o), n)));
+                    (o, d, None)
+                } else {
+                    (*axis_origin, *axis_dir, line.clone())
+                };
+                let (axis_origin, axis_dir, line) = (&axis_origin, &axis_dir, &line);
                 let world = base.world.map(|w| w.rotated(*axis_origin, *axis_dir, a));
                 // MitCad turns a plane about a line in it.
                 let in_plane = base.world.is_some_and(|w| {
@@ -311,6 +348,33 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     );
                     m
                 }
+            }
+            // An origin plane of a component's placement (format 52): the
+            // origin plane where it lies in this component now.
+            PlaneRef::Datum { datum } => {
+                let (item, m) = self.datum_placement(datum, component)?;
+                let (_, frame) = origin_frame(&item)
+                    .ok_or_else(|| "a plane datum that is not a plane".to_owned())?;
+                if is_identity(&m) {
+                    // This component's own origin plane.
+                    return self.plane_ref(
+                        &PlaneRef::Origin { name: item },
+                        names,
+                        component,
+                        final_name,
+                    );
+                }
+                let placed = Frame {
+                    o: apply_point(&m, frame.o),
+                    x: apply_vector(&m, frame.x),
+                    y: apply_vector(&m, frame.y),
+                };
+                let mut made = self.fixed_plane(&placed, component, final_name)?;
+                made.notes.push(
+                    "a component's origin plane is fixed where its placement puts it now"
+                        .to_owned(),
+                );
+                made
             }
             PlaneRef::Construction { feature } => {
                 let f = self
@@ -645,7 +709,82 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     .ok_or("the sketch did not come in")?;
                 json!({"sketch": s.uid.to_string(), "curve": s.curve(curve)?})
             }
+            // An origin datum of a component's placement (format 52): this
+            // component's own where the placement is its own, else fixed
+            // where the placement puts it now.
+            GeoRef::Datum { datum } => {
+                let (item, m) = self.datum_placement(datum, component)?;
+                let own = is_identity(&m);
+                if !own {
+                    notes.push(
+                        "a component's origin datum is fixed where its placement puts it now"
+                            .to_owned(),
+                    );
+                }
+                match item.as_str() {
+                    "O" if own => json!("origin"),
+                    "O" => json!({"point": apply_point(&m, [0.0; 3])}),
+                    "X" | "Y" | "Z" => {
+                        let d = match item.as_str() {
+                            "X" => [1.0, 0.0, 0.0],
+                            "Y" => [0.0, 1.0, 0.0],
+                            _ => [0.0, 0.0, 1.0],
+                        };
+                        if own {
+                            json!(item.to_ascii_lowercase())
+                        } else {
+                            json!({"origin": apply_point(&m, [0.0; 3]), "direction": apply_vector(&m, d)})
+                        }
+                    }
+                    _ => {
+                        let plane = PlaneRef::Datum {
+                            datum: datum.clone(),
+                        };
+                        let made =
+                            self.plane_ref(&plane, &mut std::iter::empty(), component, None)?;
+                        made.geom
+                    }
+                }
+            }
+            // A snap point (format 55): found again on its edge, face or
+            // curve in SolidCraft, which this import does not do.
+            // Each kind as a whole message (mitcad#1999).
+            GeoRef::Snap { kind, .. } => {
+                return Err(if kind == "middle" {
+                    "a reference to the middle of an edge, face or curve (a snap point), which this import does not resolve"
+                        .to_owned()
+                } else {
+                    "a reference to the center of an edge, face or curve (a snap point), which this import does not resolve"
+                        .to_owned()
+                });
+            }
         })
+    }
+
+    /// The item of an origin datum's key (`o:2/3/origin/XY`) and the
+    /// placement of its component in `component`'s coordinates now: the
+    /// occurrences of its path, root first, then back through `component`'s
+    /// own placement.
+    fn datum_placement(&self, key: &str, component: ComponentUid) -> Result<(String, Mat), String> {
+        let (path, item) = mitcad_solidcraft::kinds::datum_key(key)
+            .ok_or_else(|| "a component's origin datum that is not one".to_owned())?;
+        let mut placed = mitcad_solidcraft::document::IDENTITY;
+        for id in &path {
+            let o = self
+                .design
+                .occurrences
+                .iter()
+                .find(|o| o.id == *id)
+                .ok_or("a component's origin datum on a placement the file does not have")?;
+            placed = mat_mul(&placed, &o.transform);
+        }
+        let own = self
+            .components
+            .iter()
+            .find(|(_, uid)| **uid == component)
+            .map_or(0, |(id, _)| *id);
+        let world = self.design.component_world(own);
+        Ok((item, mat_mul(&rigid_inverse(&world), &placed)))
     }
 
     /// A path (an edge or a sketch curve) as a MitCad path reference.
@@ -670,4 +809,26 @@ impl<K: Kernel> Importer<'_, '_, K> {
             other => return Err(format!("{other:?} is not a path")),
         })
     }
+}
+
+/// Whether a placement moves nothing (within 1e-9).
+fn is_identity(m: &Mat) -> bool {
+    m.iter()
+        .flatten()
+        .zip(mitcad_solidcraft::document::IDENTITY.iter().flatten())
+        .all(|(a, b)| (a - b).abs() < 1e-9)
+}
+
+/// The inverse of a rigid placement (a turn and a move): the turn's
+/// transpose, and the move back through it.
+fn rigid_inverse(m: &Mat) -> Mat {
+    let mut out = mitcad_solidcraft::document::IDENTITY;
+    for (c, col) in out.iter_mut().enumerate().take(3) {
+        for (r, cell) in col.iter_mut().enumerate().take(3) {
+            *cell = m[r][c];
+        }
+    }
+    let t = apply_vector(&out, [m[3][0], m[3][1], m[3][2]]);
+    out[3] = [-t[0], -t[1], -t[2], 1.0];
+    out
 }

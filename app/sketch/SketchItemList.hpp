@@ -55,7 +55,8 @@ struct PointData;
 // step opens its value editor in the view. A constraint or dimension in
 // conflict carries the error badge, one that follows from the others
 // (redundant) and a curve or point a warning of the sketch is about the
-// warning badge, an inactive one the geometry does not meet the
+// warning badge, an inactive one the geometry does not meet and a
+// redundant one that still takes freedom away (mitcad#1992) the
 // information badge, as the Sketch Palette tells them; the worst of a
 // step's items is its cell's badge, and the hover list shows each on its
 // item's row. A selected cell is drawn as the timeline draws one (a tint
@@ -142,7 +143,7 @@ private:
   void describeStep(const QString& kind, Cell& cell) const;
   // The level a row is marked with: an error for a conflict, a warning
   // for a redundant item or one a warning is about, information for an
-  // unmet inactive one; a hint for none. `why` gets the words for it.
+  // unmet inactive one or one redundant only in part; a hint for none. `why` gets the words for it.
   NoticeLevel markOf(const QString& id, QString& why) const;
   // An icon with the level's badge over its top right corner and, above
   // one, the count of items over its bottom right corner; `dimmed`: the

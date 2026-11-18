@@ -42,7 +42,8 @@ failed with an exception before any part of it was made.
   (ChFi3d_ContinueGrownFaces): its end row of poles moved along the end
   span's lines, the knot moved with it, the parameters as they were, and
   each edge's curve on the face stored again with the continued surface
-  (an edge's curve on a face is kept with the face's surface).
+  (an edge's curve on a face is kept with the face's surface). The edges'
+  curves are kept in an NCollection_List (OCCT's containers, mitcad#1986).
 
 On the design's body before the item, replayed and stored: valid, the
 file's faces (124 on the stored body; the replayed one has a face more
@@ -50,22 +51,24 @@ elsewhere) every one within 3e-4 mm of the result's and the result's on
 the file's within 1e-3 mm; before, the chamfer failed.
 
 Upstream: new.
+
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index fb9c80f2..0783eee1 100644
+index 0290514b..ae1a9008 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -21,6 +21,10 @@
+@@ -21,6 +21,9 @@
  #include <BRepLib_MakeEdge.hxx>
  #include <BRepLib_MakeFace.hxx>
  #include <BRep_Builder.hxx>
 +#include <BRepTools.hxx>
 +#include <TopLoc_Location.hxx>
 +#include <TopTools_ShapeMapHasher.hxx>
-+#include <vector>
  #include <Geom_Surface.hxx>
  #include <Geom_TrimmedCurve.hxx>
  #include <Geom_BSplineCurve.hxx>
-@@ -2240,6 +2244,153 @@ void ChFi3d_Builder::ApplyRides()
+@@ -2240,6 +2243,153 @@ void ChFi3d_Builder::ApplyRides()
    }
  }
  
@@ -173,7 +176,7 @@ index fb9c80f2..0783eee1 100644
 +      occ::handle<Geom2d_Curve> C1, C2;
 +      double                    First = 0., Last = 0., Tol = 0.;
 +    };
-+    std::vector<OnFace> anOnFace;
++    NCollection_List<OnFace> anOnFace;
 +    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> anEdges;
 +    bool aComplete = true;
 +    for (TopExp_Explorer exE(F, TopAbs_EDGE); exE.More() && aComplete; exE.Next())
@@ -194,7 +197,7 @@ index fb9c80f2..0783eee1 100644
 +        o.C2 = BRep_Tool::CurveOnSurface(TopoDS::Edge(E.Reversed()), F, f2, l2);
 +      }
 +      aComplete = !o.C1.IsNull() && (o.C2.IsNull() == !BRep_Tool::IsClosed(E, F));
-+      anOnFace.push_back(o);
++      anOnFace.Append(o);
 +    }
 +    if (!aComplete)
 +    {
@@ -219,7 +222,7 @@ index fb9c80f2..0783eee1 100644
  //=================================================================================================
  
  void ChFi3d_Builder::Compute()
-@@ -3240,6 +3391,12 @@ void ChFi3d_Builder::Compute()
+@@ -3274,6 +3424,12 @@ void ChFi3d_Builder::Compute()
        ChFi3d_InitChron(cl_setregul);
  #endif
  
@@ -233,7 +236,7 @@ index fb9c80f2..0783eee1 100644
        SetRegul();
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 2104a91c..c8128c02 100644
+index 10784f11..a13e06fd 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -3158,10 +3158,13 @@ bool ChFi3d_Builder::StartSol(
@@ -251,7 +254,7 @@ index 2104a91c..c8128c02 100644
          && ChFi3d_ConcaveCreaseBeyond(anArcEdge, F, Fv, angular))
      {
        aTangentNext = false;
-@@ -10777,6 +10780,26 @@ static bool ChFi3d_IsolineOfEdge(const TopoDS_Edge&       E,
+@@ -10804,6 +10807,26 @@ static bool ChFi3d_IsolineOfEdge(const TopoDS_Edge&       E,
    return false;
  }
  
@@ -278,7 +281,7 @@ index 2104a91c..c8128c02 100644
  //=======================================================================
  // function : ChFi3d_KPartCutChainToEnd
  // purpose  : As ChFi3d_KPartCutToEnd where the contact of an analytic blend
-@@ -10882,6 +10905,13 @@ static bool ChFi3d_KPartCutChainToEnd(
+@@ -10920,6 +10943,13 @@ static bool ChFi3d_KPartCutChainToEnd(
    const TopoDS_Face              Fo  = TopoDS::Face(DStr.Shape(P->Index(opp)));
    const TopoDS_Face              B0  = otherFace(EFMap, E, N);
    double                         tP = 0., tEnd = 0.;

@@ -535,6 +535,7 @@ fn turn_fields(
         FeatureDef::Patch(patch) => {
             if let Some(boundary) = &mut patch.boundary {
                 boundary.points.iter_mut().for_each(v);
+                openings(&mut boundary.openings);
             }
         }
         FeatureDef::TrimSurface(trim) => {

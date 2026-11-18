@@ -623,6 +623,93 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
   return def;
 }
 
+// --- Free edges (mitcad#1927, #1955)
+
+const QString kWholeOpening = QStringLiteral("whole_opening");
+
+// Whole Opening of the inputs that take openings (InputDef::withOpenings
+// with this check): on, a click on a free edge takes its whole opening; off,
+// the single edge.
+InputDef wholeOpeningInput() {
+  return checkInput(kWholeOpening, QObject::tr("Whole Opening"), true)
+      .withTooltip(QObject::tr("On: a click on an open edge takes its whole opening. Off: only that edge"));
+}
+
+// The `openings` entries of the picked openings and free edges: a whole
+// opening `{"opening": ...}`, the single free edges of one opening
+// `{"opening": ..., "at": [[x, y, z], ...]}` (a point on each edge), in
+// the order first picked.
+QJsonArray openingEntries(const Selection& items) {
+  QJsonArray entries;
+  QVector<QJsonObject> singles; // the opening of each entry of single edges
+  QVector<int> where;           // its place in `entries`
+  for (const SelectionItem& item : items) {
+    if (!isOpeningEdge(item)) {
+      continue;
+    }
+    const QJsonObject opening = openingOf(item);
+    const auto at = freeEdgePoint(item);
+    if (!at) {
+      entries.append(QJsonObject{{QStringLiteral("opening"), opening}});
+      continue;
+    }
+    QJsonArray point;
+    for (const double v : *at) {
+      point.append(v);
+    }
+    const int known = static_cast<int>(singles.indexOf(opening));
+    if (known < 0) {
+      QJsonArray points;
+      points.append(point);
+      singles.append(opening);
+      where.append(static_cast<int>(entries.size()));
+      entries.append(QJsonObject{{QStringLiteral("opening"), opening}, {QStringLiteral("at"), points}});
+    } else {
+      QJsonObject entry = entries[where[known]].toObject();
+      QJsonArray points = entry.value(QStringLiteral("at")).toArray();
+      points.append(point);
+      entry.insert(QStringLiteral("at"), points);
+      entries[where[known]] = entry;
+    }
+  }
+  return entries;
+}
+
+// An `openings` entry the panel shows as picks: a whole opening, or single
+// free edges of one opening by their points.
+bool pickedOpeningEntry(const QJsonObject& entry) {
+  if (!entry.value(QStringLiteral("opening")).isObject() || entry.contains(QStringLiteral("faces"))) {
+    return false;
+  }
+  return entry.size() == 1 || (entry.size() == 2 && !entry.value(QStringLiteral("at")).toArray().isEmpty());
+}
+
+// The items of such an entry of `body`: the whole opening, or a single
+// free edge for each point.
+Selection openingEntryItems(const QString& body, const QJsonObject& entry) {
+  const QJsonObject opening = entry.value(QStringLiteral("opening")).toObject();
+  const QJsonArray points = entry.value(QStringLiteral("at")).toArray();
+  if (points.isEmpty()) {
+    return {openingEdgeItem(body, opening)};
+  }
+  Selection items;
+  for (const QJsonValue& value : points) {
+    const QJsonArray p = value.toArray();
+    if (p.size() == 3) {
+      items.append(freeEdgeItem(body, opening, {p[0].toDouble(), p[1].toDouble(), p[2].toDouble()}));
+    }
+  }
+  return items;
+}
+
+// Whole Opening as a definition's entries show it: off when an entry
+// picks single free edges.
+bool wholeOpeningsIn(const QJsonArray& entries) {
+  return std::none_of(entries.begin(), entries.end(), [](const QJsonValue& value) {
+    return !value.toObject().value(QStringLiteral("at")).toArray().isEmpty();
+  });
+}
+
 // --- Patch, Stitch and Thicken (mitcad#456)
 
 // Whether an opening of a surface body is picked (by one of its free edges,
@@ -630,6 +717,35 @@ CommandDef surfaceLoftCommand(const CommandContext& context) {
 bool picksOpening(const CommandState& state) {
   const Selection& items = state.items(QStringLiteral("boundary"));
   return std::any_of(items.begin(), items.end(), [](const SelectionItem& item) { return isOpeningEdge(item); });
+}
+
+// The `sketch_curves` entries of a patch's loop (mitcad#1972): the picked
+// sketch curves, one entry per sketch in the order first picked.
+QJsonArray sketchCurveEntries(const Selection& curves) {
+  QStringList sketches;
+  QVector<QJsonArray> picked; // the curves of each sketch
+  for (const SelectionItem& item : curves) {
+    int at = static_cast<int>(sketches.indexOf(item.owner));
+    if (at < 0) {
+      at = static_cast<int>(sketches.size());
+      sketches.append(item.owner);
+      picked.append(QJsonArray());
+    }
+    picked[at].append(item.name);
+  }
+  QJsonArray entries;
+  for (int i = 0; i < static_cast<int>(sketches.size()); ++i) {
+    entries.append(QJsonObject{{QStringLiteral("sketch"), sketches[i]}, {QStringLiteral("curves"), picked[i]}});
+  }
+  return entries;
+}
+
+// Whether the panel shows a `sketch_curves` entry: curves of a sketch,
+// without chain or direction.
+bool shownSketchCurves(const QJsonValue& value) {
+  const QJsonObject entry = value.toObject();
+  return entry.size() == 2 && entry.value(QStringLiteral("sketch")).isString() &&
+         !entry.value(QStringLiteral("curves")).toArray().isEmpty();
 }
 
 CommandDef patchCommand(const CommandContext& context) {
@@ -641,11 +757,12 @@ CommandDef patchCommand(const CommandContext& context) {
   def.featureType = QStringLiteral("patch");
   def.inputs = {
       selectionInput(QStringLiteral("boundary"), QObject::tr("Profiles or Edges"),
-                     SelectKind::Profile | SelectKind::Edge, 1, 0)
-          .withTooltip(QObject::tr("Profiles of one sketch, edges of one body closing a loop, or an open edge "
-                                   "for its whole opening"))
+                     SelectKind::Profile | SelectKind::Edge | SelectKind::SketchCurve, 1, 0)
+          .withTooltip(QObject::tr("Sketch profiles, or edges of one body closing a loop: open edges and "
+                                   "sketch curves too"))
           .withoutMeshes()
-          .withOpenings(),
+          .withOpenings(kWholeOpening),
+      wholeOpeningInput(),
       choiceInput(QStringLiteral("continuity"), QObject::tr("Continuity"), kContinuity, QStringLiteral("g0"))
           .withTooltip(QObject::tr("How a patch of edges meets the faces beside them")),
       checkInput(QStringLiteral("stitch"), QObject::tr("Stitch"), true)
@@ -658,8 +775,18 @@ CommandDef patchCommand(const CommandContext& context) {
     Selection profiles;
     Selection edges;
     Selection openings;
+    Selection curves; // sketch curves in the loop (mitcad#1972)
     for (const SelectionItem& item : state.items(QStringLiteral("boundary"))) {
-      (item.kind == SelectKind::Profile ? profiles : isOpeningEdge(item) ? openings : edges).append(item);
+      (item.kind == SelectKind::Profile       ? profiles
+       : item.kind == SelectKind::SketchCurve ? curves
+       : isOpeningEdge(item)                  ? openings
+                                              : edges)
+          .append(item);
+    }
+    if (!curves.isEmpty() && edges.isEmpty() && openings.isEmpty()) {
+      return Built::failure(QObject::tr("Select the edges the sketch curves close a loop with: sketch curves "
+                                        "only join a patch's loop of edges."),
+                            QStringLiteral("boundary"));
     }
     QJsonObject definition{{QStringLiteral("type"), QStringLiteral("patch")}};
     if (!profiles.isEmpty()) {
@@ -669,26 +796,33 @@ CommandDef patchCommand(const CommandContext& context) {
       definition.insert(QStringLiteral("profiles"), refsOf(profiles));
     }
     if (!edges.isEmpty() || !openings.isEmpty()) {
-      if (!edges.isEmpty() && !openings.isEmpty()) {
-        return Built::failure(QObject::tr("Select edges that close up into a loop, or an open edge for its "
-                                          "whole opening, not both."),
+      // Whole openings (picked by a free edge with Whole Opening on) and
+      // single free edges (with it off, mitcad#1955).
+      const auto whole = std::count_if(openings.begin(), openings.end(),
+                                       [](const SelectionItem& item) { return !isFreeEdge(item); });
+      if (whole > 0 && (whole > 1 || openings.size() > 1 || !edges.isEmpty() || !curves.isEmpty())) {
+        return Built::failure(QObject::tr("Select one whole opening, or edges, single open edges and sketch "
+                                          "curves that close up into a loop: a patch fills one loop."),
                               QStringLiteral("boundary"));
-      }
-      if (openings.size() > 1) {
-        return Built::failure(QObject::tr("Select one opening: a patch fills one loop."), QStringLiteral("boundary"));
       }
       const QString body = oneBody(edges + openings, result, QStringLiteral("boundary"));
       if (body.isEmpty()) {
         return result;
       }
       QJsonObject loop{{QStringLiteral("body"), body}};
-      if (openings.isEmpty()) {
+      if (!edges.isEmpty()) {
         loop.insert(QStringLiteral("edges"), names(edges, SelectKind::Edge));
-      } else {
+      }
+      if (whole > 0) {
         loop.insert(QStringLiteral("opening"), openingOf(openings.first()));
-        if (state.checked(QStringLiteral("stitch"))) {
-          loop.insert(QStringLiteral("stitch"), true);
-        }
+      } else if (!openings.isEmpty()) {
+        loop.insert(QStringLiteral("openings"), openingEntries(openings));
+      }
+      if (!curves.isEmpty()) {
+        loop.insert(QStringLiteral("sketch_curves"), sketchCurveEntries(curves));
+      }
+      if (!openings.isEmpty() && state.checked(QStringLiteral("stitch"))) {
+        loop.insert(QStringLiteral("stitch"), true);
       }
       if (state.choice(QStringLiteral("continuity")) != QStringLiteral("g0")) {
         loop.insert(QStringLiteral("continuity"), state.choice(QStringLiteral("continuity")));
@@ -701,25 +835,54 @@ CommandDef patchCommand(const CommandContext& context) {
     Selection items = profilesOf(feature.value(QStringLiteral("profiles")).toArray());
     const QJsonObject loop = feature.value(QStringLiteral("boundary")).toObject();
     if (!loop.isEmpty()) {
+      const QString body = str(loop, "body");
       if (loop.contains(QStringLiteral("opening"))) {
-        items.append(openingEdgeItem(str(loop, "body"), loop.value(QStringLiteral("opening")).toObject()));
-      } else if (const auto edges = pathItems(loop, context)) {
-        items += *edges;
+        items.append(openingEdgeItem(body, loop.value(QStringLiteral("opening")).toObject()));
+      } else {
+        if (loop.contains(QStringLiteral("edges"))) {
+          if (const auto edges = pathItems(QJsonObject{{QStringLiteral("body"), body},
+                                                       {QStringLiteral("edges"), loop.value(QStringLiteral("edges"))}},
+                                           context)) {
+            items += *edges;
+          }
+        }
+        // Single free edges beside them (mitcad#1955).
+        for (const QJsonValue& entry : loop.value(QStringLiteral("openings")).toArray()) {
+          items += openingEntryItems(body, entry.toObject());
+        }
+        // Sketch curves in the loop (mitcad#1972).
+        for (const QJsonValue& entry : loop.value(QStringLiteral("sketch_curves")).toArray()) {
+          if (const auto curves = pathItems(entry, context)) {
+            items += *curves;
+          }
+        }
       }
+      state.setChecked(kWholeOpening, wholeOpeningsIn(loop.value(QStringLiteral("openings")).toArray()));
       state.setChoice(QStringLiteral("continuity"),
                       loop.value(QStringLiteral("continuity")).toString(QStringLiteral("g0")));
       state.setChecked(QStringLiteral("stitch"), loop.value(QStringLiteral("stitch")).toBool());
     }
     state.setItems(QStringLiteral("boundary"), items);
   };
-  // Named edges or an opening with one continuity, as the panel shows them;
-  // only an opening is stitched there.
+  // Named edges, single free edges and sketch curves, or an opening, with
+  // one continuity, as the panel shows them; only a loop with free edges is
+  // stitched there.
   def.canEdit = [](const QJsonObject& feature) {
     const QJsonObject loop = feature.value(QStringLiteral("boundary")).toObject();
-    const bool opening = loop.contains(QStringLiteral("opening"));
+    const QJsonArray entries = loop.value(QStringLiteral("openings")).toArray();
+    const QJsonArray curves = loop.value(QStringLiteral("sketch_curves")).toArray();
+    const bool openEdges = loop.contains(QStringLiteral("opening")) || !entries.isEmpty();
+    const bool shown = std::all_of(entries.begin(), entries.end(),
+                                   [](const QJsonValue& value) {
+                                     const QJsonObject entry = value.toObject();
+                                     return pickedOpeningEntry(entry) &&
+                                            !entry.value(QStringLiteral("at")).toArray().isEmpty();
+                                   }) &&
+                       std::all_of(curves.begin(), curves.end(), shownSketchCurves);
     return loop.isEmpty() ||
-           ((loop.contains(QStringLiteral("edges")) || opening) && !loop.contains(QStringLiteral("edge_continuity")) &&
-            !loop.contains(QStringLiteral("points")) && (opening || !loop.contains(QStringLiteral("stitch"))));
+           ((loop.contains(QStringLiteral("edges")) || openEdges) && shown &&
+            !loop.contains(QStringLiteral("edge_continuity")) && !loop.contains(QStringLiteral("points")) &&
+            (openEdges || !loop.contains(QStringLiteral("stitch"))));
   };
   def.describe = [](const CommandState& state, const CommandContext&) {
     const QString described = QStringLiteral("Added patch of %1 items").arg(state.items(QStringLiteral("boundary")).size());
@@ -838,11 +1001,13 @@ QString addEdgesOf(QJsonObject& def, const CommandState& state, Built& result, c
     openings.append(QJsonObject{{QStringLiteral("faces"), faces}});
   }
   for (const SelectionItem& item : state.items(edgesKey)) {
-    if (isOpeningEdge(item)) {
-      openings.append(QJsonObject{{QStringLiteral("opening"), openingOf(item)}});
-    } else {
+    if (!isOpeningEdge(item)) {
       named.append(item);
     }
+  }
+  // Whole openings, and single free edges by their points (mitcad#1955).
+  for (const QJsonValue& entry : openingEntries(state.items(edgesKey))) {
+    openings.append(entry);
   }
   const QJsonArray edges = names(named, SelectKind::Edge);
   if (!edges.isEmpty()) {
@@ -858,11 +1023,6 @@ QString addSheetEdges(QJsonObject& def, const CommandState& state, Built& result
   return addEdgesOf(def, state, result, QStringLiteral("edges"), QStringLiteral("open_faces"));
 }
 
-// An entry of `openings` that is a whole opening picked by its free edge.
-bool wholeOpening(const QJsonObject& entry) {
-  return entry.size() == 1 && entry.value(QStringLiteral("opening")).isObject();
-}
-
 void loadEdgesOf(const QJsonObject& feature, CommandState& state, const CommandContext& context,
                  const QString& edgesKey, const QString& facesKey) {
   const QString body = str(feature, "body");
@@ -872,28 +1032,35 @@ void loadEdgesOf(const QJsonObject& feature, CommandState& state, const CommandC
                                    context)) {
     edges = *named;
   }
-  for (const QJsonValue& value : feature.value(QStringLiteral("openings")).toArray()) {
+  const QJsonArray openings = feature.value(QStringLiteral("openings")).toArray();
+  for (const QJsonValue& value : openings) {
     const QJsonObject entry = value.toObject();
-    if (wholeOpening(entry)) {
-      edges.append(openingEdgeItem(body, entry.value(QStringLiteral("opening")).toObject()));
+    if (pickedOpeningEntry(entry)) {
+      // A whole opening, or single free edges (mitcad#1955).
+      edges += openingEntryItems(body, entry);
     } else if (state.items(facesKey).isEmpty()) {
       state.setItems(facesKey, facesOf(body, entry.value(QStringLiteral("faces")).toArray(), context));
     }
   }
   state.setItems(edgesKey, edges);
+  // Whole Opening (on at first) off for single free edges; Blend
+  // Surface's ends share it.
+  if (!wholeOpeningsIn(openings)) {
+    state.setChecked(kWholeOpening, false);
+  }
 }
 
 void loadSheetEdges(const QJsonObject& feature, CommandState& state, const CommandContext& context) {
   loadEdgesOf(feature, state, context, QStringLiteral("edges"), QStringLiteral("open_faces"));
 }
 
-// Openings as the panel shows them: whole openings picked by a free edge,
-// and one entry of every opening of the faces.
+// Openings as the panel shows them: whole openings and single free edges
+// picked by a free edge, and one entry of every opening of the faces.
 bool sheetEdgesEditable(const QJsonObject& feature) {
   int faces = 0;
   for (const QJsonValue& value : feature.value(QStringLiteral("openings")).toArray()) {
     const QJsonObject opening = value.toObject();
-    if (wholeOpening(opening)) {
+    if (pickedOpeningEntry(opening)) {
       continue;
     }
     if (++faces > 1 || opening.contains(QStringLiteral("opening")) || opening.contains(QStringLiteral("at")) ||
@@ -907,9 +1074,10 @@ bool sheetEdgesEditable(const QJsonObject& feature) {
 QVector<InputDef> sheetEdgeInputs() {
   return {
       selectionInput(QStringLiteral("edges"), QObject::tr("Edges"), SelectKind::Edge, 0, 0)
-          .withTooltip(QObject::tr("Edges of one body; an open edge of a surface body takes its whole opening"))
+          .withTooltip(QObject::tr("Edges of one body, open edges of a surface body too"))
           .withoutMeshes()
-          .withOpenings(),
+          .withOpenings(kWholeOpening),
+      wholeOpeningInput(),
       selectionInput(QStringLiteral("open_faces"), QObject::tr("Open Edges Of"), SelectKind::Face, 0, 0)
           .withTooltip(QObject::tr("Faces of a surface body: their open edges are taken"))
           .withoutMeshes(),
@@ -1314,7 +1482,7 @@ QVector<InputDef> blendSideInputs(const QString& prefix, const QString& which) {
       selectionInput(key(prefix, "edges"), QObject::tr("%1 Edges").arg(which), SelectKind::Edge, 0, 0)
           .withTooltip(QObject::tr("Edges of one body that join into a chain"))
           .withoutMeshes()
-          .withOpenings(),
+          .withOpenings(kWholeOpening),
       selectionInput(key(prefix, "open_faces"), QObject::tr("%1 Open Edges Of").arg(which), SelectKind::Face, 0, 0)
           .withTooltip(QObject::tr("Faces of a surface body: their open edges are taken"))
           .withoutMeshes(),
@@ -1368,6 +1536,7 @@ CommandDef blendSurfaceCommand(const CommandContext& context) {
   def.inputs = blendSideInputs(QStringLiteral("from"), QObject::tr("First"));
   def.inputs += blendSideInputs(QStringLiteral("to"), QObject::tr("Second"));
   def.inputs += {
+      wholeOpeningInput(), // both ends' (mitcad#1955)
       checkInput(QStringLiteral("stitch"), QObject::tr("Stitch"), false)
           .withTooltip(QObject::tr("Sews the blend onto both bodies, into the first")),
   };
@@ -1453,11 +1622,11 @@ CommandDef boundarySurfaceCommand(const CommandContext& context) {
           .withTooltip(QObject::tr("The surface leaves the curves along their sketch's plane"))
           .withVisible(loop),
       selectionInput(QStringLiteral("edges"), QObject::tr("Boundary Edges"), SelectKind::Edge, 0, 0)
-          .withTooltip(QObject::tr("Edges of one body round the loop; an open edge of a surface body takes its "
-                                   "whole opening"))
+          .withTooltip(QObject::tr("Edges of one body round the loop, open edges of a surface body too"))
           .withoutMeshes()
-          .withOpenings()
+          .withOpenings(kWholeOpening)
           .withVisible(loop),
+      wholeOpeningInput().withVisible(loop),
       selectionInput(QStringLiteral("open_faces"), QObject::tr("Open Edges Of"), SelectKind::Face, 0, 0)
           .withTooltip(QObject::tr("Faces of a surface body: their open edges close the loop"))
           .withoutMeshes()
@@ -1604,7 +1773,8 @@ CommandDef matchSurfaceCommand(const CommandContext& context) {
       selectionInput(QStringLiteral("target_edges"), QObject::tr("Target Edges"), SelectKind::Edge, 0, 0)
           .withTooltip(QObject::tr("Edges of another body that join into a chain"))
           .withoutMeshes()
-          .withOpenings(),
+          .withOpenings(kWholeOpening),
+      wholeOpeningInput(),
       selectionInput(QStringLiteral("target_open_faces"), QObject::tr("Target Open Edges Of"), SelectKind::Face, 0, 0)
           .withTooltip(QObject::tr("Faces of the target surface body: their open edges are taken"))
           .withoutMeshes(),

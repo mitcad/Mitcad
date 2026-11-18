@@ -19,6 +19,7 @@
 
 #include "../framework/Selection.hpp"
 #include "DocumentSnapshot.hpp"
+#include "SketchCurveRows.hpp"
 
 class QScrollBar;
 class QTimer;
@@ -94,6 +95,11 @@ struct BrowserNode {
     // A folder of a component's Bodies folder (mitcad#1802: an imported
     // design's folders): uid and name its name; its bodies under it.
     BodyFolder,
+    // A curve of a sketch, under the sketch's row while a command's active
+    // input takes sketch curves (mitcad#1978, setSketchCurves): uid its
+    // sketch, `curve` its id, featureType its geometry (line, arc, ...);
+    // `feature` as its sketch row's.
+    SketchCurve,
   };
 
   Type type = Type::None;
@@ -106,6 +112,7 @@ struct BrowserNode {
   // in the Sketches folder. A sketch several features use has a row under
   // each, told apart by this.
   QString feature;
+  QString curve;      // a SketchCurve row: the curve's id in its sketch (c3)
   QString name;       // as shown
   QString path;       // the names from the root, "Root/Bodies/Body1"
   bool visible = true; // its light bulb
@@ -119,6 +126,12 @@ struct BrowserNode {
   // (mitcad#1700): its eye is off whatever `visible` says (dimmed when only
   // the isolation hides it), and a click adds it to the isolation.
   bool isolatedOut = false;
+  // A row under a hidden occurrence (mitcad#1995): the nearest one's name
+  // (`Fairlead:1`) and the paths of every hidden occurrence above it, the
+  // outermost first; empty when none. Its light bulb on, its eye is the
+  // dimmed closed one, and a click shows those occurrences.
+  QString hiddenWith;
+  QStringList hiddenParents;
   // A CAM operation's row: its setup's id; its state (up_to_date,
   // out_of_date, not_generated, suppressed).
   QString camSetup;
@@ -206,6 +219,18 @@ public:
   // Takes effect at the next rebuild; logged "Browser used sketches under
   // their features: on" when it changes.
   void setConsumeSketches(bool on);
+  // The curves listed under the sketches' rows (mitcad#1978), by sketch
+  // uid: while a command's active input takes sketch curves, each sketch's
+  // rows (in its folder, under its features, in every occurrence) get a
+  // row per curve, named in words (SketchCurveRows.hpp); a click picks the
+  // curve for the input as a click in the view does, and the pointer over
+  // it paints it in the view (curveHovered). Folded under the sketch's row
+  // until opened. An empty map takes the rows away (the command ended or
+  // its input takes no sketch curves). Changed in place, kept over
+  // rebuilds; logged when it changes: "Browser sketch curves: 2 sketches,
+  // 5 curves", "Browser sketch curves: none".
+  void setSketchCurves(const QHash<QString, QVector<BrowserSketchCurve>>& curves);
+  const QHash<QString, QVector<BrowserSketchCurve>>& sketchCurves() const { return m_sketchCurves; }
   bool consumeSketches() const { return m_consumeSketches; }
   // The active sketches of `component` that its features use (those the
   // Features folder lists), by uid, with how many of them use each: what
@@ -379,6 +404,9 @@ signals:
   // feature's row, or left them (an empty uid; mitcad#1327: the view paints
   // the places its notices name).
   void featureHovered(const QString& uid);
+  // The pointer came over a sketch curve's row (mitcad#1978), or left them
+  // (an invalid node): the view paints the curve.
+  void curveHovered(const mitcad::BrowserNode& node);
   // The fx badge of a bound row (mitcad#862): the pointer rests on it
   // (`pinned` false) or it was clicked; `anchor` is the badge in global
   // coordinates. The controller shows the row's bindings card.
@@ -512,6 +540,12 @@ private:
   QString m_loggedOwnerMarks = QStringLiteral("none"); // the marked rows' paths, as last logged
   // The rows logged last as left out by Isolate, by path (mitcad#1700).
   QSet<QString> m_loggedIsolatedOut;
+  // The rows logged last as hidden with a parent, by path (mitcad#1995),
+  // and the hidden occurrences above the rows being added now (their
+  // nearest one's name, their paths).
+  QSet<QString> m_loggedHiddenWith;
+  QString m_hiddenWith;
+  QStringList m_hiddenParents;
   // The CAM rows' states as last logged ("Browser CAM: …", mitcad#1013).
   QString m_loggedCam;
   QSet<QString> m_shownSelection;  // what showSelection last selected (items and features)
@@ -547,6 +581,15 @@ private:
   // it changes (its uid, empty: none).
   void hoverFeature(const BrowserNode& node);
   QString m_hoveredFeature;
+  // The sketch curve row under the pointer (mitcad#1978): curveHovered
+  // when it changes (its key, empty: none).
+  void hoverCurve(const BrowserNode& node);
+  QString m_hoveredCurve;
+  // setSketchCurves: the curves by sketch uid, their rows under a sketch's
+  // row (`sketchRow`), and the count line last logged.
+  void addCurveRows(QTreeWidgetItem* sketchRow);
+  QHash<QString, QVector<BrowserSketchCurve>> m_sketchCurves;
+  QString m_loggedSketchCurves = QStringLiteral("none");
   QWidget* m_topBar = nullptr; // setTopBar (mitcad#807)
   // The pointer resting on a row's fx badge (mitcad#862): after a moment
   // bindingsRequested (not pinned). The row's key, empty: on no badge.

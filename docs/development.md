@@ -2413,6 +2413,53 @@ runs one step after another. Build and lint use half the cores unless
   definitions, face and edge names) under its `testing` feature, and
   BUILD's test library in `core/model-tests/support`.
 
+### Port patches to OCCT
+
+MitCad's patches to OCCT (`third_party/vcpkg-ports/opencascade`, described
+in [its README](../third_party/vcpkg-ports/README.md)) are not sent to
+OCCT: its contributor agreement makes that too much work for each patch.
+They are held to the bar of OCCT's own contribution policy anyway
+(section 1 of `.github/copilot-instructions.md` in the OCCT repository,
+"fix the cause, not the symptom", and its section 5 on containers),
+mitcad#1986:
+
+- **The cause, not the symptom.** A patch's header names the case, the
+  symptom and its origin, and the patch changes the code that produces the
+  wrong result. No retry loops, no forced success, no healing of a result
+  that was built wrong.
+- **No swallowing catches.** Added code has no `catch (Standard_Failure)`
+  that leaves the operation looking successful. Where a callee reports its
+  own failure (`IsDone`, a status, `StdFail_NotDone`), the patch tests that
+  and returns the operation's failure; where it throws, the patch catches
+  that one class at that call and fails the current operation. A broken
+  invariant is traced back to its origin and fixed there. An optional
+  improvement that falls back to the old result is guarded by the exact
+  condition under which it is valid, not tried and ignored. The header says
+  which of these each handler is.
+- **A regression test per patch.** Each patch's header has a `Test:` line
+  naming a MitCad test (`geometry/tests/port/p<number>-<topic>.cpp`, ctest
+  `geometry.port.<number>`, or an older test of `geometry/tests`) on a small
+  synthetic body, not a stored model, that fails for the patch's reason
+  without the patch and passes with it, with the nearest boundary cases and,
+  where a shared algorithm changed, one other caller. A patch whose only
+  effect is speed names the bound its test checks, or says
+  `Test: none, because ...`. OCCT's own test cases are not copied into
+  this repository.
+- **Derived tolerances.** A tolerance or limit a patch adds is derived in
+  the header from the cause (the measured deviation and a stated margin);
+  the test has a case just inside and one just outside it.
+- **General conditions.** A patch's condition is the general geometric one,
+  stated in the header and tested on a second geometry beside the reported
+  case; where it is only the case, the header says so.
+- **OCCT's containers.** Code added to OCCT uses NCollection and
+  TCollection types, not the standard library's owned containers and
+  strings; interfaces to MitCad's own code stay as they are.
+
+A patch file keeps its number and its place in `portfile.cmake` when it
+changes; after a change the port gets the checks of any port change (the
+scoped check of the machine's platform), and the failing-before proof of a
+new test is one run of it against the port with and without the patch.
+
 ## Licence policy
 
 - MitCad's code is MIT with an SPDX identifier in every file.

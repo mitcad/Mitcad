@@ -8,14 +8,16 @@
 //! design file, the comparison of versions, copies of components and the
 //! export of a kept drawing.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
-use mitcad_model::Document;
 use mitcad_model::datum::Vec3;
 use mitcad_model::ids::{ComponentUid, LARGEST_U32_ID};
 use mitcad_model::internal::profile::{cross, dot};
 use mitcad_model::notice;
 use mitcad_model::testing::MockKernel;
+use mitcad_model::{Document, RecomputeMonitor};
 use mitcad_model_api::DocumentApi;
 use mitcad_model_diff::diff_states;
 use mitcad_model_drawing::Projection;
@@ -773,6 +775,153 @@ fn the_quick_path_follows_the_view_s_scale() {
             assert_eq!(calls(&doc), before, "an exact projection at any scale");
         }
     }
+}
+
+#[test]
+fn placing_a_view_projects_it_once_at_the_scale_that_fits() {
+    // mitcad#1997: a base view's fitting scale comes from its bodies'
+    // boxes, so that the kernel projects it once, at that scale (2:1: the
+    // blocks' 70 x 20 front on A3), inside the command; the sheet drawn
+    // after it takes it from the cache. From a triangulation too, whose
+    // projection follows the scale (mitcad#1671).
+    for polygonal in [false, true] {
+        let mut doc = blocks();
+        doc.kernel().projects_polygonal.set(polygonal);
+        command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+        let added = command(
+            &mut doc,
+            json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base",
+                   "direction": "front"}),
+        );
+        assert_eq!(projections(&added), [(1, 2, false)], "{added}");
+        assert_eq!(
+            *doc.kernel().projected_scales.borrow(),
+            [Some(2.0)],
+            "projected once, at its scale"
+        );
+        assert_eq!(view(&doc, "D1", 1)["scale_text"], "2:1");
+        let sheet = drawing(&doc, "D1");
+        assert_eq!(projections(&sheet), [(1, 2, true)], "{sheet}");
+        assert_eq!(doc.kernel().projected.borrow().len(), 1);
+        // Its scale changed: projected in the command (again only from a
+        // triangulation), the sheet after it from the cache.
+        let edited = command(
+            &mut doc,
+            json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "scale": "1:2"}),
+        );
+        let made: Vec<(u64, u64, bool)> = projections(&edited)
+            .into_iter()
+            .filter(|(_, _, cached)| !cached)
+            .collect();
+        if polygonal {
+            assert_eq!(made, [(1, 2, false)], "{edited}");
+            assert_eq!(
+                *doc.kernel().projected_scales.borrow(),
+                [Some(2.0), Some(0.5)]
+            );
+        } else {
+            assert!(
+                made.is_empty(),
+                "an exact projection at any scale: {edited}"
+            );
+        }
+        let sheet = drawing(&doc, "D1");
+        assert_eq!(projections(&sheet), [(1, 2, true)], "{sheet}");
+        // Fitted again: the scale from the boxes, its projection at 2:1
+        // from the cache.
+        let before = doc.kernel().projected.borrow().len();
+        command(
+            &mut doc,
+            json!({"cmd": "edit_drawing_view", "drawing": "D1", "view": 1, "scale": "fit"}),
+        );
+        assert_eq!(view(&doc, "D1", 1)["scale_text"], "2:1");
+        assert_eq!(doc.kernel().projected.borrow().len(), before);
+    }
+}
+
+#[test]
+fn a_cancel_while_a_view_is_projected_leaves_the_drawing_as_it_was() {
+    // mitcad#1997: the command's job cancelled while the kernel projects
+    // the new view (the job's test delay holds each projection): the
+    // command is rejected and the drawing stays as it was.
+    let mut doc = blocks();
+    command(&mut doc, json!({"cmd": "add_drawing", "size": "A3"}));
+    let before = doc.to_json();
+    let undo = undo_label(&doc);
+    let monitor = Arc::new(RecomputeMonitor::new());
+    monitor.set_test_delay(20_000);
+    doc.set_monitor(Some(Arc::clone(&monitor)));
+    let canceller = {
+        let monitor = Arc::clone(&monitor);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            monitor.cancel();
+        })
+    };
+    let started = std::time::Instant::now();
+    let error = refused(
+        &mut doc,
+        json!({"cmd": "add_drawing_view", "drawing": "D1", "type": "base",
+               "direction": "front", "at": [100, 120]}),
+    );
+    canceller.join().unwrap();
+    doc.set_monitor(None);
+    assert!(error.contains("canceled"), "{error}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the cancel ended the projection's wait"
+    );
+    assert_eq!(doc.to_json(), before);
+    assert_eq!(undo_label(&doc), undo);
+    assert!(
+        drawing(&doc, "D1")["sheets"][0]["views"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_sheet_drawn_only_from_the_cache_says_when_it_needs_the_kernel() {
+    // mitcad#1997: the `drawing` query with `cached` draws the sheet only
+    // from the projection cache; a model change leaves its view to be
+    // projected, and the query says so (`uncached`) without asking the
+    // kernel, its drawing and sheets listed all the same.
+    let mut doc = drawn();
+    let cached = |doc: &Document<MockKernel>| {
+        query(
+            doc,
+            json!({"query": "drawing", "drawing": "D1", "cached": true}),
+        )
+    };
+    let calls = |doc: &Document<MockKernel>| doc.kernel().projected.borrow().len();
+    let sheet = cached(&doc);
+    assert!(sheet.get("uncached").is_none(), "{sheet}");
+    assert!(sheet["sheets"][0]["groups"].is_array(), "{sheet}");
+    // Each drawn view names the group of its lines.
+    assert_eq!(
+        sheet["sheets"][0]["views"][0]["group"], "view-front",
+        "{sheet}"
+    );
+    command(
+        &mut doc,
+        json!({"cmd": "set_parameter", "name": "height", "value": 35}),
+    );
+    let before = calls(&doc);
+    let waiting = cached(&doc);
+    assert_eq!(waiting["uncached"], true, "{waiting}");
+    assert_eq!(calls(&doc), before, "the kernel was not asked");
+    assert!(waiting["sheets"][0].get("groups").is_none(), "{waiting}");
+    assert!(waiting.get("projections").is_none(), "{waiting}");
+    assert_eq!(waiting["sheets"].as_array().unwrap().len(), 1);
+    assert_eq!(waiting["sheets"][0]["views"].as_array().unwrap().len(), 2);
+    // Drawn as asked (the application's job), then from the cache.
+    let drawn = drawing(&doc, "D1");
+    assert!(drawn.get("uncached").is_none(), "{drawn}");
+    assert!(calls(&doc) > before);
+    let again = cached(&doc);
+    assert!(again.get("uncached").is_none(), "{again}");
+    assert_eq!(again["sheets"][0]["groups"], drawn["sheets"][0]["groups"]);
 }
 
 #[test]

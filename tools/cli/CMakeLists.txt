@@ -1571,14 +1571,6 @@ if(BUILD_TESTING)
   add_test(NAME cli.sketch_move_point_to_point COMMAND mitcad-cli run "${scripts}/sketch_move_point_to_point.json")
 endif()
 
-# mitcad-cli loads Qt's DLLs (mitcad-cli render): on Windows its tests find
-# them through PATH, as app.unit does.
-if(BUILD_TESTING AND WIN32)
-  get_property(mitcad_cli_tests DIRECTORY PROPERTY TESTS)
-  set_property(TEST ${mitcad_cli_tests} APPEND PROPERTY ENVIRONMENT_MODIFICATION
-    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
-endif()
-
 # Headless MCP stdio server (mitcad#124), and the real CLI transport test.
 target_sources(mitcad-cli PRIVATE mcp.cpp mcp.hpp mcp-connect.cpp mcp-connect.hpp
   "${app}/mcp/LocalEndpoint.cpp" "${app}/mcp/LocalEndpoint.hpp")
@@ -2506,10 +2498,11 @@ if(BUILD_TESTING)
 endif()
 
 # A rounding as large as the side faces beside its edges (GitHub #353,
-# mitcad#1819): the three reported designs' roundings are built at their size,
-# with no warning or information, the side faces taken away (skipped without
-# the report's archives under MITCAD_MITCAD_REPORTED; the synthetic cases are
-# geometry.suite.dressup_takes_face's stepped block).
+# mitcad#1819) or whose rounded corners meet (GitHub #403, mitcad#1954): the
+# reported designs' roundings are built at their size, with no warning or
+# information, the side faces taken away, or refused in words (skipped
+# without the report's archives under MITCAD_MITCAD_REPORTED; the synthetic
+# cases are geometry.suite.dressup_takes_face's blocks and stepped block).
 if(BUILD_TESTING)
   add_test(NAME cli.fillet_exact_reported
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
@@ -2582,7 +2575,11 @@ endif()
 # on the reported bent guide of GitHub #372 under MITCAD_MITCAD_REPORTED
 # (unpacked into the build folder): the profile sketch on a coordinate
 # system that the radius moves follows it, nothing that rebuilt fails, and
-# the body reaches 5 mm further (skipped without the report's archive).
+# the body reaches 5 mm further (skipped without the report's archive);
+# with the radius 13 mm smaller every feature rebuilds and the body stays
+# within its pads (mitcad#2009, OCCT port patch 1800); so too at 30, 25, 24
+# and 20 mm, the volume on the line through 32 and 45 mm (mitcad#2018,
+# OCCT port patches 1801 and 1802).
 if(BUILD_TESTING)
   add_test(NAME cli.fcstd_bend_reported
     COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
@@ -2610,6 +2607,33 @@ if(BUILD_TESTING)
     SKIP_REGULAR_EXPRESSION "f3d edit reported: skipped" TIMEOUT 900)
 endif()
 
+# Offset Face on two pieces of split faces at a corner (mitcad#1947,
+# GitHub #396): the reported design's pieces by -1 and -4.5 mm (skipped
+# without the report's archive under MITCAD_MITCAD_REPORTED).
+if(BUILD_TESTING)
+  add_test(NAME cli.offset_split_reported
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:mitcad-cli>"
+            "-DSCRIPTS=${CMAKE_CURRENT_SOURCE_DIR}/tests"
+            "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/offset-split-reported"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/offset-split-reported-test.cmake")
+  set_tests_properties(cli.offset_split_reported PROPERTIES
+    SKIP_REGULAR_EXPRESSION "offset split reported: skipped" TIMEOUT 900)
+endif()
+
+# A fillet on a knife edge, where a wall and a circle's cylinder meet
+# tangentially (GitHub #415, mitcad#1984): the reported sketch extruded and
+# rounded at the cusp, the tip beyond the ball taken away.
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_knife_edge COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/fillet_knife_edge.json")
+endif()
+
+# A knife edge running on into a square edge on its line, a bite cut part of
+# the way along a wall (mitcad#1988): the chain rounded, the knife edge
+# first, the square edge on its result.
+if(BUILD_TESTING)
+  add_test(NAME cli.fillet_knife_chain COMMAND mitcad-cli run "${CMAKE_CURRENT_SOURCE_DIR}/tests/fillet_knife_chain.json")
+endif()
+
 # A test's PASS_REGULAR_EXPRESSION is a list: a ';' in its text splits it
 # into alternatives of which any one passes, so that the test no longer
 # checks what it says (mitcad#1913). Write '.' for a ';' of the output.
@@ -2622,4 +2646,14 @@ if(BUILD_TESTING)
       message(SEND_ERROR "${test}: its PASS_REGULAR_EXPRESSION holds a ';', which makes it ${alternatives} alternatives of which any one passes: write '.' for it")
     endif()
   endforeach()
+endif()
+
+# Every mitcad-cli test (mitcad-cli loads Qt's DLLs, mitcad-cli render): on
+# Windows they find them through PATH, as app.unit does. Last in the file, so
+# that tests added below the old place get it too (0.66.0-rc1: the knife edge
+# tests failed with 0xc0000135, a DLL not found).
+if(BUILD_TESTING AND WIN32)
+  get_property(mitcad_cli_tests DIRECTORY PROPERTY TESTS)
+  set_property(TEST ${mitcad_cli_tests} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+    "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()

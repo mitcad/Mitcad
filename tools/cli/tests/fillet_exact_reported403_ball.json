@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #403's cube at 5 mm (mitcad#1954; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): a cube of 10 (Extrude1 F2, Body1), Fillet1 (F3) of radius 5 on all its edges (ten edges and a face's four), the corners' balls at both ends of each edge meeting in its middle. Built before as the cube rounded 0.1 % smaller with its warning and slivers of every face; now exactly as the cube's core (its middle point) swept by the ball: the ball of 5, one face, no warning or information."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F3"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 523.5987756, "faces": 1, "min_face_area": 0.01}}
+]

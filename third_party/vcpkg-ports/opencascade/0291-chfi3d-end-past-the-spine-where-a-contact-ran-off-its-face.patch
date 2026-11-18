@@ -29,11 +29,24 @@ and at its end by the face beyond the wall.
   crossing on that edge.
 
 Upstream: new.
+
+Failures (mitcad#1986): the projection of the kept contact onto the end
+piece's surface (GeomProjLib::Curve2d) fails with OCCT's reports of a
+computation it cannot make (ChFi3d_IsComputationFailure, 0016) where the
+contact does not lie on that surface: that end is not run on and is left
+to OCCT's corner as before. Any other failure (a broken invariant, a
+signal) is rethrown.
+Test: geometry/tests/test_fillet_corners.cpp (the tapering strip on a wall
+turning into its tangent plane); geometry/tests/port/p0291-end-past-the-spine.cpp
+(ctest geometry.port.0291): the same body mirrored, its top's edge with the
+wall rounded with 1: built, valid, the same volume removed as from the
+body itself; the cut plane lifted 0.75 at the wall so that the top stays
+at least 1.1 wide (the contact of 1 stays on it) as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 6cb3c97..2cb4d40 100644
+index 003b095a9..54c7cfa14 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -9342,6 +9342,148 @@ static void ChFi3d_JoinStandingEnd(TopOpeBRepDS_DataStructure&       DStr,
+@@ -9424,6 +9424,153 @@ static void ChFi3d_JoinStandingEnd(TopOpeBRepDS_DataStructure&       DStr,
    }
  }
  
@@ -142,8 +155,13 @@ index 6cb3c97..2cb4d40 100644
 +      OCC_CATCH_SIGNALS
 +      aPCK = GeomProjLib::Curve2d(CK, FK.FirstParameter(), FK.LastParameter(), SurfP);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      aPCK.Nullify();
 +    }
 +    GeomAPI_ProjectPointOnSurf aPrG(SurfQ->Value(aUVG.X(), aUVG.Y()), SurfP);
@@ -182,7 +200,7 @@ index 6cb3c97..2cb4d40 100644
  //=================================================================================================
  
  void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
-@@ -9370,6 +9512,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -9452,6 +9599,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        RolledCutToEnd(Stripe, false);
      }
      ChFi3d_JoinStandingEnd(DStr, Stripe, tolapp3d);
@@ -191,10 +209,10 @@ index 6cb3c97..2cb4d40 100644
    }
  }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index 2bae158..fb30580 100644
+index 90e54f3cc..052173c25 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -1455,10 +1455,25 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1456,10 +1456,25 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    // Choose proper SurfData
    int  num     = ChFi3d_IndexOfSurfData(Vtx, stripe, sens);
    bool isfirst = (sens == 1);
@@ -221,7 +239,7 @@ index 2bae158..fb30580 100644
      {
        SeqFil.Remove(num); // The surplus is removed
      }
-@@ -1466,7 +1481,8 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1467,7 +1482,8 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    else
    {
      for (; num > 1
@@ -231,7 +249,7 @@ index 2bae158..fb30580 100644
      {
        SeqFil.Remove(num); // The surplus is removed
        num--;
-@@ -3971,6 +3987,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -3976,6 +3992,21 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
    NCollection_List<TopoDS_Shape>::Iterator It3;
    F1 = TopoDS::Face(DStr.Shape(Fd->IndexOfS1()));
    F2 = TopoDS::Face(DStr.Shape(Fd->IndexOfS2()));
@@ -253,7 +271,7 @@ index 2bae158..fb30580 100644
    F3 = F1;
    // Where the walk round the vertex along the boundary of a face Fw of the
    // fillet steps at vertex V from Face[nb - 1] to Face[nb] and more than
-@@ -4706,6 +4737,64 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
+@@ -4733,6 +4764,64 @@ void ChFi3d_Builder::PerformIntersectionAtEnd(const int Index)
        occ::handle<GeomAdaptor_Curve> HC  = new GeomAdaptor_Curve(C, Ubid, Vbid);
        GeomAdaptor_Curve&             Cad = *HC;
        inters.Perform(HC, HGs);

@@ -42,8 +42,23 @@ concave), ChFi3d_Builder::RideOnOverlap (from Compute):
 - ChFi3d_MakeExtremities and PerformSetOfKGen enlarge the boxes of common
   points on arcs with the faces of those arcs; an arc that is no edge of
   the shape (that line) has none.
+
+Failures (mitcad#1986): RideOnOverlap is tried only for two stripes that
+are bad already (0013's computation over the face failed). A failure of
+the earlier stripe's computation again, or of the later one's ride, is
+OCCT's report that it cannot be made (ChFi3d_IsComputationFailure, added
+here to ChFi3d_Builder_0.hxx: a Standard_Failure thrown as such,
+StdFail_NotDone, Standard_ConstructionError or Standard_NotImplemented):
+the ride fails and both stay bad, so the fillet fails as before. Any other
+failure (a broken invariant, a signal) is rethrown.
+Test: geometry/tests/test_fillet_roof_slab.cpp (geometry.fillet_roof_slab);
+geometry/tests/port/p0016-ride-on-overlap.cpp (ctest geometry.port.0016): a
+plate 1 thick whose two top rims are rounded with 0.8, convex (the balls
+cannot make one rounding over the top): built, valid, the top consumed;
+the same with the slot's floor rims, concave; and a plate 2 thick (0.8
+fits: two roundings as stock).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 3b50a0d..85f5818 100644
+index 3b50a0d0..78ee9980 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -18,11 +18,20 @@
@@ -67,7 +82,7 @@ index 3b50a0d..85f5818 100644
  #include <ChFi3d_Builder.hxx>
  #include <ChFi3d_Builder_0.hxx>
  #include <ChFiDS_CommonPoint.hxx>
-@@ -489,6 +498,362 @@ void ChFi3d_Builder::RemoveCoincidentStripes()
+@@ -489,6 +498,370 @@ void ChFi3d_Builder::RemoveCoincidentStripes()
    }
  }
  
@@ -187,8 +202,13 @@ index 3b50a0d..85f5818 100644
 +    occ::handle<ChFiDS_Stripe> aStripe = A;
 +    PerformSetOfSurf(aStripe);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (A's computation failed: the ride fails, A and B stay bad stripes.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  // A's contact line on F (one surface data).
@@ -279,7 +299,10 @@ index 3b50a0d..85f5818 100644
 +  }
 +  catch (Standard_Failure const& anException)
 +  {
-+    (void)anException;
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  // B's side on the line: its common points at the ends are on the arcs
@@ -430,7 +453,7 @@ index 3b50a0d..85f5818 100644
  //=================================================================================================
  
  void ChFi3d_Builder::Compute()
-@@ -635,6 +1000,59 @@ void ChFi3d_Builder::Compute()
+@@ -635,6 +1008,59 @@ void ChFi3d_Builder::Compute()
        }
      }
      done = badstripes.IsEmpty();
@@ -490,7 +513,7 @@ index 3b50a0d..85f5818 100644
    }
    if (done)
    {
-@@ -702,6 +1120,8 @@ void ChFi3d_Builder::Compute()
+@@ -702,6 +1128,8 @@ void ChFi3d_Builder::Compute()
    if (done)
    {
      int i1;
@@ -499,7 +522,7 @@ index 3b50a0d..85f5818 100644
      for (itel.Initialize(myListStripe), i1 = 0; itel.More(); itel.Next(), i1++)
      {
        const occ::handle<ChFiDS_Stripe>& st = itel.Value();
-@@ -1293,6 +1713,11 @@ void ChFi3d_Builder::Reset()
+@@ -1293,6 +1721,11 @@ void ChFi3d_Builder::Reset()
    myOverlapFaces.Clear();
    myOverlapEdges.Clear();
    myDroppedStripes.Clear();
@@ -512,7 +535,7 @@ index 3b50a0d..85f5818 100644
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
    for (itel.Initialize(myListStripe); itel.More();)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 63137ca..ba42ea6 100644
+index 63137cae..ba42ea6f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -770,6 +770,15 @@ protected:
@@ -562,7 +585,7 @@ index 63137ca..ba42ea6 100644
    //! ons lies on an edge of a face at the vertex Bout ending the spine.
    Standard_EXPORT bool ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index b31bc45..ca76c9a 100644
+index b31bc459..ca76c9ae 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -3862,22 +3862,22 @@ void ChFi3d_StripeEdgeInter(const occ::handle<ChFiDS_Stripe>& theStripe1,
@@ -592,8 +615,43 @@ index b31bc45..ca76c9a 100644
        {
          aFI1 = aDat1->InterferenceOnS2();
          aFI2 = aDat2->InterferenceOnS2();
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index 6859a554..2571e2c7 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -50,11 +50,30 @@
+ #include <GeomAbs_Shape.hxx>
+ #include <gp_Pnt.hxx>
+ #include <NCollection_Array1.hxx>
++#include <Standard_ConstructionError.hxx>
++#include <Standard_Failure.hxx>
++#include <Standard_NotImplemented.hxx>
++#include <StdFail_NotDone.hxx>
++
++#include <typeinfo>
+ #ifdef OCCT_DEBUG
+   #include <OSD_Chronometer.hxx>
+ extern OSD_Chronometer simul, elspine, chemine;
+ #endif
+ 
++//! Whether theFailure is one with which OCCT's fillet reports a computation it cannot make:
++//! a Standard_Failure thrown as such (a walk or an approximation that fails, "Failed
++//! processing"), StdFail_NotDone, Standard_ConstructionError or Standard_NotImplemented. Any
++//! other class (an index out of range, a null object, a signal caught as an exception) is a
++//! broken invariant, which a handler of the port's patches rethrows (mitcad#1986).
++inline bool ChFi3d_IsComputationFailure(const Standard_Failure& theFailure)
++{
++  return typeid(theFailure) == typeid(Standard_Failure)
++         || dynamic_cast<const StdFail_NotDone*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_ConstructionError*>(&theFailure) != nullptr
++         || dynamic_cast<const Standard_NotImplemented*>(&theFailure) != nullptr;
++}
++
+ double ChFi3d_InPeriod(const double U, const double UFirst, const double ULast, const double Eps);
+ 
+ void ChFi3d_Boite(const gp_Pnt2d& p1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index ab95d71..94b8c52 100644
+index c535885f..d4f04409 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -1424,6 +1424,79 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
@@ -719,16 +777,16 @@ index ab95d71..94b8c52 100644
        {
          ChFi3d_EnlargeBox(cpfin2.Arc(), EFMap(cpfin2.Arc()), cpfin2.ParameterOnArc(), b2);
        }
-@@ -3007,7 +3080,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3006,7 +3079,7 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+ 
+     // (A face between this edge and another stripe's narrower than both
+     // roundings: the start overflows it.)
+-    const bool anOverflowOnly = myOverlapStripes.Contains(Stripe);
++    const bool anOverflowOnly = myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe);
      try
      {
        OCC_CATCH_SIGNALS
--      if (myOverlapStripes.Contains(Stripe))
-+      if (myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe))
-       {
-         // (A face between this edge and another stripe's narrower than both
-         // roundings: the start overflows it.)
-@@ -3821,7 +3894,8 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -3829,7 +3902,8 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
  
      ConexFaces(Spine, iedge, HS1, HS2);
  
@@ -738,7 +796,7 @@ index ab95d71..94b8c52 100644
      {
        intf = ((iedge == 1) && !Spine->IsPeriodic());
        intl = ((iedge == Spine->NbEdges()) && !Spine->IsPeriodic());
-@@ -4504,11 +4578,11 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -4512,11 +4586,11 @@ void ChFi3d_Builder::PerformSetOfKGen(occ::handle<ChFiDS_Stripe>& Stripe, const
        nextp2.SetTolerance(tol2);
  
        Bnd_Box b1, b2;
@@ -753,7 +811,7 @@ index ab95d71..94b8c52 100644
          ChFi3d_EnlargeBox(curp2.Arc(), myEFMap(curp2.Arc()), curp2.ParameterOnArc(), b2);
        }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index a421653..4aea6e8 100644
+index a4216532..4aea6e81 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 @@ -1251,6 +1251,24 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa

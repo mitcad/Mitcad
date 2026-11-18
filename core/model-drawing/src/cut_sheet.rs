@@ -25,13 +25,19 @@
 //! it ([`placed`]). The writers put outer boundaries on the layer
 //! `CUT_OUTER` and inner loops on `CUT_INNER` (the Flat Pattern's names),
 //! and the parts' names on `LABEL` when asked.
+//!
+//! A part can be a sheet-metal body's Flat Pattern instead (mitcad#1980,
+//! [`flat_part_view`]): its developed outline as cut edges, and its bend
+//! lines on the Flat Pattern's layers `BEND_UP` and `BEND_DOWN`.
 
 use std::collections::HashMap;
 use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mitcad_model::sheet::flat_dxf::{CUT_INNER, CUT_OUTER};
+use mitcad_model::sheet::flat_dxf::{
+    BEND_DOWN, BEND_UP, CUT_INNER, CUT_OUTER, FlatLoop, FlatPiece,
+};
 
 use super::bspline::{self, Spline2};
 use super::sheet::{Anchor, Group, Item, Pen, Sheet, text_width};
@@ -528,15 +534,104 @@ impl Outline {
 }
 
 /// A part worked out from its body: the face it is seen along and its
-/// outline there, with the body's planar faces to choose from.
+/// outline there, with the body's planar faces to choose from; or its
+/// Flat Pattern's outline and bend lines (mitcad#1980).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PartView {
-    /// The face's topological name.
+    /// The face's topological name; empty for a Flat Pattern.
     pub face: String,
     /// The body's planar faces with their areas (mm²), in the kernel's
     /// order.
     pub faces: Vec<(String, f64)>,
     pub outline: Outline,
+    /// A Flat Pattern's bend lines, in the outline's coordinates.
+    pub bends: Vec<BendLine>,
+}
+
+/// A bend line of a Flat Pattern part (mitcad#1980): written on
+/// `BEND_UP` when the bend's inside is on the side the pattern is seen
+/// from, else on `BEND_DOWN`, as the Flat Pattern's DXF has them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BendLine {
+    pub start: P2,
+    pub end: P2,
+    pub up: bool,
+}
+
+/// A Flat Pattern as a cut sheet's part (mitcad#1980): its loops put end
+/// to end, each exterior running counter-clockwise and each hole
+/// clockwise, the exteriors first and each kind the largest first, and
+/// its bend lines.
+pub fn flat_part_view(loops: &[FlatLoop], bends: Vec<BendLine>) -> PartView {
+    let mut out: Vec<OutlineLoop> = loops
+        .iter()
+        .filter(|l| !l.pieces.is_empty())
+        .map(|l| {
+            let pieces: Vec<Piece> = l
+                .pieces
+                .iter()
+                .map(|piece| match piece {
+                    FlatPiece::Line(a, b) => Piece::Line(*a, *b),
+                    FlatPiece::Arc {
+                        center,
+                        radius,
+                        start,
+                        sweep,
+                    } => Piece::Arc {
+                        center: *center,
+                        radius: *radius,
+                        start: *start,
+                        sweep: *sweep,
+                    },
+                    FlatPiece::Polyline(points) => Piece::Polyline(points.clone()),
+                })
+                .collect();
+            let mut found = OutlineLoop {
+                outer: l.outer,
+                pieces: end_to_end(pieces),
+            };
+            // The material on the pieces' left.
+            if (found.signed_area() > 0.0) != found.outer {
+                found.pieces = found.pieces.iter().rev().map(Piece::reversed).collect();
+            }
+            found
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.outer.cmp(&a.outer).then(
+            b.signed_area()
+                .abs()
+                .partial_cmp(&a.signed_area().abs())
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+    PartView {
+        face: String::new(),
+        faces: Vec::new(),
+        outline: Outline { loops: out },
+        bends,
+    }
+}
+
+/// A loop's pieces each turned to start where the one before it ends.
+fn end_to_end(mut pieces: Vec<Piece>) -> Vec<Piece> {
+    const JOIN: f64 = 1e-6;
+    if pieces.len() < 2 {
+        return pieces;
+    }
+    // The first runs towards the second.
+    let (second_start, second_end) = (pieces[1].start(), pieces[1].end());
+    let first_end = pieces[0].end();
+    if dist(first_end, second_start) > JOIN && dist(first_end, second_end) > JOIN {
+        pieces[0] = pieces[0].reversed();
+    }
+    for i in 1..pieces.len() {
+        let at = pieces[i - 1].end();
+        if dist(pieces[i].start(), at) > JOIN && dist(pieces[i].end(), at) <= JOIN {
+            pieces[i] = pieces[i].reversed();
+        }
+    }
+    pieces
 }
 
 /// The box of loops: lower left and upper right corners.
@@ -1328,6 +1423,24 @@ pub fn placed(outline: &Outline, place: P2, degrees: f64) -> Vec<OutlineLoop> {
         .collect()
 }
 
+/// A Flat Pattern part's bend lines on the sheet (mitcad#1980), moved and
+/// turned with its outline as [`placed`] places it.
+pub fn placed_bends(view: &PartView, place: P2, degrees: f64) -> Vec<BendLine> {
+    let mid = middle(&view.outline);
+    let angle = degrees.to_radians();
+    let (s, c) = angle.sin_cos();
+    let by = sub(place, [c * mid[0] - s * mid[1], s * mid[0] + c * mid[1]]);
+    let f = |p: P2| [c * p[0] - s * p[1] + by[0], s * p[0] + c * p[1] + by[1]];
+    view.bends
+        .iter()
+        .map(|b| BendLine {
+            start: f(b.start),
+            end: f(b.end),
+            up: b.up,
+        })
+        .collect()
+}
+
 /// A part laid out on the sheet.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPart {
@@ -1336,6 +1449,8 @@ pub struct PlacedPart {
     pub name: String,
     /// Sheet millimetres.
     pub loops: Vec<OutlineLoop>,
+    /// A Flat Pattern part's bend lines (mitcad#1980), sheet millimetres.
+    pub bends: Vec<BendLine>,
 }
 
 /// Whether loops reach out of a sheet of this size.
@@ -1490,6 +1605,14 @@ pub fn sheet(width: f64, height: f64, title: &str, parts: &[PlacedPart]) -> Shee
                 group.items.push(item(Pen::Thick, piece));
             }
         }
+        // A Flat Pattern's bend lines (mitcad#1980).
+        for bend in &part.bends {
+            group.items.push(Item::Line {
+                pen: Pen::Chain,
+                a: bend.start,
+                b: bend.end,
+            });
+        }
         groups.push(group);
         let mut label = Group::new("view-label");
         label.id = Some(format!("part-{}-label", part.id));
@@ -1520,6 +1643,12 @@ pub fn dxf(parts: &[PlacedPart], labels: bool) -> mitcad_dxf::Drawing {
     use mitcad_dxf::{Drawing, Geometry, Layer, Point2, Spline, Text, Units};
     let mut out = Drawing::new(Units::Millimeters);
     let mut layers = vec![(CUT_OUTER, 7), (CUT_INNER, 6)];
+    // A Flat Pattern's bend lines on its layers (mitcad#1980).
+    let bends = parts.iter().any(|p| !p.bends.is_empty());
+    if bends {
+        layers.push((BEND_UP, 3));
+        layers.push((BEND_DOWN, 1));
+    }
     if labels {
         layers.push((LABEL, 3));
     }
@@ -1594,6 +1723,15 @@ pub fn dxf(parts: &[PlacedPart], labels: bool) -> mitcad_dxf::Drawing {
                 };
                 out.push(layer, geometry);
             }
+        }
+        for bend in &part.bends {
+            out.push(
+                if bend.up { BEND_UP } else { BEND_DOWN },
+                Geometry::Line {
+                    start: p(bend.start),
+                    end: p(bend.end),
+                },
+            );
         }
         if labels {
             let height = label_height(&part.loops);
@@ -1730,6 +1868,29 @@ pub fn svg(parts: &[PlacedPart], width: f64, height: f64, labels: bool) -> Strin
             }
         }
         let _ = writeln!(s, "</g>");
+    }
+    // A Flat Pattern's bend lines (mitcad#1980), each an open path.
+    if parts.iter().any(|p| !p.bends.is_empty()) {
+        for (layer, up, colour) in [(BEND_UP, true, "#00a000"), (BEND_DOWN, false, "#a000a0")] {
+            let _ = writeln!(
+                s,
+                r#"<g id="{layer}" inkscape:groupmode="layer" inkscape:label="{layer}" fill="none" stroke="{colour}" stroke-width="0.1">"#
+            );
+            for part in parts {
+                for bend in part.bends.iter().filter(|b| b.up == up) {
+                    let _ = writeln!(
+                        s,
+                        r#"<path data-part="{}" d="M {} {} L {} {}"/>"#,
+                        part.id,
+                        n(bend.start[0]),
+                        n(height - bend.start[1]),
+                        n(bend.end[0]),
+                        n(height - bend.end[1])
+                    );
+                }
+            }
+            let _ = writeln!(s, "</g>");
+        }
     }
     if labels {
         let _ = writeln!(

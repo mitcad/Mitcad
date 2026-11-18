@@ -6,7 +6,7 @@ expect-ever 'Native UI: AppKit shell with embedded OCCT viewport'
 expect-model-bodies 1 4000
 capture-undo-depth baseline
 command make.print3d
-expect-log '^Panel Send to Slicer input printer shows: Slicer default$'
+expect-log '^Panel Send to Slicer input printer shows: None \(slicer.s own\)$'
 native-pointer-click input_printer
 focus-dialog '^Printer Picker$'
 expect-log '^Native picker libraryPicker at input_printer: '

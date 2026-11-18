@@ -256,11 +256,20 @@ impl<K: Kernel> Importer<'_, '_, K> {
                     degree,
                     periodic,
                     nurbs,
+                    handles,
                 } => {
                     let ids: Vec<String> = pts.iter().map(|p| pid(*p)).collect::<Result<_, _>>()?;
                     if *periodic {
                         t.dropped
                             .push(format!("{}: periodic (taken as an open spline)", c.id));
+                    }
+                    // Dragged tangent handles (format 55): MitCad fits the
+                    // spline through its points with tangents of its own.
+                    if !handles.is_empty() && !*control {
+                        t.dropped.push(format!(
+                            "{}: its tangent handles (it runs through its fit points as MitCad fits them)",
+                            c.id
+                        ));
                     }
                     if *control {
                         let mut e =
@@ -312,6 +321,15 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 }
                 C::PointOnCurve { p, c } => {
                     Some(json!({"type": "coincident", "point": pid(*p)?, "entity": cid(*c)?}))
+                }
+                // A point at a share of a curve's length (format 51): on the
+                // curve where the file places it; the share is left out.
+                C::PointAlong { p, c: curve, .. } => {
+                    t.dropped.push(format!(
+                        "{}: its share along the curve (the point stays on the curve where it is)",
+                        c.id
+                    ));
+                    Some(json!({"type": "coincident", "point": pid(*p)?, "entity": cid(*curve)?}))
                 }
                 C::Horizontal { l } => Some(json!({"type": "horizontal", "line": cid(*l)?})),
                 C::Vertical { l } => Some(json!({"type": "vertical", "line": cid(*l)?})),
@@ -647,6 +665,7 @@ fn constraint_points(c: &ConstraintKind) -> Vec<usize> {
         }
         C::Symmetric { p, q, .. } => vec![p, q],
         C::PointOnCurve { p, .. }
+        | C::PointAlong { p, .. }
         | C::Midpoint { p, .. }
         | C::Fix { p }
         | C::PointLineDistance { p, .. }

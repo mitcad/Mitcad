@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <array>
 #include <exception>
 #include <map>
 #include <optional>
@@ -11,30 +12,27 @@
 
 #include <BOPAlgo_Alerts.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
-#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
-#include <BRepBuilderAPI_Transform.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
-#include <BRepFill.hxx>
 #include <BRepGProp.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffset_MakeOffset.hxx>
-#include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepTopAdaptor_FClass2d.hxx>
+#include <Geom2d_Curve.hxx>
 #include <BRepTools.hxx>
+#include <BRepTools_History.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <GProp_GProps.hxx>
-#include <GeomAPI_PointsToBSpline.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
-#include <Geom_BSplineCurve.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_IndexedDataMap.hxx>
 #include <NCollection_List.hxx>
@@ -47,17 +45,21 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopoDS_Shell.hxx>
-#include <NCollection_Array1.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Solid.hxx>
+#include <gp_Cylinder.hxx>
+#include <gp_Sphere.hxx>
+#include <gp_Torus.hxx>
 #include <gp_Pnt2d.hxx>
-#include <gp_Trsf.hxx>
+#include <gp_Vec2d.hxx>
 
 #include "face_join.hpp"
 #include "face_select.hpp"
 #include "history.hpp"
 #include "mitcad/geometry/cancel.hpp"
 #include "mitcad/geometry/split.hpp"
+#include "mitcad/geometry/user_error.hpp"
 #include "replace.hpp"
 #include "shell_cavity.hpp"
 #include "util.hpp"
@@ -802,39 +804,29 @@ detail::FaceNamer move_faces(const Shape& input, const std::vector<std::pair<int
   return namer;
 }
 
-// Offset faces across seams (mitcad#1928): a moved face that continues
-// smoothly into a face that stays, as the pieces of a split face do, cannot
-// be moved by the geometry kernel's offset alone: the neighbour that stays
-// on the moved face's surface (or one tangent to it) cannot extend or
-// shorten along its own surface to meet it. There the moved faces and the
-// faces they continue into smoothly are offset together, the region between
-// the body and that offset is cut at the seams by walls along the moved
-// faces' normals, and only its parts at the moved faces are removed from
-// the body (inward) or added to it (outward): the seam becomes a step.
-
-// Why an offset across a seam failed, for the error.
-constexpr const char* kSeamFailure =
-    "the offset faces continue smoothly into faces that stay, and the step between them could not "
-    "be made";
+// Offset faces across seams (mitcad#1928, mitcad#1947): a moved face that
+// continues smoothly into a face that stays, as the pieces of a split face
+// do, cannot be moved by the geometry kernel's offset of the body: the
+// neighbour that stays on the moved face's surface (or one tangent to it)
+// cannot extend or shorten along its own surface to meet it. There only the
+// chosen faces move, all by one path, flat or curved: the chosen faces that
+// share edges are thickened together by the distance along their normals
+// (into the body for an inward offset, out of it for an outward one). Where
+// two of them meet, their offsets are extended or trimmed to each other, so
+// convex and concave corners at any angle close; their free sides become
+// walls along their normals. Each such cell is cut from the body (inward)
+// or fused to it (outward): a seam becomes a step. Where a moved face meets
+// a face that stays at a sharp edge that is not square to it, the cell's
+// wall there is then removed, so that the face that stays extends or trims
+// along its own surface, at any angle, as for whole faces (mitcad#1973); so
+// a pocket, hole or boss inside a moved face keeps its walls on their
+// surfaces and gets shallower or deeper by the distance.
 
 // An edge where a moved face continues smoothly into a face that stays.
 struct Seam {
   TopoDS_Edge edge;
   int face = -1;             // the moved face
-  bool one_surface = false; // the face that stays lies on the moved face's surface
 };
-
-// Whether two faces lie on one surface: coplanar planes, or one surface
-// (detail::same_surface), as the pieces of a split face do.
-bool on_one_surface(const TopoDS_Face& a, const TopoDS_Face& b) {
-  const std::optional<gp_Pln> pa = detail::face_plane(a);
-  const std::optional<gp_Pln> pb = detail::face_plane(b);
-  if (pa && pb) {
-    return pa->Axis().Direction().IsParallel(pb->Axis().Direction(), 1.0e-9) &&
-           pa->Distance(pb->Location()) < 1.0e-6;
-  }
-  return !pa && !pb && detail::same_surface(BRep_Tool::Surface(a), BRep_Tool::Surface(b));
-}
 
 std::vector<Seam> seams_of(const Shape& body, const std::vector<int>& moved) {
   NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
@@ -853,7 +845,7 @@ std::vector<Seam> seams_of(const Shape& body, const std::vector<int>& moved) {
         const int g = body.face_index(other);
         if (g >= 0 && std::find(moved.begin(), moved.end(), g) == moved.end() &&
             detail::is_smooth(edge, face, TopoDS::Face(other))) {
-          seams.push_back({edge, f, on_one_surface(face, TopoDS::Face(other))});
+          seams.push_back({edge, f});
           seen.Add(edge);
           break;
         }
@@ -863,51 +855,48 @@ std::vector<Seam> seams_of(const Shape& body, const std::vector<int>& moved) {
   return seams;
 }
 
-// The wall that cuts the region between the body and the offset at a seam:
-// the seam swept along the moved face's normal `reach` to each side. On a
-// planar face a prism of the seam (a straight seam lengthened by `reach` at
-// both ends, so that it cuts through the region where it ends on its
-// boundary); on a curved face a ruled face between the seam's points moved
-// along the face's normal at each.
-TopoDS_Shape seam_wall(const Shape& body, const Seam& seam, double reach) {
-  const TopoDS_Face& face = body.face(seam.face);
-  const BRepAdaptor_Curve curve(seam.edge);
-  const double first = curve.FirstParameter();
-  const double last = curve.LastParameter();
-  if (const std::optional<gp_Pln> plane = detail::face_plane(face)) {
-    const gp_Vec normal(plane->Axis().Direction());
-    TopoDS_Shape base = seam.edge;
-    if (curve.GetType() == GeomAbs_Line) {
-      const gp_Pnt a = curve.Value(first);
-      const gp_Pnt b = curve.Value(last);
-      const gp_Vec along(a, b);
-      if (along.Magnitude() > Precision::Confusion()) {
-        const gp_Vec past = along.Normalized() * reach;
-        base = BRepBuilderAPI_MakeEdge(a.Translated(-past), b.Translated(past)).Edge();
+// The moved faces in groups of faces that share edges, each in the order
+// they were chosen.
+std::vector<std::vector<int>> sharing_edges(const Shape& body, const std::vector<int>& moved) {
+  std::vector<std::size_t> parent(moved.size());
+  for (std::size_t i = 0; i < moved.size(); ++i) {
+    parent[i] = i;
+  }
+  const auto root = [&parent](std::size_t i) {
+    while (parent[i] != i) {
+      i = parent[i] = parent[parent[i]];
+    }
+    return i;
+  };
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+      ancestors;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, ancestors);
+  for (std::size_t i = 0; i < moved.size(); ++i) {
+    for (TopExp_Explorer it(body.face(moved[i]), TopAbs_EDGE); it.More(); it.Next()) {
+      if (!ancestors.Contains(it.Current())) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : ancestors.FindFromKey(it.Current())) {
+        const auto at = std::find(moved.begin(), moved.end(), body.face_index(other));
+        if (at != moved.end()) {
+          parent[root(static_cast<std::size_t>(at - moved.begin()))] = root(i);
+        }
       }
     }
-    gp_Trsf down;
-    down.SetTranslation(-normal * reach);
-    const TopoDS_Shape start = BRepBuilderAPI_Transform(base, down, true).Shape();
-    return BRepPrimAPI_MakePrism(start, normal * (2.0 * reach), true).Shape();
   }
-  constexpr int kSamples = 33;
-  NCollection_Array1<gp_Pnt> below(1, kSamples);
-  NCollection_Array1<gp_Pnt> above(1, kSamples);
-  for (int i = 0; i < kSamples; ++i) {
-    const double t = static_cast<double>(i) / (kSamples - 1);
-    const gp_Pnt p = curve.Value(first + (last - first) * t);
-    const gp_Vec normal(detail::normal_on_edge(face, seam.edge, t));
-    below.SetValue(i + 1, p.Translated(-normal * reach));
-    above.SetValue(i + 1, p.Translated(normal * reach));
+  std::vector<std::vector<int>> groups;
+  std::vector<std::size_t> roots;
+  for (std::size_t i = 0; i < moved.size(); ++i) {
+    const std::size_t r = root(i);
+    const auto at = std::find(roots.begin(), roots.end(), r);
+    if (at == roots.end()) {
+      roots.push_back(r);
+      groups.push_back({moved[i]});
+    } else {
+      groups[static_cast<std::size_t>(at - roots.begin())].push_back(moved[i]);
+    }
   }
-  GeomAPI_PointsToBSpline low(below, 3, 8, GeomAbs_C2, 1.0e-6);
-  GeomAPI_PointsToBSpline high(above, 3, 8, GeomAbs_C2, 1.0e-6);
-  if (!low.IsDone() || !high.IsDone()) {
-    throw std::runtime_error(kSeamFailure);
-  }
-  return BRepFill::Face(BRepBuilderAPI_MakeEdge(low.Curve()).Edge(),
-                        BRepBuilderAPI_MakeEdge(high.Curve()).Edge());
+  return groups;
 }
 
 // A point inside the face, if one is found.
@@ -936,128 +925,347 @@ bool on_face(const gp_Pnt& point, const TopoDS_Face& face) {
   return distance.IsDone() && distance.Value() <= std::max(1.0e-5, BRep_Tool::Tolerance(face));
 }
 
-// The shape `operation` makes of the first shape and the others (on copies
-// of them, which share their sub-shapes).
-template <class Operation>
-TopoDS_Shape boolean_of(const std::vector<TopoDS_Shape>& shapes) {
-  const detail::InputCopy copy(shapes);
-  Operation operation;
-  NCollection_List<TopoDS_Shape> arguments;
-  arguments.Append(copy.shape(0));
-  NCollection_List<TopoDS_Shape> tools;
-  for (std::size_t i = 1; i < shapes.size(); ++i) {
-    tools.Append(copy.shape(i));
+// The direction from the middle of the edge into the face, along the face
+// (to a point of the face a short way off the edge); empty when none is
+// found.
+std::optional<gp_Vec> into_face(const TopoDS_Face& face, const TopoDS_Edge& edge) {
+  double first = 0.0;
+  double last = 0.0;
+  const occ::handle<Geom2d_Curve> pcurve = BRep_Tool::CurveOnSurface(edge, face, first, last);
+  if (pcurve.IsNull()) {
+    return std::nullopt;
   }
-  operation.SetArguments(arguments);
-  operation.SetTools(tools);
-  operation.SetNonDestructive(true);
-  detail::build(operation);
-  if (!operation.IsDone() || operation.HasErrors()) {
-    throw std::runtime_error(kSeamFailure);
+  gp_Pnt2d uv;
+  gp_Vec2d along;
+  pcurve->D1((first + last) / 2.0, uv, along);
+  if (along.Magnitude() < gp::Resolution()) {
+    return std::nullopt;
   }
-  return operation.Shape();
+  double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+  BRepTools::UVBounds(face, u0, u1, v0, v1);
+  const gp_Vec2d across = gp_Vec2d(-along.Y(), along.X()).Normalized() * (1.0e-4 * std::max(u1 - u0, v1 - v0));
+  BRepTopAdaptor_FClass2d classifier(face, Precision::PConfusion());
+  const BRepAdaptor_Surface surface(face);
+  const gp_Pnt at = surface.Value(uv.X(), uv.Y());
+  for (const double side : {1.0, -1.0}) {
+    const gp_Pnt2d probe = uv.Translated(across * side);
+    if (classifier.Perform(probe) == TopAbs_IN) {
+      return gp_Vec(at, surface.Value(probe.X(), probe.Y()));
+    }
+  }
+  return std::nullopt;
 }
 
-// The body with the cells removed (Cut) or added (Fuse), its faces' names
-// carried, the coincident faces merged; the faces without a name then take
-// those of the offset body's face they lie in (the moved faces and the
-// neighbours' continuations), the rest are the steps.
-template <class Operation>
-detail::FaceNamer apply_cells(const Shape& body, const std::vector<TopoDS_Shape>& cells,
-                              const Shape& offset) {
-  std::vector<TopoDS_Shape> inputs{body.occt()};
-  inputs.insert(inputs.end(), cells.begin(), cells.end());
-  const detail::InputCopy copy(inputs);
-  Operation operation;
+// Where along an edge the angle between its faces is looked at, and the
+// angle (radians) up to which they meet tangentially there (as
+// detail::is_smooth takes it).
+constexpr std::array<double, 5> kSharpSamples{0.0, 0.25, 0.5, 0.75, 1.0};
+constexpr double kTangentAngle = 1.0e-3;
+
+// Points inside the edges where the moved faces meet faces that stay at an
+// angle, at a quarter, the middle and three quarters of each, with the face
+// that stays there: the sides whose walls are removed so that the face that
+// stays extends or trims along its own surface. The walls run from the
+// edges along the moved faces' normals, out of the body for a positive
+// `distance` and into it for a negative one.
+//
+// Where the two faces turn tangent somewhere along their edge (an end of a
+// mitre between roundings), the face that stays can be trimmed there but not
+// extended: at the tangent point it turns tangent to the moved face, and
+// past it to its own neighbours (the faces the rounding blends), so it has
+// no surface to extend along towards the moved face's new position. So
+// such a side is taken only where the face that stays, followed from the
+// edge into itself, comes nearer to the moved face's new position (it
+// curves towards it, as a convex rounding beside a rounding moved in does):
+// there it is trimmed back along its surface to that position, and the
+// step along the moved face's tangent edge closes against it at the tangent
+// point. Where it would have to extend past the edge to reach it, the side
+// stays a step along the moved face's normal (mitcad#1974).
+std::vector<std::pair<gp_Pnt, int>> points_on_sharp_edges(const Shape& body, const std::vector<int>& moved,
+                                                          double distance) {
+  NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+      ancestors;
+  TopExp::MapShapesAndUniqueAncestors(body.occt(), TopAbs_EDGE, TopAbs_FACE, ancestors);
+  std::vector<std::pair<gp_Pnt, int>> points;
+  for (int f : moved) {
+    const TopoDS_Face& face = body.face(f);
+    for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge& edge = TopoDS::Edge(it.Current());
+      if (BRep_Tool::Degenerated(edge) || !ancestors.Contains(edge)) {
+        continue;
+      }
+      for (const TopoDS_Shape& other : ancestors.FindFromKey(edge)) {
+        const int g = body.face_index(other);
+        if (g < 0 || std::find(moved.begin(), moved.end(), g) != moved.end() ||
+            detail::is_smooth(edge, face, TopoDS::Face(other))) {
+          continue;
+        }
+        const TopoDS_Face& kept = TopoDS::Face(other);
+        const bool turns_tangent = std::any_of(kSharpSamples.begin(), kSharpSamples.end(), [&](double t) {
+          return detail::normal_angle(edge, face, kept, t) <= kTangentAngle;
+        });
+        if (turns_tangent) {
+          // The moved face's new position lies `distance` along its normal;
+          // the face that stays comes nearer to it where it runs that way.
+          const std::optional<gp_Vec> into = into_face(kept, edge);
+          const double towards = into ? into->Dot(gp_Vec(detail::normal_on_edge(face, edge, 0.5))) : 0.0;
+          if (towards == 0.0 || (towards < 0.0) != (distance < 0.0)) {
+            break;
+          }
+        }
+        const BRepAdaptor_Curve curve(edge);
+        for (const double t : {0.25, 0.5, 0.75}) {
+          points.emplace_back(curve.Value(curve.FirstParameter() + t * (curve.LastParameter() - curve.FirstParameter())), g);
+        }
+        break;
+      }
+    }
+  }
+  return points;
+}
+
+// The places of the faces, for an error, and their names for its detail.
+std::vector<ErrorPlace> places_of(const Shape& body, const std::vector<int>& faces) {
+  std::vector<ErrorPlace> places;
+  for (int f : faces) {
+    places.push_back(face_place(detail::primary_name(body, f)));
+  }
+  return places;
+}
+
+std::string names_of(const Shape& body, const std::vector<int>& faces) {
+  std::string names;
+  for (int f : faces) {
+    names += (names.empty() ? "" : ", ") + detail::primary_name(body, f);
+  }
+  return names;
+}
+
+// The radius a curved face would have after its offset by `distance`
+// (along its normal out of the material), when the offset shrinks it:
+// a cylinder's or a sphere's radius, a torus' minor one. Empty for other
+// surfaces and for an offset that makes the face larger.
+std::optional<double> shrunk_radius(const TopoDS_Face& face, double distance) {
+  const BRepAdaptor_Surface surface(face);
+  double radius = 0.0;
+  gp_Pnt centre;
+  gp_Ax1 axis;
+  bool on_axis = false;
+  switch (surface.GetType()) {
+  case GeomAbs_Cylinder:
+    radius = surface.Cylinder().Radius();
+    axis = surface.Cylinder().Axis();
+    on_axis = true;
+    break;
+  case GeomAbs_Sphere:
+    radius = surface.Sphere().Radius();
+    centre = surface.Sphere().Location();
+    break;
+  case GeomAbs_Torus: {
+    radius = surface.Torus().MinorRadius();
+    break;
+  }
+  default:
+    return std::nullopt;
+  }
+  const double u = (surface.FirstUParameter() + surface.LastUParameter()) / 2.0;
+  const double v = (surface.FirstVParameter() + surface.LastVParameter()) / 2.0;
+  gp_Pnt point;
+  gp_Vec du, dv;
+  surface.D1(u, v, point, du, dv);
+  gp_Vec normal = du.Crossed(dv);
+  if (normal.Magnitude() < Precision::Confusion()) {
+    return std::nullopt;
+  }
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  // The direction from the centre of curvature to the point.
+  gp_Vec outward;
+  if (surface.GetType() == GeomAbs_Torus) {
+    const gp_Torus torus = surface.Torus();
+    const gp_Ax1 main = torus.Axis();
+    const gp_Vec along(main.Direction());
+    gp_Vec radial(main.Location(), point);
+    radial -= along * radial.Dot(along);
+    if (radial.Magnitude() < Precision::Confusion()) {
+      return std::nullopt;
+    }
+    const gp_Pnt tube = main.Location().Translated(radial.Normalized() * torus.MajorRadius());
+    outward = gp_Vec(tube, point);
+  } else if (on_axis) {
+    const gp_Vec along(axis.Direction());
+    outward = gp_Vec(axis.Location(), point);
+    outward -= along * outward.Dot(along);
+  } else {
+    outward = gp_Vec(centre, point);
+  }
+  if (outward.Magnitude() < Precision::Confusion()) {
+    return std::nullopt;
+  }
+  const double after = radius + (normal.Dot(outward) > 0.0 ? distance : -distance);
+  if (after >= radius) {
+    return std::nullopt;
+  }
+  return after;
+}
+
+// Why the thickening of moved faces failed, in words.
+std::string thickening_failure(const BRepOffset_MakeOffset& offset) {
+  switch (offset.Error()) {
+  case BRepOffset_BadNormalsOnGeometry:
+    return "a moved face's normals cannot be computed everywhere";
+  case BRepOffset_C0Geometry:
+    return "a moved face's surface has a crease";
+  case BRepOffset_MixedConnectivity:
+    return "the moved faces meet partly smoothly and partly at an angle along an edge";
+  case BRepOffset_CannotTrimEdges:
+  case BRepOffset_CannotExtentEdge:
+  case BRepOffset_CannotFuseVertices:
+    return "the moved faces' new positions cannot be extended or trimmed to meet each other";
+  default:
+    return "the moved faces' new positions do not close up at this distance (a face narrower than "
+           "the distance may vanish)";
+  }
+}
+
+// The cell of one group of moved faces: the faces (of `copy`) thickened by
+// the distance, a solid of positive volume, with the names of the faces
+// on their offsets (for the result's faces that lie on them).
+TopoDS_Shape cell_of(const Shape& body, const detail::InputCopy& copy, const std::vector<int>& group,
+                     double distance, std::vector<Shape::NamedFace>& offsets) {
+  for (int f : group) {
+    if (const std::optional<double> radius = shrunk_radius(body.face(f), distance)) {
+      if (*radius <= kTolerance) {
+        throw std::runtime_error(placed_error(
+            "a curved face would shrink to nothing: the distance is as large as its radius or larger",
+            "offset of " + detail::primary_name(body, f) + " by " + std::to_string(distance) +
+                " leaves a radius of " + std::to_string(*radius),
+            {face_place(detail::primary_name(body, f))}));
+      }
+    }
+  }
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  for (int f : group) {
+    builder.Add(shell, copy.of(body.face(f)));
+  }
+  BRepOffset_MakeOffset maker;
+  maker.Initialize(shell, distance, kTolerance, BRepOffset_Skin, false, false, GeomAbs_Intersection,
+                   true, false);
+  detail::interruptible([&](const Message_ProgressRange& range) { maker.MakeOffsetShape(range); });
+  TopoDS_Shape solid;
+  if (maker.IsDone()) {
+    TopExp_Explorer it(maker.Shape(), TopAbs_SOLID);
+    if (it.More()) {
+      solid = it.Current();
+      it.Next();
+      if (it.More()) {
+        solid.Nullify();
+      }
+    }
+  }
+  if (solid.IsNull()) {
+    throw std::runtime_error(placed_error(
+        "the faces cannot be moved by this distance: " + thickening_failure(maker),
+        "thickening " + names_of(body, group) + " by " + std::to_string(distance) +
+            " failed (offset error " + std::to_string(static_cast<int>(maker.Error())) + ")",
+        places_of(body, group)));
+  }
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(solid, props);
+  if (props.Mass() < 0.0) {
+    solid.Reverse();
+  }
   NCollection_List<TopoDS_Shape> arguments;
-  arguments.Append(copy.shape(0));
-  NCollection_List<TopoDS_Shape> tools;
-  for (std::size_t i = 1; i < inputs.size(); ++i) {
-    tools.Append(copy.shape(i));
+  arguments.Append(shell);
+  const BRepTools_History history(arguments, maker);
+  for (int f : group) {
+    const TopoDS_Shape face = copy.of(body.face(f));
+    for (const TopoDS_Shape& image : history.Modified(face)) {
+      if (image.ShapeType() == TopAbs_FACE && !image.IsSame(face)) {
+        offsets.push_back({image, body.face_names(f)});
+      }
+    }
+    for (const TopoDS_Shape& image : history.Generated(face)) {
+      if (image.ShapeType() == TopAbs_FACE && !image.IsSame(face)) {
+        offsets.push_back({image, body.face_names(f)});
+      }
+    }
   }
-  operation.SetArguments(arguments);
-  operation.SetTools(tools);
-  operation.SetNonDestructive(true);
-  detail::build(operation);
-  if (!operation.IsDone() || operation.HasErrors()) {
-    throw std::runtime_error(kSeamFailure);
-  }
-  operation.SimplifyResult();
-  detail::FaceNamer namer(operation.Shape());
-  namer.carry(operation, body, copy);
-  namer.carry_by_containment(offset, 1.0e-6);
-  return namer;
+  return solid;
 }
 
 ShapePtr offset_across_seams(const std::string& feature, const Shape& body,
                              const std::vector<int>& chosen, const std::vector<Seam>& seams,
                              double distance) {
-  // The moved faces with every face they continue into smoothly, offset
-  // together: there the neighbours can follow.
-  const std::vector<int> chain = detail::tangent_closure(body, chosen);
-  std::vector<std::pair<int, double>> moves;
-  for (int f : chain) {
-    moves.emplace_back(f, distance);
-  }
-  NCollection_List<TopoDS_Shape> moved;
-  const ShapePtr whole = move_faces(body, moves, {}, moved).shape();
-  // The region between the body and that offset, cut at the seams.
-  const bool inward = distance < 0.0;
-  const TopoDS_Shape region = inward ? boolean_of<BRepAlgoAPI_Cut>({body.occt(), whole->occt()})
-                                     : boolean_of<BRepAlgoAPI_Cut>({whole->occt(), body.occt()});
-  const double reach = 2.0 * std::abs(distance);
-  BRepAlgoAPI_Splitter splitter;
-  NCollection_List<TopoDS_Shape> arguments;
-  arguments.Append(region);
-  NCollection_List<TopoDS_Shape> walls;
-  for (const Seam& seam : seams) {
-    walls.Append(seam_wall(body, seam, reach));
-  }
-  splitter.SetArguments(arguments);
-  splitter.SetTools(walls);
-  splitter.SetNonDestructive(true);
-  detail::build(splitter);
-  if (!splitter.IsDone() || splitter.HasErrors()) {
-    throw std::runtime_error(kSeamFailure);
-  }
-  // The cells at the moved faces: a face of the cell lies on one. A cell
-  // that also lies on a face that stays was not cut off at its seam.
+  const detail::InputCopy copy(body.occt());
   std::vector<TopoDS_Shape> cells;
-  for (TopExp_Explorer solid(splitter.Shape(), TopAbs_SOLID); solid.More(); solid.Next()) {
-    bool at_moved = false;
-    bool at_kept = false;
-    for (TopExp_Explorer it(solid.Current(), TopAbs_FACE); it.More(); it.Next()) {
-      const std::optional<gp_Pnt> point = point_inside(TopoDS::Face(it.Current()));
-      if (!point) {
-        continue;
-      }
-      for (int f : chain) {
-        if (on_face(*point, body.face(f))) {
-          if (std::find(chosen.begin(), chosen.end(), f) != chosen.end()) {
-            at_moved = true;
-          } else {
-            at_kept = true;
-          }
-          break;
-        }
-      }
-    }
-    if (at_moved && at_kept) {
-      throw std::runtime_error(kSeamFailure);
-    }
-    if (at_moved) {
-      cells.push_back(solid.Current());
-    }
+  std::vector<Shape::NamedFace> offsets;
+  for (const std::vector<int>& group : sharing_edges(body, chosen)) {
+    cells.push_back(cell_of(body, copy, group, distance, offsets));
   }
-  if (cells.empty()) {
-    throw std::runtime_error(kSeamFailure);
+  BRep_Builder builder;
+  TopoDS_Compound together;
+  builder.MakeCompound(together);
+  for (const TopoDS_Shape& cell : cells) {
+    builder.Add(together, cell);
   }
-  detail::FaceNamer namer = inward ? apply_cells<BRepAlgoAPI_Cut>(body, cells, *whole)
-                                   : apply_cells<BRepAlgoAPI_Fuse>(body, cells, *whole);
-  // The steps: named after the moved face whose seam is nearest,
-  // <feature>:step(<face>).
+  const Shape offset(together, offsets);
+  // The body with the cells removed (inward) or added (outward), on the copy
+  // whose faces the cells share.
+  const bool inward = distance < 0.0;
+  BRepAlgoAPI_Cut cut;
+  BRepAlgoAPI_Fuse fuse;
+  BRepAlgoAPI_BooleanOperation& operation = inward ? static_cast<BRepAlgoAPI_BooleanOperation&>(cut)
+                                                   : static_cast<BRepAlgoAPI_BooleanOperation&>(fuse);
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(copy.shape());
+  NCollection_List<TopoDS_Shape> tools;
+  for (const TopoDS_Shape& cell : cells) {
+    tools.Append(cell);
+  }
+  operation.SetArguments(arguments);
+  operation.SetTools(tools);
+  operation.SetNonDestructive(true);
+  detail::build(operation);
+  if (!operation.IsDone() || operation.HasErrors()) {
+    throw std::runtime_error(placed_error(
+        inward ? "the moved faces' new positions could not be cut into the body"
+               : "the moved faces' new positions could not be joined to the body",
+        std::string(inward ? "cut" : "fuse") + " of the thickened faces " + names_of(body, chosen) +
+            " failed",
+        places_of(body, chosen)));
+  }
+  operation.SimplifyResult();
+  detail::FaceNamer namer(operation.Shape());
+  namer.carry(operation, body, copy);
+  // The faces without a name take those of the moved face whose offset they
+  // lie on; the rest are the steps, named after the moved face whose seam
+  // is nearest, <feature>:step(<face>).
+  namer.carry_by_containment(offset, 1.0e-6);
+  // A side of a moved face at a sharp edge to a face that stays is a wall
+  // along the moved face's normal in the cell; where that face is not square
+  // to the moved one, the wall is a face of the result of its own, which
+  // starts at the edge. It is removed below, so that the face that stays
+  // extends or trims along its own surface to the moved face's new position
+  // (mitcad#1973).
+  // A wall that lies on the surface of the face that stays (a face square to
+  // the moved one, whose wall the kernel did not merge with it) is that
+  // face's continuation already and stays.
+  const std::vector<std::pair<gp_Pnt, int>> sharp = points_on_sharp_edges(body, chosen, distance);
+  std::vector<TopoDS_Shape> walls;
   for (TopExp_Explorer it(namer.result(), TopAbs_FACE); it.More(); it.Next()) {
     if (namer.named(it.Current())) {
+      continue;
+    }
+    const TopoDS_Face& face = TopoDS::Face(it.Current());
+    if (std::any_of(sharp.begin(), sharp.end(), [&face, &body](const std::pair<gp_Pnt, int>& at) {
+          return on_face(at.first, face) && !on_surface(face, body.face(at.second));
+        })) {
+      walls.push_back(face);
+      namer.add(face, face_name(feature, "wall", detail::primary_name(body, chosen.front())));
       continue;
     }
     const std::optional<gp_Pnt> point = point_inside(TopoDS::Face(it.Current()));
@@ -1075,8 +1283,86 @@ ShapePtr offset_across_seams(const std::string& feature, const Shape& body,
     namer.add(it.Current(), face_name(feature, "step", detail::primary_name(body, nearest->face)));
   }
   namer.finish();
-  return namer.shape();
+  ShapePtr moved = namer.shape();
+  // The walls removed: the faces around them (the face that stays, the
+  // moved face's new position, the steps at its ends) extend or trim along
+  // their own surfaces until they close the gap, as when whole faces move.
+  // One group of walls that share edges at a time, each on the result of the
+  // one before: the kernel fills the gaps of all the groups it is given on
+  // the shape before any of them is removed, so where two groups border the
+  // same face (the moved face's new position, between the walls at its two
+  // ends) the second gap no longer fits that face once the first is closed
+  // (mitcad#1974).
+  std::vector<std::vector<TopoDS_Shape>> groups;
+  for (const TopoDS_Shape& wall : walls) {
+    ShapeMap edges;
+    TopExp::MapShapes(wall, TopAbs_EDGE, edges);
+    std::vector<TopoDS_Shape> group{wall};
+    for (auto it = groups.begin(); it != groups.end();) {
+      const bool shares = std::any_of(it->begin(), it->end(), [&edges](const TopoDS_Shape& other) {
+        for (TopExp_Explorer e(other, TopAbs_EDGE); e.More(); e.Next()) {
+          if (edges.Contains(e.Current())) {
+            return true;
+          }
+        }
+        return false;
+      });
+      if (shares) {
+        group.insert(group.end(), it->begin(), it->end());
+        it = groups.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    groups.push_back(group);
+  }
+  for (std::size_t i = 0; i < groups.size(); ++i) {
+    if (groups[i].empty()) {
+      continue; // removed with an earlier group
+    }
+    BRepAlgoAPI_Defeaturing remover;
+    remover.SetShape(moved->occt());
+    for (const TopoDS_Shape& wall : groups[i]) {
+      remover.AddFaceToRemove(wall);
+    }
+    remover.SetRunParallel(false);
+    remover.SetToFillHistory(true);
+    detail::build(remover);
+    if (!remover.IsDone() || remover.HasErrors() ||
+        remover.HasWarning(STANDARD_TYPE(BOPAlgo_AlertUnableToRemoveTheFeature)) ||
+        std::any_of(groups[i].begin(), groups[i].end(),
+                    [&remover](const TopoDS_Shape& wall) { return !remover.IsDeleted(wall); })) {
+      throw std::runtime_error(placed_error(
+          "the faces around the moved faces cannot be extended or trimmed along their surfaces to meet "
+          "their new positions",
+          "removing the walls at the sharp edges of " + names_of(body, chosen) + " failed",
+          places_of(body, chosen)));
+    }
+    // The walls still to remove, as they are in this result.
+    for (std::size_t j = i + 1; j < groups.size(); ++j) {
+      std::vector<TopoDS_Shape> images;
+      for (const TopoDS_Shape& wall : groups[j]) {
+        if (remover.IsDeleted(wall)) {
+          continue;
+        }
+        const NCollection_List<TopoDS_Shape>& modified = remover.Modified(wall);
+        if (modified.IsEmpty()) {
+          images.push_back(wall);
+        }
+        for (const TopoDS_Shape& image : modified) {
+          images.push_back(image);
+        }
+      }
+      groups[j] = images;
+    }
+    detail::FaceNamer extended(remover.Shape());
+    extended.carry(remover, *moved);
+    extended.finish();
+    moved = extended.shape();
+  }
+  return moved;
 }
+
 
 } // namespace
 
@@ -1090,52 +1376,27 @@ ShapePtr offset_faces(const std::string& feature, const Shape& body,
   const std::vector<int> chosen = detail::resolve_faces(body, faces, "faces to offset");
   return detail::run("offset faces", [&] {
     // Where a moved face continues smoothly into a face that stays (the
-    // pieces of a split face), the seam becomes a step (mitcad#1928).
+    // pieces of a split face, a face tangent to a rounding that stays), the
+    // geometry kernel's offset of the body cannot move it: it gives faces
+    // tangent to each other one distance, so beside a piece of the same
+    // surface it would move the pieces that stay as well. There the seam
+    // becomes a step (mitcad#1928, mitcad#1947, mitcad#1973).
     const std::vector<Seam> seams = seams_of(body, chosen);
-    // The geometry kernel's offset gives faces tangent to each other one
-    // distance: beside a piece of the same surface it would move the
-    // pieces that stay as well, so it is not tried there.
-    const bool split_piece =
-        std::any_of(seams.begin(), seams.end(), [](const Seam& seam) { return seam.one_surface; });
-    std::exception_ptr failure;
-    try {
-      if (split_piece) {
-        throw std::runtime_error(kSeamFailure);
-      }
-      std::vector<std::pair<int, double>> moves;
-      for (int f : chosen) {
-        moves.emplace_back(f, distance);
-      }
-      NCollection_List<TopoDS_Shape> moved;
-      detail::FaceNamer namer = move_faces(body, moves, {}, moved);
-      namer.finish();
-      ShapePtr result = namer.shape();
-      check_result(result, "the offset");
-      return result;
-    } catch (const Cancelled&) {
-      throw;
-    } catch (const Standard_OutOfMemory&) {
-      throw;
-    } catch (const std::runtime_error&) {
-      failure = std::current_exception();
-    } catch (const Standard_Failure&) {
-      failure = std::current_exception();
-    }
-    if (seams.empty()) {
-      std::rethrow_exception(failure);
-    }
-    try {
+    if (!seams.empty()) {
       ShapePtr result = offset_across_seams(feature, body, chosen, seams, distance);
       check_result(result, "the offset");
       return result;
-    } catch (const Cancelled&) {
-      throw;
-    } catch (const Standard_OutOfMemory&) {
-      throw;
-    } catch (const std::runtime_error&) {
-    } catch (const Standard_Failure&) {
     }
-    throw std::runtime_error(kSeamFailure);
+    std::vector<std::pair<int, double>> moves;
+    for (int f : chosen) {
+      moves.emplace_back(f, distance);
+    }
+    NCollection_List<TopoDS_Shape> moved;
+    detail::FaceNamer namer = move_faces(body, moves, {}, moved);
+    namer.finish();
+    ShapePtr result = namer.shape();
+    check_result(result, "the offset");
+    return result;
   });
 }
 

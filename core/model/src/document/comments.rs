@@ -16,8 +16,10 @@
 //!
 //! A target is a timeline feature, a body or one of its faces, edges or
 //! vertices by topological name, a sketch's curve, point, constraint or
-//! dimension, a parameter, or a free point in its component's coordinates
-//! placed by an occurrence, as an annotation's `at` is. The model checks a
+//! dimension, a parameter, a free point in its component's coordinates
+//! placed by an occurrence, as an annotation's `at` is, or the whole design
+//! (mitcad#2010: a request about the design as a whole, possible before it
+//! has any geometry; no place, never orphaned). The model checks a
 //! target's form; the API (`model-api/src/comments.rs`) finds it at the
 //! timeline marker, refuses one that is not there when it is added or
 //! retargeted, and settles the comments after every command
@@ -74,10 +76,11 @@ impl CommentStatus {
 /// What a comment is pinned to, in the fields of the `measure` query's
 /// picks: one of `{"feature"}`, `{"body"}` with an optional `face`, `edge`
 /// or `vertex` and `occurrence`, `{"sketch"}` with one of `curve`, `point`,
-/// `constraint` or `dimension`, `{"parameter"}`, or `{"at"}` (a point in
+/// `constraint` or `dimension`, `{"parameter"}`, `{"at"}` (a point in
 /// its component's coordinates) with an optional `component` (empty or
-/// left out: the root) and `occurrence`. An empty `occurrence` is the
-/// root's (or the owner's only placement), as in `measure`.
+/// left out: the root) and `occurrence`, or `{"design": true}` (the whole
+/// design, mitcad#2010). An empty `occurrence` is the root's (or the
+/// owner's only placement), as in `measure`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommentTarget {
@@ -124,6 +127,10 @@ pub struct CommentTarget {
     /// The occurrence that places a body or a free point's component.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<OccurrencePath>,
+    /// The whole design (mitcad#2010): `true`, alone. A build without it
+    /// refuses a design that has such a comment (an unknown field).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub design: bool,
 }
 
 /// A component id, or the root for an empty one (`""`, null).
@@ -162,13 +169,15 @@ pub enum CommentTargetKind<'a> {
     Parameter(&'a str),
     /// A free point in its component's coordinates.
     Point(Vec3),
+    /// The whole design (mitcad#2010).
+    Design,
 }
 
 /// The forms a target takes, for an error.
 const TARGET_FORMS: &str = "a target is {\"feature\"}, {\"body\"} with an optional \"face\", \
      \"edge\" or \"vertex\" and \"occurrence\", {\"sketch\"} with one \"curve\", \"point\", \
-     \"constraint\" or \"dimension\", {\"parameter\"}, or {\"at\": [x, y, z]} with an optional \
-     \"component\" and \"occurrence\"";
+     \"constraint\" or \"dimension\", {\"parameter\"}, {\"at\": [x, y, z]} with an optional \
+     \"component\" and \"occurrence\", or {\"design\": true}";
 
 impl CommentTarget {
     /// What the target is, or why its fields are no target (not whether
@@ -181,6 +190,7 @@ impl CommentTarget {
             self.sketch.is_some(),
             self.parameter.is_some(),
             self.at.is_some(),
+            self.design,
         ]);
         let names = count(&[
             self.face.is_some(),
@@ -198,6 +208,12 @@ impl CommentTarget {
         let form = || TARGET_FORMS.to_owned();
         if groups != 1 {
             return Err(form());
+        }
+        if self.design {
+            if names + items > 0 || placed || in_component {
+                return Err(form());
+            }
+            return Ok(CommentTargetKind::Design);
         }
         if let Some(uid) = self.feature {
             if names + items > 0 || placed || in_component {
@@ -760,6 +776,7 @@ mod tests {
             json!({"sketch": "F1", "dimension": "k5"}),
             json!({"parameter": "width"}),
             json!({"at": [1, 2, 3], "component": "", "occurrence": ""}),
+            json!({"design": true}),
         ];
         for value in kinds {
             assert!(target(value.clone()).kind().is_ok(), "{value}");
@@ -775,6 +792,10 @@ mod tests {
             json!({"sketch": "F1", "curve": "c4", "point": "p3"}),
             json!({"parameter": "  "}),
             json!({"at": [1, 2, 3], "face": "F2:end(r{c1})"}),
+            json!({"design": false}),
+            json!({"design": true, "feature": "F7"}),
+            json!({"design": true, "occurrence": "O1"}),
+            json!({"design": true, "component": "C1"}),
         ] {
             assert!(target(value.clone()).kind().is_err(), "{value}");
         }
@@ -782,6 +803,14 @@ mod tests {
         // The root's component and an empty occurrence are left out.
         let point = target(json!({"at": [1, 2, 3], "component": "C0", "occurrence": ""}));
         assert_eq!(point.normalized(), target(json!({"at": [1, 2, 3]})));
+        // The whole design (mitcad#2010): stored as given, `false` left out.
+        let design = target(json!({"design": true}));
+        assert_eq!(design.kind(), Ok(CommentTargetKind::Design));
+        assert_eq!(
+            serde_json::to_value(&design).unwrap(),
+            json!({"design": true})
+        );
+        assert!(TARGET_FORMS.contains("{\"design\": true}"));
     }
 
     #[test]

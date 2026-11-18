@@ -353,6 +353,11 @@ struct InputDef {
   // its free edges (openingEdgeItem, mitcad#1927: Patch, the surface
   // features' edges); other inputs never take such an item.
   bool takesOpenings = false;
+  // The check that decides how such an input keeps a picked free edge
+  // (mitcad#1955, Whole Opening): on, as its whole opening
+  // (wholeOpeningItem); off, as the single edge (freeEdgeItem). Empty: the
+  // whole opening always.
+  QString wholeOpeningCheck;
   int min = 1;
   int max = 1;
   QColor color; // highlight colour; the palette's next when invalid
@@ -734,8 +739,9 @@ struct InputDef {
     refusesMeshes = true;
     return *this;
   }
-  InputDef& withOpenings() {
+  InputDef& withOpenings(const QString& wholeCheck = QString()) {
     takesOpenings = true;
+    wholeOpeningCheck = wholeCheck;
     return *this;
   }
   InputDef& withToolOverlays() {
@@ -1008,9 +1014,15 @@ struct InputDef {
   SelectionItem taken(const SelectionItem& item) const { return convert ? convert(item) : item; }
   // The form an item is kept in by the input in a state (convertNow, else
   // convert).
+  // A single free edge of an input that takes openings, with its Whole
+  // Opening on, as its whole opening (mitcad#1955).
   SelectionItem takenIn(const SelectionItem& item, const CommandState& state, const CommandContext& context) const {
-    return convertNow ? convertNow(item, state, context) : taken(item);
+    const SelectionItem kept = convertNow ? convertNow(item, state, context) : taken(item);
+    return takesWholeOpenings(state) ? wholeOpeningItem(kept) : kept;
   }
+  // Whether the input takes a picked free edge as its whole opening in a
+  // state (Command.cpp).
+  bool takesWholeOpenings(const CommandState& state) const;
   bool isRequired() const { return type == Type::Selection && min > 0; }
 };
 
@@ -1173,6 +1185,11 @@ struct Inspection {
   bool red = false;   // the shape is a problem (interference)
   // Measurement guide edges, opaque and visible through the measured body.
   bool measurementWire = false;
+  // A second shape drawn beside `shape`, dashed in the dimension colour and
+  // under it (OcctViewer::setPreviewGuide, mitcad#1979): Measure's pick
+  // axes and axis distance, told apart from the main distance where they
+  // overlap; none when null.
+  TopoDS_Shape guide;
   QJsonValue section; // a plane reference: the bodies are shown cut there
   // Items highlighted besides the inputs' (orange; a component's bodies for
   // a Component item): BUILD's auto-length target (mitcad#375).
@@ -1216,12 +1233,17 @@ struct Inspection {
   // face"). A panel that can shows these instead of `text`; `text` stays
   // the whole answer for the others. A value is its number and unit as
   // shown and copied ("6.843 mm"); `tip` adds what does not fit on its
-  // line (the points a distance is measured between).
+  // line (the points a distance is measured between). `places` are
+  // painted in the view while the pointer is over the row, as a notice's
+  // (DocumentHost::hoverNoticePlaces; mitcad#1979: a distance's segment,
+  // {"kind": "segment", "from": [x, y, z], "to": [x, y, z]}); none: the
+  // row paints nothing.
   struct Value {
     QString name;
     QString value;
     bool main = false;
     QString tip;
+    QJsonArray places;
   };
   struct Group {
     QString title;

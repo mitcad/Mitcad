@@ -28,7 +28,19 @@ cylinder 0331 builds), and the other rounding keeps its face.
   passed a sliver on the way (the edge before the sliver, 0013's fallback).
   Two stripes overflowing onto the same face across each other's contacts
   both roll.
+
+Failures (mitcad#1986): the stripe computed again rolling on the strip's
+far edge fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the ball cannot roll so: the
+stripe is computed overflowing the strip as before, and fails as before
+where that fails, under a handler like OCCT's own in Compute (a bad
+stripe, its spine's status an error: the fillet is not done). Any other
+failure of the rolling computation (a broken invariant, a signal) is
+rethrown.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 471aab46..98525871 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -627,6 +627,113 @@ TopoDS_Edge ChFi3d_Builder::OverlapEdge(const occ::handle<ChFiDS_Stripe>& S,
@@ -145,7 +157,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
  void ChFi3d_Builder::RemoveCoincidentStripes()
  {
    TopOpeBRepDS_DataStructure&  DStr = myDS->ChangeDS();
-@@ -1779,6 +1886,67 @@ void ChFi3d_Builder::Compute()
+@@ -1787,6 +1894,72 @@ void ChFi3d_Builder::Compute()
      done = true;
    }
    done = (badstripes.IsEmpty());
@@ -167,8 +179,13 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
 +        OCC_CATCH_SIGNALS
 +        PerformSetOfSurf(st);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        aComputed = false;
 +      }
 +      if (aComputed && st->Spine()->ErrorStatus() == ChFiDS_Ok)
@@ -213,7 +230,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
    // Stripes whose blends overlap all along on a face between their edges
    // are computed again overflowing that face; stripes that then make the
    // blend of another are dropped with their corners.
-@@ -3007,6 +3175,8 @@ void ChFi3d_Builder::Reset()
+@@ -3058,6 +3231,8 @@ void ChFi3d_Builder::Reset()
    myRideFaces.Clear();
    myRideEdges.Clear();
    myRideSupports.Clear();
@@ -223,6 +240,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
    for (itel.Initialize(myListStripe); itel.More();)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 9e4beb41..de298e10 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -872,6 +872,11 @@ protected:
@@ -257,6 +275,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/Mod
    //! contact line (RideOnOverlap) and that other meet on the line, their
    //! sides on each other's surface; the face they shared is left without
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 49575438..dbc45839 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -1428,6 +1428,41 @@ static bool convexAt(const TopoDS_Edge& E, const TopoDS_Face& F1, const TopoDS_F
@@ -351,19 +370,17 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
        if (!section(false))
        {
          // Tangent to no point of the last face's surface (a sliver): the
-@@ -4108,10 +4163,13 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -4129,8 +4184,11 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     Inside = true;
+ 
+     // (A face between this edge and another stripe's narrower than both
+-    // roundings: the start overflows it.)
+-    const bool anOverflowOnly = myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe);
++    // roundings: the start overflows it. A side that may not overflow
++    // onto a face, also one continuing its face nearly tangentially,
++    // rolls before it: the start is found as for an overflow.)
++    const bool anOverflowOnly = myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe)
++                                || myRollStripes.Contains(Stripe);
      try
      {
        OCC_CATCH_SIGNALS
--      if (myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe))
-+      if (myOverlapStripes.Contains(Stripe) || myRideStripes.Contains(Stripe)
-+          || myRollStripes.Contains(Stripe))
-       {
-         // (A face between this edge and another stripe's narrower than both
--        // roundings: the start overflows it.)
-+        // roundings: the start overflows it. A side that may not overflow
-+        // onto a face, also one continuing its face nearly tangentially,
-+        // rolls before it: the start is found as for an overflow.)
-         throw Standard_Failure("overlapping roundings");
-       }
-       StartSol(Stripe, HGuide, HS1, HS2, It1, It2, pp1, pp2, First);

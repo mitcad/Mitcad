@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: MIT
+# A large design's drawing (mitcad#1997, GitHub #425) on
+# drawing-large-view.json: 36 cylinders, Drawing1's front view (view 1) at
+# 1:1 in the polygonal style with its box's middle at sheet (150, 150).
+# The test holds each projection of the jobs add_drawing_view,
+# edit_drawing_view and "drawing sheet" 3 s (MITCAD_TEST_RECOMPUTE_DELAY_MS),
+# as a large view's projection takes.
+#   1. Opened, the sheet's view is not in the projection cache: the sheet is
+#      drawn in a job of its own while the window stays usable, "Drawing the
+#      views…" over it, the view projected once.
+#   2. The view's Scale 1:2: its old lines are shown at half their size,
+#      marked as being updated, while the command's job projects it at 1:2
+#      (its progress dialog); the sheet after it from the cache.
+#   3. A base view placed and its job cancelled: no view added. Placed
+#      again: projected once, inside the command, at the scale that fits;
+#      the sheet after it from the cache.
+#   4. The bodies made higher (a model change): the sheet drawn in a job,
+#      no progress dialog.
+# Run by tools/ui-drawing-large-view-test.sh (Linux),
+# tools/ui-windows-drawing-large-view-test.ps1 (Windows) and
+# tools/ui-macos-drawing-large-view-test.sh (macOS).
+wait-idle
+# The 36 bodies' rows do not fit, so the browser opens with its folders
+# folded (on every platform's test screen): the Drawings folder unfolded to
+# reach Drawing1's row.
+expect-ever '^Browser opened folded: '
+mark
+click-logged '^Browser arrow Root/Drawings at '
+wait-log '^Browser Root/Drawings/Drawing1 at ' 20
+wait-idle
+
+# 1. Opened: drawn in a job.
+mark
+dblclick-logged '^Browser Root/Drawings/Drawing1 at '
+wait-log '^Drawing opened: D1 Drawing1, sheet 1 of 1'
+wait-log '^Drawing sheet drawn in a job: D1 sheet 1$'
+wait-log '^Drawing note: Drawing the views…$'
+expect-model-busy true
+wait-log '^Drawing sheet drawn in [0-9]+ ms in a job$' 30
+wait-log '^Drawing projection of view 1: 36 bodies, [0-9.]+ ms, projected from a triangulation$'
+wait-log '^Drawing note: none$'
+wait-log '^Drawing view 1 at '
+expect-no-log '^Progress dialog shown: drawing sheet'
+wait-idle
+
+# 2. A new scale: the old lines scaled while the command projects.
+mark
+drawing-sheet-click 150 150
+wait-log '^Drawing view 1 selected'
+wait-log '^Drawing panel drawingViewScale at '
+wait-idle
+mark
+qt-choice drawingViewScale 1:2
+wait-log '^Drawing views updating: 1 by 0[.]5$'
+wait-log '^Progress dialog shown: edit_drawing_view'
+expect-log '^Drawing views updating: 1 by 0[.]5$'
+wait-log '^Computing edit_drawing_view done in ' 30
+wait-log '^Drawing projection of view 1: 36 bodies, [0-9.]+ ms, projected from a triangulation$'
+wait-log '^Drawing views updating: none$'
+wait-log '^Drawing projection of view 1: 36 bodies, [0-9.]+ ms, from the cache$'
+expect-no-log '^Drawing sheet drawn in a job'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-idle
+
+# 3. A base view placed, cancelled, then placed again.
+mark
+command drawing.base_view
+wait-log '^Drawing tool: Base View'
+wait-idle
+drawing-sheet-click 300 80
+wait-log '^Progress dialog shown: add_drawing_view'
+qt-cancel-progress add_drawing_view
+wait-log '^Computing add_drawing_view cancelled after ' 30
+wait-idle
+expect-no-log '^Drawing view 2 at '
+expect-no-log '^Drawing command refused'
+mark
+drawing-sheet-click 300 80
+wait-log '^Progress dialog shown: add_drawing_view'
+wait-log '^Computing add_drawing_view done in ' 30
+wait-log '^Drawing projection of view 2: 36 bodies, [0-9.]+ ms, projected exactly$'
+wait-log '^Drawing projection of view 2: 36 bodies, [0-9.]+ ms, from the cache$'
+wait-log '^Drawing view 2 at '
+expect-no-log '^Drawing sheet drawn in a job'
+expect-no-log '^Drawing command refused'
+wait-idle
+key Escape
+wait-idle
+
+# 4. A model change: the sheet drawn in a job, without a progress dialog.
+mark
+model-command '{"cmd":"set_parameter","name":"height","value":30}'
+wait-log '^Drawing sheet drawn in a job: D1 sheet 1$'
+wait-log '^Drawing note: Drawing the views…$'
+wait-log '^Drawing sheet drawn in [0-9]+ ms in a job$' 30
+wait-log '^Drawing note: none$'
+expect-no-log '^Progress dialog shown: drawing sheet'
+wait-idle
+expect-never 'TestDriver: FAIL'

@@ -1262,6 +1262,10 @@ impl<K: Kernel> BuildLocal<K> for Document<K> {
                              "foot": active.apply_point(joint.frame_b.translation),
                              "normal": active.apply_vector(mitcad_model::internal::build::z_axis(&to_world)),
                              "along": active.apply_vector(mitcad_model::internal::build::x_axis(&to_world))});
+            // How it stands across a side with several slots (mitcad#2002):
+            // `middle` centred between them, `slot` on one; null on a side
+            // with one slot.
+            snapped["across"] = json!(side.across);
             // The free stretch it stands in (mitcad#1401): its ends from
             // end A and the profiles around it, for a change of From.
             snapped["with"] = side.line.as_ref().map_or(Value::Null, with);

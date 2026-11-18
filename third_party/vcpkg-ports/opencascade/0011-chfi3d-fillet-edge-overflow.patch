@@ -40,8 +40,21 @@ edge found no start (StartsolFailure).
   consumes, is dropped when it is a strip between the spine and that edge:
   its other edges at the vertices where the blend ends are cut there, so
   that nothing of it is connected to the result.
+
+Failures (mitcad#1986): StartSol reports that it found no start by the
+spine's status ChFiDS_StartsolFailure, set before it throws; only that
+failure is taken for an overflow and handed to StartSolOverflow, whose own
+failure (no side) rethrows it. Any other failure of StartSol is rethrown
+at once: the stripe fails, as before the patch.
+Test: geometry/tests/test_fillet_overflow.cpp (the roundings over a narrow
+face of mitcad#121); geometry/tests/port/p0011-edge-overflow-start.cpp
+(ctest geometry.port.0011): a block with a step 2 high whose top edge and
+foot are each rounded with 3 (the contact leaves the step's face along the
+whole edge: built, valid, the step's face consumed), with 1.9 (inside the
+face, as stock), and a bar 2 x 2 whose edge is rounded with 5, wider than
+both its faces (no ball touches a face: fails, as stock).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 192f69f..886899c 100644
+index 192f69f6..886899ca 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -389,6 +389,8 @@ void ChFi3d_Builder::Compute()
@@ -54,7 +67,7 @@ index 192f69f..886899c 100644
        {
          break;
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index ab5614b..857a2a7 100644
+index ab5614b1..857a2a73 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -829,6 +829,33 @@ private:
@@ -92,7 +105,7 @@ index ab5614b..857a2a7 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 2fe42a0..b8def97 100644
+index 2fe42a00..b8def975 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -2562,6 +2562,154 @@ static bool findIndexPoint(const TopOpeBRepDS_DataStructure&   DStr,
@@ -251,7 +264,7 @@ index 2fe42a0..b8def97 100644
                    const occ::handle<ChFiDS_Stripe>& CorDat,
                    TopOpeBRepDS_DataStructure&       DStr,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 466bf52..45a5294 100644
+index 466bf522..45a52940 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 @@ -526,4 +526,21 @@ occ::handle<Geom_BSplineCurve> ChFi3d_ApproxByC2(const occ::handle<Geom_Curve>&
@@ -277,7 +290,7 @@ index 466bf52..45a5294 100644
 +
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 9a6c580..b4cb2ec 100644
+index 9a6c5801..18018a4f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -28,6 +28,7 @@
@@ -657,7 +670,7 @@ index 9a6c580..b4cb2ec 100644
  static void ChFi3d_BuildPlane(TopOpeBRepDS_DataStructure&         DStr,
                                occ::handle<BRepAdaptor_Surface>&   HS,
                                gp_Pnt2d&                           pons,
-@@ -2359,7 +2709,53 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -2359,7 +2709,59 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      // sinon solution approchee.
      Inside = true;
  
@@ -669,7 +682,13 @@ index 9a6c580..b4cb2ec 100644
 +    }
 +    catch (Standard_Failure const&)
 +    {
-+      // The contact line may leave a face at once (edge overflow).
++      // StartSol's own failure, no start found (it sets the spine's status
++      // so before it throws): the contact line may leave a face at once
++      // (edge overflow). Any other failure is the stripe's.
++      if (Spine->ErrorStatus() != ChFiDS_StartsolFailure)
++      {
++        throw;
++      }
 +      occ::handle<BRepAdaptor_Curve2d> HCo;
 +      occ::handle<BRepAdaptor_Surface> HSrefo;
 +      occ::handle<BRepAdaptor_Curve2d> HCrefo;
@@ -712,7 +731,7 @@ index 9a6c580..b4cb2ec 100644
  
      Last = wf;
      if (Guide.IsPeriodic())
-@@ -3013,6 +3409,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3013,6 +3415,14 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      {
        fini =
          ((wl - Last) <= 10. * tolesp || (intl && !(obstacleon1 || obstacleon2))); // General case
@@ -727,7 +746,7 @@ index 9a6c580..b4cb2ec 100644
  
        if (!fini && Guide.IsPeriodic() && ((wl - Last) < Guide.Period() * 1.e-3))
        {
-@@ -3054,6 +3458,12 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3054,6 +3464,12 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      if (!forward)
      {
        fini     = ((First - wf) <= 10. * tolesp || (intf && !(obstacleon1 || obstacleon2)));
@@ -741,7 +760,7 @@ index 9a6c580..b4cb2ec 100644
        Last     = wf;
      }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
-index e1c8bb1..2a4d6f1 100644
+index e1c8bb1d..2a4d6f1a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_6.cxx
 @@ -1111,6 +1111,17 @@ bool ChFi3d_Builder::ComputeData(occ::handle<ChFiDS_SurfData>&           Data,
@@ -763,7 +782,7 @@ index e1c8bb1..2a4d6f1 100644
      {
        if (!TheWalk.Complete(Func, FInv, FInvP, FInvC, SpLast))
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index d7195c7..1dc894e 100644
+index d7195c79..1dc894eb 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 @@ -608,6 +608,130 @@ bool ChFi3d_SelectStripe(NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator&
@@ -916,7 +935,7 @@ index d7195c7..1dc894e 100644
        PerformIntersectionAtEnd(Index);
        return;
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
-index d2b91f7..a4f9aa1 100644
+index d2b91f72..a4f9aa12 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 @@ -1495,6 +1495,68 @@ void ChFi3d_FilBuilder::SimulSurf(occ::handle<ChFiDS_SurfData>&           Data,

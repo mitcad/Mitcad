@@ -1805,16 +1805,28 @@ FlexRoute FlexRouter::Impl::route(const std::vector<FlexNode>& nodes, const Flex
   // The bends: by how much each is tighter than allowed, by the circle
   // through each point and its neighbours two points away (as the bends
   // were made: the spline's own curvature at one point, where it swings
-  // through a node, is no bend of the item).
+  // through a node, is no bend of the item). The two points at each end,
+  // which have no neighbour two points away on one side, are measured as
+  // the nearest point that has, in its frame: neither the spline's own
+  // curvature at its end nor a lopsided circle there (two steps on one
+  // side, one on the other) is a bend of the item, nor the end's own frame,
+  // set to the surface rather than carried along; where the route curls
+  // onto a drum at its end either leans its flat bend a degree or two over
+  // the edge, which a flat cable that may not bend over its edge at all (no
+  // tighter than a hundred times its width) was warned of over the last
+  // 0.4 mm on one platform's rounding and not on the others' (0.65.0, arm64).
+  // (Two points either side where there are; on a route of three or four
+  // points, one.)
+  const int stencil = std::min(2, (count - 1) / 2);
+  const auto measured = [&](int i) { return stencil == 0 ? i : std::clamp(i, stencil, count - 1 - stencil); };
   {
     for (int i = 0; i < count; ++i) {
-      const int before = std::max(i - 2, 0);
-      const int after = std::min(i + 2, count - 1);
-      if (before == i || after == i) {
+      if (stencil == 0 || measured(i) != i) {
+        el(bends, i) = gp_XYZ(0.0, 0.0, 0.0);
         continue;
       }
-      const gp_XYZ a = el(points, before) - el(points, i);
-      const gp_XYZ c = el(points, after) - el(points, i);
+      const gp_XYZ a = el(points, i - stencil) - el(points, i);
+      const gp_XYZ c = el(points, i + stencil) - el(points, i);
       const gp_XYZ normal = a.Crossed(c);
       const double area = normal.SquareModulus();
       if (area < 1.0e-24) {
@@ -1835,16 +1847,17 @@ FlexRoute FlexRouter::Impl::route(const std::vector<FlexNode>& nodes, const Flex
     // section's size.)
     const double hardly = 100.0 * std::max(making.width, making.height);
     for (int i = 0; i < count; ++i) {
+      const int m = measured(i);
       double over = 0.0;
       double over_edge = 0.0;
       if (making.round) {
         if (limits.bend_radius > 0.0) {
-          over = el(bends, i).Modulus() * limits.bend_radius;
+          over = el(bends, m).Modulus() * limits.bend_radius;
         }
       } else {
-        const gp_XYZ across = el(tangents, i).Crossed(el(down, i));
-        const double flat = std::abs(el(bends, i).Dot(el(down, i)));
-        const double edge = std::abs(el(bends, i).Dot(across));
+        const gp_XYZ across = el(tangents, m).Crossed(el(down, m));
+        const double flat = std::abs(el(bends, m).Dot(el(down, m)));
+        const double edge = std::abs(el(bends, m).Dot(across));
         if (!limits.flat_bend) {
           over = flat * hardly;
         } else if (limits.bend_radius > 0.0) {

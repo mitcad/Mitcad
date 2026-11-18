@@ -1025,6 +1025,22 @@
         <translation>Kartioupotus</translation>
     </message>
     <message>
+        <source>Along -X</source>
+        <translation>-X:n suuntaan</translation>
+    </message>
+    <message>
+        <source>Along -Y</source>
+        <translation>-Y:n suuntaan</translation>
+    </message>
+    <message>
+        <source>Along -Z (hanging)</source>
+        <translation>-Z:n suuntaan (roikkuen)</translation>
+    </message>
+    <message>
+        <source>Face normal: out of the picked face</source>
+        <translation>Pinnan normaali: poimitusta pinnasta ulospäin</translation>
+    </message>
+    <message>
         <source>Custom</source>
         <translation>Mukautettu</translation>
     </message>
@@ -4517,6 +4533,34 @@
         <translation>Tuotesivut</translation>
     </message>
     <message>
+        <source>Mass (kg)</source>
+        <translation>Massa (kg)</translation>
+    </message>
+    <message>
+        <source>Ref</source>
+        <translation>Viite</translation>
+    </message>
+    <message>
+        <source>Sheet Metal</source>
+        <translation>Ohutlevy</translation>
+    </message>
+    <message>
+        <source>Thickness (mm)</source>
+        <translation>Paksuus (mm)</translation>
+    </message>
+    <message>
+        <source>Flat Width (mm)</source>
+        <translation>Levityksen leveys (mm)</translation>
+    </message>
+    <message>
+        <source>Flat Height (mm)</source>
+        <translation>Levityksen korkeus (mm)</translation>
+    </message>
+    <message>
+        <source>Area (mm²)</source>
+        <translation>Pinta-ala (mm²)</translation>
+    </message>
+    <message>
         <source>%1 cannot be written</source>
         <translation>Tiedostoon %1 ei voi kirjoittaa</translation>
     </message>
@@ -5367,12 +5411,28 @@
         <translation>tasan</translation>
     </message>
     <message>
+        <source>centered on the side</source>
+        <translation>keskitetty sivulle</translation>
+    </message>
+    <message>
+        <source>on a slot</source>
+        <translation>uralla</translation>
+    </message>
+    <message>
         <source>in line with %1</source>
         <translation>linjassa kohteen %1 kanssa</translation>
     </message>
     <message>
         <source>flush with %1</source>
         <translation>tasan kohteen %1 kanssa</translation>
+    </message>
+    <message>
+        <source>Across: centered on the side (click near a slot to place on it)</source>
+        <translation>Poikittain: keskitetty sivulle (napsauta uran läheltä sijoittaaksesi uralle)</translation>
+    </message>
+    <message>
+        <source>Across: on a slot (click near the side&apos;s center line to center it)</source>
+        <translation>Poikittain: uralla (napsauta sivun keskiviivan läheltä keskittääksesi)</translation>
     </message>
     <message>
         <source>Click near an edge of the end to turn a corner; Miter Shared then miters both components</source>
@@ -8697,10 +8757,6 @@
     <message>
         <source>The selection is not there any more.</source>
         <translation>Valintaa ei ole enää.</translation>
-    </message>
-    <message>
-        <source>&lt;b&gt;Distance: %1&lt;/b&gt;</source>
-        <translation>&lt;b&gt;Etäisyys: %1&lt;/b&gt;</translation>
     </message>
     <message>
         <source>From %1 to %2</source>
@@ -12656,20 +12712,8 @@
         <translation>Profiilit tai särmät</translation>
     </message>
     <message>
-        <source>Profiles of one sketch, edges of one body closing a loop, or an open edge for its whole opening</source>
-        <translation>Yhden luonnoksen profiilit, silmukaksi sulkeutuvat yhden kappaleen särmät tai avoin särmä koko aukkonsa puolesta</translation>
-    </message>
-    <message>
         <source>Sews the patch onto the body of the opening; a solid where it closes it</source>
         <translation>Ompelee paikan aukon kappaleeseen; solidi, jos se sulkee kappaleen</translation>
-    </message>
-    <message>
-        <source>Select edges that close up into a loop, or an open edge for its whole opening, not both.</source>
-        <translation>Valitse silmukaksi sulkeutuvat särmät tai avoin särmä koko aukkonsa puolesta, ei molempia.</translation>
-    </message>
-    <message>
-        <source>Select one opening: a patch fills one loop.</source>
-        <translation>Valitse yksi aukko: paikka täyttää yhden silmukan.</translation>
     </message>
     <message>
         <source>How a patch of edges meets the faces beside them</source>
@@ -12720,20 +12764,12 @@
         <translation>Valitse särmiä tai tahkoja, joiden avoimia särmiä tarkoitetaan.</translation>
     </message>
     <message>
-        <source>Edges of one body; an open edge of a surface body takes its whole opening</source>
-        <translation>Yhden kappaleen särmät; pintakappaleen avoin särmä ottaa koko aukkonsa</translation>
-    </message>
-    <message>
         <source>Open Edges Of</source>
         <translation>Avoimet särmät kohteesta</translation>
     </message>
     <message>
         <source>Boundary Edges</source>
         <translation>Reunasärmät</translation>
-    </message>
-    <message>
-        <source>Edges of one body round the loop; an open edge of a surface body takes its whole opening</source>
-        <translation>Yhden kappaleen särmät silmukan ympäri; pintakappaleen avoin särmä ottaa koko aukkonsa</translation>
     </message>
     <message>
         <source>Offset Surface</source>
@@ -12916,6 +12952,30 @@
         <translation>Pintakappaleen tahkot: niiden avoimet särmät otetaan mukaan</translation>
     </message>
     <message>
+        <source>Whole Opening</source>
+        <translation>Koko aukko</translation>
+    </message>
+    <message>
+        <source>On: a click on an open edge takes its whole opening. Off: only that edge</source>
+        <translation>Päällä: avoimen särmän napsautus ottaa sen koko aukon. Pois: vain sen särmän</translation>
+    </message>
+    <message>
+        <source>Sketch profiles, or edges of one body closing a loop: open edges and sketch curves too</source>
+        <translation>Luonnoksen profiilit tai yhden kappaleen silmukan sulkevat särmät: myös avoimet särmät ja luonnoskäyrät</translation>
+    </message>
+    <message>
+        <source>Select the edges the sketch curves close a loop with: sketch curves only join a patch&apos;s loop of edges.</source>
+        <translation>Valitse särmät, joiden kanssa luonnoskäyrät sulkevat silmukan: luonnoskäyrät vain liittyvät paikkauksen särmien silmukkaan.</translation>
+    </message>
+    <message>
+        <source>Select one whole opening, or edges, single open edges and sketch curves that close up into a loop: a patch fills one loop.</source>
+        <translation>Valitse yksi koko aukko tai särmiä, yksittäisiä avoimia särmiä ja luonnoskäyriä, jotka sulkeutuvat silmukaksi: paikkaus täyttää yhden silmukan.</translation>
+    </message>
+    <message>
+        <source>Edges of one body, open edges of a surface body too</source>
+        <translation>Yhden kappaleen särmät, myös pintakappaleen avoimet särmät</translation>
+    </message>
+    <message>
         <source>%1 Face Beside</source>
         <translation>%1: viereinen tahko</translation>
     </message>
@@ -12982,6 +13042,10 @@
     <message>
         <source>The surface leaves the curves along their sketch&apos;s plane</source>
         <translation>Pinta lähtee käyristä niiden luonnoksen tason suuntaisesti</translation>
+    </message>
+    <message>
+        <source>Edges of one body round the loop, open edges of a surface body too</source>
+        <translation>Yhden kappaleen särmät silmukan ympäri, myös pintakappaleen avoimet särmät</translation>
     </message>
     <message>
         <source>Faces of a surface body: their open edges close the loop</source>
@@ -16184,6 +16248,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Kappaleilla %1 ei ole omaa materiaalia: kunnes sellainen valitaan, viipaloija saa materiaalin %2.</translation>
     </message>
     <message>
+        <source>None (slicer&apos;s own)</source>
+        <translation>Ei mitään (viipaloijan oma)</translation>
+    </message>
+    <message>
+        <source>%1 goes to the slicer without a material: the slicer prints it with its own filament.</source>
+        <translation>%1 lähtee viipaloijaan ilman materiaalia: viipaloija tulostaa sen omalla filamentillaan.</translation>
+    </message>
+    <message>
         <source>%1, any nozzle</source>
         <translation>%1, mikä tahansa suutin</translation>
     </message>
@@ -17212,12 +17284,36 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Käsitelty</translation>
     </message>
     <message>
+        <source>Open, waiting for your answer</source>
+        <translation>Avoin, odottaa vastaustasi</translation>
+    </message>
+    <message>
         <source>Open</source>
         <translation>Avaa</translation>
     </message>
     <message>
         <source>%1, target gone</source>
         <translation>%1, kohde poissa</translation>
+    </message>
+    <message>
+        <source>Comment %1 by %2, %3</source>
+        <translation>Kommentti %1 (%2), %3</translation>
+    </message>
+    <message>
+        <source>Reply %1 by %2, %3</source>
+        <translation>Vastaus %1 (%2), %3</translation>
+    </message>
+    <message>
+        <source>On %1, %2</source>
+        <translation>Kohde %1, %2</translation>
+    </message>
+    <message>
+        <source>Resolution</source>
+        <translation>Ratkaisu</translation>
+    </message>
+    <message>
+        <source>Resolution by %1</source>
+        <translation>Ratkaisu (%1)</translation>
     </message>
     <message>
         <source>Comment %1 (%2), %3: %4</source>
@@ -17258,6 +17354,14 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Pick a face, an edge, a body, a point on a face or a feature.</source>
         <translation>Poimi tahko, särmä, kappale, piste tahkolla tai piirre.</translation>
+    </message>
+    <message>
+        <source>In answer to:</source>
+        <translation>Vastaus viestiin:</translation>
+    </message>
+    <message>
+        <source>In answer to</source>
+        <translation>Vastaus viestiin</translation>
     </message>
     <message>
         <source>Comment text</source>
@@ -19412,6 +19516,57 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     </message>
 </context>
 <context>
+    <name>SketchCurveRows</name>
+    <message>
+        <source>%1 %2</source>
+        <translation>%1 %2</translation>
+    </message>
+    <message>
+        <source>Centerline</source>
+        <translation>Keskiviiva</translation>
+    </message>
+    <message>
+        <source>Line</source>
+        <translation>Viiva</translation>
+    </message>
+    <message>
+        <source>Circle</source>
+        <translation>Ympyrä</translation>
+    </message>
+    <message>
+        <source>Arc</source>
+        <translation>Kaari</translation>
+    </message>
+    <message>
+        <source>Ellipse</source>
+        <translation>Ellipsi</translation>
+    </message>
+    <message>
+        <source>Elliptical Arc</source>
+        <translation>Elliptinen kaari</translation>
+    </message>
+    <message>
+        <source>Fit Point Spline</source>
+        <translation>Sovituspistesplini</translation>
+    </message>
+    <message>
+        <source>Control Point Spline</source>
+        <translation>Ohjauspistesplini</translation>
+    </message>
+    <message>
+        <source>Conic</source>
+        <translation>Kartioleikkaus</translation>
+    </message>
+    <message>
+        <source>Reference Curve</source>
+        <translation>Viitekäyrä</translation>
+    </message>
+    <message>
+        <source>Curve</source>
+        <translation>Käyrä</translation>
+    </message>
+</context>
+<context>
     <name>SpatialPaths</name>
     <message>
         <source>is a reference curve, geometry from outside the sketch: it is no path piece (draw a curve on it)</source>
@@ -20905,6 +21060,10 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
         <translation>Suuntaa malli uudelleen…</translation>
     </message>
     <message>
+        <source>Whole design</source>
+        <translation>Koko malli</translation>
+    </message>
+    <message>
         <source>Edit %1</source>
         <translation>Muokkaa: %1</translation>
     </message>
@@ -21515,6 +21674,18 @@ Yhdessä pidettyinä komponentit saavat: %2</translation>
     <message>
         <source>Hidden by Isolate: click to show it too</source>
         <translation>Eristys piilottaa: näytä myös tämä napsauttamalla</translation>
+    </message>
+    <message>
+        <source>Hidden with %1: click to show it</source>
+        <translation>Piilossa kohteen %1 mukana: näytä napsauttamalla</translation>
+    </message>
+    <message>
+        <source>%1 of %2, construction: click to pick it</source>
+        <translation>%2: %1, apugeometria: valitse napsauttamalla</translation>
+    </message>
+    <message>
+        <source>%1 of %2: click to pick it</source>
+        <translation>%2: %1: valitse napsauttamalla</translation>
     </message>
     <message>
         <source>%1, made by %2</source>
@@ -22985,6 +23156,18 @@ Napsautus: %2</translation>
         <translation>Ratkaisu</translation>
     </message>
     <message>
+        <source>Selected comment or reply</source>
+        <translation>Valittu kommentti tai vastaus</translation>
+    </message>
+    <message>
+        <source>The selected comment or reply in full, to read and copy</source>
+        <translation>Valittu kommentti tai vastaus kokonaan, luettavaksi ja kopioitavaksi</translation>
+    </message>
+    <message>
+        <source>Select a comment or a reply to read it in full here.</source>
+        <translation>Valitse kommentti tai vastaus, niin se näkyy tässä kokonaan.</translation>
+    </message>
+    <message>
         <source>&amp;Resolve</source>
         <translation>&amp;Ratkaise</translation>
     </message>
@@ -23005,8 +23188,8 @@ Napsautus: %2</translation>
         <translation>&amp;Vastaa…</translation>
     </message>
     <message>
-        <source>Adds a reply to the comment</source>
-        <translation>Lisää kommenttiin vastauksen</translation>
+        <source>Answers the selected reply, or the comment&apos;s latest one</source>
+        <translation>Vastaa valittuun vastaukseen tai kommentin viimeisimpään</translation>
     </message>
     <message>
         <source>Retar&amp;get</source>
@@ -26794,6 +26977,10 @@ Lisää tallennetun mallin.</translation>
         <translation>Lähetä</translation>
     </message>
     <message>
+        <source>None (slicer&apos;s own)</source>
+        <translation>Ei mitään (viipaloijan oma)</translation>
+    </message>
+    <message>
         <source>New printer…</source>
         <translation>Uusi tulostin…</translation>
     </message>
@@ -26869,12 +27056,44 @@ Lisää tallennetun mallin.</translation>
         <translation>Poimi lähetetyn kappaleen tasainen tahko.</translation>
     </message>
     <message>
-        <source>Material</source>
-        <translation>Materiaali</translation>
+        <source>The material the body is sent with</source>
+        <translation>Materiaali, jolla kappale lähetetään</translation>
     </message>
     <message>
-        <source>The material the bodies print with</source>
-        <translation>Materiaali, jolla kappaleet tulostetaan</translation>
+        <source>Mixed</source>
+        <translation>Vaihteleva</translation>
+    </message>
+    <message>
+        <source>All bodies</source>
+        <translation>Kaikki kappaleet</translation>
+    </message>
+    <message>
+        <source>A material for every body: choose it, then Set to all</source>
+        <translation>Materiaali kaikille kappaleille: valitse se ja sitten Aseta kaikille</translation>
+    </message>
+    <message>
+        <source>Set to all</source>
+        <translation>Aseta kaikille</translation>
+    </message>
+    <message>
+        <source>Cura uses the printer and materials chosen in Cura: MitCad sends the bodies, each body&apos;s extruder number and its process settings.</source>
+        <translation>Cura käyttää Curassa valittuja tulostinta ja materiaaleja: MitCad lähettää kappaleet, kunkin kappaleen suulakkeen numeron ja sen prosessiasetukset.</translation>
+    </message>
+    <message>
+        <source>Geometry only: the slicer keeps its own printer, process and filaments.</source>
+        <translation>Vain geometria: viipaloija pitää oman tulostimensa, prosessinsa ja filamenttinsa.</translation>
+    </message>
+    <message>
+        <source>Print project: the printer, process and materials chosen here.</source>
+        <translation>Tulostusprojekti: tässä valitut tulostin, prosessi ja materiaalit.</translation>
+    </message>
+    <message>
+        <source>Print project: what is not chosen here comes from the slicer&apos;s defaults.</source>
+        <translation>Tulostusprojekti: mitä tässä ei valita, tulee viipaloijan oletuksista.</translation>
+    </message>
+    <message>
+        <source>Material</source>
+        <translation>Materiaali</translation>
     </message>
     <message>
         <source>Edit materials…</source>
@@ -28464,8 +28683,8 @@ Lisää tallennetun mallin.</translation>
         <translation>Kiinnittää valitun kommentin toiseen tahkoon, särmään, kappaleeseen tai pisteeseen</translation>
     </message>
     <message>
-        <source>Pins a note for an AI agent to a face, an edge, a body or a point of the design</source>
-        <translation>Kiinnittää tekoälyagentille tarkoitetun huomautuksen mallin tahkoon, särmään, kappaleeseen tai pisteeseen</translation>
+        <source>Pins a note for an AI agent to a face, edge, body, point or the whole design</source>
+        <translation>Kiinnittää tekoälyagentille muistiinpanon pintaan, särmään, kappaleeseen, pisteeseen tai koko malliin</translation>
     </message>
     <message>
         <source>On</source>
@@ -28484,12 +28703,24 @@ Lisää tallennetun mallin.</translation>
         <translation>Kiinnittää sen napsautettuun pisteeseen, ei koko tahkoon tai särmään</translation>
     </message>
     <message>
+        <source>Whole Design</source>
+        <translation>Koko malli</translation>
+    </message>
+    <message>
+        <source>A comment on the design as a whole, with nothing to pick</source>
+        <translation>Kommentti koko mallista, mitään ei tarvitse valita</translation>
+    </message>
+    <message>
         <source>Comment</source>
         <translation>Kommentti</translation>
     </message>
     <message>
         <source>What should change there, for the agent to read</source>
         <translation>Mitä siinä pitäisi muuttaa, agentin luettavaksi</translation>
+    </message>
+    <message>
+        <source>Write the comment: what should change in the design.</source>
+        <translation>Kirjoita kommentti: mitä mallissa pitäisi muuttaa.</translation>
     </message>
     <message>
         <source>Pick what the comment is about: a face, an edge, a body or a point.</source>
@@ -28542,6 +28773,10 @@ Lisää tallennetun mallin.</translation>
     <message>
         <source>Reopen %1</source>
         <translation>Avaa %1 uudelleen</translation>
+    </message>
+    <message>
+        <source>Comment %1 is on the whole design.</source>
+        <translation>Kommentti %1 koskee koko mallia.</translation>
     </message>
     <message>
         <source>Comment %1 is on the parameter %2 (Edit › Edit Parameters…).</source>
@@ -29068,6 +29303,22 @@ Lisää tallennetun mallin.</translation>
         <translation>Laskenta peruttiin.</translation>
     </message>
     <message>
+        <source>%1 was hidden; shown so the new body can be seen.</source>
+        <translation>%1 oli piilossa; se näytetään, jotta uusi kappale näkyy.</translation>
+    </message>
+    <message>
+        <source>%1 was hidden; shown so the new component can be seen.</source>
+        <translation>%1 oli piilossa; se näytetään, jotta uusi komponentti näkyy.</translation>
+    </message>
+    <message>
+        <source>%1 were hidden; shown so the new body can be seen.</source>
+        <translation>%1 olivat piilossa; ne näytetään, jotta uusi kappale näkyy.</translation>
+    </message>
+    <message>
+        <source>%1 were hidden; shown so the new component can be seen.</source>
+        <translation>%1 olivat piilossa; ne näytetään, jotta uusi komponentti näkyy.</translation>
+    </message>
+    <message>
         <source>Recompute failed: %1</source>
         <translation>Uudelleenlaskenta epäonnistui: %1</translation>
     </message>
@@ -29180,6 +29431,10 @@ Lisää tallennetun mallin.</translation>
     <message>
         <source>Insert Point</source>
         <translation>Lisää piste</translation>
+    </message>
+    <message>
+        <source>Free Pattern</source>
+        <translation>Vapauta kuvio</translation>
     </message>
     <message>
         <source>Set Orbit Center Here</source>
@@ -39342,6 +39597,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>Leikkuuluettelo</translation>
     </message>
     <message>
+        <source>Sheet Metal</source>
+        <translation>Ohutlevy</translation>
+    </message>
+    <message>
         <source>Bill of Materials</source>
         <translation>Osaluettelo</translation>
     </message>
@@ -39386,6 +39645,86 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>Yhdistä tässä raportissa samat mitatut geometriat ja materiaalit; malli ei muutu</translation>
     </message>
     <message>
+        <source>Lists every component, the components as the assembly nests them, or only the parts</source>
+        <translation>Näyttää kaikki komponentit, komponentit kokoonpanon rakenteen mukaan tai vain osat</translation>
+    </message>
+    <message>
+        <source>Every component</source>
+        <translation>Kaikki komponentit</translation>
+    </message>
+    <message>
+        <source>Structured</source>
+        <translation>Rakenteellinen</translation>
+    </message>
+    <message>
+        <source>Parts only</source>
+        <translation>Vain osat</translation>
+    </message>
+    <message>
+        <source>&amp;View:</source>
+        <translation>&amp;Näkymä:</translation>
+    </message>
+    <message>
+        <source>Lists only the components of the kind chosen, such as sheet metal or library parts</source>
+        <translation>Näyttää vain valitun lajin komponentit, kuten ohutlevyt tai kirjastokomponentit</translation>
+    </message>
+    <message>
+        <source>All kinds</source>
+        <translation>Kaikki lajit</translation>
+    </message>
+    <message>
+        <source>Sheet metal</source>
+        <translation>Ohutlevy</translation>
+    </message>
+    <message>
+        <source>Build profile</source>
+        <translation>Rakenneprofiili</translation>
+    </message>
+    <message>
+        <source>Library part</source>
+        <translation>Kirjastokomponentti</translation>
+    </message>
+    <message>
+        <source>Imported</source>
+        <translation>Tuotu</translation>
+    </message>
+    <message>
+        <source>Solid</source>
+        <translation>Solidi</translation>
+    </message>
+    <message>
+        <source>Mixed</source>
+        <translation>Sekalainen</translation>
+    </message>
+    <message>
+        <source>Assembly</source>
+        <translation>Kokoonpano</translation>
+    </message>
+    <message>
+        <source>Kin&amp;d:</source>
+        <translation>&amp;Laji:</translation>
+    </message>
+    <message>
+        <source>Lists only the components of the BOM Structure chosen, such as Normal or Purchased</source>
+        <translation>Näyttää vain valitun osaluettelorakenteen komponentit, kuten normaalit tai ostettavat</translation>
+    </message>
+    <message>
+        <source>The cut sheet the Flat Patterns go onto: a new one or one of the design&apos;s</source>
+        <translation>Leikkuuarkki, jolle levitykset tulevat: uusi tai jokin suunnitelman omista</translation>
+    </message>
+    <message>
+        <source>Cut s&amp;heet:</source>
+        <translation>Leikkuu&amp;arkki:</translation>
+    </message>
+    <message>
+        <source>&amp;Add All to Cut Sheet</source>
+        <translation>&amp;Lisää kaikki leikkuuarkille</translation>
+    </message>
+    <message>
+        <source>Puts every sheet part&apos;s Flat Pattern on the cut sheet, as many as the design has</source>
+        <translation>Lisää jokaisen ohutlevyosan levityksen leikkuuarkille niin monta kuin suunnitelmassa on</translation>
+    </message>
+    <message>
         <source>Copy as &amp;CSV</source>
         <translation>Kopioi &amp;CSV:nä</translation>
     </message>
@@ -39404,6 +39743,28 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>Prints the tab shown as its PDF lays it out</source>
         <translation>Tulostaa näytetyn välilehden PDF-asettelun mukaisesti</translation>
+    </message>
+    <message>
+        <source>New Cut Sheet</source>
+        <translation>Uusi leikkuuarkki</translation>
+    </message>
+    <message>
+        <source>No sheet part&apos;s Flat Pattern can be developed</source>
+        <translation>Yhdenkään ohutlevyosan levitystä ei voi tehdä</translation>
+    </message>
+    <message numerus="yes">
+        <source>%n Flat Pattern(s) added to %1</source>
+        <translation>
+            <numerusform>%n levitys lisätty kohteeseen %1</numerusform>
+            <numerusform>%n levitystä lisätty kohteeseen %1</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n Flat Pattern(s) added to %1, with warnings</source>
+        <translation>
+            <numerusform>%n levitys lisätty kohteeseen %1, varoituksin</numerusform>
+            <numerusform>%n levitystä lisätty kohteeseen %1, varoituksin</numerusform>
+        </translation>
     </message>
     <message>
         <source>Untitled</source>
@@ -39442,8 +39803,16 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>osaluettelo</translation>
     </message>
     <message>
+        <source>sheet metal list</source>
+        <translation>ohutlevyluettelo</translation>
+    </message>
+    <message>
         <source>Save Cut List as PDF</source>
         <translation>Tallenna leikkuuluettelo PDF:nä</translation>
+    </message>
+    <message>
+        <source>Save Sheet Metal List as PDF</source>
+        <translation>Tallenna ohutlevyluettelo PDF-tiedostoksi</translation>
     </message>
     <message>
         <source>Save Bill of Materials as PDF</source>
@@ -39460,6 +39829,34 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>Copy as &amp;Text</source>
         <translation>Kopioi te&amp;kstinä</translation>
+    </message>
+    <message>
+        <source>All structures</source>
+        <translation>Kaikki rakenteet</translation>
+    </message>
+    <message>
+        <source>Normal</source>
+        <translation>Normaali</translation>
+    </message>
+    <message>
+        <source>Purchased</source>
+        <translation>Ostettava</translation>
+    </message>
+    <message>
+        <source>Phantom</source>
+        <translation>Haamu</translation>
+    </message>
+    <message>
+        <source>Reference</source>
+        <translation>Viite</translation>
+    </message>
+    <message>
+        <source>Inseparable</source>
+        <translation>Erottamaton</translation>
+    </message>
+    <message>
+        <source>BOM &amp;Structure:</source>
+        <translation>Osaluettelon &amp;rakenne:</translation>
     </message>
     <message>
         <source>Copies the tab shown as plain text with its columns aligned, for an email</source>
@@ -39491,6 +39888,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>View %1: %2</source>
         <translation>Kuvanto %1: %2</translation>
+    </message>
+    <message>
+        <source>Updating…</source>
+        <translation>Päivitetään…</translation>
     </message>
     <message>
         <source>%1°</source>
@@ -39610,6 +40011,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
     <message>
         <source>Click where the dimension goes, or a second edge, circle or corner (Shift: no snap)</source>
         <translation>Napsauta mitan paikkaa tai toista särmää, ympyrää tai kulmaa (Shift: ei kohdistusta)</translation>
+    </message>
+    <message>
+        <source>Drawing the views…</source>
+        <translation>Piirretään näkymiä…</translation>
     </message>
     <message>
         <source>Material…</source>
@@ -42543,6 +42948,10 @@ Uloskirjautuminen kirjaa ulos myös tämän tietokoneen muut Codex-ohjelmat, jot
         <translation>Lisää piste: %1</translation>
     </message>
     <message>
+        <source>Free Pattern: the pattern&apos;s copies are now plain sketch geometry</source>
+        <translation>Vapauta kuvio: kuvion kopiot ovat nyt tavallista luonnosgeometriaa</translation>
+    </message>
+    <message>
         <source>%1: %2 and %3 do not take it</source>
         <translation>%1: %2 ja %3 eivät salli sitä</translation>
     </message>
@@ -42664,6 +43073,13 @@ Hyväksy säilyttää kohteen %1 ilman niitä; Peruuta kumoaa sen.</translation>
     <message>
         <source>Sketch steps</source>
         <translation>Luonnoksen työvaiheet</translation>
+    </message>
+    <message numerus="yes">
+        <source>Partly repeats the other constraints and dimensions; it still removes %n degree(s) of freedom</source>
+        <translation>
+            <numerusform>Toistaa osittain muita rajoitteita ja mittoja; poistaa silti %n vapausasteen</numerusform>
+            <numerusform>Toistaa osittain muita rajoitteita ja mittoja; poistaa silti %n vapausastetta</numerusform>
+        </translation>
     </message>
     <message>
         <source>Dimension %1</source>

@@ -1889,6 +1889,26 @@ void SketchController::setItemsActive(const QStringList& ids, bool on) {
                                  ids.join(QStringLiteral(", ")));
 }
 
+void SketchController::freePattern(const QString& id) {
+  if (id.isEmpty()) {
+    return;
+  }
+  SketchOp op(*this);
+  QJsonObject cmd = op.command(QStringLiteral("sketch.remove"));
+  cmd.insert(QStringLiteral("items"), QJsonArray{id});
+  if (!op.run(cmd)) {
+    const QString reason = op.error();
+    op.rollback();
+    qDebug().noquote() << QStringLiteral("Pattern not freed: %1").arg(reason);
+    error(reason);
+    return;
+  }
+  op.commit();
+  notice(tr("Free Pattern: the pattern's copies are now plain sketch geometry"), NoticeLevel::Information);
+  // "Freed pattern k5", for UI tests.
+  qDebug().noquote() << QStringLiteral("Freed pattern %1").arg(id);
+}
+
 QStringList SketchController::selectedItems(bool active) const {
   QStringList ids;
   for (const SelectionItem& item : m_host.selection()) {

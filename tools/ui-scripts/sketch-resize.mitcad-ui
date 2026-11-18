@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: MIT
+# The window resized while a sketch is edited (mitcad#1996): Finish Sketch
+# puts the view before the sketch back in the view's aspect now, not the
+# one it was saved with, so the model is not drawn squashed. On
+# sketch-resize.json (Sketch1 with a rectangle, Extrude1 after it):
+#   1. A wide window; Edit Sketch1 (a double-click on the timeline); the
+#      window made narrow and tall; Finish Sketch: the restored
+#      camera's aspect is the view's width over its height and a circle at
+#      its target is drawn round ("View: camera restored, aspect a for a
+#      view of WxH px (the view's aspect), a circle drawn X x Y px
+#      (round)", OcctViewer::logRestoredCamera; the circle's two extents
+#      are also compared here, within half a pixel).
+#   2. The same the other way: Edit Sketch1 in the narrow window, the window
+#      made wide again, Finish Sketch.
+# Run by tools/ui-sketch-resize-test.sh (Linux),
+# tools/ui-windows-sketch-resize-test.ps1 (Windows) and
+# tools/ui-macos-sketch-resize-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 860
+focus-main
+wait-idle
+
+# 1. Wide when the sketch is entered, narrow and tall when it is left.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+mark
+window-resize 840 940
+wait-log '^View: resized to '
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-log '^View: camera restored, aspect [0-9.]+ for a view of [0-9]+x[0-9]+ px \(the view.s aspect\), a circle drawn [0-9.]+ x [0-9.]+ px \(round\)$'
+expect-log '^Sketch left with the view before it'
+capture across '^View: camera restored, .* a circle drawn ([0-9.]+) x '
+capture upward '^View: camera restored, .* a circle drawn [0-9.]+ x ([0-9.]+) px'
+expect-near ${across} ${upward} 0.002 0.5
+wait-idle
+
+# 2. Narrow and tall when the sketch is entered, wide when it is left.
+mark
+dblclick-logged '^Timeline Sketch1 at '
+wait-log '^Editing sketch F1 \(Sketch1\)'
+wait-idle
+mark
+window-resize 1400 860
+wait-log '^View: resized to '
+wait-idle
+mark
+command sketch.finish
+wait-log '^Sketch finished$'
+wait-log '^View: camera restored, aspect [0-9.]+ for a view of [0-9]+x[0-9]+ px \(the view.s aspect\), a circle drawn [0-9.]+ x [0-9.]+ px \(round\)$'
+expect-log '^Sketch left with the view before it'
+capture across '^View: camera restored, .* a circle drawn ([0-9.]+) x '
+capture upward '^View: camera restored, .* a circle drawn [0-9.]+ x ([0-9.]+) px'
+expect-near ${across} ${upward} 0.002 0.5
+wait-idle
+expect-never 'View: camera restored, .*(another aspect|squashed)|Recompute failed|TestDriver: FAIL'

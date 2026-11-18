@@ -59,13 +59,13 @@ wait-idle
 mark
 command surface.patch
 wait-log '^Pick places:' 20
-wait-log '^Pick edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage' 30
+wait-log '^Pick edge F[0-9]+[.]b0/[{]"at":[^ ]*"opening":[{]"faces":\["F[0-9]+:cage' 30
 wait-idle
-hover-logged '^Pick edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage'
+hover-logged '^Pick edge F[0-9]+[.]b0/[{]"at":[^ ]*"opening":[{]"faces":\["F[0-9]+:cage'
 wait-idle
 mark
-click-pick 'edge F[0-9]+[.]b0/[{]"faces":\["F[0-9]+:cage[^ ]* at '
-wait-log '^Patch Profiles or Edges: 1 edge' 20
+click-pick 'edge F[0-9]+[.]b0/[{]"at":[^ ]*"opening":[{]"faces":\["F[0-9]+:cage[^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge [[]edge [{]"faces":' 20
 expect-no-log ' not taken: '
 wait-idle 30
 mark

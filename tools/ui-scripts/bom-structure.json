@@ -1,0 +1,23 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The BOM Structure and the Bill of Materials' views (mitcad#1985), tools/ui-bom-structure-test.sh: Base (C1, occurrence O1) a 10 mm box (sketch F1, extrude F2); Frame (C2, O2) a subassembly holding Rail (C3, O3, a 10 mm box: sketch F3, extrude F4) twice (O3, O4)."},
+  {"cmd": "create_component", "name": "Base"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "activate_component", "component": "Root"},
+  {"cmd": "create_component", "name": "Frame", "transform": [[1, 0, 0, 30], [0, 1, 0, 0], [0, 0, 1, 0]]},
+  {"cmd": "create_component", "name": "Rail"},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F3", "corner": [0, 0], "width": 10, "height": 10},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"expect": {"feature": "F4", "status": "ok", "body": "F4.b0"}},
+  {"cmd": "activate_component", "component": "C2"},
+  {"cmd": "copy_occurrence", "occurrence": "O3", "transform": [[1, 0, 0, 0], [0, 1, 0, 20], [0, 0, 1, 0]]},
+  {"cmd": "activate_component", "component": "Root"},
+  {"expect": {"bodies": 2}}
+]

@@ -112,6 +112,11 @@ pub struct SketchPattern<P> {
     /// The patterned points and curves.
     pub entities: Vec<Ref>,
     pub copies: Vec<PatternCopy>,
+    /// The instances left out (mitcad#2007): a copy deleted takes its
+    /// instance out of the pattern, which then makes it no more. Sorted,
+    /// each one of [`SketchPattern::instances`]; a new count keeps those
+    /// that are still instances.
+    pub skipped: Vec<[u32; 2]>,
 }
 
 #[derive(Serialize)]
@@ -122,6 +127,13 @@ struct PatternOut<'a, P> {
     #[serde(with = "super::uids_serde")]
     entities: &'a [Ref],
     copies: &'a [PatternCopy],
+    #[serde(skip_serializing_if = "none_skipped")]
+    skipped: &'a [[u32; 2]],
+}
+
+/// No instance left out: `skipped` is not written (older files have none).
+fn none_skipped(skipped: &&[[u32; 2]]) -> bool {
+    skipped.is_empty()
 }
 
 impl<P: Serialize> Serialize for SketchPattern<P> {
@@ -131,6 +143,7 @@ impl<P: Serialize> Serialize for SketchPattern<P> {
             kind: &self.kind,
             entities: &self.entities,
             copies: &self.copies,
+            skipped: &self.skipped,
         }
         .serialize(serializer)
     }
@@ -155,12 +168,17 @@ impl<'de, P: Deserialize<'de>> Deserialize<'de> for SketchPattern<P> {
             Some(v) => serde_json::from_value(v).map_err(D::Error::custom)?,
             None => Vec::new(),
         };
+        let skipped = match map.remove("skipped") {
+            Some(v) => serde_json::from_value(v).map_err(D::Error::custom)?,
+            None => Vec::new(),
+        };
         let kind = PatternKind::<P>::deserialize(Value::Object(map)).map_err(D::Error::custom)?;
         Ok(Self {
             id,
             kind,
             entities,
             copies,
+            skipped,
         })
     }
 }
@@ -219,6 +237,7 @@ impl<P> SketchPattern<P> {
             kind,
             entities: self.entities.clone(),
             copies: self.copies.clone(),
+            skipped: self.skipped.clone(),
         })
     }
 
@@ -230,9 +249,17 @@ impl<P> SketchPattern<P> {
         }
     }
 
-    /// The instance indices the counts ask for, the originals' `[0, 0]`
-    /// left out.
+    /// The instance indices the pattern makes: its
+    /// [`SketchPattern::instances`] without the skipped ones.
     pub fn indices(&self) -> Vec<[u32; 2]> {
+        let mut all = self.instances();
+        all.retain(|i| !self.skipped.contains(i));
+        all
+    }
+
+    /// The instance indices the counts ask for, the originals' (`[0, 0]`,
+    /// or a symmetric direction's middle) left out.
+    pub fn instances(&self) -> Vec<[u32; 2]> {
         match self.kind {
             PatternKind::Circular { count, .. } => (1..count).map(|k| [k, 0]).collect(),
             PatternKind::Rectangular {
@@ -302,6 +329,14 @@ impl<P> SketchPattern<P> {
         }
         if self.entities.is_empty() {
             return Err(format!("{what}: nothing to pattern"));
+        }
+        let instances = self.instances();
+        for (k, s) in self.skipped.iter().enumerate() {
+            if !instances.contains(s) || self.skipped[..k].contains(s) {
+                return Err(format!(
+                    "{what}: the skipped instance {s:?} is no instance or is listed twice"
+                ));
+            }
         }
         let mut seen = BTreeSet::new();
         for r in &self.entities {
@@ -733,6 +768,7 @@ impl SketchEdit<'_> {
             },
             entities: entities.to_vec(),
             copies: Vec::new(),
+            skipped: Vec::new(),
         });
         self.report.constraints.push(id);
         self.sync_patterns()?;
@@ -780,6 +816,7 @@ impl SketchEdit<'_> {
             },
             entities: entities.to_vec(),
             copies: Vec::new(),
+            skipped: Vec::new(),
         });
         self.report.constraints.push(id);
         self.sync_patterns()?;
@@ -948,6 +985,12 @@ impl SketchEdit<'_> {
                 self.def.patterns.remove(i);
                 return self.finish_sync(doomed, true);
             }
+            // Skips of instances a new count no longer asks for go
+            // (mitcad#2007).
+            let instances = pattern.instances();
+            pattern.skipped.retain(|s| instances.contains(s));
+            pattern.skipped.sort_unstable();
+            pattern.skipped.dedup();
             let wanted: BTreeSet<[u32; 2]> = pattern.indices().into_iter().collect();
             // Instances no longer asked for.
             for copy in &pattern.copies {
@@ -1097,5 +1140,76 @@ impl SketchEdit<'_> {
             copy.entities.insert(*o, Ref::Curve(id));
         }
         Ok(())
+    }
+}
+
+// Copies deleted and patterns freed by edits of their curves (mitcad#2007).
+impl SketchEdit<'_> {
+    /// Takes the instances out of their patterns whose copies `deleting`
+    /// holds while their originals stay (`sketch.remove`, before the
+    /// entities go): each such instance is listed in its pattern's
+    /// `skipped`, so that the pattern does not make it again, and its
+    /// record goes, so that the copies not deleted with it stay as plain
+    /// sketch geometry where they are. A copy whose original goes too goes
+    /// with its original, as before.
+    pub(crate) fn skip_deleted_copies(&mut self, deleting: &BTreeSet<EntityUid>) {
+        for pattern in &mut self.def.patterns {
+            let hit: Vec<[u32; 2]> = pattern
+                .copies
+                .iter()
+                .filter(|c| {
+                    c.entities.iter().any(|(original, made)| {
+                        deleting.contains(&made.uid()) && !deleting.contains(&original.uid())
+                    })
+                })
+                .map(|c| c.index)
+                .collect();
+            if hit.is_empty() {
+                continue;
+            }
+            pattern.copies.retain(|c| !hit.contains(&c.index));
+            pattern.skipped.extend(hit);
+            pattern.skipped.sort_unstable();
+            pattern.skipped.dedup();
+        }
+    }
+
+    /// The patterns that `curves` belong to, as originals or copies, in
+    /// the definition's order.
+    pub(crate) fn patterns_making(&self, curves: &[EntityUid]) -> Vec<ConstraintUid> {
+        self.def
+            .patterns
+            .iter()
+            .filter(|p| {
+                curves
+                    .iter()
+                    .any(|c| p.entities.iter().any(|r| r.uid() == *c) || p.copy_ids().contains(c))
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Frees the patterns that `curves` belong to into plain sketch
+    /// geometry, as `sketch.remove` of the pattern does, and says so in a
+    /// note: Trim, Extend, Sketch Fillet and Chamfer change the shape of a
+    /// pattern's curve this way, which the pattern would otherwise make
+    /// again from its original (a copy) or copy anew (an original). The
+    /// record goes; nothing else does: the solve bound the copies to their
+    /// originals without stored constraints, so the curves keep their ids,
+    /// places, shared points and the user's constraints. The patterns
+    /// freed.
+    pub(crate) fn free_patterns_of(&mut self, curves: &[EntityUid]) -> Vec<ConstraintUid> {
+        let ids = self.patterns_making(curves);
+        if ids.is_empty() {
+            return ids;
+        }
+        self.drop_constraints(&ids.iter().copied().collect());
+        for id in &ids {
+            self.report.notes.push(crate::said(
+                "the pattern's copies are now plain sketch geometry",
+                format!("pattern {id}'s copies are now plain sketch geometry"),
+            ));
+        }
+        ids
     }
 }

@@ -3,7 +3,8 @@
 
 // Comments (mitcad#1119, app/COMMANDS.md "Comments"): notes pinned to a
 // feature, a face, an edge, a body, a sketch entity, a parameter or a point
-// of the design, which point an AI agent at the right place. The model
+// of the design, or to the whole design (mitcad#2010), which point an AI
+// agent at the right place. The model
 // keeps them (`add_comment` … `delete_comment`, the `comments` query,
 // core/model-api/src/commands.md "Comments"); this file is what the
 // application makes of the query's answer: each comment's state, its pin's
@@ -43,6 +44,7 @@ struct CommentShown {
   bool orphaned = false; // its target no longer resolves: shown at its last place
   QString author;  // user, or an MCP client's name
   QString resolution; // what the agent did (address_comment); empty: none
+  QString addressedBy; // who addressed it; empty: not addressed
   QVector<Reply> replies;
   QString created; // RFC 3339
   QString label;   // the target for people: "Body1 › face", "Extrude1", "width", "Point"
@@ -88,9 +90,47 @@ struct CommentFilter {
   QString text() const;
 };
 
-// The status as the panel shows it: Open, Addressed, Resolved (with
-// ", orphaned" while its target is gone).
+// Whether an open comment waits for the user's answer (mitcad#2010): its
+// latest reply is not the user's (an agent asked something back). Worked
+// out from the replies; the model keeps no such field.
+bool commentWaitingForYou(const CommentShown& comment);
+
+// The status as the panel shows it: Open (or "Open, waiting for your
+// answer"), Addressed, Resolved (with ", target gone" while its target is
+// gone).
 QString commentStatusText(const CommentShown& comment);
+
+// A comment's or a reply's time (RFC 3339 UTC) in the local time zone as
+// the locale writes a short date and time; the text as it is when it is
+// no time.
+QString commentTimeText(const QString& created);
+
+// One part of a thread as the Comments panel's details pane and the reply
+// dialog show it (mitcad#2010): a heading ("Reply 2 by claude-code,
+// <time>") and the text whole, its lines kept.
+struct CommentEntry {
+  QString heading;
+  QString text;
+};
+
+// The comment itself (`reply` 0: "Comment 3 by user, <time>") or one of
+// its replies (from 1); an empty entry for a reply it does not have.
+CommentEntry commentEntry(const CommentShown& comment, int reply);
+
+// What the details pane shows for a row: `summary` (what it is on and its
+// status) and, for the comment's row (`reply` 0), the whole thread: the
+// comment, its replies in order and the resolution; for a reply's row
+// (from 1) that reply alone.
+struct CommentDetails {
+  QString summary;
+  QVector<CommentEntry> entries;
+};
+CommentDetails commentDetails(const CommentShown& comment, int reply);
+
+// What a reply (Reply…, Reopen) answers: the reply selected (from 1), or
+// with the comment's row selected (0) its latest reply, else the comment
+// (0).
+int commentAnswered(const CommentShown& comment, int selectedReply);
 
 // The comment on one line for the pin's and the row's tooltip: its number,
 // the author and the text, what it is on, the agent's resolution and the

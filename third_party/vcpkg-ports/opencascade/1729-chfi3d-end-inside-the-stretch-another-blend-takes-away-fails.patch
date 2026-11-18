@@ -1,0 +1,120 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a fillet's end at a vertex whose contact meets an edge inside the
+stretch of it that another fillet's blend takes away fails at that vertex,
+instead of a corner that leaves the edge's face open (mitcad#1926).
+
+A U-shaped fin on a plate, a pit inside the U whose edge with the plate is
+rounded with 5, the arms' top edges rounded with 0.5, an arm's inner foot
+not rounded: at that arm's inner end the top's 0.5 runs down the arm's
+inner wall to the plate, its contact meeting the wall's edge with the
+plate inside the stretch the pit's rounding takes away beside the wall.
+The corner of one stripe made there was done, but the plate's wire was
+left open (the result not valid).
+
+- PerformFilletOnVertex, a regular end of one stripe: where one of its
+  contacts meets an edge at the vertex on an arc, and another stripe ending
+  at that edge's other vertex meets the same edge farther from that vertex
+  with its contact on the edge's other face, the stripe's contact lies in
+  the stretch the other blend takes away; the corner fails there
+  (endInsideAnothersCut). Contacts on one face meeting the edge from
+  either end (two roundings mitred at a short edge, 0210) are no such
+  case. The other stripe's end then
+  fails the same way, its contact inside the first one's stretch.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 9dccef06..7d4b755d 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -4955,6 +4955,79 @@ bool ChFi3d_Builder::PerformRideOnCornerAtEnd(const int Index)
+   return false;
+ }
+ 
++// Whether stripe S's end at vertex V (its SurfData Fd there) meets an edge E
++// at V inside the stretch of E that another stripe's blend takes away: that
++// stripe ends at E's other vertex, its contact there on E's other face
++// meeting E at a point, and S's contact meets E between that vertex and
++// that point. A corner made
++// there leaves the wire of E's face open where the other blend took E away
++// (a fin's arm end whose wall the top's rounding runs down to the plate in
++// the stretch a pit's rounding took away beside it; PerformRideOnStripeAtEnd
++// makes such ends where the other blend rides under S).
++static bool endInsideAnothersCut(const ChFiDS_StripeMap&            VData,
++                                 const TopoDS_Vertex&                V,
++                                 const occ::handle<ChFiDS_Stripe>&   S,
++                                 const occ::handle<ChFiDS_SurfData>& Fd,
++                                 const bool                          IsFirst)
++{
++  if (Fd.IsNull())
++  {
++    return false;
++  }
++  for (int k = 1; k <= 2; k++)
++  {
++    const ChFiDS_CommonPoint& CP = Fd->Vertex(IsFirst, k);
++    if (!CP.IsOnArc())
++    {
++      continue;
++    }
++    const TopoDS_Edge& E = CP.Arc();
++    TopoDS_Vertex      v1, v2;
++    TopExp::Vertices(E, v1, v2);
++    if (v1.IsNull() || v2.IsNull() || v1.IsSame(v2) || (!v1.IsSame(V) && !v2.IsSame(V)))
++    {
++      continue;
++    }
++    const TopoDS_Vertex Vo = v1.IsSame(V) ? v2 : v1;
++    const double        tO = BRep_Tool::Parameter(Vo, E);
++    const double        t  = CP.ParameterOnArc();
++    for (int iv = 1; iv <= VData.Extent(); iv++)
++    {
++      if (!VData.FindKey(iv).IsSame(Vo))
++      {
++        continue;
++      }
++      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(VData(iv)); it.More(); it.Next())
++      {
++        const occ::handle<ChFiDS_Stripe>& S2 = it.Value();
++        if (S2 == S || S2->Spine().IsNull() || S2->SetOfSurfData().IsNull())
++        {
++          continue;
++        }
++        int                                i2 = 0;
++        bool                               f2 = false;
++        const occ::handle<ChFiDS_SurfData> D2 = endDataAt(Vo, S2, i2, f2);
++        for (int k2 = 1; k2 <= 2 && !D2.IsNull(); k2++)
++        {
++          const ChFiDS_CommonPoint& CP2 = D2->Vertex(f2, k2);
++          // (Contacts on one face meeting E from either end, as two
++          // roundings mitred at a short edge, are no such case.)
++          if (!CP2.IsOnArc() || !CP2.Arc().IsSame(E) || D2->Index(k2) == Fd->Index(k))
++          {
++            continue;
++          }
++          const double t2 = CP2.ParameterOnArc();
++          if ((t - tO) * (t2 - tO) > 0. && std::abs(t - tO) < std::abs(t2 - tO) - Precision::PConfusion())
++          {
++            return true;
++          }
++        }
++      }
++    }
++  }
++  return false;
++}
++
+ bool ChFi3d_Builder::PerformRideOnStripeAtEnd(const int Index)
+ {
+   const TopoDS_Vertex&        Vtx  = myVDataMap.FindKey(Index);
+@@ -9753,6 +9826,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+         {
+           return;
+         }
++        if (endInsideAnothersCut(myVDataMap, Vtx, stripe, Fd, isfirst))
++        {
++          throw Standard_Failure("the end of a fillet meets an edge where another fillet has taken it away");
++        }
+         if (nba > 3)
+         {
+           myCorner = Corner_EndAtIntersection;

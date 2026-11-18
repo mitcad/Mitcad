@@ -260,6 +260,21 @@ public:
   // there were none.
   bool cancelPicks();
 
+  // Views whose new scale the model works out (mitcad#1997): their lines
+  // as the sheet has them now, each scaled by `factor` about its place,
+  // drawn lighter, with a dashed box and "Updating…" over it, until the
+  // next sheet comes (setSheet) or clearUpdating(). A factor of 1 (a scale
+  // the model has yet to choose) marks them only. Logged "Drawing views
+  // updating: 1, 2 by 0.5" and "Drawing views updating: none".
+  void showUpdating(const QList<int>& viewIds, double factor);
+  void clearUpdating();
+  QList<int> updatingViews() const { return m_updating.keys(); }
+  // A note over the top of the sheet while the model draws it in a job of
+  // its own (mitcad#1997: "Drawing the views…"), the sheet as it was
+  // drawn under it; empty: none. Logged "Drawing note: <text>" ("none").
+  void setBusyNote(const QString& text);
+  QString busyNote() const { return m_busyNote; }
+
   // The whole sheet in the widget, less its covered margins.
   void fit();
   // What covers the widget at its sides (mitcad#1008: the Floating
@@ -422,6 +437,10 @@ private:
   QRectF previewBox() const;
   void logPreview(const QString& what);
 
+  // The views being updated (showUpdating, mitcad#1997): by view id, the
+  // factor their lines are scaled by; and the note over the sheet.
+  QHash<int, double> m_updating;
+  QString m_busyNote;
   // The title block editor on (mitcad#1625), none: off.
   TitleBlockEditor* m_blockEditor = nullptr;
   // The images' files read, by their base64 (a PNG's or a JPEG's pixels).

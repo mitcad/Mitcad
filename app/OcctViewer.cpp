@@ -712,6 +712,40 @@ void setPointStyle(const occ::handle<AIS_Shape>& object, const Quantity_Color& c
   object->Attributes()->SetPointAspect(new Prs3d_PointAspect(marker, color, scale));
 }
 
+// A number of a measurement guide's log: three decimals, never "-0.000".
+QString guideNumber(double value) { return QString::number(std::abs(value) < 5e-4 ? 0.0 : value, 'f', 3); }
+
+QString guidePoint(const gp_Pnt& p) {
+  return QStringLiteral("%1,%2,%3").arg(guideNumber(p.X()), guideNumber(p.Y()), guideNumber(p.Z()));
+}
+
+// A preview's straight edges with their ends ("from x,y,z to x,y,z"), its
+// other edges counted, and in `marks` its vertices on no edge (a
+// measurement's end marks), for the logs of Measure's guides
+// (mitcad#1979).
+QString guideLines(const TopoDS_Shape& shape, int& marks) {
+  QStringList lines;
+  int others = 0;
+  for (TopExp_Explorer edges(shape, TopAbs_EDGE); edges.More(); edges.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(edges.Current());
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() != GeomAbs_Line) {
+      ++others;
+      continue;
+    }
+    lines << QStringLiteral("from %1 to %2")
+                 .arg(guidePoint(curve.Value(curve.FirstParameter())), guidePoint(curve.Value(curve.LastParameter())));
+  }
+  if (others > 0) {
+    lines << QStringLiteral("%1 other edges").arg(others);
+  }
+  marks = 0;
+  for (TopExp_Explorer vertices(shape, TopAbs_VERTEX, TopAbs_EDGE); vertices.More(); vertices.Next()) {
+    ++marks;
+  }
+  return lines.isEmpty() ? QStringLiteral("none") : lines.join(QStringLiteral("; "));
+}
+
 // A sketch point's marker or ball as an OCCT marker image (mitcad#946),
 // one shared image per look and size (`key`, sketch/PointMarkers.hpp): the
 // overlay paints the same over its highlights. Straight-alpha RGBA, as
@@ -4727,6 +4761,12 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
     m_context->Remove(m_preview, false);
     m_preview.Nullify();
   }
+  // The guide beside it goes with it (mitcad#1979): its owner sets it
+  // again after the preview.
+  if (!m_previewGuide.IsNull()) {
+    m_context->Remove(m_previewGuide, false);
+    m_previewGuide.Nullify();
+  }
   if (!shape.IsNull()) {
     m_preview = new AIS_Shape(shape);
     // A tool the preview's job meshed (DisplayMeshes, a stand-in in the
@@ -4750,6 +4790,9 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
       // A plane-gap dimension can lie entirely inside a stepped solid.
       // Keep this temporary, non-selectable guide above the body's depth.
       setEdgeStyle(m_preview, viewRole(ColorRole::SketchDimension, m_backgroundDark), 2.0);
+      // Its end marks (the vertices on no edge, mitcad#1979) as balls of
+      // its colour, over a guide that runs on through them.
+      setPointStyle(m_preview, viewRole(ColorRole::SketchDimension, m_backgroundDark), Aspect_TOM_BALL, 2.0);
       m_preview->SetTransparency(0.0);
       m_context->Display(m_preview, AIS_WireFrame, -1, false);
       m_context->SetZLayer(m_preview, Graphic3d_ZLayerId_Topmost);
@@ -4825,7 +4868,36 @@ void OcctViewer::setPreview(const TopoDS_Shape& shape, PreviewStyle style) {
           .arg(m_context->IsDisplayed(m_preview, AIS_WireFrame))
           .arg(m_preview->Transparency())
           .arg(m_preview->ZLayer() == Graphic3d_ZLayerId_Topmost);
+      // Its lines between the measured points and its end marks
+      // (mitcad#1979).
+      int marks = 0;
+      const QString lines = guideLines(shape, marks);
+      qDebug().noquote() << QStringLiteral("Preview measurement wire lines: %1; end marks %2").arg(lines).arg(marks);
     }
+  }
+  sceneChanged();
+}
+
+void OcctViewer::setPreviewGuide(const TopoDS_Shape& shape) {
+  if (!m_previewGuide.IsNull()) {
+    m_context->Remove(m_previewGuide, false);
+    m_previewGuide.Nullify();
+  }
+  if (!shape.IsNull()) {
+    m_previewGuide = new AIS_Shape(shape);
+    // Dashed and thinner than the main distance's solid line, in the same
+    // colour; the top layer keeps the bodies' depth, so the main distance
+    // in the topmost layer is drawn over it where the two coincide.
+    setEdgeStyle(m_previewGuide, viewRole(ColorRole::SketchDimension, m_backgroundDark), 1.5, Aspect_TOL_DASH);
+    m_context->Display(m_previewGuide, AIS_WireFrame, -1, false);
+    m_context->SetZLayer(m_previewGuide, Graphic3d_ZLayerId_Top);
+    int marks = 0;
+    const QString lines = guideLines(shape, marks);
+    qDebug().noquote() << QStringLiteral("Preview measurement guide: %1, displayed wireframe %2, top layer %3; lines: %4")
+                              .arg(lineTypeName(m_previewGuide->Attributes()->WireAspect()->Aspect()->LineType()))
+                              .arg(m_context->IsDisplayed(m_previewGuide, AIS_WireFrame))
+                              .arg(m_previewGuide->ZLayer() == Graphic3d_ZLayerId_Top)
+                              .arg(lines);
   }
   sceneChanged();
 }
@@ -5145,11 +5217,13 @@ OcctViewer::itemFor(const occ::handle<SelectMgr_EntityOwner>& owner) const {
   case TopAbs_EDGE: {
     const auto name = body.name_of_edge(part);
     if (!name) {
-      // A free edge of a surface body has no name: while an input takes
-      // openings, it is picked as its opening (mitcad#1927).
+      // A free edge of a surface body has no name: with no command and
+      // while an input takes openings, it is picked as a single free edge,
+      // by its opening and its middle (mitcad#1927, #1955).
       if (m_openingEdges) {
-        if (const auto opening = openingOfEdge(body, body.edge_index(part))) {
-          return openingEdgeItem(item.owner, *opening, item.occurrence);
+        const int index = body.edge_index(part);
+        if (const auto opening = openingOfEdge(body, index)) {
+          return freeEdgeItem(item.owner, *opening, edgeMiddle(body, index), item.occurrence);
         }
       }
       return std::nullopt;
@@ -5474,13 +5548,14 @@ std::vector<std::pair<SelectionItem, QPoint>> OcctViewer::pickPoints(SelectFilte
     }
     if (kinds.testFlag(SelectKind::Edge)) {
       for (int i = 0; i < body.edge_count(); ++i) {
-        // A free edge, which has no name, by its opening's while an input
-        // takes openings (mitcad#1927), as itemFor names it.
+        // A free edge, which has no name, by its opening and its middle
+        // with no command and while an input takes openings (mitcad#1927,
+        // #1955), as itemFor names it.
         std::string name = body.edge_name(i);
         QString shapeType = curveType(body.edge(i));
         if (name.empty() && m_openingEdges) {
           if (const auto opening = openingOfEdge(body, i)) {
-            name = openingEdgeItem(QString(), *opening).name.toStdString();
+            name = freeEdgeItem(QString(), *opening, edgeMiddle(body, i)).name.toStdString();
             shapeType = QStringLiteral("other");
           }
         }
@@ -6112,12 +6187,48 @@ void OcctViewer::lookAtSketchPlane(bool saveCamera, const TopoDS_Shape& face) {
 
 void OcctViewer::restoreCamera() {
   if (!m_savedCamera.IsNull()) {
-    m_view->Camera()->Copy(m_savedCamera);
+    // In the view's aspect now, with the height the saved view showed: the
+    // window may have been resized in the sketch (mitcad#1996).
+    mitcad::copyCameraKeepingAspect(*m_view->Camera(), m_savedCamera);
     m_savedCamera.Nullify();
     // Anaglyph 3D switched in the sketch stays as it is (mitcad#1449).
     keepProjection(*m_view->Camera());
+    logRestoredCamera();
   }
   sceneChanged();
+}
+
+void OcctViewer::logRestoredCamera() const {
+  const occ::handle<Graphic3d_Camera>& camera = m_view->Camera();
+  if (m_view->Window().IsNull()) {
+    return;
+  }
+  int pixelsWide = 0;
+  int pixelsHigh = 0;
+  m_view->Window()->Size(pixelsWide, pixelsHigh);
+  // A circle at the target across a quarter of the height the view shows,
+  // its extent across and up the view in pixels: equal when the camera's
+  // aspect is the view's.
+  const double radius = 0.125 * camera->ViewDimensions().Y();
+  const gp_Dir up = camera->Up();
+  const gp_Dir right = camera->Direction().Crossed(up);
+  const gp_Pnt centre = camera->Project(camera->Center());
+  const gp_Pnt across = camera->Project(camera->Center().Translated(gp_Vec(right) * radius));
+  const gp_Pnt upward = camera->Project(camera->Center().Translated(gp_Vec(up) * radius));
+  const double circleWidth = std::abs(across.X() - centre.X()) * pixelsWide;
+  const double circleHeight = std::abs(upward.Y() - centre.Y()) * pixelsHigh;
+  const double viewAspect = pixelsHigh > 0 ? double(pixelsWide) / double(pixelsHigh) : 0.0;
+  const bool viewsAspect = viewAspect > 0.0 && std::abs(camera->Aspect() - viewAspect) <= 1e-3 * viewAspect;
+  const bool round = std::abs(circleWidth - circleHeight) <= std::max(0.5, 1e-3 * std::max(circleWidth, circleHeight));
+  qDebug().noquote() << QStringLiteral("View: camera restored, aspect %1 for a view of %2x%3 px (%4), a circle drawn "
+                                       "%5 x %6 px (%7)")
+                            .arg(camera->Aspect(), 0, 'f', 4)
+                            .arg(pixelsWide)
+                            .arg(pixelsHigh)
+                            .arg(viewsAspect ? QStringLiteral("the view's aspect") : QStringLiteral("another aspect"))
+                            .arg(circleWidth, 0, 'f', 2)
+                            .arg(circleHeight, 0, 'f', 2)
+                            .arg(round ? QStringLiteral("round") : QStringLiteral("squashed"));
 }
 
 void OcctViewer::keepCamera() {
@@ -6354,6 +6465,9 @@ QRectF OcctViewer::previewScreenBox() const {
   if (!m_preview.IsNull() && m_context->IsDisplayed(m_preview)) {
     BRepBndLib::Add(m_preview->Shape(), box);
   }
+  if (!m_previewGuide.IsNull() && m_context->IsDisplayed(m_previewGuide)) {
+    BRepBndLib::Add(m_previewGuide->Shape(), box);
+  }
   return box.IsVoid() ? QRectF() : screenBox(box);
 }
 
@@ -6368,6 +6482,9 @@ QImage OcctViewer::grabWithoutPreviews() {
   }
   if (!m_preview.IsNull() && m_context->IsDisplayed(m_preview)) {
     hidden.emplace_back(m_preview, m_previewMode);
+  }
+  if (!m_previewGuide.IsNull() && m_context->IsDisplayed(m_previewGuide)) {
+    hidden.emplace_back(m_previewGuide, static_cast<int>(AIS_WireFrame));
   }
   for (const auto& [object, mode] : hidden) {
     m_context->Erase(object, false);

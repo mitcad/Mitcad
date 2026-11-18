@@ -322,6 +322,11 @@ fn target_now<K: Kernel>(doc: &Document<K>, target: &CommentTarget) -> Result<Fo
                 place: Some(transform.apply_point(at)),
             })
         }
+        // The whole design (mitcad#2010): always there, without a place.
+        CommentTargetKind::Design => Ok(Found {
+            label: "Design".to_owned(),
+            place: None,
+        }),
     }
 }
 
@@ -588,6 +593,7 @@ fn gone_label<K: Kernel>(doc: &Document<K>, target: &CommentTarget) -> String {
         }
         Ok(CommentTargetKind::Parameter(name)) => name.to_owned(),
         Ok(CommentTargetKind::Point(_)) => "Point".to_owned(),
+        Ok(CommentTargetKind::Design) => "Design".to_owned(),
         Err(_) => "?".to_owned(),
     }
 }

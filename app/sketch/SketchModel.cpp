@@ -174,6 +174,11 @@ bool SketchModel::load(const QJsonObject& sketch) {
   for (const QJsonValue& id : sketch.value(QStringLiteral("redundant")).toArray()) {
     redundant << id.toString();
   }
+  partlyRedundant.clear();
+  const QJsonObject partly = sketch.value(QStringLiteral("partly_redundant")).toObject();
+  for (auto it = partly.begin(); it != partly.end(); ++it) {
+    partlyRedundant.insert(it.key(), it.value().toInt());
+  }
   notParallel.clear();
   for (const QJsonValue& id : sketch.value(QStringLiteral("not_parallel")).toArray()) {
     notParallel << id.toString();

@@ -39,3 +39,6 @@ mod print_min_gap_tests;
 mod filament_change_tests;
 // The plate an item left when place_on_plate moves it (mitcad#1595).
 mod plate_moves_tests;
+// A Bambu-family project in the form its loader reads: preset metadata,
+// included templates, extruders and nozzle variants (mitcad#2008).
+mod slicer_project_form_tests;

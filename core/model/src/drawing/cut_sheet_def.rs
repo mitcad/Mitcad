@@ -8,6 +8,9 @@
 //! asked for (`mitcad_model_drawing::cut_sheet`), so a cut sheet follows
 //! the model; a part whose body is gone stays, marked as missing.
 //!
+//! A part can also be a sheet-metal body's Flat Pattern (mitcad#1980):
+//! its developed blank, with its bend lines.
+//!
 //! A part's `place` is where the middle of its outline's box goes on the
 //! sheet (millimetres from the sheet's lower left corner), and it turns
 //! about that middle by `rotation` (degrees counter-clockwise), so that a
@@ -31,6 +34,10 @@ pub const MAX_COUNT: u32 = 1000;
 
 fn is_zero(value: &f64) -> bool {
     *value == 0.0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// What a cut sheet keeps besides its drawing's name and folder.
@@ -78,6 +85,12 @@ pub struct CutPart {
     /// How far it is turned about that middle, degrees counter-clockwise.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f64,
+    /// The body's Flat Pattern (mitcad#1980): its developed blank from the
+    /// body's own Flat Pattern settings and side, its outline as cut edges
+    /// and its bend lines, instead of a face's silhouette (`face` is then
+    /// unused).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flat: bool,
 }
 
 impl CutSheet {

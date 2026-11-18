@@ -87,7 +87,7 @@ echo "--- 1. Printer: the picker by vendor; Escape closes it"
 ui_mark
 ui_command "Send to Slicer"
 ui_expect_new "3D Print printer: Slicer default" "the design has no printer chosen"
-ui_expect_new "Panel Send to Slicer input printer shows: Slicer default" "the field shows Slicer default"
+ui_expect_new "Panel Send to Slicer input printer shows: None (slicer's own)" "the field shows None (slicer's own) (mitcad#2008)"
 ui_expect_new "Panel Send to Slicer input printer at" "the Printer row"
 ui_expect_new "Panel Send to Slicer input process at" "the Process row"
 # The panel's places, logged together: the fields only, no pencil beside
@@ -101,7 +101,7 @@ ui_mark
 ui_step "open Printer"                     ui_click_logged "Panel Send to Slicer input printer"
 # (The built-in printers of the base library, where this computer has it,
 # come with their vendors' headings too.)
-ui_expect_new "entries, current Slicer default" "the picker opened on Slicer default"
+ui_expect_new "entries, current None (slicer's own)" "the picker opened on None (slicer's own)"
 ui_expect_new "Printer picker sections: Acme Lab 3 |" "the three Acme Lab printers under their vendor"
 sections=$(tail -n +$((UI_MARK + 1)) "$UI_LOG" | grep -F "Printer picker sections: " | tail -1)
 case "$sections" in

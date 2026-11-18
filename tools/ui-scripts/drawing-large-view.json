@@ -1,0 +1,20 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "A design for tools/ui-scripts/drawing-large-view.mitcad-ui (mitcad#1997): many bodies, as a large design's drawing has. Sketch1's circle of radius 8 at the origin on XY extruded as high as the parameter height (20 mm), Body1 (F2.b0), and a rectangular pattern of it, 6 along X and 6 along Y, 25 mm apart (F3): 36 cylinders, x and y -8 to 133, z 0 to the height. Drawing1 (D1, A3) has their front view (view 1) at 1:1 in the polygonal style (a projection from a triangulation, which a new scale projects again) with its box's middle at (150, 150): x 79.5 to 220.5 and y 140 to 160 on the sheet. The UI test holds each projection of its jobs 3 s (MITCAD_TEST_RECOMPUTE_DELAY_MS), as a large design's takes. All geometry is synthetic."},
+  {"cmd": "add_parameter", "name": "height", "value": "20 mm"},
+  {"cmd": "add_feature", "def": {"type": "sketch", "plane": "xy", "entities": [
+    {"id": "p1", "type": "point", "at": [0, 0]},
+    {"id": "c2", "type": "circle", "center": "p1", "radius": 8}]}},
+  {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": "r{c2}"}],
+    "extent": {"type": "distance", "distance": "height"}, "operation": "new_body"}},
+  {"expect": {"feature": "F2", "status": "ok"}},
+  {"cmd": "add_feature", "def": {"type": "rectangular_pattern",
+    "objects": {"type": "bodies", "bodies": ["F2.b0"]},
+    "direction1": {"axis": "x", "quantity": 6, "distance": 25},
+    "direction2": {"axis": "y", "quantity": 6, "distance": 25, "symmetric": false},
+    "distance_type": "spacing"}},
+  {"expect": {"feature": "F3", "status": "ok"}},
+  {"cmd": "add_drawing", "size": "A3"},
+  {"cmd": "add_drawing_view", "drawing": "D1", "type": "base", "direction": "front", "at": [150, 150],
+   "scale": "1:1", "style": {"polygonal": true}}
+]

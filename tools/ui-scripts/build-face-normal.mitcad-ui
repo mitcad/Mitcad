@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: MIT
+# A profile started on a face (mitcad#2000, GitHub mitcad/Mitcad#427), on
+# build-face-normal.json with the profile library the runner makes (one
+# 20 mm square profile): a box standing for an imported machine's leg,
+# 40 along X and 60 along Y, 500 high, its bottom face's centre at
+# (120, 230, 0).
+#   1. Profile, 300 long; the leg's bottom face, seen from below: Direction
+#      becomes Face normal (offered with the face) and Rotate is offered;
+#      the preview runs down from the face's centre, its x along the face's
+#      longest edge (Y), before Place; placed there, the profile's body
+#      (F2.b0) hangs below the leg, centred on its bottom face.
+#   2. Place On a plane (with a profile in the design, Profile places on
+#      profiles first and hides the construction geometry), the XY plane
+#      chosen by its icon, Direction -Z (Face normal is not offered on a
+#      plane): the preview runs down from the plane's origin; Enter places
+#      it there, its body (F4.b0) below XY.
+# Run by tools/ui-build-face-normal-test.sh (Linux),
+# tools/ui-windows-build-face-normal-test.ps1 (Windows) and
+# tools/ui-macos-build-face-normal-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+wait-idle
+command view.bottom
+wait-idle
+command view.fit
+wait-idle
+
+# 1. The leg's bottom face: along its normal, at its centre, along its edge.
+mark
+command build.profile
+wait-log '^Command Profile started' 30
+wait-log '^Inspect Profile: place grounded' 30
+wait-idle
+type-in '^Panel Profile input length at ' '300'
+wait-idle
+mark
+click-pick 'face F1[.]b0/F1:bottom'
+wait-log '^BUILD face picked: Direction Face normal, at the face.s center along its longest edge$' 30
+wait-log '^Inspect Profile: place geometry, length 300[.]00 mm .*; along normal; runs 0[.]000, 0[.]000, -1[.]000; x 0[.]000, -?1[.]000, 0[.]000; end A at 120[.]0, 230[.]0, 0[.]0;' 30
+wait-log '^Panel Profile input axis=normal at ' 20
+wait-log '^Panel Profile input rotate at [0-9]+,[0-9]+$' 20
+wait-idle
+mark
+key Return
+wait-log '^Placed ' 60
+wait-idle 30
+capture-model-number low '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.2
+expect-near ${low} -300
+capture-model-number high '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.2
+expect-near ${high} 0
+capture-model-number xmin '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.0
+expect-near ${xmin} 110
+capture-model-number xmax '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.0
+expect-near ${xmax} 130
+capture-model-number ymin '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.1
+expect-near ${ymin} 220
+capture-model-number ymax '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.1
+expect-near ${ymax} 240
+
+# 2. -Z on the XY plane: Place On a plane (the first profile placed, Place
+#    On takes profiles' faces and hides the planes), the origin shown (while
+#    Profile runs: the eye logs "(during Profile)"), XY chosen by its icon.
+command view.iso
+wait-idle
+expect-ever '^View Show menu: Origins off [|]'
+mark
+click-logged '^Browser eye Root/Origin at '
+wait-log '^Visibility Root/Origin: shown [(]during Profile[)]$' 20
+wait-idle
+command view.fit
+wait-idle
+mark
+click-logged '^Panel Profile input place=plane at '
+wait-log '^Construction geometry shown again$' 20
+wait-log '^Datum xy at ' 20
+wait-idle
+mark
+click-logged '^Datum xy at '
+wait-log '^BUILD plane chosen: plane xy' 20
+wait-idle
+mark
+click-logged '^Panel Profile input axis=-z at '
+wait-log '^Inspect Profile: place geometry, length 300[.]00 mm .*; along -z; runs 0[.]000, 0[.]000, -1[.]000; x .*; end A at 0[.]0, 0[.]0, 0[.]0;' 30
+expect-no-log '^Panel Profile input axis=normal at '
+wait-idle
+mark
+key Return
+wait-log '^Placed ' 60
+wait-idle 30
+capture-model-number low '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.2
+expect-near ${low} -300
+capture-model-number high '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.max.2
+expect-near ${high} 0
+expect-never 'TestDriver: FAIL'

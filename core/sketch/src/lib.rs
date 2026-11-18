@@ -165,6 +165,10 @@ mod offset_tests;
 // Offsets past a short piece's radius of curvature (mitcad#1938).
 #[cfg(test)]
 mod offset_fold_tests;
+// Letters' profiles: references between outlines moved apart, and glyph
+// contours that bound no profile (mitcad#1993).
+#[cfg(test)]
+mod text_regions_1993_tests;
 
 use std::collections::BTreeMap;
 use std::fmt;

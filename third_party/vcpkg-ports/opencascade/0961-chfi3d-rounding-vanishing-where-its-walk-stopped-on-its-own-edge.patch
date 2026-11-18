@@ -49,7 +49,7 @@ within 0.5 % of the exact body's; before, the fillet failed.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 03047af2..b80eff12 100644
+index 842564f3..e37986f7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -24,6 +24,7 @@
@@ -60,7 +60,7 @@ index 03047af2..b80eff12 100644
  #include <Geom2d_BSplineCurve.hxx>
  #include <Geom2d_TrimmedCurve.hxx>
  #include <GeomAPI_ProjectPointOnSurf.hxx>
-@@ -3480,6 +3481,82 @@ static bool ChFi3d_RolledIntoEndVertex(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -3514,6 +3515,82 @@ static bool ChFi3d_RolledIntoEndVertex(const TopOpeBRepDS_DataStructure&   DStr,
    return false;
  }
  
@@ -143,7 +143,7 @@ index 03047af2..b80eff12 100644
  //=======================================================================
  // function : ChFi3d_ShrinkVanishingEnd
  // purpose  : A blend between two faces that come tangent at the vertex
-@@ -3503,6 +3580,12 @@ static bool ChFi3d_RolledIntoEndVertex(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -3537,6 +3614,12 @@ static bool ChFi3d_RolledIntoEndVertex(const TopOpeBRepDS_DataStructure&   DStr,
  //           there narrower than a hundredth of the radius) the normals are
  //           not compared: the faces are tangent at the vertex, the walk
  //           only could not get nearer.
@@ -156,7 +156,7 @@ index 03047af2..b80eff12 100644
  //=======================================================================
  
  static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
-@@ -3511,7 +3594,8 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -3545,7 +3628,8 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
                                        const TopoDS_Vertex&                Vtx,
                                        const double                        theMaxDist,
                                        const bool                          theApply          = true,
@@ -166,7 +166,7 @@ index 03047af2..b80eff12 100644
  {
    ChFiDS_CommonPoint& CV1 = Fd->ChangeVertex(isfirst, 1);
    ChFiDS_CommonPoint& CV2 = Fd->ChangeVertex(isfirst, 2);
-@@ -3562,7 +3646,7 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -3596,7 +3680,7 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
    {
      return false;
    }
@@ -175,7 +175,7 @@ index 03047af2..b80eff12 100644
    // (The contact curves of a walked blend are B-splines.)
    occ::handle<Geom_BSplineCurve>   aC3d[2];
    int                              aPole3d[2] = {0, 0}, aPole2d[2] = {0, 0};
-@@ -3584,45 +3668,114 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -3618,40 +3702,84 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
        return false;
      }
    }
@@ -285,11 +285,14 @@ index 03047af2..b80eff12 100644
      }
      aC3d[k]->SetPole(aPole3d[k], PV);
      aC2d[k]->SetPole(aPole2d[k], BRep_Tool::Parameters(Vtx, aFace));
+@@ -3660,7 +3788,32 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+     // blend surface's boundary within its tolerance before and d.
+     const double        aMoved = (k == 0 ? CV1 : CV2).Point().Distance(PV);
      TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(aFi.LineIndex());
--    aCurve.Tolerance(std::max(aCurve.Tolerance(), 1.01 * aTol));
+-    aCurve.Tolerance(aCurve.Tolerance() + aMoved);
 +    if (aSurf.IsNull())
 +    {
-+      aCurve.Tolerance(std::max(aCurve.Tolerance(), 1.01 * aTol));
++      aCurve.Tolerance(aCurve.Tolerance() + aMoved);
 +      continue;
 +    }
 +    // The bent piece's deviation from the blend's boundary iso and from
@@ -316,7 +319,7 @@ index 03047af2..b80eff12 100644
    }
    for (ChFiDS_CommonPoint* aCV : {&CV1, &CV2})
    {
-@@ -3712,13 +3865,29 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3750,13 +3903,29 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
                                                     0.02 * fsp->Radius(),
                                                     0.01 * fsp->Radius()))
              || ChFi3d_RolledIntoEndVertex(myDS->DS(), Fd, isfirst, Vtx, tolesp, 0.01 * fsp->Radius()));

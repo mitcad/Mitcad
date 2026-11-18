@@ -254,6 +254,18 @@ public:
   // Whether a drawing is open over the 3D view: the Delete key then
   // deletes its views, never the model's selection behind it.
   virtual bool isDrawingOpen() const { return false; }
+  // A query that may take long as a job off the UI thread named `label`
+  // (DocumentSession::queryAsync; mitcad#1997: a drawing's sheet whose
+  // views the kernel has to project): it gives way (cancelled) to what the
+  // UI thread reads or runs meanwhile. `done` gets its answer, or that it
+  // was cancelled or failed (`error`), on the UI thread unless `context` is
+  // gone by then. False when it did not start (a job computes the model);
+  // the default starts none.
+  using QueryDone = std::function<void(const QJsonObject& answer, bool cancelled, const QString& error)>;
+  virtual bool queryInJob(const QString& /*label*/, const QJsonObject& /*query*/, QObject* /*context*/,
+                          QueryDone /*done*/) {
+    return false;
+  }
   // The bodies selected in the model (mitcad#853: a cut sheet's parts),
   // as a cut sheet's commands take them: a body's uid, or `{"body",
   // "occurrence"}` for one an occurrence places.

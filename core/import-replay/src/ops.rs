@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use mitcad_dump::{Detail, EntityName, Fingerprint, Geometry, Reference, TimelineItem, Vec3};
-use mitcad_model::{BodyUid, Cylinder, FaceName, FeatureUid, Kernel, Plane};
+use mitcad_model::{BodyUid, Cylinder, FaceInfo, FaceName, FeatureUid, Kernel, Plane};
 use serde_json::{Map, Value, json};
 
 use crate::geom::{self, mm, mm3};
@@ -4289,6 +4289,18 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 else {
                     continue;
                 };
+                // The state before it, its body of the same measures: a face
+                // that differs from that one's faces as well differs by the
+                // replay's own making (a rounding's corners made otherwise
+                // than the file's, mitcad#1977), not by the split.
+                let before: Option<Vec<FaceInfo>> = q
+                    .checked_sub(1)
+                    .and_then(|p| self.oracle.state(kernel, p).ok().map(|s| s.to_vec()))
+                    .and_then(|s| {
+                        s.iter()
+                            .find(|(_, other)| other.distance(&sig) <= RELATIVE)
+                            .and_then(|(b, _)| kernel.faces(&b.shape).ok())
+                    });
                 if crate::tracing() {
                     eprintln!(
                         "import: split face: state {q}: {} faces of {uid} against {} stored",
@@ -4300,36 +4312,33 @@ impl<K: crate::ImportKernel> Importer<'_, K> {
                 // area: a tight tolerance first, then a looser one for
                 // replayed faces that differ from the stored ones a little.
                 for tolerance in [1e-8, 1e-5] {
-                    // Each stored face stands for one face (faces of the
-                    // same area, as opposite sides, are told apart so).
-                    let mut taken = vec![false; stored.len()];
-                    let mut faces: Vec<String> = Vec::new();
-                    for f in &mine {
-                        let off = |k: usize| (stored[k].area - f.area).abs();
-                        let near = (0..stored.len())
-                            .filter(|&k| {
-                                !taken[k]
-                                    && stored[k].surface == f.surface
-                                    && off(k) <= tolerance * f.area.abs().max(1e-6)
-                            })
-                            .min_by(|&a, &b| off(a).total_cmp(&off(b)));
-                        match near {
-                            Some(k) => taken[k] = true,
-                            None => faces.extend(f.names.first().cloned()),
-                        }
-                    }
+                    let faces = unmatched_faces(&mine, &stored, tolerance);
                     if faces.is_empty() {
                         continue;
                     }
-                    for tool in &tools {
-                        let def = json!({"type": "split_face", "body": uid.to_string(),
-                                     "faces": faces, "tool": tool});
-                        if !candidates.iter().any(|c| c.defs[0] == def) {
-                            let mut c = Candidate::new(def);
-                            c.guess = true;
-                            c.input_provenance = crate::InputProvenance::Inferred;
-                            c.note = Some("the faces split found with the history".to_owned());
-                            candidates.push(c);
+                    // Those the split changed first: the faces that differ
+                    // from the state after it but not from the one before.
+                    let mut lists = Vec::new();
+                    if let Some(before) = &before {
+                        let own = unmatched_faces(&mine, before, tolerance);
+                        let split: Vec<String> =
+                            faces.iter().filter(|f| !own.contains(f)).cloned().collect();
+                        if !split.is_empty() && split.len() < faces.len() {
+                            lists.push(split);
+                        }
+                    }
+                    lists.push(faces);
+                    for faces in &lists {
+                        for tool in &tools {
+                            let def = json!({"type": "split_face", "body": uid.to_string(),
+                                         "faces": faces, "tool": tool});
+                            if !candidates.iter().any(|c| c.defs[0] == def) {
+                                let mut c = Candidate::new(def);
+                                c.guess = true;
+                                c.input_provenance = crate::InputProvenance::Inferred;
+                                c.note = Some("the faces split found with the history".to_owned());
+                                candidates.push(c);
+                            }
                         }
                     }
                 }
@@ -4437,6 +4446,31 @@ fn copy_in_place(bodies: &[BodyUid]) -> Candidate {
         "transform": {"type": "free", "matrix": identity}}));
     c.input_provenance = InputProvenance::Read;
     c
+}
+
+/// The first names of the faces of `mine` that no face of `stored` stands
+/// for: one on the same kind of surface whose area is within `tolerance`
+/// of the face's (relative), each stored face standing for one face only
+/// (faces of the same area, as opposite sides, are told apart so). A split
+/// face's (mitcad#60).
+fn unmatched_faces(mine: &[FaceInfo], stored: &[FaceInfo], tolerance: f64) -> Vec<String> {
+    let mut taken = vec![false; stored.len()];
+    let mut faces: Vec<String> = Vec::new();
+    for f in mine {
+        let off = |k: usize| (stored[k].area - f.area).abs();
+        let near = (0..stored.len())
+            .filter(|&k| {
+                !taken[k]
+                    && stored[k].surface == f.surface
+                    && off(k) <= tolerance * f.area.abs().max(1e-6)
+            })
+            .min_by(|&a, &b| off(a).total_cmp(&off(b)));
+        match near {
+            Some(k) => taken[k] = true,
+            None => faces.extend(f.names.first().cloned()),
+        }
+    }
+    faces
 }
 
 /// Items that bring bodies and leave no tool (mitcad#641): a pattern or
@@ -5446,5 +5480,48 @@ mod end_chamfer_tests {
         assert_eq!(found(vec![sink], true).len(), 1);
         let narrowing = ("F4:chamfer(c1)", 20.0, 5.0, 21.0, 4.0);
         assert!(found(vec![narrowing], true).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod split_face_tests {
+    use super::*;
+
+    fn face(name: &str, surface: &str, area: f64) -> FaceInfo {
+        FaceInfo {
+            names: vec![name.to_owned()],
+            surface: surface.to_owned(),
+            area,
+        }
+    }
+
+    #[test]
+    fn the_faces_a_split_changed_are_those_the_state_before_has() {
+        // The replay's body: a wall the split cuts in two, a rounding made
+        // a little otherwise than the file's, and a face of both states.
+        let mine = vec![
+            face("F10:import(9)", "plane", 7182.5003),
+            face("F12:fillet(E{a|b})", "cylinder", 2275.84),
+            face("F10:import(17)", "plane", 57006.68),
+        ];
+        // The file's states before and after the split.
+        let before = vec![
+            face("F12:import(99)", "plane", 7182.49993),
+            face("F12:import(52)", "cylinder", 2278.78),
+            face("F12:import(62)", "plane", 57006.68),
+        ];
+        let after = vec![
+            face("F26:a", "plane", 7000.0),
+            face("F26:b", "plane", 182.49993),
+            face("F12:import(52)", "cylinder", 2278.78),
+            face("F12:import(62)", "plane", 57006.68),
+        ];
+        let changed = unmatched_faces(&mine, &after, 1e-5);
+        assert_eq!(changed, ["F10:import(9)", "F12:fillet(E{a|b})"]);
+        let own = unmatched_faces(&mine, &before, 1e-5);
+        assert_eq!(own, ["F12:fillet(E{a|b})"]);
+        // Each stored face stands for one face only.
+        let twins = vec![face("x", "plane", 1.0), face("y", "plane", 1.0)];
+        assert_eq!(unmatched_faces(&twins, &twins[..1], 1e-8), ["y"]);
     }
 }

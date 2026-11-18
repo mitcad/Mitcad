@@ -374,6 +374,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     fn sheet_flange(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let fl: k::SheetFlange = f.typed()?;
+        // An edge split into stretches, each with a bend of its own (format
+        // 52).
+        if fl.edges.iter().any(|e| !e.segments.is_empty()) {
+            return Err(NotMapped::Unmapped(
+                "an edge of it is split into stretches with bends of their own, which MitCad's flange does not take"
+                    .to_owned(),
+            ));
+        }
         let mut notes = Vec::new();
         let body = self.sheet_body(fl.body.as_deref(), component)?;
         let position = match fl.position.as_str() {

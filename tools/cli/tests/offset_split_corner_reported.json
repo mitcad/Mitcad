@@ -1,0 +1,31 @@
+[
+  {"comment": "Offset Face on two pieces of split faces at a convex corner of the reported design of GitHub #396 (mitcad#1947), opened by offset-split-reported-test.cmake. SplitFace6 cut a 26.325 mm wide rectangle out of a face and of the face square to it: the piece on the first (A1 = 509.236 mm2) and the piece on the second (A2 = 26.325 x 37.5 = 987.200 mm2) share the corner's 26.325 mm edge (L). Moved together by -d, they give a valid body of V0 - d (A1 + A2) + d^2 L, V0 = 3264243.442 mm3: only the two pieces move, the rest of their faces stays and the seams become steps."},
+
+  {"expect": {"feature": "SplitFace6", "status": "ok", "body": "F12.b0", "volume": 3264243.442, "faces": 230}},
+  {"cmd": "add_feature", "def": {"type": "offset_face", "body": "F12.b0",
+    "faces": ["F5:start(r{c1[c16,c4],c4[c1,c6],c6[c4,c8],c8[c6,c10],c10[c8,c12],c12[c10,c14],c14[c12,c18],c16[c1,c18],c18[c16,c14]})#0",
+              "F54:inst1(F5:side(c4[c1,c6])#0)#1#1"], "distance": -1}},
+  {"expect": {"feature": "F125", "status": "ok", "body": "F12.b0", "volume": 3262773.331, "faces": 233,
+    "has_face": "F5:start(r{c1[c16,c4],c4[c1,c6],c6[c4,c8],c8[c6,c10],c10[c8,c12],c12[c10,c14],c14[c12,c18],c16[c1,c18],c18[c16,c14]})#0"}},
+  {"expect": {"body": "F12.b0", "has_face": "F54:inst1(F5:side(c4[c1,c6])#0)#1#1"}},
+  {"expect": {"body": "F12.b0", "has_face": "F5:start(r{c1[c16,c4],c4[c1,c6],c6[c4,c8],c8[c6,c10],c10[c8,c12],c12[c10,c14],c14[c12,c18],c16[c1,c18],c18[c16,c14]})#1"}},
+
+  {"comment": "The same pieces by -4.5 mm, as the report has them: V0 - 4.5 (A1 + A2) + 20.25 L."},
+  {"cmd": "edit_feature", "uid": "F125", "def": {"type": "offset_face", "body": "F12.b0",
+    "faces": ["F5:start(r{c1[c16,c4],c4[c1,c6],c6[c4,c8],c8[c6,c10],c10[c8,c12],c12[c10,c14],c14[c12,c18],c16[c1,c18],c18[c16,c14]})#0",
+              "F54:inst1(F5:side(c4[c1,c6])#0)#1#1"], "distance": -4.5}},
+  {"expect": {"feature": "F125", "status": "ok", "body": "F12.b0", "volume": 3258042.567, "faces": 233,
+    "has_face": "F54:inst1(F5:side(c4[c1,c6])#0)#1#1"}},
+
+  {"comment": "A piece of a rounding (mitcad#1974): SplitFace1 and SplitFace2 cut a piece (A = 1019.514 mm2, radius R = 7 mm) out of Fillet2's rounding, whose two ends meet the next roundings at mitres along which the faces turn tangent at one end (0 to 66 degrees and 90 to 0). By d = 1 mm in, the roundings that stay are trimmed back along their cylinders to the piece's new position, up to the points where they turn tangent, and the steps along the piece's tangent edges close against them there; no step remains at the mitres: the body loses the slab under the piece, A (d - d^2 / 2R) = 946.692 mm3, and the 13.275 mm3 the next roundings are trimmed by, and the two walls along the piece's normal at the mitres are gone (229 faces)."},
+  {"cmd": "edit_feature", "uid": "F125", "def": {"type": "offset_face", "body": "F12.b0",
+    "faces": ["F55:fillet(E{F50:side(c11[c9,c13])#0|F50:start(r{c1[c27,c6],c6[c1,c29],c9[c29,c11],c11[c9,c13],c13[c11,c15],c15[c13,c17],c17[c15,c19],c19[c17,c21],c21[c19,c23],c23[c21,c25],c25[c23,c33],c27[c33,c1],c29[c9,c6],c33[c27,c25]})})#0#0"], "distance": -1}},
+  {"expect": {"feature": "F125", "status": "ok", "body": "F12.b0", "volume": 3263283.475, "tolerance": 1e-7, "faces": 229,
+    "has_face": "F55:fillet(E{F50:side(c11[c9,c13])#0|F50:start(r{c1[c27,c6],c6[c1,c29],c9[c29,c11],c11[c9,c13],c13[c11,c15],c15[c13,c17],c17[c15,c19],c19[c17,c21],c21[c19,c23],c23[c21,c25],c25[c23,c33],c27[c33,c1],c29[c9,c6],c33[c27,c25]})})#0#0"}},
+
+  {"comment": "By d = 1 mm out, the roundings that stay would have to extend past the lines where they turn tangent to the faces they blend, where they have no surface to extend along: the piece's sides at the mitres stay steps along its normal, so the body gains the slab over the piece, A (d + d^2 / 2R) = 1092.337 mm3, exactly, with the two steps at the mitres (231 faces)."},
+  {"cmd": "edit_feature", "uid": "F125", "def": {"type": "offset_face", "body": "F12.b0",
+    "faces": ["F55:fillet(E{F50:side(c11[c9,c13])#0|F50:start(r{c1[c27,c6],c6[c1,c29],c9[c29,c11],c11[c9,c13],c13[c11,c15],c15[c13,c17],c17[c15,c19],c19[c17,c21],c21[c19,c23],c23[c21,c25],c25[c23,c33],c27[c33,c1],c29[c9,c6],c33[c27,c25]})})#0#0"], "distance": 1}},
+  {"expect": {"feature": "F125", "status": "ok", "body": "F12.b0", "volume": 3265335.779, "tolerance": 1e-7, "faces": 231,
+    "has_face": "F55:fillet(E{F50:side(c11[c9,c13])#0|F50:start(r{c1[c27,c6],c6[c1,c29],c9[c29,c11],c11[c9,c13],c13[c11,c15],c15[c13,c17],c17[c15,c19],c19[c17,c21],c21[c19,c23],c23[c21,c25],c25[c23,c33],c27[c33,c1],c29[c9,c6],c33[c27,c25]})})#0#0"}}
+]

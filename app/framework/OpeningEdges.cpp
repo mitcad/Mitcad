@@ -3,8 +3,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 #include <string>
+
+#include <BRepAdaptor_Curve.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <TopoDS_Vertex.hxx>
+#include <gp_Pnt.hxx>
 
 #include <QJsonArray>
 
@@ -85,6 +92,28 @@ std::vector<int> openingEdges(const geometry::Shape& body, const QJsonObject& op
     return {};
   }
   return boundaries[along[static_cast<std::size_t>(index)]].edges;
+}
+
+std::array<double, 3> edgeMiddle(const geometry::Shape& body, int edge) {
+  const BRepAdaptor_Curve curve(body.edge(edge));
+  const gp_Pnt middle = curve.Value((curve.FirstParameter() + curve.LastParameter()) / 2);
+  const auto rounded = [](double v) { return std::round(v * 1.0e6) / 1.0e6 + 0.0; }; // no -0
+  return {rounded(middle.X()), rounded(middle.Y()), rounded(middle.Z())};
+}
+
+std::optional<int> freeEdgeAt(const geometry::Shape& body, const QJsonObject& opening,
+                              const std::array<double, 3>& at) {
+  std::optional<int> nearest;
+  double distance = 0.0;
+  const TopoDS_Vertex point = BRepBuilderAPI_MakeVertex(gp_Pnt(at[0], at[1], at[2])).Vertex();
+  for (const int e : openingEdges(body, opening)) {
+    BRepExtrema_DistShapeShape measure(point, body.edge(e));
+    if (measure.IsDone() && (!nearest || measure.Value() < distance)) {
+      nearest = e;
+      distance = measure.Value();
+    }
+  }
+  return nearest;
 }
 
 } // namespace mitcad

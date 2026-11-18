@@ -36,3 +36,5 @@ mod link_update_tests;
 mod link_copy_tests;
 // Folders of the Bodies folder (mitcad#1802).
 mod body_folder_tests;
+// New content under hidden parents shows them (mitcad#1995).
+mod hidden_parents_tests;

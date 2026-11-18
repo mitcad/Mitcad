@@ -771,6 +771,10 @@ const QUERIES: &[(&str, ApiClass)] = &[
     // A body slid or turned into place and where it first runs into
     // others (mitcad#1737).
     ("assembly_path", Model),
+    // The Sheet Metal list (mitcad#1980).
+    ("sheet_metal_list", Model),
+    // What a print job sends to a slicer (mitcad#2008).
+    ("print_job", Model),
 ];
 
 fn class_in(table: &[(&str, ApiClass)], name: &str) -> Option<ApiClass> {

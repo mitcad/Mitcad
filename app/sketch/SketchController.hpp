@@ -375,6 +375,10 @@ public:
   // mitcad#721). An activation the sketch does not solve with is refused
   // with the model's reason; nothing changes then.
   void setItemsActive(const QStringList& ids, bool on);
+  // Free Pattern (mitcad#2007): pattern `id` goes (`sketch.remove` of it),
+  // its originals and copies stay where they are as plain sketch geometry,
+  // one undo step. Logged "Freed pattern k5".
+  void freePattern(const QString& id);
   // The selected constraints and dimensions of this sketch that are
   // inactive (`active` false) or active.
   QStringList selectedItems(bool active) const;

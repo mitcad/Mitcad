@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # check-all sources: app/MainWindowComments.cpp app/view/Comments.cpp app/view/CommentPinOverlay.cpp
 # check-all sources: app/view/CommentsWindow.cpp app/view/NavigationBar.cpp app/MainWindowMcp.cpp app/mcp
-# check-all sources: core/model-api/src core/model/src/document core/mcp tools/cli
+# check-all sources: core/model-api/src core/model/src/document core/mcp tools/cli app/browser/BrowserController.cpp
+# check-all sources: tools/ui-scripts/comments-thread.mitcad-ui tools/ui-scripts/comments-empty.json
 # Comments for AI agents (mitcad#1119) through the real UI, on a design
 # mitcad-cli makes: Body1 (F2.b0), a 30 x 20 x 10 block on XY. In the
 # Docked layout:
@@ -21,6 +22,13 @@
 # pin in the view, its row in the panel after a click on the pin.
 # tools/ui-windows-comments-test.ps1 (ctest app.ui-windows-comments) does
 # the same in the Windows VM.
+# Then (mitcad#2010) the shared steps tools/ui-scripts/comments-thread.
+# mitcad-ui on an empty design (also run by app.ui-windows-comments-thread
+# and app.ui-macos-comments-thread): Add Comment with Whole Design and the
+# browser root row's Add Comment…, an agent's long reply of several lines
+# shown in full in the details pane, the comment's row showing the whole
+# thread, "Open, waiting for your answer" until the user answers, and
+# Reply… showing the reply it answers.
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-comments-test.sh [screenshot.png]
@@ -222,6 +230,33 @@ ui_step "click C1's pin"                 ui_click_logged "Comment pin C1"
 ui_expect_new "Comments window opened: 1 comment(s)" "the Comments panel in the Floating layout"
 ui_expect_new "Comments row C1: addressed" "C1's row"
 ui_expect_new "Comments selected: C1" "selected"
+grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 
+echo "--- A comment thread with an agent (mitcad#2010): the shared steps"
+ui_stop_app
+"$CLI" run "$ROOT/tools/ui-scripts/comments-empty.json" --save "$WORK/empty.mitcad" > "$WORK/cli.log" 2>&1 ||
+  { cat "$WORK/cli.log"; ui_fail "mitcad-cli (the empty design)"; }
+export MITCAD_TEST_WORK=$WORK MITCAD_TEST_STEP_MS=100
+export MITCAD_TEST_INPUT=$ROOT/tools/ui-scripts/comments-thread.mitcad-ui
+ui_start_app --ui=qt --no-mcp --open "$WORK/empty.mitcad"
+for _ in $(seq 1 900); do
+  kill -0 "$UI_RUNNER" 2> /dev/null || break
+  sleep 0.2
+done
+kill -0 "$UI_RUNNER" 2> /dev/null && ui_fail "the comment thread's driver timed out"
+wait "$UI_RUNNER" || { tail -n 80 "$UI_LOG" >&2; ui_fail "the comment thread's steps failed"; }
+unset MITCAD_TEST_INPUT
+ui_expect_log "Comment C1: open, user, Design: Plan a wall bracket" "Add Comment with Whole Design in an empty design"
+ui_expect_log "Comment C2: open, user, Design: Name the bodies" "Add Comment... on the browser's root row"
+ui_expect_log "Comments status C1: Open, waiting for your answer" "waiting for your answer after the agent's question"
+ui_expect_log "Comments details: C1 reply 1: On Design, Open, waiting for your answer / Reply 1 by claude-code, " \
+  "the agent's reply in the details pane"
+grep -Eq '^Comments details: C1 reply 1: .*Tell me if any of that should change[.]$' "$UI_LOG" ||
+  ui_fail "the agent's long reply not in full in the details pane"
+echo "ok   the agent's long reply in full"
+ui_expect_log "Comment dialog answers: Reply 1 by claude-code, " "Reply... shows the reply it answers"
+grep -qx "Comments status C1: Open" "$UI_LOG" || ui_fail "the user's answer did not end the waiting"
+echo "ok   the user's answer ends the waiting"
+ui_expect_log "TestDriver: done" "the comment thread's steps"
 grep -q "Recompute failed" "$UI_LOG" && ui_fail "a recompute failed"
 ui_finish "UI Comments test"

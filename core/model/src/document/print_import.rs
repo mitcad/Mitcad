@@ -28,7 +28,8 @@ pub const IMPORT_ORIGIN: &str = "3mf";
 /// Reads a slicer's settings file. A panic of the reader (of a 3MF
 /// package, a preset or a bundle) is its error (mitcad#922): it runs in
 /// the application's process. A Bambu-family preset that inherits from
-/// another (`inherits`) is read with every value of its chain filled in
+/// another (`inherits`) or includes templates (`include`, mitcad#2008) is
+/// read with every value of its chain and its templates filled in
 /// (mitcad#1053): from the slicer data folder it lies in, else from the
 /// installed slicers' system presets ([`installed::resolve_preset_file`]).
 pub fn read_print_file(path: &str, dialect: Option<Dialect>) -> Result<Imported, ModelError> {
@@ -65,16 +66,13 @@ pub fn read_print_file(path: &str, dialect: Option<Dialect>) -> Result<Imported,
 }
 
 /// Whether a file is a Bambu-family preset (`.json`) that names a preset
-/// it inherits from.
+/// it inherits from, or templates it includes (mitcad#2008).
 fn inherits_another(name: &str, data: &[u8]) -> bool {
     if !name.to_ascii_lowercase().ends_with(".json") {
         return false;
     }
-    serde_json::from_slice::<serde_json::Map<String, Value>>(data).is_ok_and(|map| {
-        map.get("inherits")
-            .and_then(Value::as_str)
-            .is_some_and(|base| !base.trim().is_empty())
-    })
+    serde_json::from_slice::<serde_json::Map<String, Value>>(data)
+        .is_ok_and(|map| installed::builds_on_another(&map))
 }
 
 impl<K: Kernel> Document<K> {

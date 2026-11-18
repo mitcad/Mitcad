@@ -3,8 +3,10 @@
 
 #include <cmath>
 
+#include <QDateTime>
 #include <QFont>
 #include <QJsonArray>
+#include <QLocale>
 #include <QJsonValue>
 #include <QObject>
 #include <QPainter>
@@ -53,6 +55,7 @@ CommentsShown commentsOf(const QJsonObject& answer) {
     comment.orphaned = entry.value(QStringLiteral("orphaned")).toBool();
     comment.author = entry.value(QStringLiteral("author")).toString(QStringLiteral("user"));
     comment.resolution = entry.value(QStringLiteral("resolution")).toString();
+    comment.addressedBy = entry.value(QStringLiteral("addressed_by")).toString();
     comment.created = entry.value(QStringLiteral("created")).toString();
     comment.label = entry.value(QStringLiteral("label")).toString();
     comment.target = entry.value(QStringLiteral("target")).toObject();
@@ -140,14 +143,73 @@ QString CommentFilter::text() const {
   return chosen.isEmpty() ? QStringLiteral("none") : chosen.join(QStringLiteral(", "));
 }
 
+bool commentWaitingForYou(const CommentShown& comment) {
+  return comment.status == QLatin1String("open") && !comment.replies.isEmpty() &&
+         comment.replies.last().author != QLatin1String("user");
+}
+
 QString commentStatusText(const CommentShown& comment) {
   QString status = comment.status == QLatin1String("resolved")    ? QObject::tr("Resolved")
                    : comment.status == QLatin1String("addressed") ? QObject::tr("Addressed")
+                   : commentWaitingForYou(comment)                ? QObject::tr("Open, waiting for your answer")
                                                                   : QObject::tr("Open");
   if (comment.orphaned) {
     status = QObject::tr("%1, target gone").arg(status);
   }
   return status;
+}
+
+QString commentTimeText(const QString& created) {
+  const QDateTime time = QDateTime::fromString(created, Qt::ISODate);
+  if (!time.isValid()) {
+    return created;
+  }
+  return QLocale().toString(time.toLocalTime(), QLocale::ShortFormat);
+}
+
+CommentEntry commentEntry(const CommentShown& comment, int reply) {
+  if (reply <= 0) {
+    return {QObject::tr("Comment %1 by %2, %3")
+                .arg(QString::number(comment.number), comment.author, commentTimeText(comment.created)),
+            comment.text};
+  }
+  if (reply > comment.replies.size()) {
+    return {};
+  }
+  const CommentShown::Reply& answer = comment.replies.at(reply - 1);
+  return {QObject::tr("Reply %1 by %2, %3").arg(QString::number(reply), answer.author, commentTimeText(answer.created)),
+          answer.text};
+}
+
+CommentDetails commentDetails(const CommentShown& comment, int reply) {
+  CommentDetails details;
+  details.summary = QObject::tr("On %1, %2")
+                        .arg(comment.label.isEmpty() ? QObject::tr("nothing") : comment.label,
+                             commentStatusText(comment));
+  if (reply > 0) {
+    if (reply <= comment.replies.size()) {
+      details.entries << commentEntry(comment, reply);
+    }
+    return details;
+  }
+  details.entries << commentEntry(comment, 0);
+  for (int i = 1; i <= comment.replies.size(); ++i) {
+    details.entries << commentEntry(comment, i);
+  }
+  if (!comment.resolution.isEmpty()) {
+    details.entries << CommentEntry{comment.addressedBy.isEmpty()
+                                        ? QObject::tr("Resolution")
+                                        : QObject::tr("Resolution by %1").arg(comment.addressedBy),
+                                    comment.resolution};
+  }
+  return details;
+}
+
+int commentAnswered(const CommentShown& comment, int selectedReply) {
+  if (selectedReply > 0 && selectedReply <= comment.replies.size()) {
+    return selectedReply;
+  }
+  return static_cast<int>(comment.replies.size());
 }
 
 QString commentTip(const CommentShown& comment) {

@@ -18,19 +18,30 @@ The edges are now read into an array in one walk and taken from it by
 number. The fixes of the loop change the wire (split edges, union their
 vertices, remove segments) only for a pair whose edges intersect at a
 point or along a segment; the array is read again after such a pair, so
-every later pair sees the wire as the fixes left it, as before.
+every later pair sees the wire as the fixes left it, as before. The array
+is OCCT's NCollection_Array1 (mitcad#1986).
+
+Test: geometry/tests/port/p1050-self-intersecting-wire-many-edges.cpp
+(ctest geometry.port.1050): one crossing of a closed wire is split into 4
+new edges at one vertex, two crossings far apart are both split (the edges
+are read again after the first fix), a polygon without crossings is left as
+it is, and a wire of 6 000 edges with one crossing is fixed within 6 s
+(reading each pair's edges by number from the sequence grew with the cube
+of the edges).
+diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
+index dcbbe969..52e66148 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeFix/ShapeFix_IntersectionTool.cxx
 @@ -45,6 +45,8 @@
  #include <TopoDS_Wire.hxx>
  #include <TopoDS_Shape.hxx>
  
-+#include <vector>
++#include <NCollection_Array1.hxx>
 +
  // gka 06.09.04 BUG 6555 shape is modified always independently either intersection was fixed or not
  //=================================================================================================
  
-@@ -1084,6 +1086,27 @@
+@@ -1084,6 +1086,26 @@ bool ShapeFix_IntersectionTool::FixSelfIntersectWire(occ::handle<ShapeExtend_Wir
    NbCut           = 0;
    int  nbReplaced = 0;
    bool isDone     = false;
@@ -40,25 +51,24 @@ every later pair sees the wire as the fixes left it, as before.
 +  // a wire of n edges took about n^3 / 3 steps. They are read into an array in
 +  // one walk, and again after a pair of edges that intersect, the only place
 +  // where the fixes below change the wire.
-+  std::vector<TopoDS_Edge> edges;
-+  bool                     isEdgesRead = false;
-+  auto                     edgeAt      = [&](const int num) -> const TopoDS_Edge& {
++  NCollection_Array1<TopoDS_Edge> edges;
++  bool                            isEdgesRead = false;
++  auto                            edgeAt      = [&](const int num) -> const TopoDS_Edge& {
 +    if (!isEdgesRead)
 +    {
-+      edges.clear();
-+      edges.reserve(sewd->NbEdges());
++      edges.Resize(1, sewd->NbEdges(), false);
 +      for (int i = 1; i <= sewd->NbEdges(); i++)
 +      {
-+        edges.push_back(sewd->Edge(i));
++        edges(i) = sewd->Edge(i);
 +      }
 +      isEdgesRead = true;
 +    }
-+    return edges[num - 1];
++    return edges(num);
 +  };
    for (int num1 = 1; num1 < sewd->NbEdges() && NbSplit < 30; num1++)
    {
      // for each edge from first wire
-@@ -1094,8 +1117,8 @@
+@@ -1094,8 +1116,8 @@ bool ShapeFix_IntersectionTool::FixSelfIntersectWire(occ::handle<ShapeExtend_Wir
        {
          continue;
        }
@@ -69,7 +79,7 @@ every later pair sees the wire as the fixes left it, as before.
        if (edge1.IsSame(edge2))
        {
          continue;
-@@ -1133,6 +1156,11 @@
+@@ -1133,6 +1155,11 @@ bool ShapeFix_IntersectionTool::FixSelfIntersectWire(occ::handle<ShapeExtend_Wir
          {
            continue;
          }

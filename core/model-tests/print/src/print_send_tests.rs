@@ -63,6 +63,17 @@ fn send(doc: &mut Document<MockKernel>, name: &str) -> (Value, Vec<u8>) {
 
 /// Sends the design's bodies as 3D Print does, for a slicer.
 fn send_for(doc: &mut Document<MockKernel>, name: &str, dialect: &str) -> (Value, Vec<u8>) {
+    send_with(doc, name, dialect, json!({}))
+}
+
+/// [`send_for`] with more of the export's fields (`print_materials`,
+/// mitcad#2008).
+fn send_with(
+    doc: &mut Document<MockKernel>,
+    name: &str,
+    dialect: &str,
+    more: Value,
+) -> (Value, Vec<u8>) {
     let dir = mitcad_model::testing::unique_temp_dir("print-send");
     let path = dir.join(name).to_str().unwrap().to_owned();
     let rows: Value =
@@ -71,11 +82,12 @@ fn send_for(doc: &mut Document<MockKernel>, name: &str, dialect: &str) -> (Value
         .as_array()
         .map(|rows| rows.iter().map(|r| r["uid"].clone()).collect())
         .unwrap_or_default();
-    let result = command(
-        doc,
-        json!({"cmd": "export", "path": path, "format": "3mf", "bodies": bodies,
-               "refinement": "medium", "on_bed": true, "dialect": dialect}),
-    );
+    let mut export = json!({"cmd": "export", "path": path, "format": "3mf", "bodies": bodies,
+                            "refinement": "medium", "on_bed": true, "dialect": dialect});
+    for (key, value) in more.as_object().unwrap() {
+        export[key] = value.clone();
+    }
+    let result = command(doc, export);
     (result, std::fs::read(&path).unwrap())
 }
 
@@ -396,11 +408,12 @@ fn placements_of_two_materials_take_a_filament_slot_each() {
 }
 
 #[test]
-fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_printer() {
-    // mitcad#1727: one block at the root, no material anywhere and no
-    // printer profile: the filament is the print default, PLA (as print
-    // analysis assumes), not the design's default steel; the printer is a
-    // stand-in the slicer does not know, which the export says.
+fn without_a_material_or_a_printer_the_slicer_keeps_its_own_settings() {
+    // mitcad#2008 (in place of mitcad#1727's stand-in): one block at the
+    // root, no material anywhere, no printer and no process: geometry
+    // only. No project settings, no stand-in printer, process or PLA, no
+    // machine G-code: the slicer keeps its own printer, process and
+    // filaments, and the export has nothing to warn about.
     let mut doc = Document::new(MockKernel::default());
     let body = small_block(&mut doc);
     let material: Value = serde_json::from_str(
@@ -409,15 +422,84 @@ fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_pr
     )
     .unwrap();
     assert_eq!(material["source"], "default", "{material}");
-    assert_eq!(
-        material["print_material"],
-        json!({"id": "pla", "name": "PLA Plastic"})
+    for dialect in [
+        "bambu_studio",
+        "orcaslicer",
+        "qidi_studio",
+        "prusaslicer",
+        "cura",
+    ] {
+        let (result, data) = send_for(&mut doc, &format!("geometry-{dialect}.3mf"), dialect);
+        assert_eq!(result["delivery"], "geometry", "{dialect}: {result}");
+        assert_eq!(result["filaments"], json!([1]), "{dialect}: {result}");
+        assert_eq!(result["warnings"], json!([]), "{dialect}: {result}");
+        assert_eq!(result.get("warning_messages"), None, "{dialect}: {result}");
+        let package = mitcad_3mf::read_package(&data).unwrap();
+        for file in [
+            "Metadata/project_settings.config",
+            "Metadata/Slic3r_PE.config",
+        ] {
+            assert!(package.file(file).is_none(), "{dialect}: {file}");
+        }
+        assert!(
+            !package.files.iter().any(|(p, _)| p.starts_with("Cura/")),
+            "{dialect}"
+        );
+        // The geometry is there, closed as designed.
+        assert_eq!(mitcad_3mf::read(&data).unwrap().parts.len(), 1, "{dialect}");
+    }
+    // The Bambu family's parts: the name and slot 1, nothing else.
+    let (_, data) = send(&mut doc, "geometry.3mf");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/model_settings.config").unwrap())
+        .unwrap()
+        .to_owned();
+    let block = part_block(&model, "Body1");
+    assert_eq!(part_value(block, "extruder"), Some("1"), "{model}");
+    assert_eq!(block.matches("<metadata ").count(), 2, "{model}");
+    for injected in ["G92 E0", "use_relative_e_distances", "Mitcad", "PLA"] {
+        assert!(!model.contains(injected), "{injected}: {model}");
+    }
+    // PrusaSlicer's objects: the name and extruder 1.
+    let (_, data) = send_for(&mut doc, "geometry-prusa.3mf", "prusaslicer");
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let model = std::str::from_utf8(package.file("Metadata/Slic3r_PE_model.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(
+        model.contains("<metadata type=\"object\" key=\"extruder\" value=\"1\"/>"),
+        "{model}"
     );
-    let (result, data) = send(&mut doc, "no-printer.3mf");
-    let (project, _) = settings_files(&data);
+    // Cura: the extruder number, no per-model process value.
+    let (_, data) = send_for(&mut doc, "geometry-cura.3mf", "cura");
+    let read = mitcad_3mf::read_package(&data).unwrap();
+    let cura: Vec<&String> = read
+        .objects
+        .iter()
+        .flat_map(|o| o.metadata.iter().map(|(name, _)| name))
+        .filter(|name| name.starts_with("cura:"))
+        .collect();
+    assert_eq!(cura, ["cura:extruder_nr"], "{cura:?}");
+}
+
+#[test]
+fn a_material_chosen_for_the_job_makes_a_print_project() {
+    // mitcad#2008: the print job's material for the body (print_materials)
+    // sends a print project. Without a printer the project names a
+    // stand-in, which the export says (mitcad#1727).
+    let mut doc = Document::new(MockKernel::default());
+    let body = small_block(&mut doc);
+    let job = json!({"print_materials": {body.to_string(): "pla"}});
+    let (result, data) = send_with(&mut doc, "pla.3mf", "bambu_studio", job.clone());
+    assert_eq!(result["delivery"], "project", "{result}");
+    let (project, model) = settings_files(&data);
     assert_eq!(project["filament_settings_id"], json!(["PLA Plastic"]));
     assert_eq!(project["filament_type"], json!(["PLA"]));
     assert_eq!(project["printer_settings_id"], "Mitcad printer");
+    assert_eq!(
+        part_value(part_block(&model, "Body1"), "extruder"),
+        Some("1")
+    );
     assert_eq!(printed(&result, "Body1")["material"], "pla");
     // For agents: the step, with the command.
     let warnings: Vec<&str> = result["warnings"]
@@ -452,16 +534,28 @@ fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_pr
         "{result}"
     );
     // PrusaSlicer's project says it too.
-    let (prusa, _) = send_for(&mut doc, "no-printer-prusa.3mf", "prusaslicer");
+    let (prusa, data) = send_with(&mut doc, "pla-prusa.3mf", "prusaslicer", job.clone());
+    assert_eq!(prusa["delivery"], "project", "{prusa}");
+    assert!(
+        mitcad_3mf::read_package(&data)
+            .unwrap()
+            .file("Metadata/Slic3r_PE.config")
+            .is_some()
+    );
     assert!(
         prusa["warnings"]
             .to_string()
             .contains("import_print_profile"),
         "{prusa}"
     );
+    // The job's None for the body: geometry only again.
+    let none = json!({"print_materials": {body.to_string(): null}});
+    let (result, _) = send_with(&mut doc, "none.3mf", "bambu_studio", none);
+    assert_eq!(result["delivery"], "geometry", "{result}");
 
     // With a printer chosen at the root, the slicer gets its name and the
-    // export says nothing of a printer.
+    // export says nothing of a printer; the body without a material
+    // prints as PLA (mitcad#1727) in a print project.
     command(
         &mut doc,
         json!([
@@ -472,6 +566,7 @@ fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_pr
         ]),
     );
     let (result, data) = send(&mut doc, "bench.3mf");
+    assert_eq!(result["delivery"], "project", "{result}");
     let (project, _) = settings_files(&data);
     assert_eq!(project["printer_settings_id"], "Bench");
     assert!(
@@ -481,6 +576,206 @@ fn without_a_material_or_a_printer_the_slicer_gets_pla_and_the_export_says_no_pr
         "{result}"
     );
     assert_eq!(result.get("warning_messages"), None, "{result}");
-    // The body still prints as PLA.
     assert_eq!(printed(&result, "Body1")["material"], "pla");
+}
+
+#[test]
+fn a_job_of_some_bodies_without_a_material_is_refused_in_words() {
+    // mitcad#2008: the slicer's project cannot leave one body to the
+    // slicer while it sends materials for the others.
+    let mut doc = Document::new(MockKernel::default());
+    let first = small_block(&mut doc);
+    let second = small_block(&mut doc);
+    let dir = mitcad_model::testing::unique_temp_dir("print-send");
+    let path = dir.join("mixed.3mf").to_str().unwrap().to_owned();
+    let error = doc
+        .command(
+            &json!({"cmd": "export", "path": path, "format": "3mf", "dialect": "bambu_studio",
+                    "print_materials": {first.to_string(): "pla", second.to_string(): null}})
+            .to_string(),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("cannot leave one body"), "{error}");
+    assert!(!error.contains(&first.to_string()), "{error}");
+    assert!(!error.contains("Body"), "{error}");
+    // Two materials: a slot each, as the job's list shows.
+    petg_hf(&mut doc);
+    let (result, data) = send_with(
+        &mut doc,
+        "two.3mf",
+        "bambu_studio",
+        json!({"print_materials": {first.to_string(): "pla", second.to_string(): "petg-hf"}}),
+    );
+    assert_eq!(result["delivery"], "project", "{result}");
+    assert_eq!(result["filaments"], json!([1, 2]), "{result}");
+    let (project, _) = settings_files(&data);
+    assert_eq!(project["filament_type"], json!(["PLA", "PETG"]));
+}
+
+/// The `print_job` query's answer.
+fn print_job(doc: &Document<MockKernel>, query: Value) -> Value {
+    let mut query = query;
+    query["query"] = json!("print_job");
+    serde_json::from_str(&doc.query(&query.to_string()).unwrap()).unwrap()
+}
+
+#[test]
+fn the_print_job_query_follows_the_list_s_rules() {
+    // mitcad#2008: every body None, then one body's choice fills the
+    // others, one body back to None refused, Set to all with None back to
+    // geometry only; the status before Send.
+    let mut doc = Document::new(MockKernel::default());
+    let first = small_block(&mut doc).to_string();
+    let second = small_block(&mut doc).to_string();
+    petg_hf(&mut doc);
+    let bodies = json!([first, second]);
+    let job = print_job(&doc, json!({"bodies": bodies, "dialect": "bambu_studio"}));
+    assert_eq!(job["delivery"], "geometry", "{job}");
+    assert_eq!(job["status"], "receiver", "{job}");
+    assert_eq!(job["common"], json!({"material": null, "mixed": false}));
+    assert_eq!(job["bodies"][0]["material"], Value::Null, "{job}");
+    // The first choice fills the other body.
+    let job = print_job(
+        &doc,
+        json!({"bodies": bodies, "dialect": "bambu_studio",
+               "choose": {"body": first, "material": "pla"}}),
+    );
+    assert_eq!(job["delivery"], "project", "{job}");
+    assert_eq!(job["common"], json!({"material": "pla", "mixed": false}));
+    assert_eq!(job["bodies"][1]["material"], "pla", "{job}");
+    assert_eq!(job["bodies"][1]["material_name"], "PLA Plastic", "{job}");
+    // No printer or process: partial, said in words.
+    assert_eq!(job["status"], "partial", "{job}");
+    let notes = job["notes"].to_string();
+    assert!(notes.contains("No printer is chosen"), "{job}");
+    assert!(notes.contains("No process is chosen"), "{job}");
+    // Then only the body chosen changes: Mixed.
+    let materials = json!({first.as_str(): "pla", second.as_str(): "pla"});
+    let job = print_job(
+        &doc,
+        json!({"bodies": bodies, "dialect": "bambu_studio", "materials": materials,
+               "choose": {"body": second, "material": "petg-hf"}}),
+    );
+    assert_eq!(job["common"], json!({"material": null, "mixed": true}));
+    // One body back to None: refused in words, the list as it was.
+    let job = print_job(
+        &doc,
+        json!({"bodies": bodies, "dialect": "bambu_studio", "materials": materials,
+               "choose": {"body": second, "material": null}}),
+    );
+    let refused = job["refused"].as_str().unwrap();
+    assert!(refused.contains("cannot leave one body"), "{job}");
+    assert!(
+        !refused.contains(&second) && !refused.contains("Body"),
+        "{job}"
+    );
+    assert_eq!(job["bodies"][1]["material"], "pla", "{job}");
+    // None and Set to all: geometry only again.
+    let job = print_job(
+        &doc,
+        json!({"bodies": bodies, "dialect": "bambu_studio", "materials": materials,
+               "choose": {"material": null}}),
+    );
+    assert_eq!(job["delivery"], "geometry", "{job}");
+    assert_eq!(job["common"], json!({"material": null, "mixed": false}));
+    // Pre-filled from a component's material: the other bodies take it,
+    // as the list shows what is sent.
+    command(
+        &mut doc,
+        json!({"cmd": "set_body_material", "uid": second, "material": "petg-hf"}),
+    );
+    let job = print_job(&doc, json!({"bodies": bodies, "dialect": "bambu_studio"}));
+    assert_eq!(job["bodies"][0]["material"], "petg-hf", "{job}");
+    assert_eq!(job["bodies"][1]["material"], "petg-hf", "{job}");
+}
+
+#[test]
+fn cura_takes_geometry_extruder_slots_and_process_values_only() {
+    // mitcad#2008, Cura constrained: its printer and material choices are
+    // Cura's own, and a chosen one is listed as left out, before Send and
+    // in the export's warnings; each body's slot is its extruder.
+    let mut doc = Document::new(MockKernel::default());
+    let first = small_block(&mut doc).to_string();
+    let second = small_block(&mut doc).to_string();
+    petg_hf(&mut doc);
+    let bodies = json!([first, second]);
+    let job = print_job(&doc, json!({"bodies": bodies, "dialect": "cura"}));
+    assert_eq!(job["capabilities"]["printer"], false, "{job}");
+    assert_eq!(job["capabilities"]["materials"], false, "{job}");
+    assert_eq!(
+        job["capabilities"]["sends"],
+        json!(["geometry", "extruder_slots", "process_values"])
+    );
+    assert!(
+        job["capabilities"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("chosen in Cura"),
+        "{job}"
+    );
+    assert_eq!(job["left_out"], json!([]), "{job}");
+    let materials = json!({first.as_str(): "pla", second.as_str(): "petg-hf"});
+    let job = print_job(
+        &doc,
+        json!({"bodies": bodies, "dialect": "cura", "materials": materials}),
+    );
+    assert_eq!(job["status"], "partial", "{job}");
+    assert!(
+        job["left_out"]
+            .to_string()
+            .contains("materials chosen are not sent"),
+        "{job}"
+    );
+    let (result, data) = send_with(
+        &mut doc,
+        "cura.3mf",
+        "cura",
+        json!({"print_materials": materials}),
+    );
+    assert!(
+        result["warnings"]
+            .to_string()
+            .contains("materials chosen are not sent"),
+        "{result}"
+    );
+    // Each body's slot as its extruder number.
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    let mut extruders: Vec<&str> = package
+        .objects
+        .iter()
+        .flat_map(|o| o.metadata.iter())
+        .filter(|(name, _)| name == "cura:extruder_nr")
+        .map(|(_, value)| value.as_str())
+        .collect();
+    extruders.sort_unstable();
+    assert_eq!(extruders, ["0", "1"], "{result}");
+}
+
+#[test]
+fn a_plate_without_choices_goes_as_geometry_with_its_plate() {
+    // mitcad#2008: Send the Design's Plates, nothing chosen: the plate's
+    // objects in model_settings.config, no project settings.
+    let mut doc = Document::new(MockKernel::default());
+    small_block(&mut doc);
+    command(&mut doc, json!({"cmd": "add_print_plate"}));
+    let dir = mitcad_model::testing::unique_temp_dir("print-send");
+    let path = dir.join("plates.3mf").to_str().unwrap().to_owned();
+    let result = command(
+        &mut doc,
+        json!({"cmd": "export", "path": path, "dialect": "bambu_studio",
+               "plates": "one_file"}),
+    );
+    assert_eq!(result["delivery"], "geometry", "{result}");
+    let data = std::fs::read(&path).unwrap();
+    let package = mitcad_3mf::read_package(&data).unwrap();
+    assert!(package.file("Metadata/project_settings.config").is_none());
+    let model = std::str::from_utf8(package.file("Metadata/model_settings.config").unwrap())
+        .unwrap()
+        .to_owned();
+    assert!(
+        model.contains("<metadata key=\"plater_id\" value=\"1\"/>"),
+        "{model}"
+    );
+    assert!(model.contains("<model_instance>"), "{model}");
 }

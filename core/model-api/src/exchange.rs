@@ -137,6 +137,13 @@ pub(super) struct ExportCommand {
     /// occurrence or body, or from a motion study.
     #[serde(default)]
     animation: Option<AnimationInput>,
+    /// 3MF with a slicer's settings (mitcad#2008): the print job's
+    /// material per body (uid or name), a material id or null for "None
+    /// (slicer's own)"; a body not listed prints with the design's. Some
+    /// bodies null and others not is refused: the slicer's project cannot
+    /// leave one body to the slicer.
+    #[serde(default)]
+    print_materials: BTreeMap<String, Option<String>>,
 }
 
 /// `export`'s `animation` (mitcad#1597; commands.md, *Animated USDZ*).
@@ -812,6 +819,24 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
                 Some(Coordinates::Frame(entry.uid))
             }
         };
+        // The print job's materials (mitcad#2008).
+        if !command.print_materials.is_empty() && dialect.is_none() {
+            return Err(ApiError(
+                "print_materials go with a slicer's settings: give the slicer (dialect)".to_owned(),
+            ));
+        }
+        let mut print_materials = BTreeMap::new();
+        for (body, material) in &command.print_materials {
+            let uid = self.body_by_uid_or_name(body)?;
+            if let Some(id) = material
+                && self.material(id).is_none()
+            {
+                return Err(ApiError(format!("there is no material {id}")));
+            }
+            print_materials.insert(uid, material.clone());
+        }
+        let job: Vec<Option<String>> = print_materials.values().cloned().collect();
+        mitcad_model::print_files::check_job(&job).map_err(ApiError)?;
         let placement = ExportPlacement {
             coordinates,
             within,
@@ -829,6 +854,7 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             spacing: command.spacing,
             animation,
             print_colors: command.print_colors,
+            print_materials,
         };
         let exported = self.export_bodies(&command.path, &bodies, &options, &colors, &placement)?;
         let mut result =
@@ -855,6 +881,10 @@ impl<K: Kernel> ExchangeOps<K> for Document<K> {
             // has it.
             if let Some(dialect) = dialect {
                 result["dialect"] = json!(dialect.id());
+                // Geometry only or a print project (mitcad#2008).
+                if let Some(delivery) = exported.delivery {
+                    result["delivery"] = json!(delivery.as_str());
+                }
                 result["filaments"] = json!(
                     exported
                         .slots

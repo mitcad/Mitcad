@@ -39,9 +39,10 @@ the vertex.
   vertex where a hole touches the hub).
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 6dbda3b7f..71c4e41e0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -5064,6 +5064,7 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -5119,6 +5119,7 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
    bool                         nondegenere      = true;
    bool                         toujoursdegenere = true;
    bool                         isfirst          = false;
@@ -49,7 +50,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
    // (Several fillets ending at the vertex, each vanishing there: each its
    // contacts within a hundredth of its radius of the vertex, its faces
    // tangent there, or already ending in a point at it.)
-@@ -5147,6 +5148,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -5202,6 +5203,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
      }
      const ChFiDS_CommonPoint& CV1 = Fd->Vertex(isfirst, 1);
      const ChFiDS_CommonPoint& CV2 = Fd->Vertex(isfirst, 2);
@@ -62,7 +63,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
      // Is it always degenerated ?
      if (CV1.Point().IsEqual(CV2.Point(), 0))
      {
-@@ -5321,10 +5328,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -5376,10 +5383,10 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
    }
    else
    { // Single case processing
@@ -76,6 +77,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
      }
      if (toujoursdegenere)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index f571a2f88..d4dee18d0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -53,6 +53,8 @@
@@ -161,7 +163,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
        }
        return true;
      }
-@@ -5966,6 +6028,37 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -5972,6 +6034,37 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      double                       aBridgeEnd = 0.;
      if ((!Ok1 && HC1.IsNull()) || (!Ok2 && HC2.IsNull()))
      {
@@ -199,7 +201,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
        if ((intf && !forward) || (intl && forward))
        {
          if (!Ok1)
-@@ -7957,6 +8050,227 @@ static bool ChFi3d_KPartSectionCutAt(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -7968,6 +8061,227 @@ static bool ChFi3d_KPartSectionCutAt(const TopOpeBRepDS_DataStructure&   DStr,
    return true;
  }
  
@@ -427,7 +429,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  // An end of a piece cut by the face beyond given as such: where the cut
  // meets the other contact (the piece ends in a point there).
  struct ChFi3d_KPartCutEnd
-@@ -7992,7 +8306,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -8003,7 +8317,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
                                                           const ChFi3d_KPartCutEnd* GivenEnd   = nullptr,
                                                           const NCollection_List<TopoDS_Shape>* CutEdges = nullptr,
                                                           const bool AtFullEnds = false,
@@ -437,7 +439,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  {
    const int opp = 3 - ons;
    // (A walked Full's sections are not those through the spine's points: an
-@@ -8140,21 +8455,42 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -8151,21 +8466,42 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
      try
      {
        OCC_CATCH_SIGNALS
@@ -493,9 +495,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +                                        aExpected);
 +      }
      }
-     catch (Standard_Failure const&)
+     catch (Standard_Failure const& anException)
      {
-@@ -17046,7 +17382,13 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17115,7 +17451,13 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    const TopoDS_Edge         E   = TopoDS::Edge(CPn.Arc());
    const TopoDS_Face         N   = TopoDS::Face(DStr.Shape(P->Index(ons)));
    const TopoDS_Face         Fo  = TopoDS::Face(DStr.Shape(P->Index(opp)));
@@ -510,7 +512,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    {
      return false;
    }
-@@ -17227,7 +17569,11 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17305,7 +17647,11 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
                               aNone,
                               tolapp3d,
                               isFirst ? &anEnd : &aJunction,
@@ -521,5 +523,5 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +                             false,
 +                             !aTight.IsNull() && aTight.IsSame(B));
    }
-   catch (Standard_Failure const&)
+   catch (Standard_Failure const& anException)
    {

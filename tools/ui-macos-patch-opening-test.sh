@@ -3,7 +3,8 @@
 # check-all sources: app/commands/SurfaceCommands.cpp app/framework/OpeningEdges.cpp app/OcctViewer.cpp tools/cli
 # check-all sources: tools/ui-scripts/patch-opening.mitcad-ui tools/ui-scripts/patch-opening.json
 # Patch picks a surface body's free edge as its opening and closes it
-# (mitcad#1927): the shared input script
+# (mitcad#1927), or single free edges with Whole Opening off (mitcad#1955):
+# the shared input script
 # tools/ui-scripts/patch-opening.mitcad-ui of
 # tools/ui-patch-opening-test.sh in the Qt frontend.
 set -uo pipefail
@@ -21,8 +22,9 @@ mkdir -p "$MITCAD_TEST_WORK"
 "$cli" run "$here/ui-scripts/patch-opening.json" --save "$MITCAD_TEST_WORK/patch-opening.mitcad" || exit 1
 MITCAD_TEST_INPUT=$here/ui-scripts/patch-opening.mitcad-ui MITCAD_TEST_STEP_MS=100 \
   ui_run_app patch-opening --ui=qt --no-recovery --no-mcp --open "$MITCAD_TEST_WORK/patch-opening.mitcad"
-ui_expect_log '^Patch Profiles or Edges: 1 edge' 'a click on a free edge takes the whole opening'
-ui_expect_log '^Added patch of 1 items, stitched' 'OK patches the opening and stitches it on'
+ui_expect_log '^Patch Profiles or Edges: 1 edge [[]edge [{]"faces":' 'with Whole Opening on a click takes the whole opening'
+ui_expect_log '^Patch: Whole Opening = off' 'Whole Opening turned off'
+ui_expect_log '^Added patch of 4 items, stitched' 'four single free edges patched and stitched on'
 ui_expect_log '^TestDriver: done' 'the box is a closed solid again'
 ui_expect_no_log 'TestDriver: FAIL' 'no failed Patch opening assertion'
 [ "$UI_FAILURES" = 0 ] || exit 1

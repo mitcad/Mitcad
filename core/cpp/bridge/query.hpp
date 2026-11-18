@@ -31,5 +31,6 @@ std::unique_ptr<ShapeList> solids(const geometry::Shape& shape);
 std::size_t solid_count(const geometry::Shape& shape);
 rust::Vec<BoundingBox> face_bounding_boxes(const geometry::Shape& shape, rust::Slice<const std::uint32_t> faces);
 rust::Vec<BoundingBox> edge_bounding_boxes(const geometry::Shape& shape, rust::Slice<const std::uint32_t> edges);
+rust::Vec<BoundingBox> bounding_boxes(const ShapeList& shapes);
 
 } // namespace mitcad::bridge

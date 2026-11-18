@@ -941,6 +941,13 @@ private:
   // mitcad#1794); empty: none.
   QString m_hoveredChoice;
   void hoverChoice(const QString& key, const QString& value);
+  // The places of the shown inspection's rows by the rows' keys ("Minimum
+  // distance", "1 Radius" in the first pick's group; Inspection::Value::
+  // places, mitcad#1979), and the row the pointer is over that paints
+  // them; empty: none.
+  QHash<QString, QJsonArray> m_resultPlaces;
+  QString m_hoveredResult;
+  void hoverResult(const QString& key, bool on);
   // The panel's message without a preview report (a hint, an error, a
   // progress): the shown preview's places and bodies go with it
   // (mitcad#1609).

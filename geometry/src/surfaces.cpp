@@ -12,6 +12,7 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -27,6 +28,7 @@
 #include <BRep_Tool.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom_Curve.hxx>
 #include <Geom_Surface.hxx>
 #include <NCollection_List.hxx>
 #include <TopExp.hxx>
@@ -45,6 +47,8 @@
 #include "face_select.hpp"
 #include "free_loops.hpp"
 #include "history.hpp"
+#include "sheet_edges.hpp"
+#include "spine.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -54,6 +58,10 @@ namespace {
 constexpr double kTolerance = 1.0e-6;
 // The sewing tolerance of a stitch asked for 0.
 constexpr double kSewing = 1.0e-6;
+// How far a sketch curve's end may lie from the end of an edge of a
+// patch's loop that it meets (mm, mitcad#1972), as the model's geometric
+// tolerance.
+constexpr double kCurveGap = 1.0e-2;
 // The largest step between an open boundary's points, and the most points
 // one edge gives.
 constexpr double kBoundaryStep = 0.25;
@@ -137,13 +145,13 @@ std::vector<std::vector<int>> free_loops(const Shape& body) {
 }
 
 // Whether every vertex of the edges ends two of them.
-bool closes(const Shape& body, const std::vector<int>& edges) {
+bool closes(const std::vector<TopoDS_Edge>& edges) {
   ShapeMap vertices;
   std::map<int, int> ends;
-  for (const int e : edges) {
+  for (const TopoDS_Edge& edge : edges) {
     TopoDS_Vertex a;
     TopoDS_Vertex b;
-    TopExp::Vertices(body.edge(e), a, b);
+    TopExp::Vertices(edge, a, b);
     if (a.IsNull() || b.IsNull()) {
       return false;
     }
@@ -152,6 +160,16 @@ bool closes(const Shape& body, const std::vector<int>& edges) {
   }
   return !ends.empty() &&
          std::all_of(ends.begin(), ends.end(), [](const auto& entry) { return entry.second == 2; });
+}
+
+// The same for edges of the body, by index.
+bool closes(const Shape& body, const std::vector<int>& edges) {
+  std::vector<TopoDS_Edge> found;
+  found.reserve(edges.size());
+  for (const int e : edges) {
+    found.push_back(body.edge(e));
+  }
+  return closes(found);
 }
 
 // The primary names of the faces a loop of free edges bounds, sorted, each
@@ -222,11 +240,86 @@ std::vector<int> loop_edges(const Shape& body, const PatchLoop& loop) {
         }
       }
     }
+    // Single free edges beside them (mitcad#1955), as the surface
+    // features pick them.
+    if (!loop.openings.empty()) {
+      for (const int e : detail::sheet_edges(body, {}, loop.openings)) {
+        if (std::find(edges.begin(), edges.end(), e) == edges.end()) {
+          edges.push_back(e);
+        }
+      }
+    }
   }
   if (edges.empty()) {
     throw std::invalid_argument("the patch has no edges to fill");
   }
   return edges;
+}
+
+// The sketch curves of a patch's loop (mitcad#1972) as edges joined to the
+// loop: each end is the vertex it meets within kCurveGap, an end of the
+// body's `edges` of `copy` or of a curve before it (that vertex's
+// tolerance widened to the gap, on the working copy), else its own.
+std::vector<TopoDS_Edge> curve_edges(const Shape& copy, const std::vector<int>& edges, const Path& curves) {
+  std::vector<TopoDS_Vertex> known;
+  for (const int e : edges) {
+    TopoDS_Vertex a;
+    TopoDS_Vertex b;
+    TopExp::Vertices(copy.edge(e), a, b);
+    for (const TopoDS_Vertex& v : {a, b}) {
+      if (!v.IsNull()) {
+        known.push_back(v);
+      }
+    }
+  }
+  BRep_Builder builder;
+  const auto meet = [&known, &builder](const TopoDS_Vertex& own) {
+    const gp_Pnt p = BRep_Tool::Pnt(own);
+    TopoDS_Vertex best;
+    double nearest = kCurveGap;
+    for (const TopoDS_Vertex& v : known) {
+      const double d = BRep_Tool::Pnt(v).Distance(p);
+      if (d <= nearest) {
+        nearest = d;
+        best = v;
+      }
+    }
+    if (best.IsNull()) {
+      known.push_back(own);
+      return TopoDS::Vertex(own.Oriented(TopAbs_FORWARD));
+    }
+    if (nearest + kTolerance > BRep_Tool::Tolerance(best)) {
+      builder.UpdateVertex(best, nearest + kTolerance);
+    }
+    return TopoDS::Vertex(best.Oriented(TopAbs_FORWARD));
+  };
+  std::vector<TopoDS_Edge> result;
+  for (const PathCurve& piece : curves) {
+    const TopoDS_Edge own = detail::model_edge(piece.curve);
+    TopoDS_Vertex a;
+    TopoDS_Vertex b;
+    TopExp::Vertices(own, a, b);
+    if (a.IsNull() || b.IsNull() || a.IsSame(b)) {
+      throw std::invalid_argument("a closed sketch curve is a loop by itself; it cannot be part of a patch's loop");
+    }
+    double first = 0.0;
+    double last = 0.0;
+    const occ::handle<Geom_Curve> curve = BRep_Tool::Curve(own, first, last);
+    if (curve.IsNull()) {
+      throw std::runtime_error("a sketch curve of the patch has no curve");
+    }
+    const TopoDS_Vertex from = meet(a);
+    const TopoDS_Vertex to = meet(b);
+    if (from.IsSame(to)) {
+      throw std::invalid_argument("a sketch curve of the patch meets the loop at one point only");
+    }
+    BRepBuilderAPI_MakeEdge make(curve, from, to, first, last);
+    if (!make.IsDone()) {
+      throw std::invalid_argument("a sketch curve of the patch does not meet the loop's edges");
+    }
+    result.push_back(make.Edge());
+  }
+  return result;
 }
 
 // Whether two points of the face (by parameter) lie on the surface of
@@ -600,8 +693,17 @@ ShapePtr patch_loop(const std::string& feature, const Shape& body, const PatchLo
     // their surfaces: they work on a copy.
     const ShapePtr copy = detail::working_copy(body);
     const std::vector<int> edges = loop_edges(*copy, loop);
-    if (!closes(*copy, edges)) {
-      throw std::invalid_argument("the edges of the patch do not close up into one loop");
+    // Sketch curves beside the edges (mitcad#1972), joined to their ends.
+    const std::vector<TopoDS_Edge> curves = curve_edges(*copy, edges, loop.curves);
+    std::vector<TopoDS_Edge> all;
+    for (const int e : edges) {
+      all.push_back(copy->edge(e));
+    }
+    all.insert(all.end(), curves.begin(), curves.end());
+    if (!closes(all)) {
+      throw std::invalid_argument(curves.empty() ? "the edges of the patch do not close up into one loop"
+                                                 : "the edges and sketch curves of the patch do not close up "
+                                                   "into one loop");
     }
     std::vector<Continuity> orders(edges.size(), loop.continuity);
     for (const auto& [name, continuity] : loop.edge_continuity) {
@@ -617,12 +719,21 @@ ShapePtr patch_loop(const std::string& feature, const Shape& body, const PatchLo
     const bool plain = loop.points.empty() &&
                        std::all_of(orders.begin(), orders.end(), [](Continuity c) { return c == Continuity::G0; });
     NCollection_List<TopoDS_Shape> list;
-    for (const int e : edges) {
-      list.Append(copy->edge(e));
+    for (const TopoDS_Edge& edge : all) {
+      list.Append(edge);
     }
     BRepBuilderAPI_MakeWire wire;
     wire.Add(list);
     if (!wire.IsDone() || !BRep_Tool::IsClosed(wire.Wire())) {
+      throw std::invalid_argument("the edges of the patch do not make one closed loop");
+    }
+    // Every curve in it too: one loop, not a loop of edges and a closed
+    // chain of curves beside it.
+    int in_wire = 0;
+    for (TopExp_Explorer it(wire.Wire(), TopAbs_EDGE); it.More(); it.Next()) {
+      ++in_wire;
+    }
+    if (!curves.empty() && in_wire != static_cast<int>(all.size())) {
       throw std::invalid_argument("the edges of the patch do not make one closed loop");
     }
     TopoDS_Face face;
@@ -652,6 +763,10 @@ ShapePtr patch_loop(const std::string& feature, const Shape& body, const PatchLo
                                                      name + " lies between two faces"));
         }
         filling.Add(edge, copy->face(faces.front()), order_of(orders[i]), true);
+      }
+      // The patch only passes through the sketch curves.
+      for (const TopoDS_Edge& edge : curves) {
+        filling.Add(edge, GeomAbs_C0, true);
       }
       for (const gp_Pnt& p : loop.points) {
         filling.Add(p);

@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design tools/ui-scripts/hidden-parent-insert.mitcad-ui inserts (mitcad#1995): a 10 x 10 x 10 box."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": "xy", "corner": [30, 0],
+    "length": 10, "width": 10, "height": 10, "operation": "new_body"}}
+]

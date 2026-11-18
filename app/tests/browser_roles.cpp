@@ -3,8 +3,9 @@
 // from a snapshot, each row's look as its name delegate gives it
 // (initStyleOption). A shown transparent body keeps the plain text colour
 // (its transparency once read as a colour role, the name in error red) and
-// has the half-open eye; a visible body inside a hidden occurrence has the
-// open eye (its grey name role once read as transparent).
+// has the half-open eye; a visible body inside a hidden occurrence is
+// greyed (its grey name role once read as transparent) and has the dimmed
+// closed eye, hidden with that occurrence (mitcad#1995).
 #include "UnitTests.hpp"
 #include "browser/BrowserPanel.hpp"
 
@@ -133,12 +134,30 @@ void rowLookTests() {
   CHECK(transparent.text == plain);
   CHECK(transparent.bulb == QStringLiteral("eye-half"));
 
-  // (b) A visible body inside a hidden occurrence: greyed, the open eye.
+  // (b) A visible body inside a hidden occurrence: greyed, the dimmed
+  // closed eye (mitcad#1995: hidden with Bracket:1, as Isolate's).
   const QModelIndex block = rowNamed(tree, QStringLiteral("Block"));
   CHECK(block.isValid());
   const Look greyed = look(tree, block);
-  CHECK(greyed.bulb == QStringLiteral("eye"));
+  CHECK(greyed.bulb == QStringLiteral("eye-isolated"));
   CHECK(greyed.text != plain);
+  // Its node names the occurrence that hides it, the eye's tooltip says so
+  // and other presentations get the eye as shown.
+  bool found = false;
+  for (const BrowserPanel::PresentationRow& row : panel.presentationRows()) {
+    if (row.node.name == QStringLiteral("Block")) {
+      found = true;
+      CHECK(row.node.visible);
+      CHECK(row.node.hiddenWith == QStringLiteral("Bracket:1"));
+      CHECK(row.node.hiddenParents == QStringList{QStringLiteral("O1")});
+      CHECK(row.eyeTip == QStringLiteral("Hidden with Bracket:1: click to show it"));
+      CHECK(!row.eyeOn);
+    } else if (row.node.name == QStringLiteral("Glass")) {
+      CHECK(row.node.hiddenWith.isEmpty());
+      CHECK(row.node.hiddenParents.isEmpty());
+    }
+  }
+  CHECK(found);
 
   // The hidden occurrence's own row: the closed eye.
   const QModelIndex occurrence = rowNamed(tree, QStringLiteral("Bracket:1"));

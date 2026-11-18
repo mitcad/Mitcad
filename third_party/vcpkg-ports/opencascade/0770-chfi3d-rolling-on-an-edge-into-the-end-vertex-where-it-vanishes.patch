@@ -41,10 +41,10 @@ corners at the two points filled the rest wrongly, an invalid result.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 0c5245f..e5dfb65 100644
+index c26ef9ba..853f7eb8 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2959,7 +2959,9 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
+@@ -3081,7 +3081,9 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
    {
      return nullptr;
    }
@@ -55,7 +55,7 @@ index 0c5245f..e5dfb65 100644
    if (std::abs(P - aBS->FirstParameter()) < aTol && std::abs(P - C->FirstParameter()) < aTol)
    {
      thePole = 1;
-@@ -2989,20 +2991,25 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
+@@ -3111,20 +3113,25 @@ static occ::handle<TheBSpline> ChFi3d_BSplineEndingAt(const occ::handle<TheCurve
  //           ends of the contact curves (in 3d and on the faces) are moved
  //           to it, the blend's surface keeps its own end within the
  //           curves' tolerance, and the blend ends in a point there
@@ -85,7 +85,7 @@ index 0c5245f..e5dfb65 100644
    {
      return false;
    }
-@@ -3024,10 +3031,15 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -3146,10 +3153,15 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
      {
        return false;
      }
@@ -105,7 +105,7 @@ index 0c5245f..e5dfb65 100644
      aSurf.D1(aUV.X(), aUV.Y(), aP, aDU, aDV);
      aNorm[k] = aDU.Crossed(aDV);
      if (aNorm[k].Magnitude() < gp::Resolution())
-@@ -3062,10 +3074,41 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -3184,10 +3196,41 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
        return false;
      }
    }
@@ -146,8 +146,8 @@ index 0c5245f..e5dfb65 100644
 +    }
      aC3d[k]->SetPole(aPole3d[k], PV);
      aC2d[k]->SetPole(aPole2d[k], BRep_Tool::Parameters(Vtx, aFace));
-     TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(aFi.LineIndex());
-@@ -3108,6 +3151,25 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+     // Moving a B-spline's end pole by d moves each point of it by d times
+@@ -3234,6 +3277,25 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
    bool                         nondegenere      = true;
    bool                         toujoursdegenere = true;
    bool                         isfirst          = false;
@@ -173,7 +173,7 @@ index 0c5245f..e5dfb65 100644
    for (It.Initialize(myVDataMap(Index)), i = 0; It.More(); It.Next(), i++)
    {
      stripe = It.Value();
-@@ -3119,9 +3181,9 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -3245,9 +3307,9 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
      Fd                            = stripe->SetOfSurfData()->Sequence().Value(num);
      // A fillet ending alone at a vertex where its faces come tangent ends
      // in a point there (its contacts within a hundredth of its radius of the
@@ -186,10 +186,10 @@ index 0c5245f..e5dfb65 100644
        ChFi3d_ShrinkVanishingEnd(myDS->ChangeDS(), Fd, isfirst, Vtx, 0.01 * fsp->Radius());
      }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 0668fd5..066cf84 100644
+index 7b766c27..9c08f571 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -2507,6 +2507,45 @@ static bool ChFi3d_ConcaveCreaseAt(const TopoDS_Vertex& V,
+@@ -2533,6 +2533,45 @@ static bool ChFi3d_ConcaveCreaseAt(const TopoDS_Vertex& V,
    return false;
  }
  
@@ -235,7 +235,7 @@ index 0668fd5..066cf84 100644
  bool ChFi3d_Builder::StartSol(
    const occ::handle<ChFiDS_Spine>&    Spine,
    occ::handle<BRepAdaptor_Surface>&   HS,   // New face
-@@ -2984,7 +3023,15 @@ bool ChFi3d_Builder::StartSol(
+@@ -3010,7 +3049,15 @@ bool ChFi3d_Builder::StartSol(
          {
            if (ex.Current().IsSame(Vref))
            {

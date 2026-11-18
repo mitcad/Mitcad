@@ -10,33 +10,40 @@ of holes). BRepCheck_Analyzer finds the seam edges once per face
 BRepCheck_Wire::InContextOfFace, which uses them and skips the search; other
 callers keep InContext and Closed2d. The seam edges, the checks and their
 statuses are unchanged.
+
+Failures (mitcad#1986): SeamEdges goes through the face's edges with an
+explorer and maps, so only a failed allocation can throw there. It is
+called inside the first wire's check, under OCCT's own handler of that
+check, which marks the wire and the face failed: the same status a failure
+of the search had when each wire searched the face itself. (The patch's
+first form caught it on its own and fell back to that search, which would
+fail alike.)
+Test: geometry/tests/port/p0008-wire-closure-many-holes.cpp (ctest
+geometry.port.0008): a plate of 2 025 round holes and a cylinder's side
+with 96 holes (its seam found once) are valid, a wire of the holed side's
+bottom circle alone is still not closed, and a plate of 3 600 holes of 24
+edges each (86 404 edges) is checked within 10 s with topological checks
+only (BRepCheck_Analyzer with its geometric controls off; going through all
+edges of the face for each wire is quadratic).
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
-index 48ccc13..e73818e 100644
+index 48ccc13a..928d992c 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Analyzer.cxx
-@@ -229,6 +229,21 @@ public:
+@@ -229,6 +229,13 @@ public:
              }
            }
  
 +          // The seam edges of the face, found once for the 2d closure check of
-+          // all its wires instead of once for each wire.
++          // all its wires instead of once for each wire, by the first wire's
++          // check: a failure there (only an allocation can fail) is that
++          // wire's, as it was when each wire searched the face itself.
 +          NCollection_List<TopoDS_Shape> aSeamEdges;
 +          bool                           isSeamEdgesFound = false;
-+          try
-+          {
-+            OCC_CATCH_SIGNALS
-+            BRepCheck_Wire::SeamEdges(TopoDS::Face(aShape), aSeamEdges);
-+            isSeamEdgesFound = true;
-+          }
-+          catch (Standard_Failure const&)
-+          {
-+            // each wire searches the face itself (InContext)
-+          }
 +
            bool orientofwires = performwire;
            for (exp.Init(aShape, TopAbs_WIRE); exp.More(); exp.Next())
            {
-@@ -236,7 +251,17 @@ public:
+@@ -236,7 +243,23 @@ public:
              try
              {
                OCC_CATCH_SIGNALS
@@ -44,8 +51,14 @@ index 48ccc13..e73818e 100644
 +              // A wire of the face: not searched for in it.
 +              const occ::handle<BRepCheck_Wire> aWireRes =
 +                occ::down_cast<BRepCheck_Wire>(aFaceWireRes);
-+              if (isSeamEdgesFound && !aWireRes.IsNull())
++              if (!aWireRes.IsNull())
 +              {
++                if (!isSeamEdgesFound)
++                {
++                  aSeamEdges.Clear();
++                  BRepCheck_Wire::SeamEdges(TopoDS::Face(aShape), aSeamEdges);
++                  isSeamEdgesFound = true;
++                }
 +                aWireRes->InContextOfFace(TopoDS::Face(aShape), aSeamEdges);
 +              }
 +              else
@@ -56,7 +69,7 @@ index 48ccc13..e73818e 100644
                if (orientofwires)
                {
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
-index 7d7323f..8f2f513 100644
+index 7d7323fa..8f2f513f 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.cxx
 @@ -103,10 +103,11 @@ static void CurveDirForParameter(const Geom2dAdaptor_Curve& aC2d,
@@ -252,7 +265,7 @@ index 7d7323f..8f2f513 100644
 +  }
 +}
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
-index c5f0f30..63213a0 100644
+index c5f0f30f..63213a0b 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Wire.hxx
 @@ -42,6 +42,20 @@ public:

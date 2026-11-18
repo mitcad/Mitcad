@@ -30,6 +30,7 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeHalfSpace.hxx>
@@ -37,6 +38,7 @@
 #include <BRepTools_History.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
+#include <Bnd_Box.hxx>
 #include <ChFi3d.hxx>
 #include <ElCLib.hxx>
 #include <GProp_GProps.hxx>
@@ -78,6 +80,7 @@
 
 #include "blend.hpp"
 #include "canonical.hpp"
+#include "cored_dressup.hpp"
 #include "corner.hpp"
 #include "cutouts.hpp"
 #include "dressup_check.hpp"
@@ -111,7 +114,8 @@ constexpr double kShrink = 1.0 - 1.0e-3;
 // tolerances in 3d and 2d, deflection) for a second try where the defaults
 // (1e-2, 1e-4, 1e-5, 1e-4, 1e-5, 1e-3) fail: with the defaults OCCT finds no
 // start for the rolling ball along some edges where the faces fold back
-// sharply (mitcad#107).
+// sharply (mitcad#107; along a knife edge, faces meeting at 0 degrees, the
+// port's patch 1770 starts the ball where it fits, mitcad#1984).
 constexpr double kTight[6] = {1.0e-3, 1.0e-7, 1.0e-9, 1.0e-6, 1.0e-8, 1.0e-5};
 // The angle between the faces' normals across a knife edge: more than
 // about 172 degrees (they fold back on each other).
@@ -963,31 +967,58 @@ void name_after_nearest_edge(BRepFilletAPI_LocalOperation& maker, const std::str
       }
     }
   }
+  // The named contour edges in the contours' order, with their boxes.
+  struct Named {
+    TopoDS_Edge edge;
+    std::string name;
+    Bnd_Box box;
+  };
+  std::vector<Named> named;
+  for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+    for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+      if (const auto name = body.name_of_edge(maker.Edge(ic, ie))) {
+        Named n{maker.Edge(ic, ie), *name, Bnd_Box()};
+        BRepBndLib::Add(n.edge, n.box);
+        named.push_back(std::move(n));
+      }
+    }
+  }
   for (int f = 1; f <= faces.Extent(); ++f) {
     if (namer.named(faces(f))) {
       continue;
     }
-    std::optional<std::string> nearest;
+    // The edges by the distance of their boxes from the face's: an edge
+    // whose box lies farther than the nearest edge found so far is not
+    // nearer (an exact distance between a free-form face and every edge
+    // took a minute on a fillet of 60 edges with a few such faces,
+    // mitcad#1987). The first in the contours' order wins a tie, as when
+    // every edge was measured.
+    Bnd_Box face_box;
+    BRepBndLib::Add(faces(f), face_box);
+    std::vector<std::pair<double, std::size_t>> order;
+    for (std::size_t k = 0; k < named.size(); ++k) {
+      order.emplace_back(face_box.IsVoid() || named[k].box.IsVoid() ? 0.0 : face_box.Distance(named[k].box), k);
+    }
+    std::sort(order.begin(), order.end());
+    std::optional<std::size_t> nearest;
     double distance = 0.0;
-    for (int ic = 1; ic <= maker.NbContours(); ++ic) {
-      for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
-        const auto name = body.name_of_edge(maker.Edge(ic, ie));
-        if (!name) {
-          continue;
+    for (const auto& [lower, k] : order) {
+      if (nearest && lower > distance) {
+        break;
+      }
+      try {
+        OCC_CATCH_SIGNALS
+        BRepExtrema_DistShapeShape between(faces(f), named[k].edge);
+        if (between.IsDone() &&
+            (!nearest || between.Value() < distance || (between.Value() == distance && k < *nearest))) {
+          nearest = k;
+          distance = between.Value();
         }
-        try {
-          OCC_CATCH_SIGNALS
-          BRepExtrema_DistShapeShape between(faces(f), maker.Edge(ic, ie));
-          if (between.IsDone() && (!nearest || between.Value() < distance)) {
-            nearest = *name;
-            distance = between.Value();
-          }
-        } catch (const Standard_Failure&) {
-        }
+      } catch (const Standard_Failure&) {
       }
     }
-    if (nearest && held.count(face_name(feature, role, *nearest)) == 0) {
-      namer.add(faces(f), face_name(feature, role, *nearest));
+    if (nearest && held.count(face_name(feature, role, named[*nearest].name)) == 0) {
+      namer.add(faces(f), face_name(feature, role, named[*nearest].name));
     }
   }
 }
@@ -1706,6 +1737,10 @@ std::string corner_failure(const BRepFilletAPI_MakeFillet& maker) {
       {"ProjLib", "a curve of the corner does not project onto a face"},
       {"SIGSEGV", "the corner's computation crashed (caught)"},
       {"ACCESS_VIOLATION", "the corner's computation crashed (caught)"},
+      {"a knife edge running on along its line",
+       "an edge where two faces meet tangentially (a knife edge) runs on along its line into an edge whose "
+       "faces meet at an angle, and the rounding's ball jumps there from two radii into the wedge to the "
+       "corner, which the geometry kernel cannot round across"},
   };
   const std::string message = maker.FailedCornerMessage(1).ToCString();
   std::string cause = message.empty() ? "the corner's computation gives no result"
@@ -1751,6 +1786,15 @@ std::string fillet_failure(const BRepFilletAPI_MakeFillet& maker, const Shape& b
       const std::string more = " (and " + std::to_string(maker.NbEdges(ic) - 1) + " more edges of its chain)";
       said += more;
       named += more;
+    }
+  }
+  // A corner's failure at its vertices (mitcad#1988).
+  if (maker.Failure() == ChFi3d_Builder::Failure_Corner) {
+    for (int k = 1; k <= maker.NbFaultyVertices(); ++k) {
+      const int v = body.vertex_index(maker.FaultyVertex(k));
+      if (v >= 0 && !body.vertex_name(v).empty()) {
+        places.push_back(vertex_place(body.vertex_name(v)));
+      }
     }
   }
   if (places.empty()) {
@@ -1850,6 +1894,58 @@ std::vector<int> concave_after_convex(const BRepFilletAPI_MakeFillet& maker, con
       }
     }
   }
+  // A concave contour that meets a deferred one at a vertex where they
+  // join (a corner of the two) comes after the convex roundings too: built
+  // before them, its blend's end would take a part of the deferred one's
+  // edge away, and the deferred one would then end against that blend
+  // (a block's foot rounded along its side and along the wall behind,
+  // mitcad#1987).
+  const auto contour_kind = [&](int ic) {
+    int kind = -1;
+    for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+      const int edge = body.edge_index(maker.Edge(ic, ie));
+      if (edge < 0) {
+        return -2;
+      }
+      const auto [a, b] = edge_face_pair(body, edge);
+      const ChFiDS_TypeOfConcavity type =
+          ChFi3d::DefineConnectType(body.edge(edge), body.face(a), body.face(b), 1.0e-4, false);
+      const int k = type == ChFiDS_Convex ? 1 : type == ChFiDS_Concave ? 0 : -2;
+      if (ie > 1 && k != kind) {
+        return -2;
+      }
+      kind = k;
+    }
+    return kind;
+  };
+  const auto ends_of = [&](int ic) {
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> ends;
+    for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+      ends.Add(TopExp::FirstVertex(maker.Edge(ic, ie)));
+      ends.Add(TopExp::LastVertex(maker.Edge(ic, ie)));
+    }
+    return ends;
+  };
+  if (!deferred.empty()) {
+    std::set<int> joined;
+    for (const int ic : deferred) {
+      const auto ends = ends_of(ic);
+      for (int other = 1; other <= maker.NbContours(); ++other) {
+        if (deferred.count(other) > 0 || contour_kind(other) != 0) {
+          continue;
+        }
+        bool meets = false;
+        for (int ie = 1; ie <= maker.NbEdges(other) && !meets; ++ie) {
+          meets = ends.Contains(TopExp::FirstVertex(maker.Edge(other, ie))) ||
+                  ends.Contains(TopExp::LastVertex(maker.Edge(other, ie)));
+        }
+        if (meets) {
+          joined.insert(other);
+        }
+      }
+    }
+    deferred.insert(joined.begin(), joined.end());
+  }
   for (const int ic : deferred) {
     for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
       const int edge = body.edge_index(maker.Edge(ic, ie));
@@ -1902,6 +1998,58 @@ std::vector<int> overlap_apart(const BRepFilletAPI_MakeFillet& maker, const Shap
   return later;
 }
 
+// Where OCCT's fillet refused a corner because a knife edge (its faces
+// meeting tangentially with opposite normals) runs on along its line into
+// an edge whose faces meet at an angle (port patch 1790): the ball jumps at
+// their common vertex, from two radii into the wedge to the corner, and no
+// corner of the kernel joins the two roundings. The selected edges of the
+// contours at that vertex that are not knife edges, rounded after the knife
+// edge: its rounding ends on the face at the end, which grows over the
+// tip's section, and the other one then ends on that face as at any corner
+// of three edges (a bite cut part of the way along a wall, mitcad#1988).
+// Empty where the failure is another one.
+std::vector<int> knife_line_apart(const BRepFilletAPI_MakeFillet& maker, const Shape& body,
+                                  const std::vector<int>& owner) {
+  std::vector<int> later;
+  if (maker.Failure() != ChFi3d_Builder::Failure_Corner) {
+    return later;
+  }
+  const detail::EdgeFaces edge_faces(body);
+  for (int k = 1; k <= maker.NbFaultyVertices(); ++k) {
+    if (std::string(maker.FailedCornerMessage(k).ToCString()).find("a knife edge running on along its line") ==
+        std::string::npos) {
+      continue;
+    }
+    const TopoDS_Vertex vertex = maker.FaultyVertex(k);
+    for (int ic = 1; ic <= maker.NbContours(); ++ic) {
+      bool at_vertex = false;
+      bool knife = false;
+      for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+        const TopoDS_Edge& e = maker.Edge(ic, ie);
+        if (!TopExp::FirstVertex(e).IsSame(vertex) && !TopExp::LastVertex(e).IsSame(vertex)) {
+          continue;
+        }
+        at_vertex = true;
+        const int edge = body.edge_index(e);
+        const std::vector<int> faces = edge >= 0 ? edge_faces.at(edge) : std::vector<int>();
+        knife = faces.size() == 2 &&
+                detail::normal_angle(body.edge(edge), body.face(faces[0]), body.face(faces[1])) > kKnife;
+      }
+      if (!at_vertex || knife) {
+        continue;
+      }
+      for (int ie = 1; ie <= maker.NbEdges(ic); ++ie) {
+        const int edge = body.edge_index(maker.Edge(ic, ie));
+        if (edge >= 0 && owner[static_cast<std::size_t>(edge)] >= 0 &&
+            std::find(later.begin(), later.end(), edge) == later.end()) {
+          later.push_back(edge);
+        }
+      }
+    }
+  }
+  return later;
+}
+
 // Where the rounded corners at both ends of a selected straight edge meet
 // (or all but meet) in its middle (GitHub #353: a cube of 10 rounded by 5
 // on all its edges, every face taken away, the body a ball): the edge
@@ -1910,12 +2058,13 @@ std::vector<int> overlap_apart(const BRepFilletAPI_MakeFillet& maker, const Shap
 // within the gap the geometry kernel needs between them of 2r (2e-4 r: at a gap of 4e-4 mm on that cube its
 // fillet ran for good, its walk projecting a curve onto a face that has
 // none of it left, and a cancel does not reach it there; at 1e-3 mm it
-// builds). A refusal in words (the 0.1 % smaller retry follows), the edge
-// as its place; empty where there is no such edge. (Port patch 1701 makes
-// the kernel return there, mitcad#1922; the refusal stays, so that the
-// retry builds the body.)
+// builds). A refusal in words, the edge as its place (`meeting`, where
+// given, set to the edge); empty where there is no such edge. (Port patch
+// 1701 makes the kernel return there, mitcad#1922; the refusal stays: such
+// a fillet is built as its core swept by the ball, cored_dressup.hpp, or
+// refused, mitcad#1954.)
 std::string corners_meet(const Shape& body, const std::vector<FilletSet>& sets, const std::vector<int>& owner,
-                         double scale) {
+                         double scale, int* meeting = nullptr) {
   try {
     OCC_CATCH_SIGNALS
     NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> edges_at;
@@ -1979,6 +2128,9 @@ std::string corners_meet(const Shape& body, const std::vector<FilletSet>& sets, 
       if (std::abs(gap) > 2.0e-4 * r) {
         continue;
       }
+      if (meeting) {
+        *meeting = e;
+      }
       return placed_error(
           "the roundings of the corners at both ends of an edge meet, leaving none of the edge to round between "
           "them, which the geometry kernel cannot build",
@@ -1991,18 +2143,94 @@ std::string corners_meet(const Shape& body, const std::vector<FilletSet>& sets, 
   return {};
 }
 
+// Where the rounded corners at both ends of a selected edge meet
+// (corners_meet): the fillet built exactly as the body's core swept by the
+// ball (cored_dressup.hpp: a prism of planar faces, every selected edge of
+// one constant radius); where it cannot be built so, refused in words, with
+// the radius below which some of the edge is left to round between the
+// corners and no 0.1 % smaller retry (std::invalid_argument: the retry
+// would leave a sliver of every face the fillet takes away). Null where
+// no corners meet.
+ShapePtr where_corners_meet(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
+                            const std::vector<int>& owner, double scale) {
+  int meeting = -1;
+  const std::string meet = corners_meet(body, sets, owner, scale, &meeting);
+  if (meet.empty()) {
+    return nullptr;
+  }
+  std::vector<double> radius(static_cast<std::size_t>(body.edge_count()), 0.0);
+  bool constant = true;
+  for (int e = 0; e < body.edge_count(); ++e) {
+    const int s = e < static_cast<int>(owner.size()) ? owner[static_cast<std::size_t>(e)] : -1;
+    if (s < 0) {
+      continue;
+    }
+    const FilletSet& set = sets[static_cast<std::size_t>(s)];
+    constant = constant && set.size == FilletSize::Constant && !set.curvature;
+    radius[static_cast<std::size_t>(e)] = set.radius * scale;
+  }
+  detail::CoredFillet cored;
+  if (constant) {
+    cored = detail::cored_fillet(feature, body, radius);
+    if (cored.shape) {
+      return cored.shape;
+    }
+  }
+  // The largest radius the kernel builds there: the edge longer than 2r by
+  // more than corners_meet's 2e-4 r, in thousandths of a millimetre.
+  double length = 0.0;
+  if (meeting >= 0) {
+    TopoDS_Vertex a;
+    TopoDS_Vertex b;
+    TopExp::Vertices(TopoDS::Edge(body.edge(meeting)), a, b);
+    if (!a.IsNull() && !b.IsNull()) {
+      length = BRep_Tool::Pnt(a).Distance(BRep_Tool::Pnt(b));
+    }
+  }
+  const double fits = std::floor(length / (2.0 + 2.0e-4) * 1000.0) / 1000.0;
+  char text[32];
+  std::snprintf(text, sizeof text, "%.3f", fits);
+  const std::string below = std::string(": a radius of ") + text + " mm or less leaves some of the edge to round";
+  std::vector<ErrorPlace> places;
+  if (meeting >= 0) {
+    places.push_back(edge_place(body.edge_name(meeting)));
+  }
+  const std::string edge = meeting >= 0 ? describe_edge(body, meeting) : std::string("an edge");
+  std::string said = "the roundings of the corners at both ends of an edge meet, leaving none of the edge to round "
+                     "between them";
+  std::string named = "the roundings of the corners at both ends of " + edge + " meet, leaving none of it to " +
+                      "round between them";
+  if (!cored.inner.empty()) {
+    const std::string inner = ", and an inner corner's edge is rounded with them, which cannot be built there";
+    said += inner;
+    named += inner + " (";
+    for (std::size_t i = 0; i < cored.inner.size(); ++i) {
+      named += (i == 0 ? "" : ", ") + describe_edge(body, cored.inner[i]);
+      places.push_back(edge_place(body.edge_name(cored.inner[i])));
+    }
+    named += ")";
+  } else {
+    const std::string only = ", which is built exactly only on a block of flat faces whose outer edges between "
+                             "the faces it rounds are all rounded by one radius";
+    said += only;
+    named += only;
+  }
+  throw std::invalid_argument("fillet failed; " + placed_error(said + below, named + below, places));
+}
+
 // The rolling ball fillets of the sets (none asymmetric or G2) that own the
 // body's edges, at their sizes times `scale`, their contours added in the
 // order the sets list their edges (`listed`) or in the body's.
 ShapePtr round_edges(const std::string& feature, const Shape& body, const std::vector<FilletSet>& sets,
                      const std::vector<int>& owner, bool rolling_ball_corners, double scale, bool tight,
                      bool listed = true) {
-  // (Corners that meet in an edge's middle: refused before the kernel's
-  // fillet, which never returns there, corners_meet.)
+  // (Corners that meet in an edge's middle: never given to the kernel's
+  // fillet, which never returns there, corners_meet; built as the body's
+  // core swept by the ball, or refused in words with no smaller retry,
+  // mitcad#1954.)
   if (rolling_ball_corners) {
-    const std::string meet = corners_meet(body, sets, owner, scale);
-    if (!meet.empty()) {
-      throw std::runtime_error("fillet failed; " + meet);
+    if (ShapePtr cored = where_corners_meet(feature, body, sets, owner, scale)) {
+      return cored;
     }
   }
   BRepFilletAPI_MakeFillet maker(body.occt());
@@ -2142,6 +2370,11 @@ ShapePtr round_edges(const std::string& feature, const Shape& body, const std::v
     // first one's faces where they meet (overlap_apart, mitcad#1926).
     if (later.empty() && setbacks.empty()) {
       later = overlap_apart(maker, body, owner);
+    }
+    // A knife edge and an edge running on along its line, the one, then
+    // the other (knife_line_apart, mitcad#1988).
+    if (later.empty() && setbacks.empty()) {
+      later = knife_line_apart(maker, body, owner);
     }
     if (!later.empty()) {
       std::vector<int> first = owner;

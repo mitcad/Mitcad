@@ -129,8 +129,9 @@ pub enum Constraint {
     Perpendicular(EntityId, EntityId),
     /// Tangency between a line, circle, arc or spline and a circle, arc or
     /// spline (or a line and a spline). When the curves share a point (a
-    /// common end point, a coincident constraint or point-on-curve
-    /// constraints), the tangency is at that point (a G1 join).
+    /// common end point, a coincident constraint, or a point held on a curve
+    /// by point-on-curve, midpoint or collinear constraints, mitcad#2006),
+    /// the tangency is at that point (a G1 join).
     Tangent(EntityId, EntityId),
     /// Curvature continuity (G2) where a spline joins a line, an arc or
     /// another spline at a shared end point: tangent there and with equal

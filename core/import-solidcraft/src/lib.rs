@@ -54,8 +54,8 @@ use mitcad_solidcraft::{Design, Feature, SolidcraftFile};
 use serde_json::Value;
 
 pub use report::{
-    BodyReport, CheckReport, FeatureReport, JointReport, Outcome, ParameterReport, SketchReport,
-    SolidcraftReport,
+    BodyReport, CheckReport, FeatureReport, JointReport, NewerReport, Outcome, ParameterReport,
+    SketchReport, SolidcraftReport,
 };
 // A design's file: its extensions (`.sc`, `.solidcraft`, `.solvecraft`)
 // and the format key check of a `.sc` file, which other programs use too
@@ -104,6 +104,12 @@ pub fn import_solidcraft_file<K: Kernel>(
         upgrades: file.upgrades.clone(),
         container: file.container,
         units: file.design.units.clone(),
+        // A newer SolidCraft's design, read as far as this import reads it
+        // (mitcad#1994).
+        newer: file
+            .newer
+            .as_ref()
+            .map(|n| NewerReport::new(n, file.left_out.clone())),
         ..SolidcraftReport::default()
     };
     let design = file.design;
@@ -258,6 +264,35 @@ impl<K: Kernel> Importer<'_, '_, K> {
                 "a point cloud (scanned reference points): not mapped".to_owned()
             } else {
                 format!("{clouds} point clouds (scanned reference points): not mapped")
+            });
+        }
+        // Placements typed as expressions (formats 56 and 57): placed where
+        // the file saved them.
+        let expressed = self
+            .design
+            .occurrences
+            .iter()
+            .filter(|o| !o.expressed_moves.is_empty())
+            .count();
+        if expressed > 0 {
+            // One and several as whole messages (mitcad#1999).
+            self.report.notes.push(if expressed == 1 {
+                "an occurrence placed where the file saved it: its moves typed as expressions are not kept"
+                    .to_owned()
+            } else {
+                format!(
+                    "{expressed} occurrences placed where the file saved them: their moves typed as expressions are not kept"
+                )
+            });
+        }
+        // Notes anchored in the model (format 52): MitCad keeps no such
+        // text.
+        let notes = self.design.notes.len();
+        if notes > 0 {
+            self.report.notes.push(if notes == 1 {
+                "a note (text anchored to a point in the model): not mapped".to_owned()
+            } else {
+                format!("{notes} notes (text anchored to a point in the model): not mapped")
             });
         }
         if let Some(position) = marker

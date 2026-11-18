@@ -65,6 +65,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
 
     fn patch(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
         let p: k::Patch = f.typed()?;
+        // Loops of a sketch's 3D curves (format 52), which this import does
+        // not bring in.
+        if !p.profiles_3d.is_empty() {
+            return Err(NotMapped::Unmapped(
+                "it patches loops of a sketch's 3D curves, which this import does not bring in"
+                    .to_owned(),
+            ));
+        }
         let mut notes = Vec::new();
         let mut def = json!({"type": "patch"});
         if let Some(sketch) = p.sketch {

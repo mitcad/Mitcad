@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <functional>
+#include <utility>
 #include <vector>
 
 #include <QCoreApplication>
@@ -38,6 +40,9 @@ class ValueLine;
 // "…, under their names: <name>, …" and "…, cut: <name> (<needed> of
 // <width>)". A click on a header logs "Panel <command> result group <n>
 // folded|unfolded", Copy "Panel <command> result copied <name>: <value>".
+// A row with places (Inspection::Value::places, mitcad#1979) calls
+// setRowHovered's function with its key while the pointer comes over it
+// (true) and leaves it (false).
 class ResultRows : public QFrame {
   Q_DECLARE_TR_FUNCTIONS(mitcad::ResultRows)
 
@@ -55,6 +60,9 @@ public:
   // values: …", "Panel <command> result <group title>: …"); the AppKit
   // command form logs its rows with them too (mitcad#1354).
   static void logRows(const QString& command, const Inspection& result);
+  // Called with a row's key ("Minimum distance", "1 Radius") as the
+  // pointer comes over a row that has places and leaves it.
+  void setRowHovered(std::function<void(const QString&, bool)> hovered) { m_rowHovered = std::move(hovered); }
 
 private:
   struct Row {
@@ -77,6 +85,7 @@ private:
   std::vector<QWidget*> m_bodies;
   std::vector<bool> m_folded; // by group, kept across answers
   QWidget* m_content = nullptr; // made again for each answer
+  std::function<void(const QString&, bool)> m_rowHovered;
 };
 
 } // namespace mitcad

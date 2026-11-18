@@ -1,0 +1,18 @@
+{
+  "comment": "Worked out by hand (mitcad#1994), format 57 as SolidCraft 0.43.0 reads it: a 40 x 20 rectangle extruded on two sides with entered distances -2 and 6 (Direction fixes the sides, a sign turns its own side over: from z = -6 to -2, 3200); two pins of radius 3 and 10 high joined on its top (2 * 90 pi); a hole of 4.2 through it with a cosmetic M5 of class 6H (no geometry): 17.64 pi; a counterbored hole of 3 through, its bore 6 wide and 1 deep: 9 pi + 6.75 pi; one cosmetic M6 thread feature on both pins (no geometry). The slab: 3200 + 146.61 pi = 3660.5889. A ring: a 4 x 10 rectangle 6 to 10 from a fixed axis whose origin is the parameter cx (60) turned a full turn: 640 pi = 2010.6193; a collar: a 2 x 10 rectangle 4 to 6 from a line of another sketch turned a full turn: 200 pi = 628.3185; a 10 mm cube placed by its center (100, 0, 0): 1000. Total 7299.5267.",
+  "body_count": 4,
+  "total": {"volume_mm3": 7299.5267},
+  "bbox": {"min": [0, -5, -10], "max": [105, 20, 10]},
+  "bodies": [
+    {"name": "Slab", "volume_mm3": 3660.5889, "bbox": {"min": [0, 0, -6], "max": [40, 20, 8]}},
+    {"name": "Ring", "volume_mm3": 2010.6193, "bbox": {"min": [50, 0, -10], "max": [70, 10, 10]}},
+    {"name": "Collar", "volume_mm3": 628.3185, "bbox": {"min": [74, 0, -6], "max": [86, 10, 6]}},
+    {"name": "Cube", "volume_mm3": 1000, "bbox": {"min": [95, -5, -5], "max": [105, 5, 5]}}
+  ],
+  "timeline": [
+    {"name": "Base"}, {"name": "Slab"}, {"name": "Pin1"}, {"name": "Pin2"}, {"name": "Tapped"},
+    {"name": "Counterbored"}, {"name": "Pin threads"}, {"name": "Ring profile"}, {"name": "Ring"},
+    {"name": "Axis"}, {"name": "Collar profile"}, {"name": "Collar"}, {"name": "Cube"}
+  ],
+  "parametric": 9
+}

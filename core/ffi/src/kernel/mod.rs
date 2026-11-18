@@ -1969,6 +1969,7 @@ impl Kernel for OcctKernel {
             &spec.feature.to_string(),
             occt(spec.body)?,
             &surfaces::patch_loop(spec),
+            &surfaces::patch_curves(spec),
         )
         .map_err(failed)
     }
@@ -2355,10 +2356,21 @@ impl Kernel for OcctKernel {
         shapes: &[&Self::Shape],
         spec: &mitcad_model::drawing::ViewSpec,
     ) -> Result<mitcad_model::drawing::ViewProjection, KernelError> {
-        let list = shape_list(shapes)?;
-        drawing::ffi::project_view(&list, &drawing::view(spec))
-            .map(|drawn| drawing::projection(&drawn))
-            .map_err(failed)
+        // OCCT's hidden-line removal looks at no progress range, and a
+        // large view's takes minutes: a Cancel gives the call up
+        // (mitcad#1997, as a fillet's, mitcad#1917).
+        let shapes: Vec<SharedPtr<Shape>> = shapes.iter().map(|s| (*s).clone()).collect();
+        for shape in &shapes {
+            occt(shape)?;
+        }
+        let view = drawing::view(spec);
+        abandon::abandonable(move || {
+            let refs: Vec<&SharedPtr<Shape>> = shapes.iter().collect();
+            let list = shape_list(&refs)?;
+            drawing::ffi::project_view(&list, &view)
+                .map(|drawn| drawing::projection(&drawn))
+                .map_err(failed)
+        })
     }
 
     fn round_holes(
@@ -3276,6 +3288,17 @@ impl Kernel for OcctKernel {
         spec: &mitcad_model::flex_drape::DrapeNodesSpec<'_, Self::Shape>,
     ) -> Result<mitcad_model::flex_drape::DrapeNodes, KernelError> {
         flex_drape::nodes(spec)
+    }
+
+    // Many shapes' boxes at once (mitcad#1997; query.rs).
+
+    fn bounding_boxes(
+        &self,
+        shapes: &[&Self::Shape],
+    ) -> Result<Vec<Option<BoundingBox>>, KernelError> {
+        let list = shape_list(shapes)?;
+        let boxes = query::ffi::bounding_boxes(&list).map_err(failed)?;
+        Ok(boxes.into_iter().map(item_box).collect())
     }
 }
 

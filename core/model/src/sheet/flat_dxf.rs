@@ -219,6 +219,128 @@ pub fn drawing(
     Ok(crate::exchange::dxf_in_unit(drawing, options.unit))
 }
 
+/// A piece of a Flat Pattern's outline as a cut sheet takes it
+/// (mitcad#1980), in flat coordinates, mm.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FlatPiece {
+    Line([f64; 2], [f64; 2]),
+    /// Counter-clockwise from `start` (radians) by `sweep`; a whole circle
+    /// sweeps 2 pi.
+    Arc {
+        center: [f64; 2],
+        radius: f64,
+        start: f64,
+        sweep: f64,
+    },
+    /// A curve that is no line or circle (an ellipse, a B-spline), as
+    /// points along it.
+    Polyline(Vec<[f64; 2]>),
+}
+
+/// A closed loop of a Flat Pattern's outline: the exterior of a region
+/// (`outer`) or one of its holes. Its pieces are in the outline's order;
+/// the cut sheet puts them end to end and turns the loop as it needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatLoop {
+    pub outer: bool,
+    pub pieces: Vec<FlatPiece>,
+}
+
+/// How many points a curve that is no line or circle gets per mm of its
+/// chord, at least [`MIN_SAMPLES`] and at most [`MAX_SAMPLES`].
+const SAMPLES_PER_MM: f64 = 2.0;
+const MIN_SAMPLES: usize = 16;
+const MAX_SAMPLES: usize = 512;
+
+/// The outline of a valid Flat Pattern's `regions` as a cut sheet takes
+/// it (mitcad#1980): each region's exterior and holes, consecutive pieces
+/// of one line or circle joined as the DXF drawing joins them; a curve
+/// that is no line or circle as points along it.
+pub fn outline_loops(regions: &[MaterialRegion]) -> Result<Vec<FlatLoop>, String> {
+    let mut out = Vec::new();
+    for (r, region) in regions.iter().enumerate() {
+        for (l, contour) in region.loops.iter().enumerate() {
+            let mut exact: Vec<SegmentGeometry> = Vec::new();
+            let mut curved = false;
+            let mut pieces: Vec<FlatPiece> = Vec::new();
+            for edge in &contour.edges {
+                let piece = edge
+                    .curve
+                    .geometry_piece()
+                    .map_err(|e| format!("contour {l} of region {r}: {e}"))?;
+                match piece {
+                    SegmentGeometry::Line { .. }
+                    | SegmentGeometry::Arc { .. }
+                    | SegmentGeometry::Circle { .. } => {
+                        exact.push(piece.clone());
+                        pieces.push(flat_piece(&piece).expect("a line or an arc"));
+                    }
+                    _ => {
+                        curved = true;
+                        let (t0, t1) = (edge.curve.range.first, edge.curve.range.last);
+                        let (a, b) = edge
+                            .curve
+                            .ends()
+                            .map_err(|e| format!("contour {l} of region {r}: {e}"))?;
+                        let chord = dist(a, b).max(1.0);
+                        let n = ((chord * SAMPLES_PER_MM) as usize).clamp(MIN_SAMPLES, MAX_SAMPLES);
+                        let points = (0..=n)
+                            .map(|i| edge.curve.point(t0 + (t1 - t0) * i as f64 / n as f64))
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(|e| format!("contour {l} of region {r}: {e}"))?;
+                        pieces.push(FlatPiece::Polyline(points));
+                    }
+                }
+            }
+            // Lines and arcs split at chart seams joined again, as in the
+            // DXF drawing; a loop with other curves keeps its pieces.
+            if !curved {
+                pieces = joined(exact).iter().filter_map(flat_piece).collect();
+            }
+            out.push(FlatLoop {
+                outer: l == 0,
+                pieces,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// A line, arc or circle as a piece of a cut sheet's outline.
+fn flat_piece(geometry: &SegmentGeometry) -> Option<FlatPiece> {
+    match geometry {
+        SegmentGeometry::Line { start, end } => Some(FlatPiece::Line(*start, *end)),
+        SegmentGeometry::Arc {
+            center,
+            radius,
+            start_angle,
+            end_angle,
+        } => {
+            let mut sweep = (end_angle - start_angle).rem_euclid(TAU);
+            if sweep < 1e-12 {
+                sweep = TAU;
+            }
+            Some(FlatPiece::Arc {
+                center: *center,
+                radius: *radius,
+                start: *start_angle,
+                sweep,
+            })
+        }
+        SegmentGeometry::Circle {
+            center,
+            radius,
+            start,
+        } => Some(FlatPiece::Arc {
+            center: *center,
+            radius: *radius,
+            start: *start,
+            sweep: TAU,
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "flat_dxf_tests.rs"]
 mod tests;

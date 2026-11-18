@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -38,6 +39,7 @@
 #include <gp_Pnt2d.hxx>
 
 #include "mitcad/analysis/common.hpp"
+#include "mitcad/geometry/trimmed_box.hpp"
 #include "util.hpp"
 
 namespace mitcad::geometry {
@@ -95,59 +97,6 @@ const char* curve_type(const TopoDS_Edge& edge) {
   default:
     return "other";
   }
-}
-
-// BRepBndLib::AddOptimal(shape, box, false, false) with the faces on all
-// cores: the optimal box of a spline face is a search over its surface,
-// seconds for a body of thousands of faces (through-all extrusions ask for
-// the box of each new body). The same box: AddOptimal takes the union of
-// its faces' boxes, then adds the edges not in faces and the vertices not
-// in edges, which are added here as it adds them.
-Bnd_Box optimal_box(const TopoDS_Shape& shape) {
-  std::vector<TopoDS_Shape> faces;
-  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
-    faces.push_back(it.Current());
-  }
-  std::vector<Bnd_Box> boxes(faces.size());
-  std::vector<std::exception_ptr> errors(faces.size());
-  OSD_Parallel::For(
-      0, static_cast<int>(faces.size()),
-      [&](int i) {
-        const auto k = static_cast<std::size_t>(i);
-        try {
-          BRepBndLib::AddOptimal(faces[k], boxes[k], false, false);
-        } catch (...) {
-          errors[k] = std::current_exception();
-        }
-      },
-      faces.size() < 8);
-  Bnd_Box box;
-  for (std::size_t k = 0; k < faces.size(); ++k) {
-    if (errors[k]) {
-      std::rethrow_exception(errors[k]);
-    }
-    if (!boxes[k].IsVoid()) {
-      double xmin = 0, ymin = 0, zmin = 0, xmax = 0, ymax = 0, zmax = 0;
-      boxes[k].Get(xmin, ymin, zmin, xmax, ymax, zmax);
-      box.Update(xmin, ymin, zmin, xmax, ymax, zmax);
-    }
-  }
-  BRep_Builder builder;
-  TopoDS_Compound rest;
-  builder.MakeCompound(rest);
-  bool any = false;
-  for (TopExp_Explorer it(shape, TopAbs_EDGE, TopAbs_FACE); it.More(); it.Next()) {
-    builder.Add(rest, it.Current());
-    any = true;
-  }
-  for (TopExp_Explorer it(shape, TopAbs_VERTEX, TopAbs_EDGE); it.More(); it.Next()) {
-    builder.Add(rest, it.Current());
-    any = true;
-  }
-  if (any) {
-    BRepBndLib::AddOptimal(rest, box, false, false);
-  }
-  return box;
 }
 
 } // namespace
@@ -238,7 +187,9 @@ BoundingBox bounding_box(const Shape& shape) {
       result.max = gp_Pnt(b[3], b[4], b[5]);
       return result;
     }
-    Bnd_Box box = optimal_box(shape.occt());
+    // The trimmed faces' box, not their surfaces' over the parameters
+    // their boundaries span (mitcad#2020); faces on all cores.
+    Bnd_Box box = trimmed_box(shape.occt());
     if (box.IsVoid()) {
       // A mesh body has only triangulations.
       BRepBndLib::Add(shape.occt(), box, true);
@@ -254,6 +205,45 @@ BoundingBox bounding_box(const Shape& shape) {
     shape.set_bounds({xmin, ymin, zmin, xmax, ymax, zmax});
     return result;
   });
+}
+
+std::vector<BoundingBox> bounding_boxes(const std::vector<std::shared_ptr<Shape>>& shapes) {
+  // Each shape once: bounding_box keeps its box on the shape.
+  std::vector<const Shape*> distinct;
+  std::map<const Shape*, std::size_t> index;
+  std::vector<std::size_t> slot(shapes.size(), 0);
+  for (std::size_t i = 0; i < shapes.size(); ++i) {
+    const Shape* shape = shapes[i].get();
+    const auto [at, added] = index.emplace(shape, distinct.size());
+    if (added) {
+      distinct.push_back(shape);
+    }
+    slot[i] = at->second;
+  }
+  std::vector<BoundingBox> boxes(distinct.size());
+  std::vector<std::exception_ptr> errors(distinct.size());
+  OSD_Parallel::For(
+      0, static_cast<int>(distinct.size()),
+      [&](int i) {
+        const auto k = static_cast<std::size_t>(i);
+        try {
+          if (distinct[k] != nullptr) {
+            boxes[k] = bounding_box(*distinct[k]);
+          }
+        } catch (...) {
+          errors[k] = std::current_exception();
+        }
+      },
+      distinct.size() < 2);
+  std::vector<BoundingBox> result;
+  result.reserve(shapes.size());
+  for (std::size_t i = 0; i < shapes.size(); ++i) {
+    if (errors[slot[i]]) {
+      std::rethrow_exception(errors[slot[i]]);
+    }
+    result.push_back(boxes[slot[i]]);
+  }
+  return result;
 }
 
 BoundingBox enclosing_box(const Shape& shape) {
@@ -297,13 +287,18 @@ BoundingBox enclosing_box(const Shape& shape) {
 
 namespace {
 
-// The tight box of one face or edge; a mesh face's from its triangles.
+// The tight box of one face (its trimmed face's, mitcad#2020) or edge; a
+// mesh face's from its triangles.
 BoundingBox item_box(const TopoDS_Shape& item) {
   if (item.IsNull()) {
     return {};
   }
   Bnd_Box box;
-  BRepBndLib::AddOptimal(item, box, false, false);
+  if (item.ShapeType() == TopAbs_FACE) {
+    box = trimmed_face_box(TopoDS::Face(item));
+  } else {
+    BRepBndLib::AddOptimal(item, box, false, false);
+  }
   if (box.IsVoid()) {
     BRepBndLib::Add(item, box, true);
   }

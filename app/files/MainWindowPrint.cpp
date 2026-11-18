@@ -103,6 +103,15 @@ QString filamentNow() { return choiceHeadingPrefix() + QStringLiteral("__filamen
 // row's material.
 const char* kEditMaterials = "__edit_materials";
 
+// A body's material row and the job's All bodies box (mitcad#2008):
+// "None (slicer's own)", the body sent without a material, the slicer's own
+// filament. With every body None the send is geometry only.
+const char* kNoMaterial = "__none";
+// The All bodies box's value while nothing is being chosen: the bodies'
+// common material, or Mixed (a state, not a material; Command.hpp,
+// choiceHeadingPrefix).
+QString jobMaterialNow() { return choiceHeadingPrefix() + QStringLiteral("__job"); }
+
 // The bodies go on the print bed by their print bed faces (mitcad#731),
 // else by the automatic orientation, centred on the plate and dropped onto
 // the bed as Center on Plate and Drop to Bed say (mitcad#1109).
@@ -215,6 +224,17 @@ struct PrintPanel {
   // tooltip as last logged.
   SentProcess process;
   QString processLogged;
+  // The print job (mitcad#2008): None (slicer's own) for every body, chosen
+  // by None and Set to all (geometry only; the design's materials stay),
+  // the model's `print_job` answer for the bodies sent and the dialect, and
+  // its delivery line as last logged.
+  bool jobNone = false;
+  QJsonObject job;
+  QString jobLogged;
+  // The design's slicer as last read (designDialect): what the rows use
+  // while a job computes the model, so that no row reads the design then
+  // and makes the bed plan give way.
+  QString designDialect;
 };
 
 // The 3MF export's `occurrences` (mitcad#856): each body's placements
@@ -551,7 +571,8 @@ CommandDef MainWindow::print3dCommand() {
   };
   const auto choices = [rowsOf](const QString& kind) {
     const QVector<ProfilePickerRow> rows = rowsOf(kind);
-    QVector<QPair<QString, QString>> options{{QString(), tr("Slicer default")}};
+    // None: the slicer's own (mitcad#2008), not a default of MitCad's.
+    QVector<QPair<QString, QString>> options{{QString(), tr("None (slicer's own)")}};
     for (const ProfilePickerRow& row : rows) {
       options.append({row.key, row.name});
     }
@@ -651,7 +672,7 @@ CommandDef MainWindow::print3dCommand() {
       const QString owner = profile.value(QStringLiteral("owner")).toString();
       const LibraryItem* row = findDesignCopy(processes, id);
       QString key;
-      QString name = tr("Slicer default");
+      QString name = tr("None (slicer's own)");
       if (!id.isEmpty()) {
         key = row != nullptr ? row->key() : QStringLiteral("design/") + id;
         name = row != nullptr ? row->name : profile.value(QStringLiteral("name")).toString(id);
@@ -1337,14 +1358,39 @@ CommandDef MainWindow::print3dCommand() {
                              .arg(placement.center ? QStringLiteral("on") : QStringLiteral("off"),
                                   placement.drop ? QStringLiteral("on") : QStringLiteral("off"));
   };
-  // The bodies printed grouped by material (mitcad#1141): one row each,
+  // The slicer a 3MF is written for, as Send chooses it (sendToSlicer):
+  // the Open in slicer's dialect, else the design's; empty without one.
+  // The design's is read only while no job computes the model: the bed
+  // plan in the background (mitcad#1121) would give way to the read; the
+  // one read last meanwhile.
+  const auto sendDialect = [this, panel](const CommandState& state) {
+    QString dialect = slicerDialect(slicerOfChoice(state.choice(QStringLiteral("slicer"))));
+    if (dialect.isEmpty()) {
+      if (!modelBusy()) {
+        panel->designDialect = designDialect();
+      }
+      dialect = panel->designDialect;
+    }
+    return dialect;
+  };
+  // Cura takes no printer or materials (mitcad#2008): their choices are
+  // disabled, Cura's own selection prints.
+  const auto curaChosen = [threeMf, sendDialect](const CommandState& state) {
+    return threeMf(state) && sendDialect(state) == QStringLiteral("cura");
+  };
+  // The bodies printed, one row each (mitcad#2008, the print job's list),
   // read again when the bodies or the model change; the materials the
-  // pickers list with them. Logged as the rows show them: "3D Print
-  // materials: Filament 1: PETG (2 bodies) | Filament 2: TPU (1 body)".
-  const auto filamentsNow = [this, panel](const CommandState& state) -> const QVector<FilamentGroup>& {
+  // pickers list with them. Each row shows what the body is sent with: the
+  // model's `print_job` answer (its own or its component's material, the
+  // first body's where some have one and others none, None (slicer's own)
+  // without any or after None and Set to all). Logged as the rows show
+  // them: "3D Print materials: Body1: PETG | Body2: None (slicer's own)".
+  const auto filamentsNow = [this, panel, sendDialect](const CommandState& state) -> const QVector<FilamentGroup>& {
     const QStringList bodies = printedBodies(state);
+    const QString dialect = sendDialect(state);
     // The printer chosen picks the materials' variants (mitcad#1054).
-    const QString key = bodies.join(QLatin1Char(',')) + QLatin1Char('|') + state.choice(QStringLiteral("printer"));
+    const QString key = bodies.join(QLatin1Char(',')) + QLatin1Char('|') + state.choice(QStringLiteral("printer")) +
+                        QLatin1Char('|') + dialect + (panel->jobNone ? QStringLiteral("|none") : QString());
     // While a job computes the model (the bed plan in the background,
     // mitcad#1121) the rows show what was read last: read again after it.
     if ((!panel->materialsStale && panel->materialsFor == key) || modelBusy()) {
@@ -1383,15 +1429,62 @@ CommandDef MainWindow::print3dCommand() {
       }
       rows.append(row);
     }
-    panel->filaments = filamentGroups(rows);
+    // What the job sends (mitcad#2008): the model's list rules, None for
+    // every body after None and Set to all.
+    QJsonObject jobQuery{{QStringLiteral("query"), QStringLiteral("print_job")},
+                         {QStringLiteral("bodies"), QJsonArray::fromStringList(bodies)},
+                         {QStringLiteral("dialect"), dialect.isEmpty() ? QStringLiteral("bambu_studio") : dialect}};
+    if (panel->jobNone) {
+      QJsonObject none;
+      for (const QString& uid : bodies) {
+        none.insert(uid, QJsonValue::Null);
+      }
+      jobQuery.insert(QStringLiteral("materials"), none);
+    }
+    try {
+      panel->job = bodies.isEmpty() ? QJsonObject() : queryObject(jobQuery);
+    } catch (const std::exception&) {
+      panel->job = QJsonObject();
+      complete = false;
+    }
+    for (const QJsonValue& value : panel->job.value(QStringLiteral("bodies")).toArray()) {
+      const QJsonObject sent = value.toObject();
+      for (BodyMaterial& row : rows) {
+        if (row.body != sent.value(QStringLiteral("body")).toString()) {
+          continue;
+        }
+        const QString material = sent.value(QStringLiteral("material")).toString();
+        if (material.isEmpty()) {
+          row.chosen = false;
+        } else if (!row.chosen || row.id != material) {
+          row.id = material;
+          row.name = shownMaterialName(material, sent.value(QStringLiteral("material_name")).toString());
+          row.chosen = true;
+          row.variant.clear();
+        }
+      }
+    }
+    // One row per body, in the order sent.
+    QVector<FilamentGroup> groups;
+    for (const BodyMaterial& row : std::as_const(rows)) {
+      FilamentGroup group;
+      group.id = row.id;
+      group.name = row.name;
+      group.chosen = row.chosen;
+      group.variant = row.variant;
+      group.preset = row.preset;
+      group.bodies << row.body;
+      group.bodyNames << row.bodyName;
+      groups.append(group);
+    }
+    panel->filaments = groups;
     panel->materials = queryLibraryItems(model(), QStringLiteral("material"), projectFolder());
     panel->materialRows = materialPickerRows(panel->materials);
     panel->materialsFor = key;
     panel->materialsStale = !complete;
-    const int count = static_cast<int>(panel->filaments.size());
     QStringList shown;
-    for (int i = 0; i < count; ++i) {
-      shown << QStringLiteral("%1: %2").arg(filamentRowLabel(i, count), filamentRowText(panel->filaments.at(i), count));
+    for (const FilamentGroup& group : std::as_const(panel->filaments)) {
+      shown << QStringLiteral("%1: %2").arg(group.bodyNames.value(0), bodyRowText(group));
     }
     const QString logged = shown.isEmpty() ? QStringLiteral("none") : shown.join(QStringLiteral(" | "));
     if (logged != panel->materialsLogged) {
@@ -1400,17 +1493,63 @@ CommandDef MainWindow::print3dCommand() {
     }
     return panel->filaments;
   };
-  // A material row's choice (mitcad#1141): a material given to the row's
-  // bodies at once, one undo step, as the Material tool and Material ▸ give
-  // it (a library's copied into the design by the same step; an appearance
-  // set by hand asked about); Edit materials… opens the Materials window on
-  // the row's material. The row then shows its bodies again; Cancel does
-  // not take the material back.
-  const auto chooseMaterial = [this, panel, filamentsNow](int index, CommandState& state) {
+  // A material given to bodies (mitcad#1141): at once, one undo step, as
+  // the Material tool and Material ▸ give it (a library's copied into the
+  // design by the same step; an appearance set by hand asked about). The
+  // rows then show their bodies again; Cancel does not take it back.
+  const auto assignMaterial = [this, panel](const LibraryItem& item, const QStringList& bodies,
+                                            const QStringList& names) {
+    if (!canChangePrintSettings()) {
+      showError(changeBlockedReason());
+      return false;
+    }
+    const QString project = projectFolder();
+    QJsonArray bodyRows;
+    QJsonArray designMaterials;
+    try {
+      bodyRows = queryArray(QStringLiteral("bodies"));
+      designMaterials = queryArray(QStringLiteral("materials"));
+    } catch (const std::exception&) {
+      // No appearance set by hand is known: none is asked about.
+    }
+    const QStringList offered = materialAppearances(designFields(item, designMaterials, QJsonObject()));
+    const BodyMaterialCommands assignment = bodyMaterialCommands(this, &item, offered, bodyRows, bodies, project);
+    if (assignment.cancelled || assignment.commands.isEmpty()) {
+      return false;
+    }
+    // One undo step, named as the Material tool's: Set Material of Body1,
+    // or Material.
+    const QJsonArray& commands = assignment.commands;
+    const bool done = commands.size() == 1 ? runModelCommand(commands.first().toObject())
+                                           : runModelCommands(commands, tr("Material"));
+    panel->materialsStale = true;
+    if (!done) {
+      return false;
+    }
+    // A material chosen: the job carries materials again (mitcad#2008).
+    panel->jobNone = false;
+    rememberRecentMaterial(item.place, item.key());
+    qInfo().noquote() << QStringLiteral("3D Print material: %1 for %2").arg(item.name, names.join(QStringLiteral(", ")));
+    qInfo().noquote() << QStringLiteral("Material %1 set for %2 body(ies), appearance %3")
+                             .arg(item.designId().isEmpty() ? item.id : item.designId())
+                             .arg(bodies.size())
+                             .arg(assignment.appearance);
+    return true;
+  };
+  // A body row's choice (mitcad#2008, the print job's list rules, the
+  // model's `print_files::choose`): a material for one body while every
+  // body is None goes to every body; with materials chosen, to that body
+  // alone. None for one body while another carries a material is refused
+  // in words (the slicer's project cannot leave one body to the slicer);
+  // None of a job of one body sends it as geometry only. Edit materials…
+  // opens the Materials window on the row's material.
+  const auto chooseMaterial = [this, panel, filamentsNow, assignMaterial, sendDialect](int index,
+                                                                                       CommandState& state) {
     const QString key = filamentRowKey(index);
     const QString value = state.choice(key);
     state.setChoice(key, filamentNow());
-    const QVector<FilamentGroup>& groups = filamentsNow(state);
+    state.setChoice(QStringLiteral("material_all"), jobMaterialNow());
+    const QVector<FilamentGroup> groups = filamentsNow(state);
     if (index >= groups.size() || value == filamentNow() || value.startsWith(choiceHeadingPrefix()) ||
         isChoiceSeparator(value)) {
       return;
@@ -1422,61 +1561,80 @@ CommandDef MainWindow::print3dCommand() {
       m_controller->openMaterialsOf(group.bodies);
       return;
     }
+    const bool noneYet = std::none_of(groups.begin(), groups.end(), [](const FilamentGroup& g) { return g.chosen; });
+    if (value == QLatin1String(kNoMaterial)) {
+      if (!group.chosen) {
+        return;
+      }
+      // The model's rule and its words.
+      QJsonObject materials;
+      QStringList bodies;
+      for (const FilamentGroup& g : groups) {
+        bodies << g.bodies.value(0);
+        materials.insert(g.bodies.value(0), g.chosen ? QJsonValue(g.id) : QJsonValue(QJsonValue::Null));
+      }
+      const QString dialect = sendDialect(state);
+      QString refused;
+      try {
+        refused = queryObject({{QStringLiteral("query"), QStringLiteral("print_job")},
+                               {QStringLiteral("bodies"), QJsonArray::fromStringList(bodies)},
+                               {QStringLiteral("dialect"), dialect.isEmpty() ? QStringLiteral("bambu_studio") : dialect},
+                               {QStringLiteral("materials"), materials},
+                               {QStringLiteral("choose"),
+                                QJsonObject{{QStringLiteral("body"), group.bodies.value(0)},
+                                            {QStringLiteral("material"), QJsonValue::Null}}}})
+                      .value(QStringLiteral("refused"))
+                      .toString();
+      } catch (const std::exception&) {
+        return;
+      }
+      if (!refused.isEmpty()) {
+        qInfo().noquote() << QStringLiteral("3D Print material refused: %1").arg(refused);
+        showError(mitcad::modelMessage(refused));
+        return;
+      }
+      panel->jobNone = true;
+      panel->materialsStale = true;
+      qInfo().noquote() << QStringLiteral("3D Print material: None (slicer's own) for %1")
+                               .arg(group.bodyNames.join(QStringLiteral(", ")));
+      return;
+    }
     const LibraryItem* found = findItem(panel->materials, value);
     if (found == nullptr) {
       return;
     }
-    if (!canChangePrintSettings()) {
-      showError(changeBlockedReason());
-      return;
+    // The first material chosen fills every body without one.
+    QStringList bodies = group.bodies;
+    QStringList names = group.bodyNames;
+    if (noneYet || panel->jobNone) {
+      bodies.clear();
+      names.clear();
+      for (const FilamentGroup& g : groups) {
+        bodies << g.bodies;
+        names << g.bodyNames;
+      }
     }
     const LibraryItem item = *found;
-    const QString project = projectFolder();
-    QJsonArray bodyRows;
-    QJsonArray designMaterials;
-    try {
-      bodyRows = queryArray(QStringLiteral("bodies"));
-      designMaterials = queryArray(QStringLiteral("materials"));
-    } catch (const std::exception&) {
-      // No appearance set by hand is known: none is asked about.
-    }
-    const QStringList offered = materialAppearances(designFields(item, designMaterials, QJsonObject()));
-    const BodyMaterialCommands assignment = bodyMaterialCommands(this, &item, offered, bodyRows, group.bodies, project);
-    if (assignment.cancelled || assignment.commands.isEmpty()) {
-      return;
-    }
-    // One undo step, named as the Material tool's: Set Material of Body1,
-    // or Material.
-    const QJsonArray& commands = assignment.commands;
-    const bool done = commands.size() == 1 ? runModelCommand(commands.first().toObject())
-                                           : runModelCommands(commands, tr("Material"));
-    panel->materialsStale = true;
-    if (!done) {
-      return;
-    }
-    rememberRecentMaterial(item.place, item.key());
-    qInfo().noquote() << QStringLiteral("3D Print material: %1 for %2")
-                             .arg(item.name, group.bodyNames.join(QStringLiteral(", ")));
-    qInfo().noquote() << QStringLiteral("Material %1 set for %2 body(ies), appearance %3")
-                             .arg(item.designId().isEmpty() ? item.id : item.designId())
-                             .arg(group.bodies.size())
-                             .arg(assignment.appearance);
+    assignMaterial(item, bodies, names);
   };
-  // The material rows (mitcad#1141): "Material" with one material, else
-  // "Filament 1", "Filament 2", … (the 3MF's filaments), each showing its
-  // material and how many bodies print with it, "No material: choose one"
-  // for the bodies without one (what the slicer gets meanwhile in the
-  // tooltip). Opened, a searchable picker (the Printer and Process rows',
-  // mitcad#1108) of the materials with their swatches, the FDM plastics
-  // first, grouped by where they live, the row's material tagged Current;
-  // last, below a line, Edit materials….
+  // The material rows (mitcad#1141, mitcad#2008): one per body of the job,
+  // labelled with its name, showing the material it is sent with or None
+  // (slicer's own). Opened, a searchable picker (the Printer and Process
+  // rows', mitcad#1108): None (slicer's own) first, then the materials with
+  // their swatches, the FDM plastics first, grouped by where they live, the
+  // row's material tagged Current; last, below a line, Edit materials….
+  // Disabled for Cura, which prints with its own materials.
+  const auto materialsEnabled = [threeMf, curaChosen](const CommandState& state) {
+    return threeMf(state) && !curaChosen(state);
+  };
   std::vector<InputDef> materialRows;
   for (int index = 0; index < kFilamentRows; ++index) {
     InputDef row =
         choiceInput(filamentRowKey(index), tr("Material"), {}, filamentNow())
-            .withTooltip(tr("The material the bodies print with"))
+            .withTooltip(tr("The material the body is sent with"))
             .withLabel([filamentsNow, index](const CommandState& state) {
-              return filamentRowLabel(index, static_cast<int>(filamentsNow(state).size()));
+              const QVector<FilamentGroup>& groups = filamentsNow(state);
+              return index < static_cast<int>(groups.size()) ? groups.at(index).bodyNames.value(0) : tr("Material");
             })
             .withVisible([filamentsNow, index](const CommandState& state) {
               return index < static_cast<int>(filamentsNow(state).size());
@@ -1489,7 +1647,8 @@ CommandDef MainWindow::print3dCommand() {
                 return options;
               }
               // The row's state first; its label is the field's tooltip.
-              options.append({filamentNow(), filamentRowTooltip(groups.at(index))});
+              options.append({filamentNow(), bodyRowTooltip(groups.at(index))});
+              options.append({QString::fromLatin1(kNoMaterial), tr("None (slicer's own)")});
               QString heading;
               for (const MaterialPickerRow& material : std::as_const(panel->materialRows)) {
                 if (material.heading != heading) {
@@ -1510,8 +1669,9 @@ CommandDef MainWindow::print3dCommand() {
                 return rows;
               }
               const FilamentGroup& group = groups.at(index);
-              rows.append(
-                  ChoicePickerRow{filamentNow(), QString(), filamentRowText(group, count), QString(), QString()});
+              rows.append(ChoicePickerRow{filamentNow(), QString(), bodyRowText(group), QString(), QString()});
+              rows.append(ChoicePickerRow{QString::fromLatin1(kNoMaterial), QString(), tr("None (slicer's own)"),
+                                          group.chosen ? QString() : tr("Current"), QString()});
               const LibraryItem* current = group.chosen ? findDesignCopy(panel->materials, group.id) : nullptr;
               for (const MaterialPickerRow& material : std::as_const(panel->materialRows)) {
                 const bool now = current != nullptr && current->key() == material.key;
@@ -1540,10 +1700,156 @@ CommandDef MainWindow::print3dCommand() {
             .withOnChange([chooseMaterial, index](CommandState& state, const CommandContext&) {
               chooseMaterial(index, state);
             })
-            .withEnabled(threeMf); // as the other print rows (mitcad#655)
+            .withEnabled(materialsEnabled); // as the other print rows (mitcad#655), not for Cura
     row.choiceImageSize = 16;
     materialRows.push_back(row);
   }
+  // The job's common material above the rows (mitcad#2008): the material
+  // every body is sent with, None (slicer's own), or Mixed; a choice here
+  // goes to every body with Set to all beside it (None and Set to all: the
+  // geometry only, the slicer's own printer, process and filaments).
+  const auto commonText = [panel](const CommandState&) {
+    const QJsonObject common = panel->job.value(QStringLiteral("common")).toObject();
+    if (common.value(QStringLiteral("mixed")).toBool()) {
+      return tr("Mixed");
+    }
+    const QString id = common.value(QStringLiteral("material")).toString();
+    if (id.isEmpty()) {
+      return tr("None (slicer's own)");
+    }
+    for (const QJsonValue& value : panel->job.value(QStringLiteral("bodies")).toArray()) {
+      const QJsonObject body = value.toObject();
+      if (body.value(QStringLiteral("material")).toString() == id) {
+        return shownMaterialName(id, body.value(QStringLiteral("material_name")).toString());
+      }
+    }
+    return id;
+  };
+  const auto severalBodies = [filamentsNow](const CommandState& state) { return filamentsNow(state).size() > 1; };
+  InputDef jobRow =
+      choiceInput(QStringLiteral("material_all"), tr("All bodies"), {}, jobMaterialNow())
+          .withTooltip(tr("A material for every body: choose it, then Set to all"))
+          .withVisible(severalBodies)
+          .withChoices([panel, filamentsNow, commonText](const CommandState& state) {
+            filamentsNow(state);
+            QVector<QPair<QString, QString>> options{{jobMaterialNow(), commonText(state)},
+                                                     {QString::fromLatin1(kNoMaterial), tr("None (slicer's own)")}};
+            QString heading;
+            for (const MaterialPickerRow& material : std::as_const(panel->materialRows)) {
+              if (material.heading != heading) {
+                heading = material.heading;
+                options.append({choiceHeadingPrefix() + heading, heading});
+              }
+              options.append({material.key, material.name});
+            }
+            return options;
+          })
+          .withChoicePicker([panel, filamentsNow, commonText](const CommandState& state) {
+            filamentsNow(state);
+            QVector<ChoicePickerRow> rows;
+            rows.append(ChoicePickerRow{jobMaterialNow(), QString(), commonText(state), QString(), QString()});
+            rows.append(
+                ChoicePickerRow{QString::fromLatin1(kNoMaterial), QString(), tr("None (slicer's own)"), QString(), QString()});
+            for (const MaterialPickerRow& material : std::as_const(panel->materialRows)) {
+              rows.append(ChoicePickerRow{material.key, material.heading, QString(), QString(), material.heading});
+            }
+            return rows;
+          })
+          .withChoiceImages([panel](const QString& value) {
+            for (const MaterialPickerRow& material : std::as_const(panel->materialRows)) {
+              if (material.key == value) {
+                return materialSwatch(material.color);
+              }
+            }
+            return QImage();
+          })
+          .withEnabled(materialsEnabled);
+  jobRow.choiceImageSize = 16;
+  InputDef setToAll =
+      noteInput(
+          QStringLiteral("material_all_set"),
+          [](const CommandState&) { return InputNote{QString(), {tr("Set to all")}, {}}; },
+          [this, panel, filamentsNow, assignMaterial](int, const CommandState& state, const CommandContext&) {
+            const QString value = state.choice(QStringLiteral("material_all"));
+            const QVector<FilamentGroup> groups = filamentsNow(state);
+            if (value.startsWith(choiceHeadingPrefix()) || groups.isEmpty()) {
+              return;
+            }
+            if (value == QLatin1String(kNoMaterial)) {
+              panel->jobNone = true;
+              panel->materialsStale = true;
+              qInfo().noquote() << QStringLiteral("3D Print material: None (slicer's own) set to all");
+              commandInputsChanged();
+              return;
+            }
+            const LibraryItem* found = findItem(panel->materials, value);
+            if (found == nullptr) {
+              return;
+            }
+            QStringList bodies;
+            QStringList names;
+            for (const FilamentGroup& g : groups) {
+              bodies << g.bodies;
+              names << g.bodyNames;
+            }
+            const LibraryItem item = *found;
+            if (assignMaterial(item, bodies, names)) {
+              qInfo().noquote() << QStringLiteral("3D Print material: %1 set to all").arg(item.name);
+            }
+          })
+          .withBesidePrevious()
+          .withVisible(severalBodies)
+          .withEnabled(materialsEnabled);
+  // What the job sends, before Send (mitcad#2008, the model's `print_job`
+  // answer): geometry only, or a print project and what of it comes from
+  // the slicer's defaults; for Cura, that its printer and materials are
+  // Cura's own and what chosen is left out. Logged as it changes.
+  InputDef deliveryRow =
+      noteInput(
+          QStringLiteral("delivery"),
+          [panel, filamentsNow, threeMf, curaChosen, sendDialect](const CommandState& state) {
+            filamentsNow(state);
+            InputNote note;
+            if (!threeMf(state) || sendDialect(state).isEmpty() || panel->job.isEmpty()) {
+              return note;
+            }
+            const bool project = panel->job.value(QStringLiteral("delivery")).toString() == QStringLiteral("project");
+            const QString status = panel->job.value(QStringLiteral("status")).toString();
+            QStringList notes;
+            for (const QJsonValue& value : panel->job.value(QStringLiteral("notes")).toArray()) {
+              notes << mitcad::modelMessage(value.toString());
+            }
+            QStringList leftOut;
+            for (const QJsonValue& value : panel->job.value(QStringLiteral("left_out")).toArray()) {
+              leftOut << mitcad::modelMessage(value.toString());
+            }
+            if (curaChosen(state)) {
+              note.text = tr("Cura uses the printer and materials chosen in Cura: MitCad sends the bodies, each "
+                             "body's extruder number and its process settings.");
+            } else if (!project) {
+              note.text = tr("Geometry only: the slicer keeps its own printer, process and filaments.");
+            } else if (status == QStringLiteral("complete")) {
+              note.text = tr("Print project: the printer, process and materials chosen here.");
+            } else {
+              note.text = tr("Print project: what is not chosen here comes from the slicer's defaults.");
+              leftOut = notes + leftOut;
+            }
+            if (!leftOut.isEmpty()) {
+              note.notice = leftOut.join(QLatin1Char(' '));
+              note.noticeLevel = NoticeLevel::Warning;
+            }
+            const QString logged = QStringLiteral("%1 (%2)%3")
+                                       .arg(project ? QStringLiteral("project") : QStringLiteral("geometry"), status,
+                                            note.notice.isEmpty() ? QString() : QStringLiteral(": ") + note.notice);
+            if (logged != panel->jobLogged) {
+              panel->jobLogged = logged;
+              qInfo().noquote() << QStringLiteral("3D Print delivery: %1").arg(logged);
+            }
+            return note;
+          },
+          [](int, const CommandState&, const CommandContext&) {})
+          .withFieldColumn()
+          .withEnabled(threeMf);
   def.inputs = {
       // Sheet and empty bodies cannot be picked, and are not sent.
       selectionInput(QStringLiteral("bodies"), tr("Bodies"), SelectKind::Body, 1, 0)
@@ -1654,7 +1960,10 @@ CommandDef MainWindow::print3dCommand() {
           .withEnabled(threeMf),
       // The design's printer and process (mitcad#655): chosen here, edited
       // in the profile editor (Edit…).
-      profileRow(QStringLiteral("printer"), tr("Printer")),
+      // Cura prints with its own printer (mitcad#2008): disabled, the
+      // delivery line under the materials says so.
+      profileRow(QStringLiteral("printer"), tr("Printer"))
+          .withEnabled([threeMf, curaChosen](const CommandState& state) { return threeMf(state) && !curaChosen(state); }),
       profileRow(QStringLiteral("process"), tr("Process")),
       // What sets its own process values below the root, under the label
       // Own settings (mitcad#655): "Body1: Walls", the pencil at the right.
@@ -1869,9 +2178,14 @@ CommandDef MainWindow::print3dCommand() {
     while (at < def.inputs.size() && def.inputs.at(at).id != QStringLiteral("materials")) {
       ++at;
     }
+    // The job's All bodies and Set to all above the rows, what is sent
+    // under them (mitcad#2008).
+    def.inputs.insert(at++, jobRow);
+    def.inputs.insert(at++, setToAll);
     for (const InputDef& row : materialRows) {
       def.inputs.insert(at++, row);
     }
+    def.inputs.insert(at++, deliveryRow);
   }
   // Filament changes (mitcad#1643) under Purge volumes.
   {
@@ -2111,7 +2425,18 @@ CommandDef MainWindow::print3dCommand() {
       }
       remember(panel->bedFaces.asking.faces.value(index));
     }
-    return sendToSlicer(state, panel->whole, &panel->bedFaces);
+    // The print job's materials (mitcad#2008): what the rows show, None
+    // for every body after None and Set to all.
+    CommandState sent = state;
+    QJsonObject materials;
+    for (const QJsonValue& value : panel->job.value(QStringLiteral("bodies")).toArray()) {
+      const QJsonObject body = value.toObject();
+      materials.insert(body.value(QStringLiteral("body")).toString(), body.value(QStringLiteral("material")));
+    }
+    sent.setObject(QStringLiteral("print_job"),
+                   QJsonObject{{QStringLiteral("print_materials"), materials},
+                               {QStringLiteral("none"), panel->jobNone}});
+    return sendToSlicer(sent, panel->whole, &panel->bedFaces);
   };
   return def;
 }
@@ -2295,6 +2620,15 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
                         {QStringLiteral("colors"), appearanceColors(every)}};
     if (!dialect.isEmpty()) {
       command.insert(QStringLiteral("dialect"), dialect);
+      // None and Set to all (mitcad#2008): every plate's bodies as
+      // geometry only.
+      if (state.object(QStringLiteral("print_job")).value(QStringLiteral("none")).toBool()) {
+        QJsonObject none;
+        for (const QString& body : std::as_const(every)) {
+          none.insert(body, QJsonValue::Null);
+        }
+        command.insert(QStringLiteral("print_materials"), none);
+      }
     }
     QJsonObject result;
     if (!runCommand(command, &result)) {
@@ -2340,6 +2674,19 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
     }
     if (!dialect.isEmpty()) {
       command.insert(QStringLiteral("dialect"), dialect);
+      // The print job's materials, as the panel's rows show them
+      // (mitcad#2008): every body sent that the list has.
+      const QJsonObject listed =
+          state.object(QStringLiteral("print_job")).value(QStringLiteral("print_materials")).toObject();
+      QJsonObject materials;
+      for (const QString& body : std::as_const(sent)) {
+        if (listed.contains(body)) {
+          materials.insert(body, listed.value(body));
+        }
+      }
+      if (!materials.isEmpty()) {
+        command.insert(QStringLiteral("print_materials"), materials);
+      }
     }
     QJsonObject result;
     if (!runCommand(command, &result)) {
@@ -2352,6 +2699,8 @@ bool MainWindow::sendToSlicer(const CommandState& state, const QStringList& whol
         filaments << QString::number(slot.toInt());
       }
       const QStringList warnings = exportWarnings(result);
+      qInfo().noquote() << QStringLiteral("3D Print delivery sent: %1")
+                               .arg(result.value(QStringLiteral("delivery")).toString());
       qInfo().noquote() << QStringLiteral("3D Print: print settings for %1, filaments %2%3")
                                .arg(dialect, filaments.join(QLatin1Char(',')),
                                     warnings.isEmpty() ? QString()

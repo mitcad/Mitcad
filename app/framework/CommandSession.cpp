@@ -1017,6 +1017,26 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
         slot->def->onChange(m_state, m_host);
       }
     }
+    // Whole Opening (mitcad#1955): the picked free edges of the inputs it
+    // decides as their whole openings (on), or as the edges they were
+    // picked by (off; an opening read from the definition stays whole).
+    for (const Slot& other : slotsOf(false)) {
+      const InputDef& input = *other.def;
+      if (input.type != InputDef::Type::Selection || !input.takesOpenings || input.wholeOpeningCheck != key) {
+        continue;
+      }
+      Selection converted;
+      for (const SelectionItem& item : std::as_const(m_state).items(other.key)) {
+        const SelectionItem kept = on ? wholeOpeningItem(item) : singleFreeEdgeItem(item);
+        if (!converted.contains(kept)) {
+          converted.append(kept);
+        }
+      }
+      if (converted != std::as_const(m_state).items(other.key)) {
+        m_state.setItems(other.key, converted);
+        selectionChanged(other.key); // logged, highlighted, previewed
+      }
+    }
     inputsChanged();
   };
   actions.objectChanged = [this](const QString& key, const QJsonObject& value) {
@@ -1237,6 +1257,9 @@ void CommandSession::setPresenter(CommandPresenter& presenter) {
   // The pointer over a row of a choice's list (mitcad#1794): what the
   // row's option is about.
   actions.choiceHovered = [this](const QString& key, const QString& value) { hoverChoice(key, value); };
+  // The pointer over a row of an inspection's answer (mitcad#1979): its
+  // places, Measure's distance between its points.
+  actions.resultHovered = [this](const QString& key, bool on) { hoverResult(key, on); };
   // The button beside the message (mitcad#1634): Activate <component>
   // beside the refusal of picks of several components; once the model is
   // idle, the host activates it and keeps only its picks.
@@ -2697,6 +2720,30 @@ void CommandSession::acceptInspection(const Inspection& result) {
                    : result.measurementWire ? OcctViewer::PreviewStyle::MeasurementWire
                                             : OcctViewer::PreviewStyle::Add;
   m_host.viewer().setPreview(result.shape, style);
+  // Measure's axes and axis distance beside the main distance
+  // (mitcad#1979); setPreview took the last ones away.
+  if (!result.guide.IsNull()) {
+    m_host.viewer().setPreviewGuide(result.guide);
+  }
+  // The rows that paint their places while the pointer is over them
+  // (Inspection::Value::places, mitcad#1979): those of this answer. A row
+  // hovered went with the rows the panel made again.
+  if (!m_hoveredResult.isEmpty()) {
+    hoverResult(m_hoveredResult, false);
+  }
+  m_resultPlaces.clear();
+  for (const Inspection::Value& value : result.values) {
+    if (!value.places.isEmpty()) {
+      m_resultPlaces.insert(value.name, value.places);
+    }
+  }
+  for (std::size_t g = 0; g < result.groups.size(); ++g) {
+    for (const Inspection::Value& value : result.groups[g].values) {
+      if (!value.places.isEmpty()) {
+        m_resultPlaces.insert(QStringLiteral("%1 %2").arg(g + 1).arg(value.name), value.places);
+      }
+    }
+  }
   if (m_def.keepsSection || !result.section.isNull()) {
     m_host.showSection(result.section);
   }
@@ -3395,6 +3442,24 @@ void CommandSession::hoverChoice(const QString& key, const QString& value) {
         << QStringLiteral("Panel %1 choice %2 hovered: %3 places").arg(m_def.name, row).arg(places.size());
   }
   m_hoveredChoice = row;
+  // The panel's own source: the places go with the command (mitcad#1327).
+  m_host.hoverNoticePlaces(QStringLiteral("panel"), places, std::vector<BodyDisplay>());
+}
+
+void CommandSession::hoverResult(const QString& key, bool on) {
+  const QJsonArray places = on ? m_resultPlaces.value(key) : QJsonArray();
+  const QString row = places.isEmpty() ? QString() : key;
+  if (row == m_hoveredResult || (!on && key != m_hoveredResult)) {
+    return; // nothing new, or another row's leaving after this one came
+  }
+  // For the UI tests: what the row paints, and when it stops.
+  if (row.isEmpty()) {
+    qDebug().noquote() << QStringLiteral("Panel %1 result %2 left").arg(m_def.name, m_hoveredResult);
+  } else {
+    qDebug().noquote()
+        << QStringLiteral("Panel %1 result %2 hovered: %3 places").arg(m_def.name, row).arg(places.size());
+  }
+  m_hoveredResult = row;
   // The panel's own source: the places go with the command (mitcad#1327).
   m_host.hoverNoticePlaces(QStringLiteral("panel"), places, std::vector<BodyDisplay>());
 }

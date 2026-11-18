@@ -39,7 +39,21 @@ edge down to the ring's corner.
   contacts that surface's iso curves with p-curves projected onto the faces
   in their walked periods, the parameters along it; only for a stripe of one
   surface data with no corner at its other end yet.
+
+Failures (mitcad#1986): the projections of the crease's iso-lines onto the
+two faces and the crease's curves (ChFi3d_ComputeCurves) fail with OCCT's
+reports of a computation it cannot make (ChFi3d_IsComputationFailure,
+0016) where the two blends do not meet in such a crease: the corner is not
+made so and is left as before, which its caller is told. Any other failure
+(a broken invariant, a signal) is rethrown.
+Test: geometry/tests/port/p0432-roundings-crease-over-a-narrow-face.cpp
+(ctest geometry.port.0432): a second geometry to geometry.fillet_corners'
+lipped rim, a square rim (lines meeting at 90 degrees) whose lip's inner
+bottom edges are rounded with 4 over a ring 1 wide and a 45-degree
+chamfer: built, valid, the ends of each crease vertices, the volume exact;
+a ring 5 wide as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 985258714..38b0ba8c6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -717,6 +717,128 @@ NCollection_List<occ::handle<ChFiDS_Stripe>> ChFi3d_Builder::RollsInsteadOfOverf
@@ -172,6 +186,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
  }
  
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index 9a82884aa..b76a78d53 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -979,7 +979,7 @@ bool ChFi3d_IsInFront(TopOpeBRepDS_DataStructure&       DStr,
@@ -211,6 +226,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
      jf1  = 2;
      jf2  = 2;
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
+index d19dce742..5a5f1121d 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
 @@ -371,6 +371,16 @@ protected:
@@ -231,6 +247,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx b/src/
  
    Standard_EXPORT void ExtentOneCorner(const TopoDS_Vertex&              V,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
+index 7be2607f9..da82d2051 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx
 @@ -40,6 +40,26 @@
@@ -276,7 +293,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx b/s
    const TopoDS_Vertex&                                   Vtx  = myVDataMap.FindKey(Index);
    TopOpeBRepDS_DataStructure&                            DStr = myDS->ChangeDS();
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator It;
-@@ -1151,3 +1178,667 @@ void ChFi3d_FilBuilder::PerformTwoCorner(const int Index)
+@@ -1151,3 +1178,677 @@ void ChFi3d_FilBuilder::PerformTwoCorner(const int Index)
      myListStripe.Append(corner);
    }
  }
@@ -542,8 +559,13 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx b/s
 +    aPCS = GeomProjLib::Curve2d(aC3S, a0, a1, BRep_Tool::Surface(Fs));
 +    aPCR = GeomProjLib::Curve2d(aC3R, a0, a1, BRep_Tool::Surface(Fr));
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    return false;
 +  }
 +  if (aPCS.IsNull() || aPCR.IsNull())
@@ -848,8 +870,13 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder_C2.cxx b/s
 +    computed = IRoll[0] == 1 ? ChFi3d_ComputeCurves(HS[0], HS[1], Pardeb, Parfin, Gc, PGc1, PGc2, tolapp3d, tol2d, tolreached)
 +                             : ChFi3d_ComputeCurves(HS[0], HS[1], Parfin, Pardeb, Gc, PGc1, PGc2, tolapp3d, tol2d, tolreached);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    computed = false;
 +  }
 +  if (!computed || Gc.IsNull() || PGc1.IsNull() || PGc2.IsNull())

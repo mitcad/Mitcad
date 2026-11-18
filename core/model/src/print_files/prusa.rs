@@ -25,14 +25,14 @@ use crate::document::PrintFrom;
 use crate::print_keys::{self, Dialect, Kind, PrintSet};
 
 pub(super) const PROJECT_FILE: &str = "Metadata/Slic3r_PE.config";
-const MODEL_SETTINGS: &str = "Metadata/Slic3r_PE_model.config";
+pub(super) const MODEL_SETTINGS: &str = "Metadata/Slic3r_PE_model.config";
 const LAYER_RANGES: &str = "Metadata/Prusa_Slicer_layer_config_ranges.xml";
 /// The presets a project's process, filaments and printer inherit from
 /// (PrusaSlicer's own spelling).
 const INHERITS: &str = "inherits_cummulative";
 
 /// The namespace of PrusaSlicer's metadata names.
-const NAMESPACE: (&str, &str) = ("slic3rpe", "http://schemas.slic3r.org/3mf/2017/06");
+pub(super) const NAMESPACE: (&str, &str) = ("slic3rpe", "http://schemas.slic3r.org/3mf/2017/06");
 
 const DIALECT: Dialect = Dialect::PrusaSlicer;
 

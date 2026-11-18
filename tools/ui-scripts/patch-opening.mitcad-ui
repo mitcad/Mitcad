@@ -1,12 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Patch picks a surface body's free edge as its opening and closes it
-# (mitcad#1927, GitHub mitcad/Mitcad#379), on patch-opening.json (a box
-# whose top face was unstitched and deleted: an open shell of five faces):
+# (mitcad#1927, GitHub mitcad/Mitcad#379), and with Whole Opening off takes
+# single free edges (mitcad#1955), on patch-opening.json (a box whose top
+# face was unstitched and deleted: an open shell of five faces):
 #   Patch's Profiles or Edges offers the opening's free edges as edges
-#   (their pick places name the opening, not the wall beside them); the
-#   pointer over one hovers it, a click takes the whole opening as one
-#   edge item, Stitch is on, and OK makes the box a closed solid again
-#   (one body of 1000 mm3).
+#   (their pick places name the edge by its opening and middle point, not
+#   the wall beside them); with Whole Opening on the pointer over one shows
+#   the whole opening and a click takes it as one edge item (then
+#   cancelled); with Whole Opening off each click takes one free edge, the
+#   four of them close the loop, Stitch is on, and OK makes the box a closed
+#   solid again (one body of 1000 mm3).
 # Run by tools/ui-patch-opening-test.sh (Linux),
 # tools/ui-windows-patch-opening-test.ps1 (Windows) and
 # tools/ui-macos-patch-opening-test.sh (macOS).
@@ -20,23 +23,55 @@ wait-idle
 mark
 command surface.patch
 wait-log '^Pick places:' 20
-wait-log '^Pick edge F1[.]b0/[{]"faces":\["F1:side' 20
+wait-log '^Pick edge F1[.]b0/[{]"at":\[10,0,5\],"opening":[{]"faces":\["F1:side' 20
 wait-idle
 
-# The pointer over that edge, then a click on it: the whole opening.
-hover-logged '^Pick edge F1[.]b0/[{]"faces":\["F1:side'
+# Whole Opening on: the pointer over that edge shows the whole opening,
+# and a click on it takes it.
+hover-logged '^Pick edge F1[.]b0/[{]"at":\[10,0,5\]'
+wait-log '^Hover opening: 4 edge[(]s[)] of F1[.]b0' 20
 wait-idle
 mark
-click-pick 'edge F1[.]b0/[{]"faces":\["F1:side[^ ]* at '
-wait-log '^Patch Profiles or Edges: 1 edge' 20
+click-pick 'edge F1[.]b0/[{]"at":\[10,0,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge [[]edge [{]"faces":' 20
+expect-no-log ' not taken: '
+wait-log '^Preview Patch: ok' 30
+wait-idle 30
+mark
+button '^Cancel$'
+wait-idle 30
+
+# Whole Opening off: each free edge on its own; the four close the loop.
+mark
+command surface.patch
+wait-log '^Panel Patch input whole_opening at ' 20
+wait-idle
+click-logged '^Panel Patch input whole_opening at '
+wait-log '^Patch: Whole Opening = off$' 10
+wait-idle
+mark
+click-pick 'edge F1[.]b0/[{]"at":\[10,0,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge [[]edge [{]"at":\[10,0,5\]' 20
+wait-idle 30
+mark
+click-pick 'edge F1[.]b0/[{]"at":\[20,5,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 2 edges' 20
+wait-idle 30
+mark
+click-pick 'edge F1[.]b0/[{]"at":\[10,10,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 3 edges' 20
+wait-idle 30
+mark
+click-pick 'edge F1[.]b0/[{]"at":\[0,5,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 4 edges' 20
 expect-no-log ' not taken: '
 wait-log '^Preview Patch: ok' 30
 wait-idle 30
 
-# OK: the patch stitched on, the box a solid again.
+# OK: the patch of the four edges stitched on, the box a solid again.
 mark
 button '^OK$'
-wait-log '^Added patch of 1 items, stitched' 30
+wait-log '^Added patch of 4 items, stitched' 30
 wait-idle 30
 expect-model-bodies 1 1000
 expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

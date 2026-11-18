@@ -258,8 +258,12 @@ pub(crate) fn prepare(sys: &System) -> Prepared {
 /// ([`compile_mapped`]).
 pub(crate) fn compile(sys: &System) -> (Vec<Equation>, HashSet<(usize, usize)>) {
     let classes = sys.point_classes();
-    // Points known to lie on each entity: its end points and the points of
-    // point-on-curve constraints (by coincidence class).
+    // Points known to lie on each entity (by coincidence class): its end
+    // points and the points every constraint that puts a point on a curve
+    // holds there: point on curve, a midpoint (of a line or an arc), and
+    // collinear lines' end points on each other's line. A tangent through
+    // one of them is a join there (mitcad#2006: an arc starting at a line's
+    // midpoint; the distance form is then implied by the midpoint).
     let mut on: Vec<Vec<(usize, usize)>> = vec![Vec::new(); sys.entities.len()];
     for (i, r) in sys.entities.iter().enumerate() {
         if let Some(r) = r
@@ -271,8 +275,22 @@ pub(crate) fn compile(sys: &System) -> (Vec<Equation>, HashSet<(usize, usize)>) 
         }
     }
     for (_, c) in sys.live_constraints() {
-        if let Constraint::PointOnCurve(p, e) = c.def {
-            on[e.index()].push((classes[p.index()], p.index()));
+        match c.def {
+            Constraint::PointOnCurve(p, e) | Constraint::Midpoint(p, e) => {
+                on[e.index()].push((classes[p.index()], p.index()));
+            }
+            Constraint::Collinear(l1, l2) => {
+                for (from, to) in [(l2, l1), (l1, l2)] {
+                    if let Some(EntityData::Line { p1, p2 }) =
+                        sys.entities[from.index()].as_ref().map(|r| &r.data)
+                    {
+                        for p in [*p1, *p2] {
+                            on[to.index()].push((classes[p], p));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

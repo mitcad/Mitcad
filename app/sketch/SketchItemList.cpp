@@ -341,6 +341,12 @@ NoticeLevel SketchItemList::markOf(const QString& id, QString& why) const {
     why = tr("Conflicts with other constraints or dimensions");
     return NoticeLevel::Error;
   }
+  // Redundant in part only (mitcad#1992): it still takes freedom away.
+  if (model.partlyRedundant.contains(id)) {
+    why = tr("Partly repeats the other constraints and dimensions; it still removes %n degree(s) of freedom",
+             nullptr, model.partlyRedundant.value(id));
+    return NoticeLevel::Information;
+  }
   if (model.redundant.contains(id)) {
     why = tr("Follows from the other constraints and dimensions");
     return NoticeLevel::Warning;

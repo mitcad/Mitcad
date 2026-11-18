@@ -4,13 +4,30 @@ Part of [mitcad-import-solidcraft](../README.md); the other imports'
 documents are indexed in [core/import](../../import/README.md#documents).
 
 SolidCraft designs (mitcad#450) are read by `core/solidcraft` (plain JSON
-or the container; every file format upgraded to 50, SolidCraft 0.40's, by
-SolidCraft's own steps, `third_party/solidcraft`, mitcad#1331; a released
-format has every change of its number, a design saved while changes were
-pending only those it lists) and built again as MitCad features by
-`core/import-solidcraft` on the `Kernel` trait. A newer format, and a
-SolidCraft drawing (`solidcraft-drawing/N`, a file of its own), are refused
+or the container; every file format upgraded to 57, SolidCraft 0.43.0's,
+by SolidCraft's own steps, `third_party/solidcraft`, mitcad#1331 and
+mitcad#1994; a released format has every change of its number, a design
+saved while changes were pending only those it lists) and built again as
+MitCad features by `core/import-solidcraft` on the `Kernel` trait. A
+SolidCraft drawing (`solidcraft-drawing/N`, a file of its own) is refused
 with a message saying so.
+
+A design a newer SolidCraft saved (a format past 57, or changes in its
+`format_pending` this import does not know) opens with a warning
+(mitcad#1994, as SolidCraft's own `newer_file.rs` opens one): "Saved by a
+newer SolidCraft (format 58; this import reads SolidCraft designs up to
+format 57): what this import reads came in, features it cannot read are
+placeholders with the reason, and what it does not know is left out.
+Features may build differently from the newer SolidCraft, which can give a
+known option a new meaning." It is the first warning of the result's
+notices and the report's `newer` (`format`, `reads_up_to`,
+`unknown_changes`, `left_out`, `warning`). What the reader reads is read: a
+feature of a kind it does not know is a placeholder ("saved by a newer
+SolidCraft: a `…` feature, which this import does not know"); a section of
+the design it does not know or cannot read, and a parameter it cannot read,
+are left out and named in `left_out`. A field it does not know inside a
+feature is not named (the reader cannot tell it from a field it ignores).
+Only a file that is not a design is refused.
 The file keeps definitions only, not bodies: nothing is checked against
 stored results, and nothing falls back to them. A feature that does not
 map or fails is a suppressed placeholder with the reason, and the timeline
@@ -54,7 +71,57 @@ goes on. Command, options and report: [commands.md](../../model-api/src/commands
 
 The feature kinds of format 27 all have MitCad counterparts; the cone, frame
 members, path flanges and Repair Part of the later formats have none and are
-placeholders with the reason. Options MitCad has not are named in each row
+placeholders with the reason.
+
+## Formats 51 to 57 (SolidCraft 0.41 to 0.43.0, mitcad#1994)
+
+| Group | Change (format) | MitCad |
+|---|---|---|
+| Holes and threads | `bridged-counterbore` (51) | the counterbore's bridge layers are MitCad's stepped `print_bridging`, with a note: MitCad's layers are the print's layer height and only where the counterbore opens toward the print bed |
+| | `hole-direction-own-faces` (51) | nothing saved: a hole drills along the file's direction |
+| | `thread-continuous-flanks` (52), `thread-single-face-selection` (57) | read and ignored (how the faces are named, the dialog) |
+| | `hole-sketch-plane-start` (53) | holes at sketch points start at the sketch's plane; an older design's hole at points of a sketch on a derived plane (`old_surface_start`) has a note: the file moves a point inside a body back to the body's surface |
+| | `hole-thread-class` (57) | read and ignored (a drawing's callout) |
+| | `linked-cosmetic-threads` (57) | read and ignored (a linked import's records) |
+| | `thread-multiple-faces` (57) | one `thread` per face, on the body `target_bodies` names; the others named `<name> (2)`, … |
+| Extrude, revolve, sweep, fillet | `two-sided-extrude-fixed-sides` (51) | a two-sided extrude of entered distances is MitCad's signed `two_sides` (Direction fixes the sides, a sign turns its own side over); an older design's (`second_follows_first`) the unsigned sides, flipped where its first distance sends side one now |
+| | `revolve-axis-origin-expressions` (51) | the fixed axis where its origin's expressions put it now, with a note |
+| | `fillet-turn` (51) | a swept turn round a sharp side edge is a note: the rounds meet as MitCad's fillet makes them |
+| | `transferred-profile-frame` (51) | nothing saved |
+| | `revolve-axis-sketch` (52) | the axis line in the sketch the file names |
+| | `two-sided-cut-cap-names` (52) | a cap named `top` or `bottom` is found by its height over the sketch, else at its pick |
+| | `sweep-path-on-body-edges` (53) | the sweep's path is the body's edges at the picks (`path_body`, `path_edges`) |
+| | `extrude-to-object-keeps-picked-placements` (57) | the extrude runs to its object where the components stand; a note where they stood elsewhere when the object was picked |
+| | `sweep-walls-named-along-the-path` (57) | read (the step drops sketch links' names; the import fixes linked curves where they are) |
+| Sketches and 3D wires | `intersection-curve-sketch-curves` (51), `sketch-link-construction-point` (52), `sketch-vertex-link-names` (55) | linked curves fixed where they are, as before |
+| | `sketch-point-along` (51) | the point on its curve (a coincidence), its share along the curve left out with a note |
+| | `3d-wire-point-nodes` (52) | a reference to a 3D wire's node fails (3D curves are not brought in) |
+| | `sketch-text-vertical-align` (52) | texts are left out, as before |
+| | `sketch3d-profiles` (52) | a patch of 3D sketch loops is a placeholder |
+| | `spline-tangent-handles` (55) | a fit spline's dragged tangent handles are left out with a note |
+| | `split-face-loops` (55) | a split face along joined loops: `extend` off |
+| Planes and references | `plane-at-angle-direction-only` (51) | the plane turns about the axis direction projected onto the base, through the pivot (a point, the origin or a vertex) or the base's origin, fixed where it is now |
+| | `nested-face-name` (52) | face names that hold another's in parentheses (`F5:blend(…)`, `F3:inner(…)`) read as the older form |
+| | `component-origin-datums` (52) | a component's origin plane, axis or point: this component's own where it is its own, else fixed where the placement puts it now, with a note |
+| | `construct-snap-points` (55) | a reference to a snap point fails with the reason |
+| | `plane-at-angle-follows-named-axis` (57) | the construction axis the plane turns about |
+| | `saved-face-points` (57) | read and ignored (a model cache) |
+| Frames, sheet metal, primitives | `frame-end-caps` (52), `frame-member-locate` and `frame-standard-sizes` (56) | placeholders, as frame members are |
+| | `sheet-flange-segments` (52) | a flange whose edge is split into stretches is a placeholder |
+| | `box-centred` (54) | MitCad's box from the corner its center and size give now, its height both ways (`symmetric`), with a note |
+| Assemblies, placement and patterns | `component-origin-visibility`, `joint-captured-positions`, `joint-constraint-tag` (52) | read and ignored |
+| | `joint-origin-inside` (52) | the joint origin's path goes down through the occurrences it is inside |
+| | `joint-plane-and-axis-snaps` (52) | an origin on an origin or explicit plane, a world axis or a fixed line: a point there with the plane's normal or the axis as z; other planes and axes fail with the reason |
+| | `solid-move-origin` (55) | the move turns about its point, where its expressions put it now |
+| | `occurrence-move-expressions` (56), `placement-expressions` (57) | placed where the file saved them, a note naming them |
+| | `pattern-names-by-source` (56) | read (copies are named in the order of the stored names) |
+| | `move-copy-placements` (57) | a move whose copies take their sources' placements in another component is a placeholder |
+| New feature kinds | `cell-grid-feature` (56), `cell-grid-*` (57) | placeholders: MitCad has no cell grid |
+| | `point-cloud-*` (51) | point clouds named in the report as not mapped |
+| | `notes` (52) | named in the report as not mapped |
+| | `configuration-row-ids` (53), `linked-configuration` (57) | read and ignored (configurations are not mapped) |
+| | `blend-definition-faces`, `plugin-data-namespace` (55) | read and ignored |
+| Display only | `canvas-lock`, `cpu-output-presentation`, `embedded-surface-textures`, `glass-material-models` (51), `opus-quality`, `render-indirect-clamp`, `render-quality-controls` (52) | read and ignored | Options MitCad has not are named in each row
 (such a feature is a placeholder with the reason). What a join makes of
 pieces that touch only along an edge or at a point (`touching`, format 49)
 is MitCad's own.

@@ -36,10 +36,10 @@ rim is rounded with 0.5.
   found it; the next stretch starts on the arc (RecOnS, as a walk goes on
   across a seam).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index 8335900..8aca3b1 100644
+index b5dc4800..fd0cc1e3 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -2906,6 +2906,62 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+@@ -2926,6 +2926,62 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
    }
  }
  
@@ -103,10 +103,10 @@ index 8335900..8aca3b1 100644
  // ends at the vertices of E and its points on E, within Tol.
  static bool runsAlongEdge(const occ::handle<Geom_Curve>& C,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 3d36c9d..4b23fe5 100644
+index 2b4cad2b..cb1e9500 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -549,6 +549,15 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
+@@ -568,6 +568,15 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
                               const occ::handle<ChFiDS_Stripe>& CorDat,
                               const ChFiDS_Map&                 EFMap);
  
@@ -123,10 +123,10 @@ index 3d36c9d..4b23fe5 100644
  //! edge of that face (a face exactly as wide as the blend's contact distance)
  //! is stored as a blend on that edge: its side takes the face beyond the
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index f9dfd41..06cb6a7 100644
+index a5f55245..32a9f02f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -4923,6 +4923,16 @@ static bool ChFi3d_KPartCutJunction(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -4934,6 +4934,16 @@ static bool ChFi3d_KPartCutJunction(const TopOpeBRepDS_DataStructure&   DStr,
    return false;
  }
  
@@ -143,7 +143,7 @@ index f9dfd41..06cb6a7 100644
  // The point where the face beyond B cuts the section of the analytic blend
  // SD at spine point P: on the blend's surface between its contacts (an
  // isoline of its parameters); its parameters on the blend and on B.
-@@ -4940,6 +4950,21 @@ static bool ChFi3d_KPartSectionCut(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -4951,6 +4961,21 @@ static bool ChFi3d_KPartSectionCut(const TopOpeBRepDS_DataStructure&   DStr,
    {
      return false;
    }
@@ -165,7 +165,7 @@ index f9dfd41..06cb6a7 100644
    const ChFiDS_FaceInterference& FO = SD->Interference(3 - ons);
    const ChFiDS_FaceInterference& FN = SD->Interference(ons);
    if (FO.PCurveOnSurf().IsNull() || FN.PCurveOnSurf().IsNull())
-@@ -5005,7 +5030,9 @@ struct ChFi3d_KPartCutEnd
+@@ -5016,7 +5041,9 @@ struct ChFi3d_KPartCutEnd
  // side ons is cut by the face beyond B: from Start (a point on an arc where
  // the contact leaves its face, or null: the cut of the section at W1) to
  // End (likewise at W2). An end given as such (GivenStart, GivenEnd) is a
@@ -176,7 +176,7 @@ index f9dfd41..06cb6a7 100644
  static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStructure&         DStr,
                                                           const occ::handle<ChFiDS_Spine>&    Spine,
                                                           const occ::handle<ChFiDS_SurfData>& Full,
-@@ -5019,9 +5046,20 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5030,9 +5057,20 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
                                                           const double                        tol3d,
                                                           const ChFi3d_KPartCutEnd* GivenStart = nullptr,
                                                           const ChFi3d_KPartCutEnd* GivenEnd   = nullptr,
@@ -198,7 +198,7 @@ index f9dfd41..06cb6a7 100644
    if (Full.IsNull() || W2 - W1 <= Precision::PConfusion())
    {
      return occ::handle<ChFiDS_SurfData>();
-@@ -5061,16 +5099,29 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5072,16 +5110,29 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
        Par[k](4) = Given->uvB.Y();
        continue;
      }
@@ -229,7 +229,7 @@ index f9dfd41..06cb6a7 100644
      {
        const ChFiDS_FaceInterference& FAdj = Adj->Interference(ons);
        if (FAdj.PCurveOnSurf().IsNull())
-@@ -5340,6 +5391,18 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5356,6 +5407,18 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
          continue;
        }
      }
@@ -248,7 +248,7 @@ index f9dfd41..06cb6a7 100644
      if ((CP == nullptr || Given != nullptr) && Full->Index(opp) > 0)
      {
        // At an end of the spine's edge, the other contact ends on the edge
-@@ -6838,9 +6901,23 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -6888,9 +6951,23 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
    {
      aSpineFace = myEFMap.Contains(Spine->Edges(ie)) && containsSameShape(myEFMap(Spine->Edges(ie)), N);
    }
@@ -273,7 +273,7 @@ index f9dfd41..06cb6a7 100644
    }
    B                   = otherFace(myEFMap, E, N);
    if (B.IsNull() || B.IsSame(N) || HSo->Face().IsSame(B) || HSo->Face().IsSame(N)
-@@ -6848,6 +6925,15 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -6898,6 +6975,15 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
    {
      return false;
    }
@@ -289,7 +289,7 @@ index f9dfd41..06cb6a7 100644
    TopoDS_Face BF = B, NFw = N;
    BF.Orientation(TopAbs_FORWARD);
    NFw.Orientation(TopAbs_FORWARD);
-@@ -6888,6 +6974,9 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -6938,6 +7024,9 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
    gp_Pnt2d                         uvN   = pcNE->Value(CPn.ParameterOnArc());
    double                           Wcur  = Start;
    bool                             first = true;
@@ -299,25 +299,25 @@ index f9dfd41..06cb6a7 100644
    for (int stretch = 0; stretch < 4; stretch++)
    {
      const TopoDS_Face Fo = HSO->Face();
-@@ -6919,7 +7008,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -6969,7 +7058,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
      {
        OCC_CATCH_SIGNALS
        walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
 -                           Last, false, false, Forward, false, false, Soldep, intf, intl);
 +                           Last, false, false, Forward, ons != 1 && recO, ons != 2 && recO, Soldep, intf, intl);
      }
-     catch (Standard_Failure const&)
+     catch (Standard_Failure const& anException)
      {
-@@ -7089,7 +7178,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -7144,7 +7233,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
        try
        {
          OCC_CATCH_SIGNALS
 -        G = ChFi3d_KPartCutPiece(DStr, Spine, X, ons, N, B, Wa, Wb, aNone, aNone, tolapp3d, Ga, Gb);
 +        G = ChFi3d_KPartCutPiece(DStr, Spine, X, ons, N, B, Wa, Wb, aNone, aNone, tolapp3d, Ga, Gb, &aConsumedEdges, true);
        }
-       catch (Standard_Failure const&)
+       catch (Standard_Failure const& anException)
        {
-@@ -7118,7 +7207,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -7178,7 +7267,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
        {
          continue;
        }
@@ -326,7 +326,7 @@ index f9dfd41..06cb6a7 100644
        aCutEdges.Append(Es);
        // The seam is kept on one side of the crossing, the side away from
        // the spine's edge (the blend takes the rest): the side of the blend's
-@@ -7188,13 +7277,13 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+@@ -7248,13 +7337,13 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
        try
        {
          OCC_CATCH_SIGNALS
@@ -341,8 +341,8 @@ index f9dfd41..06cb6a7 100644
 +          Gb = ChFi3d_KPartCutPiece(DStr, Spine, X, ons, N, B, Xc.W, W2, aNone, aNone, tolapp3d, &aMid[after], G2, &aCutEdges, true);
          }
        }
-       catch (Standard_Failure const&)
-@@ -7292,6 +7381,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
+       catch (Standard_Failure const& anException)
+@@ -7357,6 +7446,7 @@ bool ChFi3d_Builder::WalkedBridgeOverGap(const occ::handle<ChFiDS_Stripe>&
        return false;
      }
      HSO  = HSn;

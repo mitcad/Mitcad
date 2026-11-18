@@ -202,7 +202,10 @@ Two roundings meeting at a vertex of four sharp edges whose ends lie on the
 same two points are joined along their intersection
 (`PerformTwoCornerSameExt`); the many-edge corner took that path only where
 the ends agreed within 1e-7, and now also where both ends are common points
-on one edge within that edge's tolerance (`SameEndPoint`). A slot through a
+on one edge, within twice the distance between that edge's curves on its
+two faces there (`SameEndPoint`; each end is computed on its own face's
+curve, so they lie that far apart; never beyond the edge's tolerance, which
+was the limit until mitcad#1986). Test: `geometry.port.0503`. A slot through a
 round boss, its rim chamfered and the chamfer's lower edges rounded with 1:
 at each corner the wall's rounding (a cylinder) meets 0500's torus round the
 boss, and both end on the crease between the chamfer's plane and cone. On a

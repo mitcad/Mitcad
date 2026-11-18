@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: MIT
+# Patch takes a sketch curve for its boundary from the Browser (mitcad#1978,
+# follow-up of mitcad#1972, GitHub mitcad/Mitcad#407), on the reported
+# design (a wall of a box cut at a slant: Body1 F2.b0, one planar face in
+# the plane y = -22.059883 whose four edges are all free, and its offset
+# copy Body7 F13.b0, hidden here so that Body1's edges are in view):
+#   a sketch named Cross on the XZ plane moved onto the wall's plane holds
+#   one line from the lower end of the slanted free edge to the far end of
+#   the top free edge, across the wall: with them it closes a triangle;
+#   the Browser is folded (Collapse All) and opened down to the Sketches
+#   folder of Component1:1;
+#   Patch lists the sketches' curves in the Browser while its boundary
+#   takes sketch curves; with Whole Opening off it takes the top and the
+#   slanted free edge in the view, then Cross's row opens to its curve,
+#   Line 1, whose row paints the line in the view under the pointer and
+#   whose click takes it into the boundary; the preview builds, Stitch is
+#   turned off, OK adds the patch, and the curve rows go with the command.
+# Run by tools/ui-surface-patch-browser-curve-test.sh (Linux),
+# tools/ui-windows-surface-patch-browser-curve-test.ps1 (Windows) and
+# tools/ui-macos-surface-patch-browser-curve-test.sh (macOS).
+expect-ever 'View area' 600
+wait-idle 600
+model-command '{"cmd":"set_body_visible","uid":"F13.b0","visible":false}'
+wait-idle 60
+# The sketch: XZ (sketch x along the design's X, sketch y along -Z, its
+# normal +Y) moved -22.059883 along its normal; the slanted edge's lower
+# end (x 42.991993, z 0) to the top edge's far end (x -25.837054, z 10).
+model-command '{"cmd":"add_feature","name":"Cross","def":{"type":"sketch","plane":"xz","placement":{"offset":-22.059883001913107},"entities":[{"id":"p40","type":"point","at":[42.99199335877307,0]},{"id":"p41","type":"point","at":[-25.837054357949604,-10]},{"id":"c42","type":"line","start":"p40","end":"p41"}]}}'
+wait-idle 60
+command view.fit
+wait-idle
+
+# The Browser folded, then opened down to the component's sketches.
+expect-ever '^Browser Root at ' 30
+mark
+context-menu-logged '^Browser Root at ' 'Collapse All'
+wait-idle
+wait-log '^Browser arrow Root/Component1:1 at ' 20
+click-logged '^Browser arrow Root/Component1:1 at '
+wait-log '^Browser arrow Root/Component1:1/Sketches at ' 20
+click-logged '^Browser arrow Root/Component1:1/Sketches at '
+wait-log '^Browser Root/Component1:1/Sketches/Cross at ' 20
+wait-idle
+# No command: the sketches list no curves.
+expect-never '^Browser Root/Component1:1/Sketches/Cross/'
+
+# Patch: its boundary takes sketch curves, so the Browser lists them.
+mark
+command surface.patch
+wait-log '^Panel Patch input whole_opening at ' 20
+wait-log '^Browser sketch curves: [1-9][0-9]* sketches, [1-9][0-9]* curves$' 30
+wait-idle
+click-logged '^Panel Patch input whole_opening at '
+wait-log '^Patch: Whole Opening = off$' 10
+wait-idle
+# The top free edge (its middle at x 11.318849, z 10) and the slanted one
+# (its middle at x 45.733373, z 5), in the view.
+mark
+click-pick 'edge F2[.]b0/[{]"at":\[11[.]3188[0-9]*,-22[.]0598[0-9]*,10\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 1 edge [[]edge [{]"at":\[11[.]3188' 20
+wait-idle 30
+mark
+click-pick 'edge F2[.]b0/[{]"at":\[45[.]7333[0-9]*,-22[.]0598[0-9]*,5\][^ ]* at '
+wait-log '^Patch Profiles or Edges: 2 edges' 20
+wait-idle 30
+
+# The line from the Browser: Cross's row opens to its curve. Its arrow
+# came with the curve rows when Patch started (before the marks of the
+# edge picks), so it is looked for in the whole log.
+expect-ever '^Browser arrow Root/Component1:1/Sketches/Cross at ' 20
+mark
+click-logged '^Browser arrow Root/Component1:1/Sketches/Cross at '
+wait-log '^Browser Root/Component1:1/Sketches/Cross/Line 1 at ' 20
+wait-idle 30
+# The pointer over its row paints the line in the view.
+mark
+hover-logged '^Browser Root/Component1:1/Sketches/Cross/Line 1 at '
+wait-log '^Notice hover highlighted: browser curve: sketch_curve c42 of F[0-9]+ ' 20
+wait-idle 30
+# A click takes it: the loop closes.
+mark
+click-logged '^Browser Root/Component1:1/Sketches/Cross/Line 1 at '
+wait-log '^Patch Profiles or Edges: 2 edges, 1 sketch curve ' 20
+expect-no-log ' not taken: '
+wait-log '^Preview Patch: ok' 60
+wait-idle 60
+
+# Stitch off: the patch is a body of its own.
+expect-ever '^Panel Patch input stitch at ' 20
+mark
+click-logged '^Panel Patch input stitch at '
+wait-log '^Patch: Stitch = off$' 10
+wait-log '^Preview Patch: ok' 60
+wait-idle 60
+mark
+button '^OK$'
+wait-log '^Added patch of 3 items$' 60
+wait-log '^Browser sketch curves: none$' 20
+wait-idle 60
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

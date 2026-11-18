@@ -15,8 +15,12 @@ There the ball was not seen as staying put, and the walk failed as before
 to 1.4e-3 mm apart, which the walk's tolerance (1e-4) refused.
 
 - StillTolerance: the centres of a ball of radius R that stays put may lie
-  apart by 5e-3 (half the hundredth of a millimetre a stored body is taken
-  within), at most R / 200.
+  apart by 3.2e-3, at most R / 200. Derived (mitcad#1986; it was 5e-3,
+  half the hundredth of a millimetre a stored body is taken within): each
+  support is a tube of the ball's radius within 1.6e-3 of its axis (the
+  stored rounding, measured), so the centres seen from two of them lie
+  within 2 x 1.6e-3 of each other; the case's lay 1.4e-3 apart. R / 200
+  keeps the tolerance small beside a small ball (0.64 and less).
 - StillDirection: where the centre moves at less than a tenth of the
   contact's speed along one parameter (and at more than 0.3 along the
   other), the support is taken for a tube of the ball's radius if the
@@ -34,30 +38,34 @@ cone rim's chain now builds through the mitre of the vertical rounding and
 the stored B-spline rounding between the flat side and the cone; both rims
 valid, the result with the stored body's faces, within 2.1e-4 mm of it.
 
-Test: geometry/tests/test_fillet_stationary_ball.cpp (the case's stored
-body before the rounding).
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_stationary_ball.cpp
+(the case's stored body before the rounding).
 
 Upstream: new.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+index 0aa48c2f..c81014fd 100644
 --- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
-@@ -159,6 +159,14 @@ gp_Vec CentreDirection(const gp_Vec& nsurf)
+@@ -159,6 +159,16 @@ gp_Vec CentreDirection(const gp_Vec& nsurf)
  // the mid-point's condition); its derivatives by the guide's parameter are those of that
  // section, each contact running round its tube's section.
  
 +//! How far the centres of a ball of radius R that stays put, seen from its contacts, may lie
-+//! apart (mitcad#1420): the supports are tubes of the ball's radius within it. Half the
-+//! hundredth of a millimetre a stored body's geometry is taken within, at most R / 200.
++//! apart (mitcad#1420): the supports are tubes of the ball's radius within it. A stored
++//! rounding approximated by a B-spline was a tube within 1.6e-3 of its axis (measured), so the
++//! centres seen from two such tubes lie within twice that, 3.2e-3, of each other (1.4e-3 was
++//! measured); at most R / 200, so that the ball's own size bounds it (mitcad#1986).
 +double StillTolerance(const double R)
 +{
-+  return std::min(5.e-3, 5.e-3 * R);
++  return std::min(3.2e-3, 5.e-3 * R);
 +}
 +
  //! The parameter of S (1: U, 2: V) along which the centre of the ball of radius R touching S at
  //! (U, V) on the side of C does not move (S is there a tube of the ball's radius); 0 if none.
  int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
-@@ -195,7 +203,38 @@ int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
+@@ -195,7 +205,38 @@ int StillDirection(const occ::handle<Adaptor3d_Surface>& S,
    {
      return 2;
    }
@@ -97,7 +105,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/
  }
  
  //! The first and second derivatives by the guide's parameter W of the parameter Dir of S at the
-@@ -847,7 +886,21 @@ bool BlendFunc_ConstRad::IsSolution(const math_Vector& Sol, const double Tol)
+@@ -847,7 +888,21 @@ bool BlendFunc_ConstRad::IsSolution(const math_Vector& Sol, const double Tol)
  
    Ok = ComputeValues(Sol, 1, true, param);
  
@@ -120,7 +128,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/
    {
  
      // ns1, ns2 and  np are copied locally to avoid crushing the fields !
-@@ -1179,10 +1232,18 @@ bool BlendFunc_ConstRad::StillSection(const double       W,
+@@ -1179,10 +1234,18 @@ bool BlendFunc_ConstRad::StillSection(const double       W,
    {
      return false;
    }

@@ -155,7 +155,7 @@ impl<K: Kernel> Importer<'_, '_, K> {
         let mut def = revolve_def(self, f, component, &r, Some(profiles.clone()))?;
         self.as_surface(&mut def, s.sketch, &profiles, &s.curves)?;
         self.add(&def, Some(&f.name), component)?;
-        Ok(Mapped::parametric())
+        Ok(Mapped::partial(super::features::line_axis_notes(&r.axis)))
     }
 
     fn surface_sweep(&mut self, f: &Feature, component: ComponentUid) -> MapResult {
@@ -171,6 +171,8 @@ impl<K: Kernel> Importer<'_, '_, K> {
             profiles: s.profiles.clone().unwrap_or_default(),
             path_sketch: s.path_sketch,
             path: s.path.clone(),
+            path_body: s.path_body.clone(),
+            path_edges: s.path_edges.clone(),
             orientation: s.orientation.clone(),
             twist: s.twist.clone(),
             scale: s.scale.clone(),
@@ -180,7 +182,14 @@ impl<K: Kernel> Importer<'_, '_, K> {
             targets: Vec::new(),
         };
         let mut notes = Vec::new();
-        let mut def = sweep_def(self, f, &sweep, Some(profiles.clone()), &mut notes)?;
+        let mut def = sweep_def(
+            self,
+            f,
+            &sweep,
+            Some(profiles.clone()),
+            component,
+            &mut notes,
+        )?;
         self.as_surface(&mut def, s.sketch, &profiles, &s.curves)?;
         self.add(&def, Some(&f.name), component)?;
         Ok(Mapped::partial(notes))

@@ -7,7 +7,8 @@
 // Docked status line (the notices of the feature the message is about).
 // Faces, edges and vertices are drawn as the selection preview draws them,
 // in the hover's colour and seen through what hides them; a point as a
-// ball; a sketch region as its profile; a joint as the pointer over its
+// ball; a segment (two points, mitcad#1979) as a line between them; a
+// sketch region as its profile; a joint as the pointer over its
 // Browser row draws it (mitcad#1753). Nothing is selected, picked or
 // framed; moving away clears them. While a job computes the model they are
 // kept and drawn once it has ended (mitcad#1600). A message shown in place
@@ -30,6 +31,7 @@
 #include <vector>
 
 #include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <Bnd_Box.hxx>
@@ -253,6 +255,22 @@ std::vector<HighlightDisplay> MainWindow::noticeHighlights() const {
       if (pointOf(place.value(QStringLiteral("at")), at)) {
         add(SelectionItem{SelectKind::Point, noticeBody, QString(), QString(), QString()},
             BRepBuilderAPI_MakeVertex(at).Vertex().Moved(placed));
+      }
+      continue;
+    }
+    if (kind == QStringLiteral("segment")) {
+      // A straight line between two points (mitcad#1979: a Measure row's
+      // distance between its points), a point where they meet.
+      gp_Pnt from;
+      gp_Pnt to;
+      if (pointOf(place.value(QStringLiteral("from")), from) && pointOf(place.value(QStringLiteral("to")), to)) {
+        if (from.Distance(to) > 1e-9) {
+          add(SelectionItem{SelectKind::Edge, noticeBody, QString(), QString(), QString()},
+              BRepBuilderAPI_MakeEdge(from, to).Edge().Moved(placed));
+        } else {
+          add(SelectionItem{SelectKind::Point, noticeBody, QString(), QString(), QString()},
+              BRepBuilderAPI_MakeVertex(from).Vertex().Moved(placed));
+        }
       }
       continue;
     }

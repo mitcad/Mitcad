@@ -75,6 +75,7 @@
 #include <optional>
 
 #include <QHash>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QKeySequence>
@@ -134,7 +135,9 @@ public:
   QWidget* sheetView() const;
   QString drawing() const { return m_drawing; }
   // The model changed (a command, undo, another design): the sheet is
-  // asked for again; the workspace closes when its drawing is gone.
+  // asked for again; the workspace closes when its drawing is gone. From
+  // the projection cache when it holds every view; otherwise drawn in a
+  // job of its own (mitcad#1997, drawInJob), the sheet shown meanwhile.
   void refresh();
   // Runs a tool by its id ("drawing.base_view"), as its button and its
   // command do.
@@ -206,6 +209,26 @@ protected:
 
 private:
   void place();
+  // A sheet whose views the kernel has to project (mitcad#1997): the
+  // `drawing` query `query` as a job of its own (DocumentHost::queryInJob),
+  // started once the window's own work is done, after the job computing the
+  // model when one runs; the sheet as it was drawn stays meanwhile, "Drawing
+  // the views…" over it after 400 ms, as the progress dialog comes for a
+  // command. A job that gave way to the window's work starts again when the
+  // model is free; a newer refresh drops it. Logs "Drawing sheet drawn in
+  // a job: D1 sheet 1" and "Drawing sheet drawn in <n> ms in a job".
+  void drawInJob(const QJsonObject& query);
+  void startDrawJob(int generation);
+  void drawJobDone(int generation, const QJsonObject& answer, bool cancelled, const QString& error);
+  // The drawing's sheet the query could not draw (an undo took it): the
+  // first sheet shown, or the drawing closed when it is gone.
+  void sheetGone(const QString& why);
+  // A view's Scale chosen (mitcad#1997): its lines and those of the views
+  // that follow its scale shown scaled to `value` while the model works the
+  // new scale out (DrawingSheetView::showUpdating); marked only when the
+  // model chooses it (Fit the Sheet). False when the view is not on the
+  // sheet.
+  bool showScaling(int view, const QString& value);
   // The views' tools with their names, or their icons only when the bar
   // is narrower than its row with names (`width`, pixels).
   void fitTools(int width);
@@ -418,6 +441,14 @@ private:
   QString m_name;
   int m_sheet = 0;
   QJsonObject m_answer; // the `drawing` query's last answer
+  // The sheet drawn whole last ("D1/0"), and the sheet drawn in a job
+  // (mitcad#1997): its query, the refresh it belongs to, its clock and the
+  // timer of its note.
+  QString m_drawnSheet;
+  QJsonObject m_drawQuery;
+  int m_drawGeneration = 0;
+  QElapsedTimer m_drawClock;
+  QTimer* m_drawNoteTimer = nullptr;
   const DrawingToolDef* m_tool = nullptr;
   // The tools' options, by tool id and option id, kept between uses.
   QHash<QString, QHash<QString, QString>> m_options;

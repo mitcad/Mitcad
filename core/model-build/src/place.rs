@@ -694,6 +694,11 @@ pub struct SidePlan {
     pub lines: Vec<crate::lineup::LineUp>,
     /// The line-up a click took (`snapped` `inline` or `flush_face`).
     pub line: Option<crate::lineup::LineUp>,
+    // Across a side with two or more slots (mitcad#2002).
+    /// How the part stands across the side: `middle` centred on it
+    /// between its slots, `slot` on one of its slots; None on a side with
+    /// one slot (nothing to choose).
+    pub across: Option<&'static str>,
 }
 
 /// A snap point along a side's slot (`SidePlan::snaps`): its kind, the new
@@ -1118,11 +1123,15 @@ pub(crate) trait PlaceCrateOps<K: Kernel> {
 
     /// The slot of a picked side face nearest to the point: of the slots
     /// on the face's plane when the face is planar (none: a closed side).
+    /// With `middles` (a profile standing on its end, mitcad#2002) the
+    /// middle of a side between its slots is one more: a click nearer the
+    /// side's centre line than any slot's centres the profile on the side.
     fn pick_slot(
         &self,
         target: &Target,
         face: Option<&(mitcad_model::ids::BodyUid, mitcad_model::topo::FaceName)>,
         point: Option<V3>,
+        middles: bool,
     ) -> Result<String, ModelError>;
 
     /// Plans a part on a slot of a profile's side (mitcad#394): its near
@@ -1966,7 +1975,8 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 }
                 match target.info.frame_kind(name).as_str() {
                     "end" => Pick::End(name.clone()),
-                    "slot" => Pick::Slot(name.clone()),
+                    // A side's middle between its slots (mitcad#2002).
+                    "slot" | "side" => Pick::Slot(name.clone()),
                     "face" if target.info.is_side(name) => Pick::Slot(name.clone()),
                     _ => Pick::Frame(name.clone()),
                 }
@@ -2217,7 +2227,11 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 .map(|spot| (spot, "frame")),
             Pick::Slot(slot) => self.plan_side(source, target, &slot, at, touch, new, length),
             Pick::Face(face) => {
-                let slot = self.pick_slot(target, face.as_ref(), point_local)?;
+                // A profile standing on its end may stand centred on a
+                // side with several slots (mitcad#2002).
+                let middles =
+                    source.meta.role == BuildRole::Profile && source.meta.length.is_some();
+                let slot = self.pick_slot(target, face.as_ref(), point_local, middles)?;
                 self.plan_side(source, target, &slot, at, touch, new, length)
             }
         }
@@ -2284,8 +2298,14 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
         target: &Target,
         face: Option<&(mitcad_model::ids::BodyUid, mitcad_model::topo::FaceName)>,
         point: Option<V3>,
+        middles: bool,
     ) -> Result<String, ModelError> {
         let mut slots = target.info.slots();
+        // The middles of the sides with two or more slots (mitcad#2002),
+        // after the slots: with no point, or one as near a slot, the slot.
+        if middles {
+            slots.extend(target.info.middles.iter());
+        }
         // A member's face frames where it has no slots (mitcad#478).
         let faces: Vec<(&String, &Transform)> = target
             .info
@@ -2369,6 +2389,14 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
                 )));
             }
         };
+        // Only a profile standing on its end stands centred between the
+        // slots of a side (mitcad#2002); anything else goes in a slot.
+        let centred = target.info.is_side_middle(slot);
+        if centred && (own != touch || source.meta.length.is_none()) {
+            return Err(refuse(format!(
+                "{label} goes in a slot: only a profile stands centered between the slots of a side"
+            )));
+        }
         // Mating frames face each other: z against z.
         let flip = true;
         // How far the new part reaches along the slot from its frame.
@@ -2457,6 +2485,18 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             gap: None,
             lines: Vec::new(),
             line: None,
+            across: if centred {
+                Some("middle")
+            } else if crate::frame_side(slot).is_some_and(|side| {
+                target
+                    .info
+                    .middles
+                    .contains_key(&crate::side_middle_name(side))
+            }) {
+                Some("slot")
+            } else {
+                None
+            },
         };
         // In line with the frame's other profiles (mitcad#1886): for a
         // click, a part square on the side.
@@ -2935,18 +2975,29 @@ impl<K: Kernel> PlaceCrateOps<K> for Document<K> {
             .and_then(unit)
             .map(|d| unit(inverse(&placement).apply_vector(d)).unwrap_or(d))
             .filter(|d| dot(*d, z_axis(&local)) < 1.0 - 1e-9);
-        let hint = turn.map(|d| {
-            let [_, ex, ey, ez] = parts(&local);
-            match lie {
-                Some(lie) => crate::timber::lie_axes(d, bounds, ez, lie, 0.0).0,
-                None => [ex, ey, ez]
-                    .into_iter()
-                    .find(|a| dot(*a, d).abs() < 1.0 - 1e-6)
-                    .unwrap_or(ex),
+        // On a planar face its sides line up with the face's longest
+        // straight edge (mitcad#2000), unless the part runs along it;
+        // `rotate` turns it further.
+        let runs = turn.unwrap_or_else(|| z_axis(&local));
+        let edge = mitcad_model::internal::joints::face_edge_axis(&mut self.resolver(), geometry)
+            .filter(|e| dot(*e, runs).abs() < 1.0 - 1e-6);
+        let hint = match (turn, lie) {
+            (Some(d), Some(lie)) => {
+                Some(crate::timber::lie_axes(d, bounds, z_axis(&local), lie, 0.0).0)
             }
-        });
-        let mut override_frame =
-            (point_local.is_some() || turn.is_some()).then_some(FrameOverride {
+            (Some(d), None) => edge.or_else(|| {
+                let [_, ex, ey, ez] = parts(&local);
+                Some(
+                    [ex, ey, ez]
+                        .into_iter()
+                        .find(|a| dot(*a, d).abs() < 1.0 - 1e-6)
+                        .unwrap_or(ex),
+                )
+            }),
+            (None, _) => edge,
+        };
+        let mut override_frame = (point_local.is_some() || turn.is_some() || hint.is_some())
+            .then_some(FrameOverride {
                 origin: point_local,
                 z_axis: turn,
                 x_axis: hint,

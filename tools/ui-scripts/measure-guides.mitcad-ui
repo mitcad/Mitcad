@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# Measure's two guides told apart where they overlap (mitcad#1979), on the
+# synthetic plate of tools/cli/tests/measure_guides.json: two parallel
+# 8.5 mm holes 35 mm apart. The first hole's top edge against the second
+# hole's wall:
+#   1. the main row reads Minimum distance 26.5 mm, the Axis distance 35 mm;
+#   2. the view draws the minimum as the measurement wire between its own
+#      points (4.25, 0, 10) and (30.75, 0, 10) with its two end marks, and
+#      the axis distance as a dashed guide in the top layer between its own
+#      points (0, 0, 10) and (35, 0, 10), on the same line;
+#   3. the pointer over each row paints that row's segment, and leaving the
+#      rows takes it away;
+#   4. the History's row reads Minimum distance.
+# Run by tools/ui-measure-guides-test.sh, tools/ui-windows-measure-guides-test.ps1
+# and tools/ui-macos-measure-guides-test.sh.
+wait-idle
+command view.fit
+mark
+command inspect.measure
+expect-log '^Command Measure started'
+click-pick 'edge F2[.]b0/E[{]F2:end[(][^|]*[|]F4:side[(]c1[)][}]'
+expect-log '^Measure Selection 1: 1 edge'
+mark
+click-pick 'face F2[.]b0/F4:side[(]c3[)]'
+wait-log '^Panel Measure result values: Minimum distance = 26[.]5 mm, .x = 26[.]5 mm, .y = -?0 mm, .z = -?0 mm, .*Axis distance = 35 mm'
+expect-no-log '^Panel Measure result values: Distance = '
+expect-log 'distance 26[.]5, angle 0 deg, axis distance 35, axis lines 2'
+# The minimum between its own points, opaque, with its end marks.
+expect-log '^Preview measurement wire: displayed wireframe 1, transparency 0, topmost 1$'
+expect-log '^Preview measurement wire lines: from 4[.]250,0[.]000,10[.]000 to 30[.]750,0[.]000,10[.]000; end marks 2$'
+# The axes and the axis distance dashed, under it, between their own points.
+expect-log '^Preview measurement guide: dashed, displayed wireframe 1, top layer 1; lines: .*from 0[.]000,0[.]000,10[.]000 to 35[.]000,0[.]000,10[.]000'
+expect-no-log '^Preview measurement wire lines: .*from 0[.]000,0[.]000,10[.]000 to 35[.]000'
+screenshot '${MITCAD_TEST_WORK}/measure-guides.png'
+# Each row paints its own segment.
+mark
+hover-logged '^Panel Measure result Minimum distance at '
+wait-log '^Panel Measure result Minimum distance hovered: 1 places$'
+wait-log '^Notice hover highlighted: panel: segment 4[.]250,0[.]000,10[.]000 to 30[.]750,0[.]000,10[.]000 [(]1 drawn[)]$'
+screenshot '${MITCAD_TEST_WORK}/measure-guides-minimum-hovered.png'
+mark
+hover-logged '^Panel Measure result Axis distance at '
+wait-log '^Panel Measure result Axis distance hovered: 1 places$'
+expect-log '^Panel Measure result Minimum distance left$'
+wait-log '^Notice hover highlighted: panel: segment 0[.]000,0[.]000,10[.]000 to 35[.]000,0[.]000,10[.]000 [(]1 drawn[)]$'
+screenshot '${MITCAD_TEST_WORK}/measure-guides-axis-hovered.png'
+mark
+hover-logged '^Panel Measure result 1 Diameter at '
+wait-log '^Panel Measure result Axis distance left$'
+wait-log '^Notice hover highlighted: none$'
+key Escape
+expect-log '^Command Measure cancelled$'
+# The History's row names the main value as the panel does.
+mark
+command inspect.measure
+wait-log '^Measure history row 1: .*, Minimum distance 26[.]5 mm, .*Axis distance 35 mm'
+expect-no-log '^Measure history row 1: .*, Distance 26'
+key Escape
+expect-log '^Command Measure cancelled$'

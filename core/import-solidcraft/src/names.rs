@@ -72,9 +72,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
     fn want(&self, name: &str) -> Option<Want> {
         let name = name.trim_start_matches('?');
         let name = cut_piece(name);
-        // A shell's inside of a face (whose name may be a copy's).
+        // A shell's inside of a face (whose name may be a copy's):
+        // `F3:inner:F2:top`, or `F3:inner(F2:top)` since format 52.
         if let Some((id, role)) = name.strip_prefix('F').and_then(|r| r.split_once(':'))
-            && let Some(inner) = role.strip_prefix("inner:")
+            && let Some(inner) = nested(role, "inner")
             && let Ok(id) = id.parse::<u64>()
             && self.design.feature(id).is_some_and(|f| f.kind == "shell")
         {
@@ -126,11 +127,11 @@ impl<K: Kernel> Importer<'_, '_, K> {
             ("cylinder", "top") => Role::Exact(vec!["top"]),
             ("cylinder", "bottom") => Role::Exact(vec!["bottom"]),
             ("cylinder", "side") => Role::Exact(vec!["side0"]),
-            ("fillet", r) if r.starts_with("blend:") => Role::Prefix("fillet("),
-            ("chamfer", r) if r.starts_with("blend:") => Role::Prefix("chamfer("),
+            ("fillet", r) if nested(r, "blend").is_some() => Role::Prefix("fillet("),
+            ("chamfer", r) if nested(r, "blend").is_some() => Role::Prefix("chamfer("),
             // A shell's inside of a face: Mitcad's `offset(<face>)`.
-            ("shell", r) if r.starts_with("inner:") => {
-                let inner = r.strip_prefix("inner:")?;
+            ("shell", r) if nested(r, "inner").is_some() => {
+                let inner = nested(r, "inner")?;
                 self.want(inner)?;
                 Role::Wraps("offset(", inner.to_owned())
             }
@@ -250,8 +251,10 @@ impl<K: Kernel> Importer<'_, '_, K> {
         if let Some(name) = name {
             let name = name.trim_start_matches('?');
             let name = name.split('~').next().unwrap_or(name);
-            // The `|` between the faces (a blend's name holds an edge's).
-            let splits: Vec<usize> = name.match_indices('|').map(|(i, _)| i).collect();
+            // The `|` between the faces (a blend's name holds an edge's: in
+            // parentheses since format 52, where its `|` is not one of
+            // these).
+            let splits: Vec<usize> = top_level_bars(name);
             for i in splits {
                 let (a, b) = (&name[..i], &name[i + 1..]);
                 let (Some(fa), Some(fb)) = (
@@ -335,6 +338,32 @@ enum Role {
     Wraps(&'static str, String),
 }
 
+/// Where an edge name's `|` stand outside parentheses and brackets.
+fn top_level_bars(name: &str) -> Vec<usize> {
+    let mut depth = 0i32;
+    let mut out = Vec::new();
+    for (i, c) in name.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            '|' if depth == 0 => out.push(i),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The name a role of a face name holds: `<role>:<name>` (designs before
+/// format 52) or `<role>(<name>)` (format 52, `nested-face-name`), a piece
+/// qualifier after the parentheses left out.
+fn nested<'a>(role: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = role.strip_prefix(prefix)?;
+    if let Some(old) = rest.strip_prefix(':') {
+        return Some(old);
+    }
+    cut_piece(rest).strip_prefix('(')?.strip_suffix(')')
+}
+
 /// A name without its piece qualifier (`#2`, `#[…]`) at the end.
 fn cut_piece(name: &str) -> &str {
     let mut depth = 0i32;
@@ -347,4 +376,44 @@ fn cut_piece(name: &str) -> &str {
         }
     }
     name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A face name that holds another's reads in both forms: after a colon
+    /// (before format 52) and in parentheses (format 52), a character
+    /// outside ASCII read whole.
+    #[test]
+    fn nested_face_names_read_in_both_forms() {
+        assert_eq!(nested("inner:F2:top", "inner"), Some("F2:top"));
+        assert_eq!(nested("inner(F2:top)", "inner"), Some("F2:top"));
+        assert_eq!(nested("inner(F2:top)#2", "inner"), Some("F2:top"));
+        assert_eq!(
+            nested("blend(F2:side:曲|F2:top)", "blend"),
+            Some("F2:side:曲|F2:top")
+        );
+        assert_eq!(
+            nested("blend:F2:side:l2|F2:top", "blend"),
+            Some("F2:side:l2|F2:top")
+        );
+        assert_eq!(nested("side:l2", "blend"), None);
+        assert_eq!(nested("inner(F2:top", "inner"), None);
+    }
+
+    /// An edge's two faces split at the `|` outside parentheses only: a
+    /// blend's name (format 52) holds the edge it rounds.
+    #[test]
+    fn an_edge_name_splits_outside_the_names_it_holds() {
+        let name = "F5:blend(F2:side:l2|F2:top)|F2:side:l3";
+        let bars = top_level_bars(name);
+        assert_eq!(bars.len(), 1);
+        assert_eq!(&name[bars[0] + 1..], "F2:side:l3");
+        // The older form splits at every bar.
+        assert_eq!(
+            top_level_bars("F5:blend:F2:side:l2|F2:top|F2:side:l3").len(),
+            2
+        );
+    }
 }

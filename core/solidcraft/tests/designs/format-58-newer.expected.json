@@ -1,0 +1,13 @@
+{
+  "comment": "Worked out by hand (mitcad#1994): a design of format 58, newer than the import's 57, opens with a warning. A 20 x 20 x 10 block (4000) by the parameter side; a feature of a kind this import does not know keeps its place as a placeholder; a 10 x 10 x 2 lid (200) after it. The section and the parameter it cannot read are left out. Total 4200.",
+  "body_count": 2,
+  "total": {"volume_mm3": 4200},
+  "bbox": {"min": [0, 0, 0], "max": [40, 20, 10]},
+  "bodies": [
+    {"name": "Block", "volume_mm3": 4000},
+    {"name": "Lid", "volume_mm3": 200}
+  ],
+  "timeline": [{"name": "Block"}, {"name": "Lattice"}, {"name": "Lid"}],
+  "params": [{"name": "side"}],
+  "parametric": 2
+}

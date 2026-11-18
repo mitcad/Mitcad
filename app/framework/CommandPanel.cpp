@@ -134,6 +134,9 @@ QString choiceLabel(const QString& label) {
     QT_TRANSLATE_NOOP("Choice", "About x, the other way"), QT_TRANSLATE_NOOP("Choice", "About y"),
     QT_TRANSLATE_NOOP("Choice", "About y, the other way"), QT_TRANSLATE_NOOP("Choice", "Along X"),
     QT_TRANSLATE_NOOP("Choice", "Along Y"), QT_TRANSLATE_NOOP("Choice", "Along Z (standing)"),
+    QT_TRANSLATE_NOOP("Choice", "Along -X"), QT_TRANSLATE_NOOP("Choice", "Along -Y"),
+    QT_TRANSLATE_NOOP("Choice", "Along -Z (hanging)"),
+    QT_TRANSLATE_NOOP("Choice", "Face normal: out of the picked face"),
     QT_TRANSLATE_NOOP("Choice", "Along an edge: on a face, flush with its edge"),
     QT_TRANSLATE_NOOP("Choice", "Auto"), QT_TRANSLATE_NOOP("Choice", "Auto: from the members"),
     QT_TRANSLATE_NOOP("Choice", "Auto: through"), QT_TRANSLATE_NOOP("Choice", "Auto: through it"),
@@ -803,6 +806,13 @@ CommandPanel::CommandPanel(const CommandDef& def, const CommandState& state, boo
   // inspection gives them (Measure, mitcad#1010).
   m_resultRows = new ResultRows(def.name, this);
   m_resultRows->setFloatingStyle(chromeStyle() == ChromeStyle::Floating);
+  // The pointer over a row that has places paints them (mitcad#1979:
+  // Measure's distance between its points).
+  m_resultRows->setRowHovered([this](const QString& key, bool on) {
+    if (CommandPresenter::actions().resultHovered) {
+      CommandPresenter::actions().resultHovered(key, on);
+    }
+  });
   layout->addWidget(m_resultRows);
   // A group folded or unfolded moves its rows and what is under them: the
   // places again (mitcad#528).

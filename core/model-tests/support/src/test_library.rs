@@ -3,7 +3,8 @@
 //! slot profiles of three systems (made as the profile layout says: a
 //! section on XY extruded by `L`, `mount:` frames at its ends and slots),
 //! a profile with closed sides, a cap, a bracket with its nut and screw
-//! and an angle of plates with them,
+//! and an angle of plates with them (and one with a screw and a washer
+//! that have mount frames, as the parts library's fasteners),
 //! panels sized by parameters or fixed, a rail with its carriage and a
 //! slider for a slot. A resolver in memory serves them at two versions.
 
@@ -116,6 +117,136 @@ pub fn profile_design(w: f64, open: &[&str]) -> String {
     doc.recompute();
     doc.to_json()
 }
+
+/// A profile `w` along X and `h` along Y, `L` long (1000 mm), as the
+/// profile layout says, with slot frames at the places `slots` gives: each
+/// a side (`x+`, `x-`, `y+`, `y-`) and the slot's centre across it (y on an
+/// x side, x on a y side), numbered on each side from the lower coordinate
+/// (mitcad#2002: sides with two slots).
+pub fn slotted_design(w: f64, h: f64, slots: &[(&str, f64)]) -> String {
+    let mut doc = Document::new(MockKernel::default());
+    command(
+        &mut doc,
+        json!({"cmd": "add_parameter", "name": "L", "expression": "1000 mm"}),
+    )
+    .unwrap();
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(
+            sketch,
+            [-w / 2.0, -h / 2.0],
+            &ValueInput::Number(w),
+            &ValueInput::Number(h),
+        )
+        .unwrap()
+        .region;
+    let extrude = doc
+        .add_feature(
+            &def(
+                json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+                        "extent": {"type": "distance", "distance": "L"}, "operation": "new_body"}),
+            ),
+            None,
+        )
+        .unwrap()
+        .uid;
+    fixed_frame(
+        &mut doc,
+        "end_a",
+        [0.0; 3],
+        [0.0, 0.0, -1.0],
+        [1.0, 0.0, 0.0],
+    );
+    doc.add_feature(
+        &def(json!({"type": "joint_origin",
+                    "geometry": {"body": format!("{extrude}.b0"),
+                                 "face": format!("{extrude}:end({region})")}})),
+        Some("mount:end_b"),
+    )
+    .unwrap();
+    for (name, origin, z) in slotted_frames(w, h, slots) {
+        fixed_frame(&mut doc, &name, origin, z, [0.0, 0.0, 1.0]);
+    }
+    doc.recompute();
+    doc.to_json()
+}
+
+/// The slot frames of [`slotted_design`]: name, origin and z.
+fn slotted_frames(w: f64, h: f64, slots: &[(&str, f64)]) -> Vec<(String, [f64; 3], [f64; 3])> {
+    let mut out = Vec::new();
+    for side in ALL_SIDES {
+        let mut across: Vec<f64> = slots
+            .iter()
+            .filter(|(s, _)| *s == side)
+            .map(|(_, c)| *c)
+            .collect();
+        across.sort_by(f64::total_cmp);
+        for (i, c) in across.into_iter().enumerate() {
+            let (origin, z) = match side {
+                "x+" => ([w / 2.0, c, 0.0], [1.0, 0.0, 0.0]),
+                "x-" => ([-w / 2.0, c, 0.0], [-1.0, 0.0, 0.0]),
+                "y+" => ([c, h / 2.0, 0.0], [0.0, 1.0, 0.0]),
+                _ => ([c, -h / 2.0, 0.0], [0.0, -1.0, 0.0]),
+            };
+            out.push((format!("slot_{side}_{}", i + 1), origin, z));
+        }
+    }
+    out
+}
+
+/// The `build` block of a [`slotted_design`] profile of system B8 in the
+/// series `grid`.
+pub fn slotted_build(grid: f64, w: f64, h: f64, slots: &[(&str, f64)]) -> Value {
+    let mut frames = vec![
+        json!({"name": "end_a", "kind": "end"}),
+        json!({"name": "end_b", "kind": "end"}),
+    ];
+    for (name, _, _) in slotted_frames(w, h, slots) {
+        frames.push(json!({"name": name, "kind": "slot"}));
+    }
+    json!({
+        "role": "profile",
+        "system": {"type": "B", "slot": 8.0, "grid": grid},
+        "length": {"parameter": "L", "min": "10 mm", "max": "6000 mm", "stock": ["6000 mm"]},
+        "section": {"width": format!("{w} mm"), "height": format!("{h} mm")},
+        "slot": {"depth": "9 mm", "opening": "8.2 mm"},
+        "mass_per_metre": "1.8 kg",
+        "frames": frames,
+    })
+}
+
+/// The slots of a 30x60 (30 along X): two on each long side (x+, x-), 15
+/// either side of its middle, one on each short side.
+pub const SLOTS_30X60: [(&str, f64); 6] = [
+    ("x+", -15.0),
+    ("x+", 15.0),
+    ("x-", -15.0),
+    ("x-", 15.0),
+    ("y+", 0.0),
+    ("y-", 0.0),
+];
+
+/// The slots of a 40x80 (40 along X), as a 30x60's in the series 40.
+pub const SLOTS_40X80: [(&str, f64); 6] = [
+    ("x+", -20.0),
+    ("x+", 20.0),
+    ("x-", -20.0),
+    ("x-", 20.0),
+    ("y+", 0.0),
+    ("y-", 0.0),
+];
+
+/// The slots of a 60x60: two on every side, 15 either side of its middle.
+pub const SLOTS_60X60: [(&str, f64); 8] = [
+    ("x+", -15.0),
+    ("x+", 15.0),
+    ("x-", -15.0),
+    ("x-", 15.0),
+    ("y+", -15.0),
+    ("y+", 15.0),
+    ("y-", -15.0),
+    ("y-", 15.0),
+];
 
 /// A guide rail 15 x 15, `L` long (1000 mm): the ends of a profile with no
 /// slots, its carriage's frame `rail` on its top and its face frame `base`
@@ -256,6 +387,39 @@ fn angle_design() -> String {
     doc.to_json()
 }
 
+/// A block with one mount frame `seat` of `kind` at `origin`, its z along
+/// -Z, as the parts library's fasteners have theirs (mitcad#2001).
+fn seated_design(size: [f64; 3], corner: [f64; 2], kind: &str, origin: [f64; 3]) -> String {
+    let mut doc = Document::new(MockKernel::default());
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let region = doc
+        .add_rectangle(
+            sketch,
+            corner,
+            &ValueInput::Number(size[0]),
+            &ValueInput::Number(size[1]),
+        )
+        .unwrap()
+        .region;
+    doc.add_feature(
+        &def(
+            json!({"type": "extrude", "profiles": [{"sketch": sketch, "region": region}],
+                    "extent": {"type": "distance", "distance": size[2]}, "operation": "new_body"}),
+        ),
+        None,
+    )
+    .unwrap();
+    doc.add_feature(
+        &def(json!({"type": "joint_origin",
+                    "geometry": {"origin": origin, "normal": [0.0, 0.0, -1.0], "x_axis": [1.0, 0.0, 0.0]},
+                    "mount": {"name": "seat", "kind": kind}})),
+        Some("Mount seat"),
+    )
+    .unwrap();
+    doc.recompute();
+    doc.to_json()
+}
+
 /// A panel `W` x `H` x `t` (parameters, or `W` fixed).
 fn panel_design(fixed_width: Option<f64>) -> String {
     let mut doc = Document::new(MockKernel::default());
@@ -347,6 +511,33 @@ impl TestLibrary {
                     "P30_2N",
                     "Profile 30x30 B8 2N",
                 ),
+            );
+        }
+        // Profiles with two slots on a side (mitcad#2002): a 30x60, whose
+        // section at V2 is a 40x80 (another size, its slots 20 from its
+        // middle), and a 60x60.
+        let slotted = |grid: f64, w: f64, h: f64, slots: &[(&str, f64)], name: &str| Part {
+            text: slotted_design(w, h, slots),
+            build: Some(slotted_build(grid, w, h, slots)),
+            part_number: name.replace(' ', "_"),
+            name: name.to_owned(),
+            designation: format!("{name} L={{L}}"),
+        };
+        add(
+            "p30x60",
+            V1,
+            slotted(30.0, 30.0, 60.0, &SLOTS_30X60, "Profile 30x60 B8"),
+        );
+        add(
+            "p30x60",
+            V2,
+            slotted(30.0, 40.0, 80.0, &SLOTS_40X80, "Profile 30x60 B8"),
+        );
+        for rev in [V1, V2] {
+            add(
+                "p60",
+                rev,
+                slotted(30.0, 60.0, 60.0, &SLOTS_60X60, "Profile 60x60 B8"),
             );
         }
         // At V2 the 30 profile is 32 wide (another section).
@@ -657,6 +848,60 @@ impl TestLibrary {
                 ),
                 part_number: "CAP30B".to_owned(),
                 name: "Box cap 30 B8".to_owned(),
+                designation: String::new(),
+            },
+        );
+        // Fasteners with mount frames as the parts library gives them
+        // (mitcad#1197, mitcad#2001): a screw's `shaft` frame `seat` under
+        // its head, z along the shank to the tip, and a washer's `hole`
+        // frame `seat` on its bearing face, z out of it; and an angle as
+        // angle30 that brings them with its nut.
+        add(
+            "screw6-seat",
+            V1,
+            Part {
+                // The shank from the tip (z = 0) up to the head's underside
+                // (z = 12), its frame there pointing down to the tip.
+                text: seated_design([6.0, 6.0, 12.0], [-3.0, -3.0], "shaft", [0.0, 0.0, 12.0]),
+                build: None,
+                part_number: String::new(),
+                name: "Screw M6x12 with a seat".to_owned(),
+                designation: String::new(),
+            },
+        );
+        add(
+            "washer6-seat",
+            V1,
+            Part {
+                // 1.5 thick, its bearing face at z = 0.
+                text: seated_design([12.0, 12.0, 1.5], [-6.0, -6.0], "hole", [0.0; 3]),
+                build: None,
+                part_number: String::new(),
+                name: "Washer 6 with a seat".to_owned(),
+                designation: String::new(),
+            },
+        );
+        add(
+            "angle30-seat",
+            V1,
+            Part {
+                text: angle_design(),
+                build: Some(json!({
+                    "role": "connector",
+                    "systems": [{"type": "B", "slot": 8}],
+                    "frames": [{"name": "mount_a", "kind": "face"}, {"name": "mount_b", "kind": "face"}],
+                    "connector": {
+                        "junctions": ["L", "T"],
+                        "space": "inner_corner",
+                        "mates": [{"frame": "mount_a", "to": "slot"}, {"frame": "mount_b", "to": "slot"}],
+                        "fasteners": [{"frame": "mount_a",
+                                       "nut": {"library": LIBRARY, "component": "tnut8"},
+                                       "screw": {"library": "test-fasteners", "component": "screw6-seat"},
+                                       "washer": {"library": "test-fasteners", "component": "washer6-seat"}}]
+                    }
+                })),
+                part_number: "AN30S".to_owned(),
+                name: "Angle 30 B8 with seated screws".to_owned(),
                 designation: String::new(),
             },
         );

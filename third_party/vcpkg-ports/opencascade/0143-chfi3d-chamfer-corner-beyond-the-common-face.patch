@@ -34,8 +34,23 @@ later on a rounding of a corpus design).
 
 Before, the corner failed and the chamfer with it.
 
+Failures (mitcad#1986): the arc between the corner's points
+(ChFi3d_ArcBetween) and the intersection of the two chamfers' surfaces
+with the face beyond fail with OCCT's reports of a computation it cannot
+make (ChFi3d_IsComputationFailure, 0016) where the corner cannot be cut so:
+no piece is made and the corner is left to OCCT, as the code after the
+handlers reports. Any other failure (a broken invariant, a signal) is
+rethrown.
+Test: geometry/tests/port/p0143-chamfer-corner-beyond-the-common-face.cpp
+(ctest geometry.port.0143): a second geometry to test_chamfer_overflow.cpp's
+hexagon, a square prism under a disc, the edges where its walls meet the
+disc's underside chamfered 2, wider than the underside near the corners:
+built, valid, exact volume, each corner cut by the disc's cylinder where
+the chamfers' intersection meets it, with the cylinder's seam away from the
+corners and on a corner's diagonal; chamfers of 0.8, whose contacts cross
+on the underside, as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-index aa28fd4..1231028 100644
+index aa28fd4e..12310284 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 @@ -904,6 +904,47 @@ occ::handle<Geom_BezierCurve> ChFi3d_Spine(const gp_Pnt& pd,
@@ -123,10 +138,10 @@ index aa28fd4..1231028 100644
      if (ChFi3d_IntTraces(fd1,
                           pref1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index 6859a55..3d36c9d 100644
+index 2571e2c7..1f8f8ac4 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -299,6 +299,12 @@ bool ChFi3d_IntTraces(const occ::handle<ChFiDS_SurfData>& fd1,
+@@ -318,6 +318,12 @@ bool ChFi3d_IntTraces(const occ::handle<ChFiDS_SurfData>& fd1,
                        const bool                          Check2dDistance = false,
                        const bool                          enlarge         = false);
  
@@ -140,10 +155,10 @@ index 6859a55..3d36c9d 100644
                        const occ::handle<ChFiDS_Stripe>& cd1,
                        const occ::handle<ChFiDS_Stripe>& cd2,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_ChBuilder_C2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_ChBuilder_C2.cxx
-index e905205..b99e4f7 100644
+index e9052051..e9a6ec84 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_ChBuilder_C2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_ChBuilder_C2.cxx
-@@ -16,9 +16,522 @@
+@@ -16,9 +16,532 @@
  
  #include <ChFi3d_ChBuilder.hxx>
  
@@ -349,8 +364,13 @@ index e905205..b99e4f7 100644
 +    ok = isFirst ? ChFi3d_ArcBetween(S, SB, Pc, CPco.Point(), Pnear, uvS, uvB, true, tol3d, Cc, Ps, Pb)
 +                 : ChFi3d_ArcBetween(S, SB, CPco.Point(), Pc, Pnear, uvS, uvB, false, tol3d, Cc, Ps, Pb);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT's report that this cannot be computed: no piece, reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    ok = false;
 +  }
 +  if (!ok)
@@ -505,8 +525,13 @@ index e905205..b99e4f7 100644
 +      }
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT's report that this cannot be computed: no piece, reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    found = false;
 +  }
 +  if (!found)

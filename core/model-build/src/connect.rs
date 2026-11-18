@@ -366,11 +366,13 @@ enum Hardware {
 }
 
 /// A piece of hardware on one of a connector's frames, read: what it is,
-/// whether it is held by its `slot` frame (a nut), and its box in its own
-/// coordinates.
+/// whether it is held by its `slot` frame (a nut), whether its own frame's
+/// z points towards what it bears on ([`bears_along_z`]), and its box in
+/// its own coordinates.
 struct Held {
     kind: Hardware,
     in_slot: bool,
+    along: bool,
     bounds: Option<BoundingBox>,
 }
 
@@ -383,11 +385,16 @@ type HeldJoint = (ComponentUid, FeatureUid, JointDef<ValueInput>, Held);
 /// and its own frame's override, and whether the connector's wall was
 /// found. A nut's slot frame points into the profile, as the connector's
 /// frame does (docs/libraries.md, "The direction of a frame's z axis"):
-/// the two agree, not flipped, so that the nut lies in the slot. A screw's
-/// or a washer's origin is its head's underside (a washer's face), z out
-/// of the head: flipped, its shank into the profile, and moved back by
-/// the connector's wall behind the frame, so that it bears on the wall's
-/// outer face; a screw also by the washer under it.
+/// the two agree, not flipped, so that the nut lies in the slot. A screw
+/// or a washer bears on the connector's wall: its seat (a screw's head's
+/// underside, a washer's face) is moved back by the wall behind the frame,
+/// so that it bears on the wall's outer face, a screw also by the washer
+/// under it, and its shank points into the profile (mitcad#2001). Held by
+/// a mount frame whose z points that way already (a screw's `shaft` frame
+/// along the shank, a washer's `hole` frame out of its bearing face), it
+/// is not flipped and its frame is shifted along its +z; held by its
+/// design's origin (a fastener without mount frames: z out of the head),
+/// it is flipped and its frame is shifted along its -z.
 fn holds<K: Kernel>(
     doc: &Document<K>,
     bodies: &[K::Shape],
@@ -429,10 +436,10 @@ fn holds<K: Kernel>(
                     0.0
                 };
             let shift = (back > 1e-9).then_some(FrameOverride {
-                shift: Some([0.0, 0.0, -back]),
+                shift: Some([0.0, 0.0, if h.along { back } else { -back }]),
                 ..FrameOverride::default()
             });
-            (true, shift)
+            (!h.along, shift)
         })
         .collect();
     (out, wall.is_some() || loose.is_empty())
@@ -482,6 +489,26 @@ fn wall_behind<K: Kernel>(
         }
     }
     wall
+}
+
+/// Whether a fastener's own frame `own` (its design's origin when None)
+/// has its z towards what the fastener bears on (mitcad#2001). Every mount
+/// frame's z does (docs/libraries.md, "Mount frames"): a screw's `shaft`
+/// frame goes along the shank to the tip, a nut's or a washer's `hole`
+/// frame and a `face` frame point out of the face that goes on, and a
+/// Build frame points towards the component that mates there. A fastener
+/// without mount frames is held by its design's origin, its head's
+/// underside (a washer's face) with z out of the head (mitcad#1115); a
+/// Build `bore` frame, which has no side, is read so too.
+fn bears_along_z(used: &SourceUse, own: Option<&str>) -> bool {
+    let Some(name) = own else {
+        return false;
+    };
+    used.meta
+        .frames
+        .iter()
+        .find(|f| f.name == name)
+        .is_none_or(|f| f.kind != "bore")
 }
 
 /// The own frame a fastener source is held by, and whether it is its
@@ -541,10 +568,12 @@ fn fastener_pieces<K: Kernel>(
             };
             let (fmounts, fbounds) = evaluated(doc, &used, &[])?;
             let (own, in_slot) = own_hold(&used, &fmounts);
+            let along = bears_along_z(&used, own.as_deref());
             read.push((
                 Held {
                     kind,
                     in_slot,
+                    along,
                     bounds: fbounds,
                 },
                 used,
@@ -556,6 +585,7 @@ fn fastener_pieces<K: Kernel>(
             .map(|(h, _, _)| Held {
                 kind: h.kind,
                 in_slot: h.in_slot,
+                along: h.along,
                 bounds: h.bounds,
             })
             .collect();
@@ -639,6 +669,58 @@ fn held_source<K: Kernel>(
         new: false,
         config,
     })
+}
+
+/// The fasteners of the current rule held the wrong way before
+/// mitcad#2001, each with its joint set right: held by a mount frame whose
+/// z points towards the connector's wall (a screw's `shaft` frame, a
+/// washer's `hole` frame), they were flipped and shifted along their -z as
+/// a fastener held by its design's origin is, so that the shank pointed
+/// out of the profile and the seat lay on the wall's far side. Not flipped
+/// and shifted as far along +z, the same seat lies on the wall's outer
+/// face. Each fastener's component, its joint and the joint's definition.
+fn reversed_fasteners<K: Kernel>(
+    doc: &Document<K>,
+) -> Vec<(ComponentUid, FeatureUid, JointDef<ValueInput>)> {
+    doc.assembly()
+        .components
+        .iter()
+        .filter_map(|c| {
+            let record = c.build.as_ref()?;
+            if record.role != BuildRole::Fastener
+                || record.rule != Some(CONNECT_RULE)
+                || record.added_by.is_none()
+            {
+                return None;
+            }
+            let (joint, source) = (record.joint?, record.source?);
+            let mut def = joint_input(doc, joint)?;
+            let GeomRef::Mount { name, .. } = &def.a.geometry else {
+                return None;
+            };
+            let name = name.clone();
+            if !def.flip {
+                return None;
+            }
+            let config = doc
+                .part_info(c.uid)
+                .and_then(|i| i.def.and_then(|d| d.config));
+            let used = held_source(doc, source, config)?;
+            let in_slot = used
+                .meta
+                .frames
+                .iter()
+                .any(|f| f.name == name && f.kind == "slot");
+            if in_slot || !bears_along_z(&used, Some(&name)) {
+                return None;
+            }
+            def.flip = false;
+            if let Some(shift) = def.a.frame_override.as_mut().and_then(|o| o.shift.as_mut()) {
+                shift[2] = -shift[2];
+            }
+            Some((c.uid, joint, def))
+        })
+        .collect()
 }
 
 /// A joint's definition in command form.
@@ -1041,14 +1123,16 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                         || (r.role == BuildRole::Fastener && r.added_by.is_some()))
             })
             .collect();
-        if first.is_empty() {
+        // Fasteners of the current rule held the wrong way (mitcad#2001).
+        let reversed = reversed_fasteners(self);
+        if first.is_empty() && reversed.is_empty() {
             return Ok(Vec::new());
         }
         // A test hook (mitcad#1151): with MITCAD_TEST_BUILD_UPGRADE_REFUSED
         // set, a design with parts of the first rule is refused as an edit
         // the document refuses would be, so that the callers' handling of
         // a refused upgrade (the design still opens) can be tested.
-        if std::env::var_os("MITCAD_TEST_BUILD_UPGRADE_REFUSED").is_some() {
+        if !first.is_empty() && std::env::var_os("MITCAD_TEST_BUILD_UPGRADE_REFUSED").is_some() {
             return Err(refuse(
                 "placing the connectors again is refused (MITCAD_TEST_BUILD_UPGRADE_REFUSED)",
             ));
@@ -1066,6 +1150,10 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
         let mut edits: Vec<(FeatureUid, JointDef<ValueInput>)> = Vec::new();
         let mut moved = Vec::new();
         let mut marked = Vec::new();
+        for (c, joint, def) in reversed {
+            edits.push((joint, def));
+            moved.push(c);
+        }
         for connector in connectors {
             let Some(info) = self.part_info(connector) else {
                 continue;
@@ -1157,14 +1245,17 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                 let Ok((_, fbounds)) = evaluated(self, &used, &[]) else {
                     continue;
                 };
-                let in_slot = match &def.a.geometry {
-                    GeomRef::Mount { name, .. } => used
-                        .meta
+                let own = match &def.a.geometry {
+                    GeomRef::Mount { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                let in_slot = own.is_some_and(|name| {
+                    used.meta
                         .frames
                         .iter()
-                        .any(|f| f.name == *name && f.kind == "slot"),
-                    _ => false,
-                };
+                        .any(|f| f.name == name && f.kind == "slot")
+                });
+                let along = bears_along_z(&used, own);
                 let kind = if in_slot {
                     Hardware::Nut
                 } else if washer_of(frame).is_some_and(|w| w == used.def.library.component) {
@@ -1179,6 +1270,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     Held {
                         kind,
                         in_slot,
+                        along,
                         bounds: fbounds,
                     },
                 ));
@@ -1192,6 +1284,7 @@ impl<K: Kernel> ConnectBuild<K> for Document<K> {
                     .map(|(_, _, _, h)| Held {
                         kind: h.kind,
                         in_slot: h.in_slot,
+                        along: h.along,
                         bounds: h.bounds,
                     })
                     .collect();

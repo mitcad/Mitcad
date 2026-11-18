@@ -9,8 +9,8 @@ The case: a perforated plate (a plane face with 1,187 round holes, 172,924
 boundary nodes), whose base triangulation took 1.1 s in Delabella. Of its
 14 million in-circle tests 334,000 (the points of one hole are nearly
 cocircular) reach the exact evaluation, which built every expansion in a
-std::vector: dozens of heap allocations per test, about half of
-Delabella's time.
+dynamic array (1070's): dozens of heap allocations per test, about half
+of Delabella's time (measured with 1070's first form, std::vector).
 The face's triangulation is the same before and after (each triangle's
 nodes compared); Delabella's time on it falls from 1.1 s to 0.49 s.
 
@@ -33,27 +33,40 @@ nodes compared); Delabella's time on it falls from 1.1 s to 0.49 s.
 
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
+index 2aa672e9..9535338e 100644
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 +++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
-@@ -41,7 +41,7 @@
+@@ -41,7 +41,7 @@ SOFTWARE.
  
  #include <algorithm>
  #include <cmath>
--#include <vector>
+-#include <NCollection_DynamicArray.hxx>
 +#include <Standard_Macro.hxx>
  #include "delabella.pxx" // we just need LOG() macro
  
  // assuming BITS is max(X_BITS,Y_BITS)
-@@ -82,8 +82,6 @@
+@@ -82,20 +82,6 @@ typedef int64_t  Signed62;		// 4xBITS + 6	dot(vect,norm)
  // forever or crashes.
  namespace
  {
--typedef std::vector<double> Expansion;
+-typedef NCollection_DynamicArray<double> Expansion;
+-
+-// The block size of an expansion's components: an in-circle determinant's
+-// expansions hold a few dozen at most.
+-const int THE_EXPANSION_BLOCK = 16;
+-
+-// The expansion of one value.
+-Expansion singleExpansion(double v)
+-{
+-  Expansion e(THE_EXPANSION_BLOCK);
+-  e.Append(v);
+-  return e;
+-}
 -
  const double THE_EPSILON = 1.1102230246251565e-16; // 2^-53
  // Shewchuk's error bounds of the floating-point orient2d and incircle,
  // doubled for the fused multiply-adds a compiler may form.
-@@ -106,114 +104,233 @@
+@@ -118,112 +104,233 @@ inline void twoProduct(double a, double b, double& x, double& y)
    y = std::fma(a, b, -x);
  }
  
@@ -64,9 +77,8 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +template <int N>
 +struct Expansion
  {
--  Expansion h;
--  h.reserve(e.size() + 1);
--  double q = b;
+-  Expansion h(THE_EXPANSION_BLOCK);
+-  double    q = b;
 -  for (const double c : e)
 +  int    size = 0;
 +  double c[N];
@@ -83,7 +95,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +    int    h = 0;
 +    for (int k = 0; k < size; ++k)
      {
--      h.push_back(err);
+-      h.Append(err);
 +      double sum = 0.0, err = 0.0;
 +      twoSum(q, c[k], sum, err);
 +      if (err != 0.0)
@@ -94,9 +106,9 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      }
 -    q = sum;
 -  }
--  if (q != 0.0 || h.empty())
+-  if (q != 0.0 || h.IsEmpty())
 -  {
--    h.push_back(q);
+-    h.Append(q);
 +    if (q != 0.0 || h == 0)
 +    {
 +      c[h++] = q;
@@ -133,9 +145,8 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +template <int M>
 +Expansion<2 * M> scaleExpansion(const Expansion<M>& e, double b)
  {
--  Expansion h;
--  h.reserve(2 * e.size());
--  double q = 0.0;
+-  Expansion h(THE_EXPANSION_BLOCK);
+-  double    q = 0.0;
 -  for (const double c : e)
 +  Expansion<2 * M> h;
 +  double           q = 0.0;
@@ -148,20 +159,20 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      twoSum(q, productErr, sum, err);
      if (err != 0.0)
      {
--      h.push_back(err);
+-      h.Append(err);
 +      h.c[h.size++] = err;
      }
      twoSum(product, sum, q, err);
      if (err != 0.0)
      {
--      h.push_back(err);
+-      h.Append(err);
 +      h.c[h.size++] = err;
      }
    }
--  if (q != 0.0 || h.empty())
+-  if (q != 0.0 || h.IsEmpty())
 +  if (q != 0.0 || h.size == 0)
    {
--    h.push_back(q);
+-    h.Append(q);
 +    h.c[h.size++] = q;
    }
    return h;
@@ -172,7 +183,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +template <int M, int N>
 +Expansion<2 * M * N + 1> multiplyExpansions(const Expansion<M>& e, const Expansion<N>& f)
  {
--  Expansion h(1, 0.0);
+-  Expansion h = singleExpansion(0.0);
 -  for (const double c : f)
 +  Expansion<2 * M * N + 1> h;
 +  h.c[0] = 0.0;
@@ -193,10 +204,10 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +template <int N>
 +Expansion<N> negateExpansion(Expansion<N> e)
  {
--  for (double& c : e)
+-  for (int k = 0; k < e.Length(); ++k)
 +  for (int k = 0; k < e.size; ++k)
    {
--    c = -c;
+-    e.ChangeValue(k) = -e.Value(k);
 +    e.c[k] = -e.c[k];
    }
    return e;
@@ -208,7 +219,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  {
    double x = 0.0, y = 0.0;
    twoSum(a, -b, x, y);
--  return growExpansion(Expansion(1, y), x);
+-  return growExpansion(singleExpansion(y), x);
 +  Expansion<2> h;
 +  h.c[0] = y;
 +  h.size = 1;
@@ -221,13 +232,13 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +template <int N>
 +int expansionSign(const Expansion<N>& e)
  {
--  for (size_t k = e.size(); k > 0; --k)
+-  for (int k = e.Length(); k > 0; --k)
 +  for (int k = e.size; k > 0; --k)
    {
--    if (e[k - 1] != 0.0)
+-    if (e.Value(k - 1) != 0.0)
 +    if (e.c[k - 1] != 0.0)
      {
--      return e[k - 1] > 0.0 ? 1 : -1;
+-      return e.Value(k - 1) > 0.0 ? 1 : -1;
 +      return e.c[k - 1] > 0.0 ? 1 : -1;
      }
    }
@@ -332,7 +343,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  // The sign of (b - a) x (c - a): positive when a, b, c turn
  // counterclockwise.
  int orientSign(double ax, double ay, double bx, double by, double cx, double cy)
-@@ -230,8 +347,7 @@
+@@ -240,8 +347,7 @@ int orientSign(double ax, double ay, double bx, double by, double cx, double cy)
    {
      return -1;
    }
@@ -342,7 +353,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  }
  
  // The sign of the determinant of the rows (x, y, x^2 + y^2) of a - d,
-@@ -273,19 +389,12 @@
+@@ -283,19 +389,12 @@ int incircleSign(double ax,
      return -1;
    }
  
@@ -368,7 +379,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  }
  } // namespace
  
-@@ -434,6 +543,18 @@
+@@ -444,6 +543,18 @@ struct CDelaBella : IDelaBella
        aNorm.z    = (Signed31)orientSign(v[0]->x, v[0]->y, v[1]->x, v[1]->y, v[2]->x, v[2]->y);
        return aNorm;
      }
@@ -387,7 +398,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
    };
  
    Vert* vert_alloc;
-@@ -995,7 +1116,7 @@
+@@ -1005,7 +1116,7 @@ struct CDelaBella : IDelaBella
                added_last = s;
                ++added;
  

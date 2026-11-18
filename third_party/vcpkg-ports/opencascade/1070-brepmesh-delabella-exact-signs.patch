@@ -34,7 +34,7 @@ bits, BRepMesh on the face with the radius swept from 400 to 1550 mm at
   is computed exactly as an expansion, a sum of doubles that do not
   overlap (J. R. Shewchuk, "Adaptive Precision Floating-Point Arithmetic
   and Fast Robust Geometric Predicates", 1997), with std::fma for the
-  products' errors. Face::dot returns the in-circle sign (the triple
+  products' errors, its components in an NCollection_DynamicArray. Face::dot returns the in-circle sign (the triple
   product of the lifted points, without rounding the lifted z), and
   Face::cross the orientation's sign as the normal's z, which decides the
   Delaunay faces (z < 0). The normal's x and y are as before; they decide
@@ -60,7 +60,12 @@ bits, BRepMesh on the face with the radius swept from 400 to 1550 mm at
   instead of going on without a base triangulation.
 
 Upstream: new.
+
+Test: geometry/io/tests/test_io.cpp (test_nearly_cocircular_planes,
+mitcad#846: the face with the concave arc meshed at every radius of the
+sweep; it crashed without the patch).
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx
+index b6b12026..16540d64 100644
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx
 +++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAlgo.cxx
 @@ -134,6 +134,14 @@ void BRepMesh_DelabellaBaseMeshAlgo::buildBaseTriangulation()
@@ -79,6 +84,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelabellaBaseMeshAl
      {
        const DelaBella_Triangle* aTrianglePtr = aTriangulator->GetFirstDelaunayTriangle();
 diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
+index 8e4adba5..2aa672e9 100644
 --- a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 +++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp
 @@ -40,6 +40,8 @@ SOFTWARE.
@@ -86,11 +92,11 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  
  #include <algorithm>
 +#include <cmath>
-+#include <vector>
++#include <NCollection_DynamicArray.hxx>
  #include "delabella.pxx" // we just need LOG() macro
  
  // assuming BITS is max(X_BITS,Y_BITS)
-@@ -69,6 +71,224 @@ typedef int64_t  Signed62;		// 4xBITS + 6	dot(vect,norm)
+@@ -69,6 +71,234 @@ typedef int64_t  Signed62;		// 4xBITS + 6	dot(vect,norm)
  // in order to expand xy range
  */
  
@@ -105,7 +111,19 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +// forever or crashes.
 +namespace
 +{
-+typedef std::vector<double> Expansion;
++typedef NCollection_DynamicArray<double> Expansion;
++
++// The block size of an expansion's components: an in-circle determinant's
++// expansions hold a few dozen at most.
++const int THE_EXPANSION_BLOCK = 16;
++
++// The expansion of one value.
++Expansion singleExpansion(double v)
++{
++  Expansion e(THE_EXPANSION_BLOCK);
++  e.Append(v);
++  return e;
++}
 +
 +const double THE_EPSILON = 1.1102230246251565e-16; // 2^-53
 +// Shewchuk's error bounds of the floating-point orient2d and incircle,
@@ -132,22 +150,21 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +// e + b, both exact, components in increasing magnitude, zeros dropped.
 +Expansion growExpansion(const Expansion& e, double b)
 +{
-+  Expansion h;
-+  h.reserve(e.size() + 1);
-+  double q = b;
++  Expansion h(THE_EXPANSION_BLOCK);
++  double    q = b;
 +  for (const double c : e)
 +  {
 +    double sum = 0.0, err = 0.0;
 +    twoSum(q, c, sum, err);
 +    if (err != 0.0)
 +    {
-+      h.push_back(err);
++      h.Append(err);
 +    }
 +    q = sum;
 +  }
-+  if (q != 0.0 || h.empty())
++  if (q != 0.0 || h.IsEmpty())
 +  {
-+    h.push_back(q);
++    h.Append(q);
 +  }
 +  return h;
 +}
@@ -165,9 +182,8 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +// e * b exactly.
 +Expansion scaleExpansion(const Expansion& e, double b)
 +{
-+  Expansion h;
-+  h.reserve(2 * e.size());
-+  double q = 0.0;
++  Expansion h(THE_EXPANSION_BLOCK);
++  double    q = 0.0;
 +  for (const double c : e)
 +  {
 +    double product = 0.0, productErr = 0.0;
@@ -176,24 +192,24 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +    twoSum(q, productErr, sum, err);
 +    if (err != 0.0)
 +    {
-+      h.push_back(err);
++      h.Append(err);
 +    }
 +    twoSum(product, sum, q, err);
 +    if (err != 0.0)
 +    {
-+      h.push_back(err);
++      h.Append(err);
 +    }
 +  }
-+  if (q != 0.0 || h.empty())
++  if (q != 0.0 || h.IsEmpty())
 +  {
-+    h.push_back(q);
++    h.Append(q);
 +  }
 +  return h;
 +}
 +
 +Expansion multiplyExpansions(const Expansion& e, const Expansion& f)
 +{
-+  Expansion h(1, 0.0);
++  Expansion h = singleExpansion(0.0);
 +  for (const double c : f)
 +  {
 +    h = sumExpansions(h, scaleExpansion(e, c));
@@ -203,9 +219,9 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +
 +Expansion negateExpansion(Expansion e)
 +{
-+  for (double& c : e)
++  for (int k = 0; k < e.Length(); ++k)
 +  {
-+    c = -c;
++    e.ChangeValue(k) = -e.Value(k);
 +  }
 +  return e;
 +}
@@ -215,17 +231,17 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
 +{
 +  double x = 0.0, y = 0.0;
 +  twoSum(a, -b, x, y);
-+  return growExpansion(Expansion(1, y), x);
++  return growExpansion(singleExpansion(y), x);
 +}
 +
 +// The sign of an expansion: that of its largest component, the last one.
 +int expansionSign(const Expansion& e)
 +{
-+  for (size_t k = e.size(); k > 0; --k)
++  for (int k = e.Length(); k > 0; --k)
 +  {
-+    if (e[k - 1] != 0.0)
++    if (e.Value(k - 1) != 0.0)
 +    {
-+      return e[k - 1] > 0.0 ? 1 : -1;
++      return e.Value(k - 1) > 0.0 ? 1 : -1;
 +    }
 +  }
 +  return 0;
@@ -315,7 +331,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  static Unsigned28 s14sqr(const Signed14& s)
  {
    return (Unsigned28)((Signed29)s * s);
-@@ -104,6 +324,7 @@ struct CDelaBella : IDelaBella
+@@ -104,6 +334,7 @@ struct CDelaBella : IDelaBella
    {
      Unsigned28 z;
      Face*      sew;
@@ -323,7 +339,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  
      Vect operator-(const Vert& v) const // diff
      {
-@@ -161,19 +382,22 @@ struct CDelaBella : IDelaBella
+@@ -161,19 +392,22 @@ struct CDelaBella : IDelaBella
    struct Face : DelaBella_Triangle
    {
      Norm n;
@@ -351,7 +367,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      }
  
      Face* Next(const Vert* p) const
-@@ -195,15 +419,20 @@ struct CDelaBella : IDelaBella
+@@ -195,15 +429,20 @@ struct CDelaBella : IDelaBella
        return nullptr;
      }
  
@@ -377,7 +393,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      }
    };
  
-@@ -224,6 +453,20 @@ struct CDelaBella : IDelaBella
+@@ -224,6 +463,20 @@ struct CDelaBella : IDelaBella
  
    virtual ~CDelaBella() = default;
  
@@ -398,7 +414,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
    int Triangulate()
    {
      int points = inp_verts;
-@@ -303,7 +546,7 @@ struct CDelaBella : IDelaBella
+@@ -303,7 +556,7 @@ struct CDelaBella : IDelaBella
          free(face_alloc);
        }
        max_faces  = 0;
@@ -407,7 +423,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        if (face_alloc)
        {
          max_faces = hull_faces;
-@@ -320,8 +563,10 @@ struct CDelaBella : IDelaBella
+@@ -320,8 +573,10 @@ struct CDelaBella : IDelaBella
  
      for (int i = 1; i < hull_faces; i++)
      {
@@ -419,7 +435,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      face_alloc[hull_faces - 1].next = nullptr;
  
      Face* cache = face_alloc;
-@@ -378,6 +623,13 @@ struct CDelaBella : IDelaBella
+@@ -378,6 +633,13 @@ struct CDelaBella : IDelaBella
                   || (f.n.y < 0 && TvL.y < 0) || (f.n.z > 0 && TvL.z > 0)
                   || (f.n.z < 0 && TvL.z < 0);
  
@@ -433,7 +449,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        if (lvh && !tvl) // insert new f on top of e(2,0) = (last,head)
        {
          // f.v[0] = head;
-@@ -400,8 +652,7 @@ struct CDelaBella : IDelaBella
+@@ -400,8 +662,7 @@ struct CDelaBella : IDelaBella
        }
        else
        {
@@ -443,7 +459,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        }
  
        last = v;
-@@ -482,8 +733,9 @@ struct CDelaBella : IDelaBella
+@@ -482,8 +743,9 @@ struct CDelaBella : IDelaBella
          }
  
          // retract last point it will be added as a cone's top later
@@ -455,7 +471,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
          i--;
        }
      }
-@@ -660,18 +912,23 @@ struct CDelaBella : IDelaBella
+@@ -660,18 +922,23 @@ struct CDelaBella : IDelaBella
  
        // 1. FIND FIRST VISIBLE FACE
        //    simply iterate around last vertex using last added triangle adjecency info
@@ -484,7 +500,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
              _f--;
            }
          }
-@@ -681,6 +938,11 @@ struct CDelaBella : IDelaBella
+@@ -681,6 +948,11 @@ struct CDelaBella : IDelaBella
        //    (we also build silhouette (vertex loop) between visible & invisible faces)
  
        // push first visible face onto stack (of visible faces)
@@ -496,7 +512,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        Face* stack = _f;
        _f->next    = _f; // old trick to use list pointers as 'on-stack' markers
        while (stack)
-@@ -700,6 +962,7 @@ struct CDelaBella : IDelaBella
+@@ -700,6 +972,7 @@ struct CDelaBella : IDelaBella
  
          // delete visible face
          _f->Free(&cache);
@@ -504,7 +520,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  
          // check all 3 neighbors
          for (int e = 0; e < 3; e++)
-@@ -718,10 +981,19 @@ struct CDelaBella : IDelaBella
+@@ -718,10 +991,19 @@ struct CDelaBella : IDelaBella
                Vert* a = fv[ab[e][0]];
                Vert* b = fv[ab[e][1]];
  
@@ -524,7 +540,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
  
                s->n    = s->cross();
                s->f[2] = n;
-@@ -741,7 +1013,7 @@ struct CDelaBella : IDelaBella
+@@ -741,7 +1023,7 @@ struct CDelaBella : IDelaBella
                }
                else
                {
@@ -533,7 +549,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
                }
  
                // build silhouette needed for sewing sides in the second pass
-@@ -767,7 +1039,7 @@ struct CDelaBella : IDelaBella
+@@ -767,7 +1049,7 @@ struct CDelaBella : IDelaBella
                }
                else
                {
@@ -542,7 +558,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
                }
  
                // push neighbor face, it's visible and requires processing
-@@ -780,13 +1052,35 @@ struct CDelaBella : IDelaBella
+@@ -780,13 +1062,35 @@ struct CDelaBella : IDelaBella
  
        // 3. SEW SIDES OF CONE BUILT ON SLIHOUTTE SEGMENTS
  
@@ -580,7 +596,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        do
        {
          // sew pr<->nx
-@@ -870,7 +1164,7 @@ struct CDelaBella : IDelaBella
+@@ -870,7 +1174,7 @@ struct CDelaBella : IDelaBella
          max_verts  = 0;
        }
  
@@ -589,7 +605,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
        if (vert_alloc)
        {
          max_verts = points;
-@@ -920,6 +1214,9 @@ struct CDelaBella : IDelaBella
+@@ -920,6 +1224,9 @@ struct CDelaBella : IDelaBella
        v->x    = (Signed14) * (const float*)((const char*)x + i * advance_bytes);
        v->y    = (Signed14) * (const float*)((const char*)y + i * advance_bytes);
        v->z    = s14sqr(v->x) + s14sqr(v->y);
@@ -599,7 +615,7 @@ diff --git a/src/ModelingAlgorithms/TKMesh/BRepMesh/delabella.cpp b/src/Modeling
      }
  
      out_verts = Triangulate();
-@@ -955,6 +1252,9 @@ struct CDelaBella : IDelaBella
+@@ -955,6 +1262,9 @@ struct CDelaBella : IDelaBella
        v->x    = (Signed14) * (const double*)((const char*)x + i * advance_bytes);
        v->y    = (Signed14) * (const double*)((const char*)y + i * advance_bytes);
        v->z    = s14sqr(v->x) + s14sqr(v->y);

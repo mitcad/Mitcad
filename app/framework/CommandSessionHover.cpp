@@ -13,7 +13,11 @@
 #include <QtLogging>
 
 #include <BRep_Builder.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <TopExp.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Shape.hxx>
 
 #include "CommandSession.hpp"
 #include "Json.hpp"
@@ -299,6 +303,27 @@ void CommandSession::updateHoverChain() {
   }
   const InputDef* input = activeInput();
   const SelectionItem& item = m_hovered;
+  // A free edge with Whole Opening on (mitcad#1955): the hover shows the
+  // whole opening a click takes, the edge under the pointer the view's own.
+  if (input != nullptr && isFreeEdge(item) && input->takesWholeOpenings(m_state)) {
+    const SelectionItem whole = wholeOpeningItem(item);
+    const QString key = QStringList{item.occurrence, item.owner, whole.name}.join(QLatin1Char('|'));
+    if (key != m_chainKey) {
+      m_chainKey = key;
+      m_chainShape = m_host.itemShape(whole);
+      m_host.viewer().setHoverChain(m_chainShape);
+    }
+    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
+    if (!m_chainShape.IsNull()) {
+      TopExp::MapShapes(m_chainShape, TopAbs_EDGE, edges);
+    }
+    const QString line = QStringLiteral("Hover opening: %1 edge(s) of %2").arg(edges.Extent()).arg(item.owner);
+    if (line != m_loggedHover) {
+      m_loggedHover = line;
+      qDebug().noquote() << line;
+    }
+    return;
+  }
   QStringList chain;
   if (input != nullptr && item.isValid() && !item.owner.isEmpty() && !item.name.isEmpty() &&
       (item.kind == SelectKind::Edge || item.kind == SelectKind::Face) && input->chainKinds.testFlag(item.kind)) {

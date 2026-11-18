@@ -227,7 +227,9 @@ pub trait Kernel: Send {
         Err(KernelError::Unsupported("mass properties"))
     }
 
-    /// None for an empty shape.
+    /// The tight box of the shape's trimmed faces, not of their surfaces
+    /// beyond their boundaries (mitcad#2020); `enclosing_box` is the
+    /// quicker, looser one. None for an empty shape.
     fn bounding_box(&self, _shape: &Self::Shape) -> Result<Option<BoundingBox>, KernelError> {
         Err(KernelError::Unsupported("bounding boxes"))
     }
@@ -2269,6 +2271,19 @@ pub trait Kernel: Send {
         _spec: &crate::flex_drape::DrapeNodesSpec<'_, Self::Shape>,
     ) -> Result<crate::flex_drape::DrapeNodes, KernelError> {
         Err(KernelError::Unsupported("hanging flex items"))
+    }
+
+    // Many shapes' boxes at once (mitcad#1997).
+
+    /// [`Kernel::bounding_box`] of each shape, in their order: the boxes a
+    /// kernel can measure beside each other (a drawing view of hundreds of
+    /// bodies fitted to its sheet). Unsupported where the caller asks
+    /// shape by shape.
+    fn bounding_boxes(
+        &self,
+        _shapes: &[&Self::Shape],
+    ) -> Result<Vec<Option<BoundingBox>>, KernelError> {
+        Err(KernelError::Unsupported("boxes of many shapes"))
     }
 }
 

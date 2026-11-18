@@ -5,8 +5,10 @@
 //! `revision`; saved and read back; orphaned when a feature removes the
 //! face they are on, and retargeted; a model change with its
 //! `address_comment` in one array undone as one step; a comment on a
-//! parameter following its renames (mitcad#1305); and comments on a
-//! deleted last feature staying orphaned after a reload (mitcad#1320).
+//! parameter following its renames (mitcad#1305); comments on a
+//! deleted last feature staying orphaned after a reload (mitcad#1320); and
+//! a comment on the whole design, in an empty design and through model
+//! changes (mitcad#2010).
 
 use serde_json::{Value, json};
 
@@ -797,4 +799,127 @@ fn a_comment_follows_its_occurrence_to_another_parent() {
     let back = comment(&doc, &id);
     assert_eq!(back["target"]["occurrence"], arm, "{back}");
     assert_eq!(back["orphaned"], false, "{back}");
+}
+
+/// mitcad#2010, Done when: a `{"design": true}` comment in an empty design
+/// is added, replied to, addressed, resolved, reopened and deleted, saved
+/// and read back, never orphaned by a model change (a feature added and
+/// deleted), labelled "Design" without a place; a target of another form
+/// beside it is refused with the forms, which list the new one.
+#[test]
+fn a_comment_on_the_whole_design_works_in_an_empty_design() {
+    let design = || json!({"design": true});
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().measures_selections.set(true);
+    let id = add(&mut doc, "Plan a wall bracket for a 40 mm pipe", design());
+    assert_eq!(id, "C1");
+    assert_eq!(undo_label(&doc), "Add Comment C1");
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["target"], design(), "{c1}");
+    assert_eq!(c1["label"], "Design", "{c1}");
+    assert_eq!(c1["place"], Value::Null, "{c1}");
+    assert_eq!(c1["orphaned"], false, "{c1}");
+    assert_eq!(comments(&doc)["open"], 1);
+    let on_design = query(&doc, json!({"query": "comments", "target": design()}));
+    assert_eq!(ids(&on_design), ["C1"]);
+
+    // The agent asks back, the user answers, the agent addresses it.
+    command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "Which wall material?\nAnd which screws?",
+               "author": "claude-code"}),
+    );
+    assert_eq!(undo_label(&doc), "Reply to C1");
+    command(
+        &mut doc,
+        json!({"cmd": "reply_comment", "id": "C1", "text": "Concrete, M6"}),
+    );
+    let replies = comment(&doc, "C1")["replies"].clone();
+    assert_eq!(replies[0]["author"], "claude-code");
+    assert_eq!(
+        replies[0]["text"],
+        "Which wall material?\nAnd which screws?"
+    );
+    assert_eq!(replies[1]["author"], "user");
+
+    // Model changes: a block added and deleted, with undo; never orphaned.
+    command(
+        &mut doc,
+        json!([
+            {"cmd": "sketch.create"},
+            {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [0, 0], "width": 20, "height": 20},
+            {"cmd": "add_feature", "def": {"type": "extrude", "profiles": [{"sketch": "F1", "region": R}],
+              "extent": {"type": "distance", "distance": "20 mm"}, "operation": "new_body"}},
+        ]),
+    );
+    assert_eq!(comment(&doc, "C1")["orphaned"], false);
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": "F2"}));
+    command(&mut doc, json!({"cmd": "delete_feature", "uid": "F1"}));
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["orphaned"], false, "{c1}");
+    assert_eq!(c1["place"], Value::Null, "{c1}");
+    command(&mut doc, json!({"cmd": "undo"}));
+    assert_eq!(comment(&doc, "C1")["orphaned"], false);
+
+    command(
+        &mut doc,
+        json!({"cmd": "address_comment", "id": "C1", "resolution": "Bracket1 for a 40 mm pipe",
+               "author": "claude-code"}),
+    );
+    assert_eq!(comment(&doc, "C1")["status"], "addressed");
+    command(&mut doc, json!({"cmd": "resolve_comment", "id": "C1"}));
+    assert_eq!(comment(&doc, "C1")["status"], "resolved");
+    command(
+        &mut doc,
+        json!({"cmd": "reopen_comment", "id": "C1", "text": "Make it 3 mm thicker"}),
+    );
+    let c1 = comment(&doc, "C1");
+    assert_eq!(c1["status"], "open");
+    assert_eq!(c1["replies"].as_array().unwrap().len(), 3);
+
+    // Saved and read back: the target as written, no place.
+    let saved = doc.to_json();
+    let file: Value = serde_json::from_str(&saved).unwrap();
+    assert_eq!(file["comments"][0]["target"], design());
+    assert!(file["comments"][0].get("place").is_none(), "{saved}");
+    assert!(file["comments"][0].get("orphaned").is_none(), "{saved}");
+    let mut loaded = Document::from_json(&saved, MockKernel::default()).unwrap();
+    loaded.kernel().measures_selections.set(true);
+    loaded.recompute();
+    assert_eq!(loaded.to_json(), saved);
+    let listed = |doc: &Document<MockKernel>| comments(doc)["comments"].clone();
+    assert_eq!(listed(&loaded), listed(&doc));
+
+    // A comment orphaned elsewhere is retargeted to the design (the undo
+    // above brought Sketch1 back, without Extrude1).
+    let on_sketch = add(&mut loaded, "this sketch", json!({"feature": "F1"}));
+    command(&mut loaded, json!({"cmd": "delete_feature", "uid": "F1"}));
+    assert_eq!(comment(&loaded, &on_sketch)["orphaned"], true);
+    command(
+        &mut loaded,
+        json!({"cmd": "retarget_comment", "id": on_sketch, "target": design()}),
+    );
+    let retargeted = comment(&loaded, &on_sketch);
+    assert_eq!(retargeted["orphaned"], false, "{retargeted}");
+    assert_eq!(retargeted["place"], Value::Null, "{retargeted}");
+    assert_eq!(retargeted["label"], "Design", "{retargeted}");
+
+    // Another form beside it, or `false`, is no target; the error lists
+    // the forms, the design's among them.
+    for target in [
+        json!({"design": true, "feature": "F1"}),
+        json!({"design": true, "occurrence": "O1"}),
+        json!({"design": false}),
+    ] {
+        let error = refused(
+            &mut loaded,
+            json!({"cmd": "add_comment", "text": "x", "target": target}),
+        );
+        assert!(error.contains("a target is"), "{target}: {error}");
+        assert!(error.contains("{\"design\": true}"), "{target}: {error}");
+    }
+
+    command(&mut loaded, json!({"cmd": "delete_comment", "id": "C1"}));
+    assert_eq!(undo_label(&loaded), "Delete Comment C1");
+    assert_eq!(ids(&comments(&loaded)), [on_sketch.as_str()]);
 }

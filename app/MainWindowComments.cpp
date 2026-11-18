@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Comments (mitcad#1119; app/COMMANDS.md "Comments"): notes pinned to a
-// face, an edge, a body, a point, a feature, a sketch or a parameter that
-// point an AI agent at the right place. Add Comment (Shift+N, the Inspect
-// group, the view's context menu) picks the target in its panel and takes
-// the text there; the browser's, the timeline's and Edit Parameters'
-// menus ask for the text of a comment on their row (addCommentOn). After
+// face, an edge, a body, a point, a feature, a sketch, a parameter or the
+// whole design (mitcad#2010) that point an AI agent at the right place.
+// Add Comment (Shift+N, the Inspect group, the view's context menu) picks
+// the target in its panel, or takes Whole Design, and the text there; the
+// browser's (its root row: the whole design), the timeline's and Edit
+// Parameters' menus ask for the text of a comment on their row
+// (addCommentOn). After
 // every refresh the model's `comments` query gives the numbered pins in the
 // view (view/CommentPinOverlay) and the rows of the Comments panel
 // (view/CommentsWindow), whose Resolve, Reopen, Reply…, Delete and
@@ -89,7 +91,7 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
     def.group.clear();
     def.enabled = [this] { return !m_commentRetarget.isEmpty(); };
   } else {
-    def.tooltip = tr("Pins a note for an AI agent to a face, an edge, a body or a point of the design");
+    def.tooltip = tr("Pins a note for an AI agent to a face, edge, body, point or the whole design");
     def.tab = QStringLiteral("SOLID");
     def.group = QStringLiteral("INSPECT");
     def.shortcut = QKeySequence(Qt::SHIFT | Qt::Key_N);
@@ -113,10 +115,29 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
           .withTooltip(tr("Pins it to the point clicked, not to the whole face or edge")),
   };
   if (!retarget) {
+    // The whole design (mitcad#2010): On and At the Point Clicked hidden,
+    // nothing to pick, so that an empty design takes a comment too.
+    const auto notWhole = [](const CommandState& state) { return !state.checked(QStringLiteral("whole_design")); };
+    def.inputs[0].withVisible(notWhole);
+    def.inputs[1].withVisible(notWhole);
+    def.inputs.prepend(checkInput(QStringLiteral("whole_design"), tr("Whole Design"))
+                           .withTooltip(tr("A comment on the design as a whole, with nothing to pick")));
     def.inputs.append(textInput(QStringLiteral("text"), tr("Comment"))
                           .withTooltip(tr("What should change there, for the agent to read")));
   }
   def.build = [this, retarget](const CommandState& state, const CommandContext&) -> Built {
+    if (!retarget && state.checked(QStringLiteral("whole_design"))) {
+      const QString text = state.text(QStringLiteral("text")).trimmed();
+      if (text.isEmpty()) {
+        return Built::failure(tr("Write the comment: what should change in the design."), QStringLiteral("text"));
+      }
+      QJsonArray commands;
+      commands.append(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("add_comment")},
+                                  {QStringLiteral("text"), text},
+                                  {QStringLiteral("target"), QJsonObject{{QStringLiteral("design"), true}}},
+                                  {QStringLiteral("author"), QStringLiteral("user")}});
+      return Built::of({{QStringLiteral("commands"), commands}});
+    }
     const Selection& picks = state.items(QStringLiteral("target"));
     if (picks.isEmpty()) {
       return Built::failure(tr("Pick what the comment is about: a face, an edge, a body or a point."),
@@ -163,6 +184,9 @@ CommandDef MainWindow::commentTargetCommand(bool retarget) {
     return Built::of({{QStringLiteral("commands"), commands}});
   };
   def.describe = [retarget](const CommandState& state, const CommandContext&) {
+    if (!retarget && state.checked(QStringLiteral("whole_design"))) {
+      return QStringLiteral("Comment added on the whole design");
+    }
     const Selection& picks = state.items(QStringLiteral("target"));
     return QStringLiteral("Comment %1 on %2%3")
         .arg(retarget ? QStringLiteral("retargeted") : QStringLiteral("added"),
@@ -340,13 +364,27 @@ void MainWindow::openComments() {
     };
     actions.resolve = simple("resolve_comment", tr("Resolve %1"));
     actions.remove = simple("delete_comment", tr("Delete Comment %1"));
-    actions.reply = [this](const QString& id) {
-      afterEventWhenIdle(*this, this, [this, id] {
-        const QVector<CommentShown> comments = commentsOf(m_commentsAnswer).comments;
-        const CommentShown* comment = commentById(comments, id);
+    // What a reply answers (mitcad#2010): the reply selected in the panel,
+    // or with the comment's row its latest reply, else the comment.
+    const auto answered = [this](const QString& id, int selectedReply) {
+      const QVector<CommentShown> comments = commentsOf(m_commentsAnswer).comments;
+      const CommentShown* comment = commentById(comments, id);
+      if (comment == nullptr) {
+        return std::pair<QString, CommentEntry>();
+      }
+      return std::pair<QString, CommentEntry>(comment->label,
+                                              commentEntry(*comment, commentAnswered(*comment, selectedReply)));
+    };
+    const auto selectedReply = [this] {
+      const auto* panel = static_cast<CommentsWindow*>(m_commentsWindow.data());
+      return panel != nullptr ? panel->selectedReply() : 0;
+    };
+    actions.reply = [this, answered, selectedReply](const QString& id) {
+      const int reply = selectedReply();
+      afterEventWhenIdle(*this, this, [this, id, reply, answered] {
+        const auto [label, answers] = answered(id, reply);
         const std::optional<QString> text = askCommentText(
-            m_commentsWindow.data(), tr("Reply to Comment %1").arg(commentNumber(id)),
-            comment != nullptr ? comment->text : QString());
+            m_commentsWindow.data(), tr("Reply to Comment %1").arg(commentNumber(id)), label, false, answers);
         if (text) {
           runCommentCommand({{QStringLiteral("cmd"), QStringLiteral("reply_comment")},
                              {QStringLiteral("id"), id},
@@ -356,14 +394,13 @@ void MainWindow::openComments() {
         }
       });
     };
-    actions.reopen = [this](const QString& id) {
-      afterEventWhenIdle(*this, this, [this, id] {
-        const QVector<CommentShown> comments = commentsOf(m_commentsAnswer).comments;
-        const CommentShown* comment = commentById(comments, id);
+    actions.reopen = [this, answered, selectedReply](const QString& id) {
+      const int reply = selectedReply();
+      afterEventWhenIdle(*this, this, [this, id, reply, answered] {
+        const auto [label, answers] = answered(id, reply);
         // Why it is open again, for the agent: a reply, if one is given.
         const std::optional<QString> text = askCommentText(
-            m_commentsWindow.data(), tr("Reopen Comment %1").arg(commentNumber(id)),
-            comment != nullptr ? comment->text : QString(), true);
+            m_commentsWindow.data(), tr("Reopen Comment %1").arg(commentNumber(id)), label, true, answers);
         if (!text) {
           return;
         }
@@ -455,7 +492,10 @@ void MainWindow::showCommentTarget(const QString& id) {
                                  made != nullptr ? m_snapshot.firstOccurrence(made->component) : QString()});
     }
   }
-  if (target.contains(QStringLiteral("parameter"))) {
+  if (target.value(QStringLiteral("design")).toBool()) {
+    // The whole design (mitcad#2010): nothing to select, no place to frame.
+    showHint(tr("Comment %1 is on the whole design.").arg(comment->number));
+  } else if (target.contains(QStringLiteral("parameter"))) {
     showHint(tr("Comment %1 is on the parameter %2 (Edit › Edit Parameters…).")
                  .arg(comment->number)
                  .arg(target.value(QStringLiteral("parameter")).toString()));

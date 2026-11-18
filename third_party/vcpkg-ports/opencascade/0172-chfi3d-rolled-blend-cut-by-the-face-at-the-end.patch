@@ -32,11 +32,25 @@ face, an edge whose range lies beyond its vertices).
   towards V). The end blend's contact curves no longer run past its end
   (where it was extended for the face at the end to cut it). The spine's
   end becomes a free boundary with a singular extremity: no corner at V.
+
+Failures (mitcad#1986): the walk on, still rolling on the edge, and the
+piece cut by the face at the end fail with OCCT's reports of a computation
+it cannot make (ChFi3d_IsComputationFailure, 0016) where the blend cannot
+be carried to the face at the end so: the stripe's own state is restored
+and the end is left to OCCT's corner as before, which its caller is told.
+Any other failure (a broken invariant, a signal) is rethrown.
+Test: geometry/tests/port/p0172-rolled-blend-cut-at-the-end.cpp (ctest
+geometry.port.0172): a round pocket cut into a post off its axis, its floor
+a lens between the pocket's wall and the post's rim narrower than the
+radius, the floor's edge at the wall rounded with 2.5 and 2 (the ball
+touching the wall and rolling on the rim): built, valid, the lens consumed,
+the blend cut by the post's side at each tip; a pocket within the post,
+its floor wide enough for the ball all round, as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 5b87977..7d264d0 100644
+index b25afc06..84221db7 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -929,6 +929,13 @@ private:
+@@ -955,6 +955,13 @@ private:
    //! Returns true when the stripe was changed.
    Standard_EXPORT bool WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, const bool isFirst);
  
@@ -51,10 +65,10 @@ index 5b87977..7d264d0 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index d3b0d64..5ce11b7 100644
+index 67add267..4f45d05f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -6769,6 +6769,364 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -7563,6 +7563,374 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    return true;
  }
  
@@ -252,8 +266,13 @@ index d3b0d64..5ce11b7 100644
 +                  tolesp, First, Last, false, false, !isFirst, false, false, false, Soldep);
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  // (The stripe's state is that of its own walk.)
@@ -372,8 +391,13 @@ index d3b0d64..5ce11b7 100644
 +                             isFirst ? &anEnd : &aJunction,
 +                             isFirst ? &aJunction : &anEnd);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    G.Nullify();
 +  }
 +  if (G.IsNull())
@@ -419,7 +443,7 @@ index d3b0d64..5ce11b7 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -7804,8 +8162,14 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -8693,8 +9061,14 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
    if (!Simul)
    {
      // Walked blends cut by the face at an end before that end.

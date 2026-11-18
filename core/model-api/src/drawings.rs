@@ -32,7 +32,6 @@ use super::drawing_annotations::{
 };
 use super::drawing_templates::{RevisionCommand, SaveTemplateCommand, TitleBlockCommand};
 use super::prelude::*;
-use mitcad_model::Document;
 use mitcad_model::assembly::{Assembly, inverse};
 use mitcad_model::datum::Vec3;
 use mitcad_model::exchange::{BodyKind, MeshTolerance};
@@ -42,6 +41,7 @@ use mitcad_model::internal::fingerprint::Fingerprint;
 use mitcad_model::kernel::Kernel;
 use mitcad_model::notice;
 use mitcad_model::transform::Transform;
+use mitcad_model::{Document, ModelError};
 use mitcad_model_build::prelude::*;
 use mitcad_model_drawing::annotate::{turned, turned_with_view};
 use mitcad_model_drawing::clip::{self, Band, ViewMap};
@@ -359,7 +359,10 @@ named_enum! {
 /// The `drawing` query: a drawing with each sheet's views; the one sheet
 /// asked for (the first by default) drawn, with its items unless
 /// `geometry` is false. `title`: the design's name, for the root's
-/// drawings without a title of their own.
+/// drawings without a title of their own. `cached` (mitcad#1997): drawn
+/// only from what the projection cache holds; a sheet with a view the
+/// kernel would have to project (or shade) is not drawn and says so
+/// (`uncached`), so that the application draws it in a job of its own.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct DrawingQuery {
@@ -370,6 +373,8 @@ pub(super) struct DrawingQuery {
     geometry: bool,
     #[serde(default)]
     title: Option<String>,
+    #[serde(default)]
+    cached: bool,
 }
 
 fn yes() -> bool {
@@ -529,6 +534,36 @@ thread_local! {
     /// nothing collects them.
     static NOTES: std::cell::RefCell<Option<Vec<ProjectionNote>>> =
         const { std::cell::RefCell::new(None) };
+    /// While the `drawing` query draws only from the cache ([`from_cache`],
+    /// mitcad#1997): whether a view would have needed the kernel; none
+    /// while the kernel may be asked.
+    static CACHE_ONLY: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// What a view's projection or shading says while the `drawing` query
+/// draws only from the cache and the cache does not have it (mitcad#1997).
+const NOT_CACHED: &str = "not projected yet";
+
+/// Runs `work` without asking the kernel for projections or shadings that
+/// the cache does not hold (mitcad#1997): those fail with [`NOT_CACHED`];
+/// gives whether any did.
+fn from_cache<T>(work: impl FnOnce() -> T) -> (T, bool) {
+    let outer = CACHE_ONLY.with(|c| c.replace(Some(false)));
+    let out = work();
+    let missed = CACHE_ONLY.with(|c| c.replace(outer)).unwrap_or(false);
+    (out, missed)
+}
+
+/// Whether a projection or shading the cache does not hold must not be
+/// made now ([`from_cache`]); noted as missed when so.
+fn cache_only() -> bool {
+    CACHE_ONLY.with(|c| match c.get() {
+        Some(_) => {
+            c.set(Some(true));
+            true
+        }
+        None => false,
+    })
 }
 
 /// A view's projection as a drawing command or the `drawing` query asked
@@ -1178,6 +1213,11 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 // (mitcad#729), and they stay in line with their parents.
                 follow_turns(&old.sheets[index], sheet)?;
                 align(sheet);
+                // The views turned projected in this command's job
+                // (mitcad#1997).
+                if changed.sheets[index].views != old.sheets[index].views {
+                    self.project_sheet(&changed, index)?;
+                }
                 self.set_drawing(old.uid, label, changed)?;
                 Ok(json!({"drawing": old.uid, "sheet": index}))
             }
@@ -1495,6 +1535,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         if let Some(projection) = self.drawing_cache().projection(scaled_key) {
             return Ok(projection);
         }
+        if cache_only() {
+            return Err(NOT_CACHED.to_owned());
+        }
         let projection = Arc::new(self.project_now(shown, spec)?);
         let key = if projection.polygonal {
             scaled_key
@@ -1511,10 +1554,28 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
         let shapes = self.placed_shapes(shown)?;
         let placed = started.elapsed().as_secs_f64() * 1e3;
         let refs: Vec<&K::Shape> = shapes.iter().collect();
-        let projection = self
-            .kernel()
-            .project_view(&refs, spec)
-            .map_err(|e| e.to_string());
+        // In a job (a command, or the `drawing` query drawn in the
+        // background, mitcad#1997) a Cancel gives the kernel's projection
+        // up, which can take minutes for a large view: the command is then
+        // rejected, the query answers nothing. For tests the job's delay
+        // (RecomputeMonitor::set_test_delay) makes each projection that
+        // long, ending early on a cancel.
+        let projection = match self.monitor() {
+            Some(monitor) => {
+                monitor.test_pause();
+                if monitor.is_cancelled() {
+                    Err(ModelError::Cancelled.to_string())
+                } else {
+                    self.kernel()
+                        .interruptible(monitor, || self.kernel().project_view(&refs, spec))
+                        .map_err(|e| e.to_string())
+                }
+            }
+            None => self
+                .kernel()
+                .project_view(&refs, spec)
+                .map_err(|e| e.to_string()),
+        };
         let ms = started.elapsed().as_secs_f64() * 1e3;
         PROJECTIONS.with(|p| {
             let (n, total) = p.get();
@@ -1991,9 +2052,15 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                 drawing.name, query.sheet
             )));
         }
-        let (drawn, notes) =
-            noting(|| self.draw_sheet(drawing, query.sheet, query.title.as_deref()));
-        let drawn = drawn?;
+        let draw = || noting(|| self.draw_sheet(drawing, query.sheet, query.title.as_deref()));
+        // Only from the cache (mitcad#1997): a sheet that needs the kernel
+        // is not drawn; its drawing and sheets are listed all the same.
+        let ((drawn, notes), missed) = if query.cached {
+            from_cache(draw)
+        } else {
+            (draw(), false)
+        };
+        let drawn = if missed { None } else { Some(drawn?) };
         let sheets: Vec<Value> = drawing
             .sheets
             .iter()
@@ -2018,7 +2085,9 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                     "annotations": sheet.annotations,
                     "views": sheet.views.iter().map(|v| view_json(sheet, v)).collect::<Vec<_>>(),
                 });
-                if si == query.sheet {
+                if si == query.sheet
+                    && let Some(drawn) = &drawn
+                {
                     let evaluated = &drawn.evaluated;
                     if let Some(views) = value["views"].as_array_mut() {
                         for view in views {
@@ -2044,6 +2113,10 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
                                 } else {
                                     json!([b.min, b.max])
                                 };
+                                // The id of the group of its lines
+                                // (mitcad#1997: drawn scaled while its
+                                // new scale is worked out).
+                                view["group"] = json!(evaluated.views[*i].id);
                                 // Its label's box, which a drag moves
                                 // (mitcad#1909).
                                 if let Some(label) = evaluated.views[*i].label_group() {
@@ -2093,6 +2166,11 @@ impl<K: Kernel> DrawingsOps<K> for Document<K> {
             "decimals": drawing.defaults.decimals,
             "text_height": drawing.defaults.text_height,
         });
+        if missed {
+            let mut answer = answer;
+            answer["uncached"] = json!(true);
+            return Ok(answer);
+        }
         // The drawn sheet's views' projections, for the log (mitcad#1033).
         Ok(with_projections(answer, &notes))
     }
@@ -2141,6 +2219,23 @@ trait DrawingsLocal<K: Kernel> {
     /// the farthest first, each grey by how squarely it faces the eye; a
     /// section's without what its plane takes away.
     fn shaded(&self, shown: &[Shown], spec: &ViewSpec) -> Result<Arc<Shading>, String>;
+
+    /// The scale of ISO 5455 at which a base view fits its sheet
+    /// ([`fitting_scale`]) from the boxes of its bodies seen along it
+    /// (mitcad#1997): nothing is projected, so that the view is projected
+    /// once, at that scale. None for another view, one with breaks, one
+    /// that shows nothing, or a body the kernel gives no box of.
+    fn box_fitting_scale(&self, drawing: &Drawing, si: usize, id: u32) -> Option<f64>;
+
+    /// A sheet's views worked out inside the command that changed them
+    /// (mitcad#1997): their projections at their final scales are then in
+    /// the cache for the sheet drawn after it, and the work is the
+    /// command's job (its progress, its Cancel). A Cancel meanwhile
+    /// rejects the command.
+    fn project_sheet(&self, drawing: &Drawing, si: usize) -> Result<(), ApiError>;
+
+    /// Rejects the command whose job was cancelled (mitcad#1997).
+    fn drawing_stop(&self) -> Result<(), ApiError>;
 }
 
 impl<K: Kernel> DrawingsLocal<K> for Document<K> {
@@ -2414,14 +2509,30 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
                 view.place = clear(target, [2.0 * reach, 2.0 * reach], [1.0, 0.0], false);
             }
         } else {
-            // Its box is known once it is projected.
-            let b = self.placed_view(&changed, si, id)?.bounds;
+            // A base view's scale that fits the sheet, from its bodies'
+            // boxes first (mitcad#1997): it is then projected once, at the
+            // scale it keeps.
+            let mut fit_later = false;
+            if scale.is_none() && c.kind == ViewType::Base {
+                match self.box_fitting_scale(&changed, si, id) {
+                    Some(fit) => {
+                        changed.sheets[si].views.last_mut().expect("added").scale = Some(fit);
+                    }
+                    None => fit_later = true,
+                }
+            }
+            phases.mark("fit");
+            // Its box is known once it is projected; a Cancel meanwhile
+            // rejects the command.
+            let placed = self.placed_view(&changed, si, id);
+            self.drawing_stop()?;
+            let b = placed?.bounds;
             phases.mark("project");
             if b.is_empty() {
                 return Err(ApiError(format!("view {id} would show nothing")));
             }
             let sheet = &mut changed.sheets[si];
-            if scale.is_none() && c.kind == ViewType::Base {
+            if fit_later {
                 let fit = fitting_scale(sheet, &b);
                 sheet.views.last_mut().expect("added").scale = Some(fit);
             }
@@ -2449,6 +2560,10 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         }
         phases.mark("place");
         align(&mut changed.sheets[si]);
+        // Its sheet worked out as it is drawn next, in this command's job
+        // (mitcad#1997).
+        self.project_sheet(&changed, si)?;
+        phases.mark("sheet");
         let label = format!("Add view {id} to {}", old.name);
         self.set_drawing(old.uid, label, changed)?;
         phases.mark("store");
@@ -2755,10 +2870,18 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
             align(sheet);
         }
         if fit {
-            // One of ISO 5455's scales that fits its box on the sheet.
-            let b = self.placed_view(&changed, si, id)?.bounds;
+            // One of ISO 5455's scales that fits its box on the sheet: from
+            // its bodies' boxes where it can (mitcad#1997), else from its
+            // lines as they are.
+            let s = match self.box_fitting_scale(&changed, si, id) {
+                Some(s) => s,
+                None => {
+                    let placed = self.placed_view(&changed, si, id);
+                    self.drawing_stop()?;
+                    fitting_scale(&changed.sheets[si], &placed?.bounds)
+                }
+            };
             let sheet = &mut changed.sheets[si];
-            let s = fitting_scale(sheet, &b);
             let i = sheet.view_index(id).expect("found");
             sheet.views[i].scale = Some(s);
             align(sheet);
@@ -2792,6 +2915,22 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         } else {
             format!("Edit view {id} of {}", old.name)
         };
+        // What it changed projected at the scales it keeps, in this
+        // command's job (mitcad#1997): a new scale, direction, style or
+        // subject, and the views that follow it. A move projects nothing.
+        let moved_only = changed.sheets[si]
+            .views
+            .iter()
+            .zip(&old.sheets[si].views)
+            .all(|(a, b)| {
+                let mut a = a.clone();
+                a.place = b.place;
+                a.label_offset = b.label_offset;
+                a == *b
+            });
+        if !moved_only {
+            self.project_sheet(&changed, si)?;
+        }
         self.set_drawing(old.uid, label, changed)?;
         Ok(json!({"drawing": old.uid, "view": id}))
     }
@@ -2851,6 +2990,9 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         let key = view_key("drawing-shade-v1", &self.keyed(shown), spec);
         if let Some(shading) = self.drawing_cache().shading(key) {
             return Ok(shading);
+        }
+        if cache_only() {
+            return Err(NOT_CACHED.to_owned());
         }
         let tolerance = MeshTolerance {
             deviation: 0.1,
@@ -2922,6 +3064,54 @@ impl<K: Kernel> DrawingsLocal<K> for Document<K> {
         let shading = Arc::new(shading);
         self.drawing_cache().keep_shading(key, Arc::clone(&shading));
         Ok(shading)
+    }
+
+    fn box_fitting_scale(&self, drawing: &Drawing, si: usize, id: u32) -> Option<f64> {
+        let sheet = drawing.sheets.get(si)?;
+        let view = sheet.view(id)?;
+        if !matches!(view.kind, ViewKind::Base { .. }) || !view.breaks.is_empty() {
+            return None;
+        }
+        let spec = sheet.spec(id).ok()?;
+        let (shown, _) = self
+            .subject_shown(drawing.component, &sheet.subject(id))
+            .ok()?;
+        // The corners of each body's box where the view shows it, in the
+        // view's coordinates: a box that holds the view's lines. The
+        // bodies' boxes measured beside each other where the kernel can
+        // (mitcad#1997: 884 bodies one after another took 5 s), else body
+        // by body.
+        let shapes: Vec<&K::Shape> = shown
+            .iter()
+            .map(|s| self.body_shape(s.body))
+            .collect::<Option<_>>()?;
+        let boxes = match self.kernel().bounding_boxes(&shapes) {
+            Ok(boxes) if boxes.len() == shapes.len() => boxes,
+            _ => shapes
+                .iter()
+                .map(|shape| self.kernel().bounding_box(shape).ok().flatten())
+                .collect(),
+        };
+        let mut b = Bounds::empty();
+        for (s, boxed) in shown.iter().zip(boxes) {
+            for corner in boxed?.corners() {
+                b.add(spec.project(s.transform.apply_point(corner)));
+            }
+        }
+        (!b.is_empty()).then(|| fitting_scale(sheet, &b))
+    }
+
+    fn project_sheet(&self, drawing: &Drawing, si: usize) -> Result<(), ApiError> {
+        self.evaluate_views(drawing, si);
+        self.drawing_stop()
+    }
+
+    fn drawing_stop(&self) -> Result<(), ApiError> {
+        if self.monitor().is_some_and(|m| m.is_cancelled()) {
+            Err(ModelError::Cancelled.into())
+        } else {
+            Ok(())
+        }
     }
 }
 

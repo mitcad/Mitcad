@@ -471,7 +471,7 @@ impl<K: Kernel> FaceSheetCrateOps<K> for Document<K> {
                 }
                 mitcad_model::features::GeomRef::Face { body, face } => {
                     let local = point.map(|p| inverse(&target.placement).apply_point(p));
-                    self.pick_slot(&target, Some(&(*body, face.clone())), local)?
+                    self.pick_slot(&target, Some(&(*body, face.clone())), local, false)?
                 }
                 _ => return Err(refuse("pick a face of a member")),
             };

@@ -3,9 +3,12 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
+#include <utility>
 
 #include <QAction>
 #include <QClipboard>
+#include <QEvent>
 #include <QFont>
 #include <QGuiApplication>
 #include <QLabel>
@@ -41,6 +44,18 @@ public:
   }
   // The value under its name now.
   bool stacked() const { return !fits(width()); }
+  // `hovered` called with true as the pointer comes over the row (its name,
+  // its value or the gap between them) and with false as it leaves the row
+  // or the row hides (mitcad#1979). Read from the moves themselves too, so
+  // that posted moves (the UI tests' driver) count as the pointer's do.
+  void watchHover(std::function<void(bool)> hovered) {
+    m_hovered = std::move(hovered);
+    for (QWidget* watched : {static_cast<QWidget*>(this), static_cast<QWidget*>(m_name),
+                             static_cast<QWidget*>(m_value)}) {
+      watched->setMouseTracking(true);
+      watched->installEventFilter(this);
+    }
+  }
   QSize sizeHint() const override { return {m_nameWidth + kGap + m_value->sizeHint().width(), lineHeight()}; }
   QSize minimumSizeHint() const override {
     return {std::max(m_name->sizeHint().width(), kIndent + m_value->sizeHint().width()), lineHeight()};
@@ -54,6 +69,24 @@ protected:
   void resizeEvent(QResizeEvent* event) override {
     QWidget::resizeEvent(event);
     place();
+  }
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    switch (event->type()) {
+    case QEvent::Enter:
+    case QEvent::MouseMove:
+      setHovered(true);
+      break;
+    case QEvent::Leave:
+    case QEvent::Hide:
+      // A move from its name to its value leaves only the name.
+      if (watched == this) {
+        setHovered(false);
+      }
+      break;
+    default:
+      break;
+    }
+    return QWidget::eventFilter(watched, event);
   }
 
 private:
@@ -75,9 +108,18 @@ private:
     }
   }
 
+  void setHovered(bool on) {
+    if (on != m_on && m_hovered) {
+      m_on = on;
+      m_hovered(on);
+    }
+  }
+
   QLabel* m_name;
   QLabel* m_value;
   int m_nameWidth = 0;
+  std::function<void(bool)> m_hovered;
+  bool m_on = false;
 };
 
 namespace {
@@ -248,6 +290,16 @@ void ResultRows::addRows(QVBoxLayout* column, const std::vector<Inspection::Valu
     }
     row.line = new ValueLine(row.name, row.text, column->parentWidget());
     column->addWidget(row.line);
+    // A row with places paints them while the pointer is over it
+    // (mitcad#1979).
+    if (!value.places.isEmpty() && m_rowHovered) {
+      const QString hoveredKey = row.key;
+      row.line->watchHover([this, hoveredKey](bool on) {
+        if (m_rowHovered) {
+          m_rowHovered(hoveredKey, on);
+        }
+      });
+    }
     lines.push_back(row.line);
     nameWidth = std::max(nameWidth, row.name->sizeHint().width());
     const QString key = row.key;

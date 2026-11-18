@@ -28,11 +28,20 @@ second solver:
   of Compute computes such a stripe again.
 
 Upstream: with 0170 only; without it the inverse function is OCCT's already.
+
+Failures (mitcad#1986): the second computation runs only for a stripe
+that failed already; where it fails with OCCT's reports of a computation it
+cannot make (ChFi3d_IsComputationFailure, 0016) the stripe stays bad and
+the fillet fails as before. Any other failure (a broken invariant, a
+signal) is rethrown.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_rolling_ball.cpp
+(the rolling ball's cases).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index ccba7ca8..e162732b 100644
+index 6bfa76eb..7a4364d6 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -4001,10 +4001,15 @@ void ChFi3d_Builder::Compute()
+@@ -4061,10 +4061,15 @@ void ChFi3d_Builder::Compute()
  #endif
  
    // Construction of the stripe of fillet on each stripe.
@@ -48,7 +57,7 @@ index ccba7ca8..e162732b 100644
      try
      {
        OCC_CATCH_SIGNALS
-@@ -4029,6 +4034,10 @@ void ChFi3d_Builder::Compute()
+@@ -4089,6 +4094,10 @@ void ChFi3d_Builder::Compute()
        badstripes.Append(itel.Value());
        noteFailure(itel.Value(), blendFailure(itel.Value()));
      }
@@ -59,7 +68,7 @@ index ccba7ca8..e162732b 100644
      done = true;
    }
    // (The other parts of chamfers cut by the faces beyond a narrow face.)
-@@ -4095,6 +4104,63 @@ void ChFi3d_Builder::Compute()
+@@ -4155,6 +4164,68 @@ void ChFi3d_Builder::Compute()
      st->Spine()->SetErrorStatus(aStatus);
      itBad.Next();
    }
@@ -97,8 +106,13 @@ index ccba7ca8..e162732b 100644
 +      PerformSetOfSurf(st);
 +      aComputed = done;
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      aComputed = false;
 +    }
 +    if (aComputed && st->Spine()->ErrorStatus() == ChFiDS_Ok)
@@ -144,10 +158,10 @@ index 64959046..b8204269 100644
  private:
    Standard_EXPORT bool FaceTangency(const TopoDS_Edge&   E0,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index e5d4eadb..04e6372a 100644
+index fb9fa3cd..34d0b83a 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -23882,6 +23882,13 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -23933,6 +23933,13 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
    const occ::handle<ChFiDS_Spine>& sp = Stripe->Spine();
    int                              SI = ChFi3d_SolidIndex(sp, DStr, myESoMap, myEShMap);
    Stripe->SetSolidIndex(SI);

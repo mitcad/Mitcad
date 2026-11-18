@@ -24,6 +24,14 @@
 //! on a view and shows that component's number: in a parts list of its own
 //! view, else of another view of the sheet. A balloon whose component is
 //! gone, or that no parts list lists, is broken.
+//!
+//! The components' BOM Structures act on both (mitcad#1985): a Phantom's
+//! children are listed and numbered at its level; at `parts` a Purchased
+//! or Inseparable component is one item, its children not listed; a
+//! Reference is listed without a number, `REF` for its quantity, and gets
+//! no balloon.
+
+use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
@@ -35,7 +43,7 @@ use super::prelude::*;
 use mitcad_model::assembly::Assembly;
 use mitcad_model::ids::{BodyUid, ComponentUid, OccurrenceUid};
 use mitcad_model::kernel::Kernel;
-use mitcad_model::{Document, PartsListRow};
+use mitcad_model::{BomStructure, Document, PartsListRow};
 use mitcad_model_drawing::Units;
 use mitcad_model_drawing::annotate::ViewAnnotation;
 use mitcad_model_drawing::internal::hole_text;
@@ -103,6 +111,10 @@ impl TableEdit {
     }
 }
 
+/// A Reference's quantity cell in a parts list: it counts for none
+/// (mitcad#1985).
+const REFERENCE_QUANTITY: &str = "REF";
+
 /// What a row of a parts list stands for: a component, or a body of the
 /// drawing's own component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,19 +131,39 @@ pub(super) struct PartsList {
     /// How many occurrences below the drawing's component its view's
     /// subject lies.
     pub(super) depth: usize,
+    /// The components' BOM Structures it was worked out with (mitcad#1985).
+    pub(super) structures: Structures,
     pub(super) items: Vec<(RowKey, Vec<OccurrenceUid>, u32)>,
+    /// Its References' rows: listed without a number (mitcad#1985).
+    pub(super) references: Vec<RowKey>,
     pub(super) data: TableData,
     pub(super) label: String,
 }
 
+/// Each component's BOM Structure (mitcad#1985); Normal when left out.
+pub(super) type Structures = BTreeMap<ComponentUid, BomStructure>;
+
 impl PartsList {
-    /// The number of the row this key has, if it has one.
-    pub(super) fn item(&self, key: RowKey, path: &[OccurrenceUid]) -> Option<u32> {
-        let placement = match (key, self.levels) {
-            (RowKey::Body(_), _) => &[][..],
-            (RowKey::Component(_), Levels::Top) => path.get(..=self.depth)?,
-            (RowKey::Component(_), Levels::Parts) => path,
-        };
+    /// The row a pick's body is in, in this list ([`row_of`]).
+    pub(super) fn row_of(
+        &self,
+        assembly: &Assembly,
+        body: BodyUid,
+        path: &[OccurrenceUid],
+    ) -> Option<(RowKey, Vec<OccurrenceUid>)> {
+        row_of(
+            assembly,
+            &self.structures,
+            body,
+            path,
+            self.levels,
+            self.depth,
+        )
+    }
+
+    /// The number of the row this key has at this placement (as
+    /// [`row_of`] gives them), if it has one.
+    pub(super) fn item(&self, key: RowKey, placement: &[OccurrenceUid]) -> Option<u32> {
         if let Some((_, _, number)) = self
             .items
             .iter()
@@ -153,30 +185,51 @@ impl PartsList {
 
 /// The row a pick's body is in, in a parts list of these levels whose
 /// view's subject lies `depth` occurrences below the drawing's component
-/// (`path` starts there): the component of the occurrence right below the
-/// subject, or of the body's own occurrence; the body itself when no
-/// occurrence below the subject places it.
+/// (`path` starts there), with the placement it counts (the path to the
+/// row's occurrence; none for a body): the component of the occurrence
+/// right below the subject (`top`), or of the body's own occurrence
+/// (`parts`); the body itself when no occurrence below the subject places
+/// it. The BOM Structures act on it (mitcad#1985): at `top` a Phantom
+/// gives way to its child on the path (its children are listed at its
+/// level); at `parts` the first Purchased, Inseparable or Reference on the
+/// path below the subject is the row, as one item.
 pub(super) fn row_of(
     assembly: &Assembly,
+    structures: &Structures,
     body: BodyUid,
     path: &[OccurrenceUid],
     levels: Levels,
     depth: usize,
-) -> Option<RowKey> {
-    let occurrence = if path.len() > depth {
-        match levels {
-            Levels::Top => path.get(depth),
-            Levels::Parts => path.last(),
-        }
-    } else {
-        None
-    };
-    match occurrence {
-        None => Some(RowKey::Body(body)),
-        Some(o) => assembly
-            .occurrence(*o)
-            .map(|o| RowKey::Component(o.component)),
+) -> Option<(RowKey, Vec<OccurrenceUid>)> {
+    if path.len() <= depth {
+        return Some((RowKey::Body(body), Vec::new()));
     }
+    let component_at = |i: usize| assembly.occurrence(path[i]).map(|o| o.component);
+    let structure = |c: ComponentUid| structures.get(&c).copied().unwrap_or_default();
+    let at = match levels {
+        Levels::Top => {
+            let mut i = depth;
+            while i + 1 < path.len() && structure(component_at(i)?) == BomStructure::Phantom {
+                i += 1;
+            }
+            i
+        }
+        Levels::Parts => {
+            let mut found = path.len() - 1;
+            for i in depth..path.len() {
+                if matches!(
+                    structure(component_at(i)?),
+                    BomStructure::Purchased | BomStructure::Inseparable | BomStructure::Reference
+                ) {
+                    found = i;
+                    break;
+                }
+            }
+            found
+        }
+    };
+    let component = component_at(at)?;
+    Some((RowKey::Component(component), path[..=at].to_vec()))
 }
 
 /// The rows of a table sorted by a column (its index in `columns`, if the
@@ -408,16 +461,24 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
         // Below the view's subject: an occurrence's view lists what is in
         // it, not the occurrence itself.
         let depth = view.subject_depth;
+        // The BOM Structures act on its rows (mitcad#1985).
+        let structures = self.bom_structures();
+        let structure = |key: &RowKey| match key {
+            RowKey::Component(c) => structures.get(c).copied().unwrap_or_default(),
+            RowKey::Body(_) => BomStructure::Normal,
+        };
         let mut keys: Vec<(RowKey, Vec<Vec<OccurrenceUid>>)> = Vec::new();
         let seen = self.bodies_seen(view);
         for s in &seen {
-            let Some(key) = row_of(assembly, s.body, &s.path, settings.levels, depth) else {
+            let Some((key, placement)) = row_of(
+                assembly,
+                &structures,
+                s.body,
+                &s.path,
+                settings.levels,
+                depth,
+            ) else {
                 continue;
-            };
-            let placement: Vec<OccurrenceUid> = match (key, settings.levels) {
-                (RowKey::Body(_), _) => Vec::new(),
-                (RowKey::Component(_), Levels::Top) => s.path[..=depth].to_vec(),
-                (RowKey::Component(_), Levels::Parts) => s.path.clone(),
             };
             match keys.iter_mut().find(|(k, _)| *k == key) {
                 Some((_, placements)) => {
@@ -444,41 +505,56 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 RowKey::Body(body) => vec![*body],
                 RowKey::Component(component) => self.component_bodies(*component),
             };
+            // A row of a whole component with what it holds: at `top`, and
+            // a Purchased, Inseparable or Reference one at `parts`
+            // (mitcad#1985).
+            let whole = match key {
+                RowKey::Component(component) => {
+                    settings.levels == Levels::Top
+                        || (matches!(
+                            structure(key),
+                            BomStructure::Purchased
+                                | BomStructure::Inseparable
+                                | BomStructure::Reference
+                        ) && self.assembly().children(*component).next().is_some())
+                }
+                RowKey::Body(_) => false,
+            };
+            let reference = structure(key) == BomStructure::Reference;
             for placement in placements {
                 let mut signature = if !settings.group_identical {
                     None
-                } else if let (RowKey::Component(component), Levels::Top) = (key, settings.levels) {
+                } else if let (RowKey::Component(component), true) = (key, whole) {
                     self.component_part_signature(*component, view.component, placement)
                 } else {
                     self.part_signature(&bodies)
                 };
-                let mut materials =
-                    if let (RowKey::Component(component), Levels::Top) = (key, settings.levels) {
-                        if let Some(signature) = &signature {
-                            signature.materials.clone()
-                        } else {
-                            self.component_part_materials(*component, view.component, placement)
-                                .unwrap_or_default()
-                        }
+                let mut materials = if let (RowKey::Component(component), true) = (key, whole) {
+                    if let Some(signature) = &signature {
+                        signature.materials.clone()
                     } else {
-                        bodies
-                            .iter()
-                            .map(|body| {
-                                let path = if matches!(key, RowKey::Body(_)) {
-                                    seen.iter()
-                                        .find(|s| s.body == *body)
-                                        .map(|s| s.path.as_slice())
-                                        .unwrap_or(placement)
-                                } else {
-                                    placement
-                                };
-                                self.body_material_under(*body, view.component, path)
-                                    .0
-                                    .id
-                                    .clone()
-                            })
-                            .collect()
-                    };
+                        self.component_part_materials(*component, view.component, placement)
+                            .unwrap_or_default()
+                    }
+                } else {
+                    bodies
+                        .iter()
+                        .map(|body| {
+                            let path = if matches!(key, RowKey::Body(_)) {
+                                seen.iter()
+                                    .find(|s| s.body == *body)
+                                    .map(|s| s.path.as_slice())
+                                    .unwrap_or(placement)
+                            } else {
+                                placement
+                            };
+                            self.body_material_under(*body, view.component, path)
+                                .0
+                                .id
+                                .clone()
+                        })
+                        .collect()
+                };
                 materials.sort();
                 materials.dedup();
                 if let Some(signature) = &mut signature {
@@ -486,9 +562,11 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 }
                 let group = if settings.group_identical {
                     match signature.as_ref() {
-                        Some(s) => groups
-                            .iter_mut()
-                            .find(|g| g.3.as_ref().is_some_and(|other| other.matches(s))),
+                        // A Reference groups with References only.
+                        Some(s) => groups.iter_mut().find(|g| {
+                            (structure(&g.0) == BomStructure::Reference) == reference
+                                && g.3.as_ref().is_some_and(|other| other.matches(s))
+                        }),
                         // Not measured: its own row still counts each of its
                         // placements, merged with no other (mitcad#1315).
                         None => groups.iter_mut().find(|g| g.3.is_none() && g.0 == *key),
@@ -535,6 +613,10 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
                 let cells = columns
                     .iter()
                     .map(|c| {
+                        // A Reference counts for no quantity (mitcad#1985).
+                        if c == "quantity" && structure(key) == BomStructure::Reference {
+                            return REFERENCE_QUANTITY.to_owned();
+                        }
                         if super::libraries::physical_material_column(c) && !materials.is_empty() {
                             return materials
                                 .iter()
@@ -558,24 +640,41 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
         for (_, cells) in &mut rows {
             cells.truncate(shown);
         }
-        // Numbered in that order.
+        // Numbered in that order; a Reference gets no number (mitcad#1985).
         let item = columns.iter().position(|c| c == "item");
         let mut items = Vec::new();
+        let mut references = Vec::new();
         let mut words = Vec::new();
-        let count = rows.len();
+        let count = rows
+            .iter()
+            .filter(|(index, _)| structure(&groups[*index].0) != BomStructure::Reference)
+            .count();
         if by_item && settings.descending {
             rows.reverse();
         }
-        for (n, (key, cells)) in rows.iter_mut().enumerate() {
+        let mut n = 0;
+        for (index, cells) in rows.iter_mut() {
+            let group = &groups[*index];
+            if structure(&group.0) == BomStructure::Reference {
+                if let Some(i) = item {
+                    cells[i] = String::new();
+                }
+                references.extend(group.1.iter().map(|(key, _)| *key));
+                words.push(format!(
+                    "{REFERENCE_QUANTITY} {}",
+                    self.parts_cell(group.0, "name", group.2, &list)
+                ));
+                continue;
+            }
             let number = if by_item && settings.descending {
                 (count - n) as u32
             } else {
                 n as u32 + 1
             };
+            n += 1;
             if let Some(i) = item {
                 cells[i] = number.to_string();
             }
-            let group = &groups[*key];
             items.extend(
                 group
                     .1
@@ -593,6 +692,8 @@ impl<K: Kernel> DrawingTablesOps<K> for Document<K> {
             levels: settings.levels,
             depth,
             items,
+            references,
+            structures,
             label: if words.is_empty() {
                 "no components".to_owned()
             } else {

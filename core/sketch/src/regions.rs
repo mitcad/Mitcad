@@ -1950,9 +1950,28 @@ pub fn best_match<'a>(
     regions: impl IntoIterator<Item = &'a Region>,
     key: &RegionKey,
 ) -> Option<&'a Region> {
+    best_matches(regions, key).into_iter().next()
+}
+
+/// Every region that matches a reference whose key no longer exists as
+/// well as the best one does ([`best_match`] first, then the others of the
+/// same likeness, larger first): the most curves in common with the key,
+/// the most identical segments and the fewest other curves. Empty when no
+/// region shares a curve.
+///
+/// Several regions match alike when the key's old region lay between
+/// curves that now bound regions apart, each of them the same way: a
+/// letter of a text that overlapped its neighbour, the reference picked
+/// between the two outlines, and a change that moved them apart
+/// (mitcad#1993). The old region's area is then in each of them, as in
+/// the pieces of a region a change split, and not in the largest alone.
+pub fn best_matches<'a>(
+    regions: impl IntoIterator<Item = &'a Region>,
+    key: &RegionKey,
+) -> Vec<&'a Region> {
     let wanted: Vec<CurveId> = key.segments().map(|s| s.curve.clone()).collect();
     let wanted_segments: Vec<&SegmentKey> = key.segments().collect();
-    regions
+    let mut scored: Vec<_> = regions
         .into_iter()
         .map(|r| {
             let curves: Vec<CurveId> = r.profile.key.segments().map(|s| s.curve.clone()).collect();
@@ -1964,16 +1983,24 @@ pub fn best_match<'a>(
                 .filter(|s| wanted_segments.contains(s))
                 .count();
             let extra = curves.len() - common;
-            (common, exact, std::cmp::Reverse(extra), r)
+            ((common, exact, std::cmp::Reverse(extra)), r)
         })
-        .filter(|(common, ..)| *common > 0)
-        .max_by(|a, b| {
-            (a.0, a.1, a.2)
-                .cmp(&(b.0, b.1, b.2))
-                .then_with(|| a.3.area.abs().total_cmp(&b.3.area.abs()))
-                .then_with(|| b.3.profile.key.cmp(&a.3.profile.key))
-        })
-        .map(|(.., r)| r)
+        .filter(|((common, ..), _)| *common > 0)
+        .collect();
+    // Best first: the likeness, then the largest, then the first key.
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.area.abs().total_cmp(&a.1.area.abs()))
+            .then_with(|| a.1.profile.key.cmp(&b.1.profile.key))
+    });
+    let Some(best) = scored.first().map(|(likeness, _)| *likeness) else {
+        return Vec::new();
+    };
+    scored
+        .into_iter()
+        .take_while(|(likeness, _)| *likeness == best)
+        .map(|(_, r)| r)
+        .collect()
 }
 
 /// The distance from `p` to the segment `a`-`b`.

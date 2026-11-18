@@ -7,6 +7,8 @@
 
 #include <QFlags>
 #include <QHashFunctions>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
@@ -154,8 +156,65 @@ inline bool isOpeningEdge(const SelectionItem& item) {
   // A named edge is "E{...}"; an opening's name is a JSON object.
   return item.kind == SelectKind::Edge && item.name.startsWith(QLatin1Char('{'));
 }
-// The opening of such an item; empty for any other item.
+// The opening of such an item (of a single free edge's too); empty for any
+// other item.
 QJsonObject openingOf(const SelectionItem& item);
+
+// A single free edge (mitcad#1955): an edge item of the body whose name is
+// the edge as a definition's `openings` entry picks it, `{"at": [x, y, z],
+// "opening": {...}}` (compact JSON, its keys sorted: the opening, and a
+// point on the edge, its middle as the view names it, in the component's
+// coordinates). The view names every picked free edge so (with no command,
+// and while an input takes openings); an input whose Whole Opening check
+// is on keeps it as its whole opening (InputDef::takenIn).
+inline SelectionItem freeEdgeItem(const QString& body, const QJsonObject& opening, const std::array<double, 3>& at,
+                                  const QString& occurrence = QString()) {
+  QJsonArray point;
+  for (const double v : at) {
+    point.append(v);
+  }
+  const QJsonObject edge{{QStringLiteral("opening"), opening}, {QStringLiteral("at"), point}};
+  return {SelectKind::Edge, body, QString::fromUtf8(QJsonDocument(edge).toJson(QJsonDocument::Compact)),
+          QStringLiteral("other"), occurrence};
+}
+// Inline, as isOpeningEdge.
+inline bool isFreeEdge(const SelectionItem& item) {
+  return isOpeningEdge(item) && item.name.startsWith(QLatin1String("{\"at\":"));
+}
+// The point of a single free edge; none for any other item.
+inline std::optional<std::array<double, 3>> freeEdgePoint(const SelectionItem& item) {
+  if (!isFreeEdge(item)) {
+    return std::nullopt;
+  }
+  const QJsonArray at = QJsonDocument::fromJson(item.name.toUtf8()).object().value(QStringLiteral("at")).toArray();
+  if (at.size() != 3) {
+    return std::nullopt;
+  }
+  return std::array<double, 3>{at[0].toDouble(), at[1].toDouble(), at[2].toDouble()};
+}
+// The whole opening of a single free edge, the edge's point kept in `at`
+// (so that Whole Opening turned off takes that edge again); any other item
+// as it is.
+inline SelectionItem wholeOpeningItem(const SelectionItem& item) {
+  if (!isFreeEdge(item)) {
+    return item;
+  }
+  const QJsonObject edge = QJsonDocument::fromJson(item.name.toUtf8()).object();
+  SelectionItem whole{SelectKind::Edge, item.owner,
+                      QString::fromUtf8(QJsonDocument(edge.value(QStringLiteral("opening")).toObject())
+                                            .toJson(QJsonDocument::Compact)),
+                      QStringLiteral("other"), item.occurrence};
+  whole.at = freeEdgePoint(item);
+  return whole;
+}
+// A whole opening taken by one of its free edges back as that edge (its
+// point in `at`); any other item as it is.
+inline SelectionItem singleFreeEdgeItem(const SelectionItem& item) {
+  if (!isOpeningEdge(item) || isFreeEdge(item) || !item.at) {
+    return item;
+  }
+  return freeEdgeItem(item.owner, QJsonDocument::fromJson(item.name.toUtf8()).object(), *item.at, item.occurrence);
+}
 
 // Order in which a window selection prefers kinds: it keeps one kind.
 SelectKind preferredKind(const Selection& items);

@@ -48,6 +48,23 @@ pub struct TextOutline {
     /// mitcad#416), its font not being installed.
     pub stored: bool,
     pub contours: Vec<PlacedContour>,
+    /// The glyph contours that could not become profile curves (their
+    /// pieces do not join end to end, or a piece is not a line or a Bézier
+    /// curve): left out of the profiles, and told by the sketch
+    /// (mitcad#1993).
+    pub dropped: Vec<DroppedContour>,
+}
+
+/// A glyph contour that bounds no profile ([`TextOutline::dropped`]): the
+/// character, the contour's index in its glyph and where its points lie in
+/// the sketch (the lowest and highest x and y).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DroppedContour {
+    pub character: char,
+    pub glyph: u32,
+    pub contour: u32,
+    pub low: P2,
+    pub high: P2,
 }
 
 impl TextOutline {
@@ -783,17 +800,17 @@ pub fn layout(
         }
     }
     let mut contours = Vec::new();
+    let mut dropped = Vec::new();
     for (k, place) in placements {
         for (j, contour) in glyphs.glyphs[k].contours.iter().enumerate() {
-            let parts: Option<Vec<Curve2>> = contour
+            let placed: Vec<Vec<P2>> = contour
                 .iter()
-                .map(|points| {
-                    let placed: Vec<P2> = points.iter().map(|p| place(*p)).collect();
-                    piece(&placed)
-                })
+                .map(|points| points.iter().map(|p| place(*p)).collect())
                 .collect();
-            let Some(parts) = parts else { continue };
-            if composite(&parts).is_some() {
+            let parts: Option<Vec<Curve2>> = placed.iter().map(|points| piece(points)).collect();
+            if let Some(parts) = parts
+                && composite(&parts).is_some()
+            {
                 contours.push(PlacedContour {
                     id: CurveId::Glyph {
                         text: text.id,
@@ -802,7 +819,28 @@ pub fn layout(
                     },
                     parts,
                 });
+                continue;
             }
+            // A contour that bounds no profile is told, not dropped
+            // silently (mitcad#1993); one without points has nothing to
+            // tell.
+            let mut points = placed.iter().flatten();
+            let Some(first) = points.next() else {
+                continue;
+            };
+            let (low, high) = points.fold((*first, *first), |(low, high), p| {
+                (
+                    [low[0].min(p[0]), low[1].min(p[1])],
+                    [high[0].max(p[0]), high[1].max(p[1])],
+                )
+            });
+            dropped.push(DroppedContour {
+                character: chars[k],
+                glyph: k as u32,
+                contour: j as u32,
+                low,
+                high,
+            });
         }
     }
     Ok(TextOutline {
@@ -811,6 +849,7 @@ pub fn layout(
         fallback: glyphs.fallback,
         stored: false,
         contours,
+        dropped,
     })
 }
 

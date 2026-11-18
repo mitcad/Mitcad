@@ -3186,6 +3186,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 on viitekäyrä: tangenttisuus koskee viivoja, kaaria, ympyröitä ja splinejä</translation>
     </message>
     <message>
+        <source>%1 is a reference: its parts list gives it no number</source>
+        <translation>%1 on viite: sen osaluettelo ei anna sille numeroa</translation>
+    </message>
+    <message>
         <source>%1 is a shared repository already</source>
         <translation>%1 on jo jaettu repositorio</translation>
     </message>
@@ -4502,6 +4506,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 on viitekäyrällä tai tahkolla; irrota se ensin</translation>
     </message>
     <message>
+        <source>%1 is one of %2</source>
+        <translation>%1 on jokin näistä: %2</translation>
+    </message>
+    <message>
+        <source>%1 is one of %2, not %3</source>
+        <translation>%1 on jokin näistä: %2, ei %3</translation>
+    </message>
+    <message>
         <source>%1 is open and its component links must change; close this design before moving the source, then reopen it</source>
         <translation>%1 on auki ja sen komponenttilinkkien on muututtava; sulje tämä malli ennen lähteen siirtämistä ja avaa se sitten uudelleen</translation>
     </message>
@@ -5104,6 +5116,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 now keeps what its views showed when the design was opened (%2): hiding, showing or adding components no longer changes them</source>
         <translation>%1 säilyttää nyt sen, mitä sen näkymät näyttivät mallin avaamishetkellä (%2): komponenttien piilottaminen, näyttäminen tai lisääminen ei enää muuta niitä</translation>
+    </message>
+    <message>
+        <source>%1 occurrences placed where the file saved them: their moves typed as expressions are not kept</source>
+        <translation>%1 esiintymää sijoitettu siihen, mihin tiedosto ne tallensi: niiden lausekkeina kirjoitettuja siirtoja ei säilytetä</translation>
     </message>
     <message>
         <source>%1 of %2 (with FreeCAD&apos;s axes)</source>
@@ -9262,12 +9278,22 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: mallia ei ole vielä tallennettu, joten linkkiä ei seurata ja komponentti pitää malliin tallennetut kappaleet; tallenna malli ja valitse sitten Päivitä linkki</translation>
     </message>
     <message>
+        <source>  left out: %1
+</source>
+        <translation>  jätetty pois: %1
+</translation>
+    </message>
+    <message>
         <source> (its materials cannot be taken: %1)</source>
         <translation> (sen materiaaleja ei voi ottaa: %1)</translation>
     </message>
     <message>
         <source>%1 and %2 share no seam</source>
         <translation>Kohteilla %1 ja %2 ei ole yhteistä saumaa</translation>
+    </message>
+    <message>
+        <source>%1 goes in a slot: only a profile stands centered between the slots of a side</source>
+        <translation>%1 menee uraan: vain profiili voi seistä keskitettynä sivun urien välissä</translation>
     </message>
     <message>
         <source>%1 has its length bound to another part: give it a length of its own to miter it at the corner</source>
@@ -9288,6 +9314,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>%1 is not connected to the fixed panel through the sheet&apos;s bends and seams; a cut may have separated it</source>
         <translation>%1 ei ole yhteydessä kiinteään levyosaan levyn taivutusten ja saumojen kautta; leikkaus on voinut erottaa sen</translation>
+    </message>
+    <message>
+        <source>%1 is not one of the job&apos;s bodies</source>
+        <translation>%1 ei ole työn kappaleita</translation>
     </message>
     <message>
         <source>%1 is placed by a frame of its own: its end cannot move to the corner</source>
@@ -9318,6 +9348,18 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 tarvitsee levyn levitetyn muodon, jota kohteella %2 ei ole (suora leikkaus taivutuksen tai kaltevan paneelin läpi)</translation>
     </message>
     <message>
+        <source>%1 notes (text anchored to a point in the model): not mapped</source>
+        <translation>%1 huomautusta (mallin pisteeseen ankkuroitu teksti): ei vastinetta</translation>
+    </message>
+    <message>
+        <source>%1 partly repeats the others; it still removes %2 degrees of freedom</source>
+        <translation>%1 toistaa osittain muita; se poistaa silti %2 vapausastetta</translation>
+    </message>
+    <message>
+        <source>%1 partly repeats the others; it still removes one degree of freedom</source>
+        <translation>%1 toistaa osittain muita; se poistaa silti yhden vapausasteen</translation>
+    </message>
+    <message>
         <source>%1 takes the materials of %2</source>
         <translation>%1 ottaa kohteen %2 materiaalit</translation>
     </message>
@@ -9334,8 +9376,32 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1 tekstuurikoordinaattia %2 sijainnille</translation>
     </message>
     <message>
+        <source>%1: a material keeps a value for each nozzle variant, and the project one per filament: written as the value of %2</source>
+        <translation>%1: materiaali pitää arvon kullekin suutinmuunnelmalle ja projekti yhden filamenttia kohden: kirjoitetaan muunnelman %2 arvona</translation>
+    </message>
+    <message>
+        <source>%1: a material keeps a value the project cannot carry (an empty list or one of lists): left out</source>
+        <translation>%1: materiaali pitää arvon, jota projekti ei voi kuljettaa (tyhjä lista tai listojen lista): jätetään pois</translation>
+    </message>
+    <message>
         <source>%1: its materials cannot be taken from its design (%2); its bodies keep theirs</source>
         <translation>%1: sen materiaaleja ei voi ottaa sen mallista (%2); sen kappaleet pitävät omansa</translation>
+    </message>
+    <message>
+        <source>%1: its templates nest more than %2 deep</source>
+        <translation>%1: sen mallipohjat ovat sisäkkäin yli %2 tasoa</translation>
+    </message>
+    <message>
+        <source>%1: kept by the materials of only some filament slots; the project has one list for every filament, so the slicer&apos;s own presets give them for all</source>
+        <translation>%1: vain osan filamenttipaikkojen materiaalit pitävät sen; projektissa on yksi lista kaikille filamenteille, joten viipaloijan omat esiasetukset antavat ne kaikille</translation>
+    </message>
+    <message>
+        <source>%1: its share along the curve (the point stays on the curve where it is)</source>
+        <translation>%1: sen osuus käyrää pitkin (piste pysyy käyrällä nykyisessä paikassaan)</translation>
+    </message>
+    <message>
+        <source>%1: its tangent handles (it runs through its fit points as MitCad fits them)</source>
+        <translation>%1: sen tangenttikahvat (se kulkee sovituspisteidensä kautta niin kuin MitCad ne sovittaa)</translation>
     </message>
     <message>
         <source>%1: the design is not saved yet, so the link is not followed and it keeps the design saved with it; save the design, then Update Link</source>
@@ -9350,12 +9416,40 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>%1: tiedosto on projektin ulkopuolella, joten linkkiä ei seurata ja komponentti pitää projektiin tallennetun mallin; jotta sitä seurattaisiin, siirrä tiedosto projektiin tai tee molemmat sisältävästä kansiosta projekti (Tiedosto › Projekti › Uusi projekti…) ja valitse sitten Päivitä linkki</translation>
     </message>
     <message>
+        <source>%1: the printer keeps a different value for each of its %2 extruders or nozzle variants, and the design changed it: written as %3 for every one</source>
+        <translation>%1: tulostin pitää eri arvon kullekin %2 suulakkeestaan tai suutinmuunnelmastaan, ja suunnitelma muutti sitä: kirjoitetaan arvona %3 jokaiselle</translation>
+    </message>
+    <message>
         <source>%1: the second direction is parallel to the first</source>
         <translation>%1: toinen suunta on yhdensuuntainen ensimmäisen kanssa</translation>
     </message>
     <message>
         <source>%1: the second direction must be a unit vector</source>
         <translation>%1: toisen suunnan on oltava yksikkövektori</translation>
+    </message>
+    <message>
+        <source>%1: the slicer preset&apos;s own bookkeeping, not a setting of a project: left out</source>
+        <translation>%1: viipaloijan esiasetuksen oma kirjanpito, ei projektin asetus: jätetään pois</translation>
+    </message>
+    <message>
+        <source>%1: the templates it includes include or inherit %2 in a loop</source>
+        <translation>%1: sen sisällyttämät mallipohjat sisällyttävät tai perivät kohteen %2 silmukassa</translation>
+    </message>
+    <message>
+        <source>%1: what this import reads came in, features it cannot read are placeholders with the reason, and what it does not know is left out. Features may build differently from the newer SolidCraft, which can give a known option a new meaning.</source>
+        <translation>%1: se, minkä tämä tuonti lukee, tuli mukaan; piirteet, joita se ei pysty lukemaan, ovat paikanvaraajia syineen, ja se, mitä se ei tunne, jätettiin pois. Piirteet voivat muodostua eri tavalla kuin uudemmassa SolidCraftissa, joka voi antaa tutulle asetukselle uuden merkityksen.</translation>
+    </message>
+    <message>
+        <source>%1: the skipped instance %2 is no instance or is listed twice</source>
+        <translation>%1: ohitettu kopio %2 ei ole kopio tai se on listattu kahdesti</translation>
+    </message>
+    <message>
+        <source>%1: not a text or a list of texts, which the slicer reads: left out</source>
+        <translation>%1: ei teksti eikä tekstien lista, joita viipaloija lukee: jätetään pois</translation>
+    </message>
+    <message>
+        <source>; the design was imported before the preset&apos;s templates (include) were read, so its machine G-code and other template values may be its base preset&apos;s: import the preset from the slicer again</source>
+        <translation>; suunnitelma tuotiin ennen kuin esiasetuksen mallipohjia (include) luettiin, joten sen koneen G-koodi ja muut mallipohjan arvot voivat olla sen pohjaesiasetuksen: tuo esiasetus viipaloijasta uudelleen</translation>
     </message>
     <message>
         <source>A curve: reference curve of %1:</source>
@@ -10112,6 +10206,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Siltojen virtaus</translation>
     </message>
     <message>
+        <source>Bridge layer</source>
+        <translation>Siltauskerros</translation>
+    </message>
+    <message>
         <source>Bridge speed</source>
         <translation>Siltojen nopeus</translation>
     </message>
@@ -10148,6 +10246,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>British Standard Whitworth</translation>
     </message>
     <message>
+        <source>Build profile</source>
+        <translation>Rakenneprofiili</translation>
+    </message>
+    <message>
         <source>Built %1 elements as features (%2), checked against %3; of those kinds %4 came in as meshes or boxes
 </source>
         <translation>Rakennettiin %1 elementtiä piirteinä (%2), tarkistettu vertaamalla kohteeseen %3; näistä tyypeistä %4 tuli mukaan verkkoina tai laatikoina
@@ -10180,6 +10282,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>Catch length</source>
         <translation>Salvan pituus</translation>
+    </message>
+    <message>
+        <source>Cell size</source>
+        <translation>Solun koko</translation>
     </message>
     <message>
         <source>Center distance: %1 mm</source>
@@ -10510,6 +10616,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Kopioi kohteeseen %1</translation>
     </message>
     <message>
+        <source>Corner Chamfer</source>
+        <translation>Nurkan viiste</translation>
+    </message>
+    <message>
         <source>Corner relief</source>
         <translation>Kulman vapautusleikkaus</translation>
     </message>
@@ -10604,6 +10714,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>Cura has one build plate: write a file per plate (plates: file_per_plate)</source>
         <translation>Curassa on yksi tulostusalusta: kirjoita oma tiedosto kullekin alustalle (plates: file_per_plate)</translation>
+    </message>
+    <message>
+        <source>Cura uses the printer and materials chosen in Cura: MitCad sends the bodies, each body&apos;s extruder number and its process settings.</source>
+        <translation>Cura käyttää Curassa valittuja tulostinta ja materiaaleja: MitCad lähettää kappaleet, kunkin kappaleen suulakkeen numeron ja sen prosessiasetukset.</translation>
     </message>
     <message>
         <source>Curtain Wall</source>
@@ -11384,6 +11498,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Luo rivit kohteesta %1</translation>
     </message>
     <message>
+        <source>Geometry only: the slicer keeps its own printer, process and filaments.</source>
+        <translation>Vain geometria: viipaloija pitää oman tulostimensa, prosessinsa ja filamenttinsa.</translation>
+    </message>
+    <message>
         <source>Global monotonic line</source>
         <translation>Globaali monotoninen viiva</translation>
     </message>
@@ -11738,6 +11856,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
 </translation>
     </message>
     <message>
+        <source>Inset Ratio</source>
+        <translation>Sisennyssuhde</translation>
+    </message>
+    <message>
         <source>Inside the git repository %1</source>
         <translation>Git-repositorion %1 sisällä</translation>
     </message>
@@ -11974,6 +12096,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>Libraries in %1:</source>
         <translation>Kirjastot kohteessa %1:</translation>
+    </message>
+    <message>
+        <source>Library part</source>
+        <translation>Kirjastokomponentti</translation>
     </message>
     <message>
         <source>Lightning overhang angle</source>
@@ -12232,8 +12358,16 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>MitCadissa ei ole Korjaa osa -piirrettä (tahkot rakennetaan uudelleen, vapaat särmät ommellaan, reiät paikataan)</translation>
     </message>
     <message>
+        <source>MitCad has no cell grid feature (a sketch&apos;s profiles filled with cells cut from bodies)</source>
+        <translation>MitCadissa ei ole soluruudukkopiirrettä (luonnoksen profiilit täytettyinä kappaleista leikatuilla soluilla)</translation>
+    </message>
+    <message>
         <source>MitCad has no cone primitive</source>
         <translation>MitCadissa ei ole kartioprimitiiviä</translation>
+    </message>
+    <message>
+        <source>MitCad has no frame member end cap (a plate closing a frame member&apos;s end)</source>
+        <translation>MitCadissa ei ole runko-osan päätykantta (levy, joka sulkee runko-osan pään)</translation>
     </message>
     <message>
         <source>MitCad has no frame member feature (a profile along each line of a frame sketch)</source>
@@ -12484,6 +12618,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>No printer bed is defined for this placement; build-volume fit was not checked.</source>
         <translation>Tälle sijoitukselle ei ole määritetty tulostusalustaa; sopivuutta tulostustilavuuteen ei tarkistettu.</translation>
+    </message>
+    <message>
+        <source>No printer is chosen: the slicer gets a stand-in printer and fills its settings with its defaults, not with the printer chosen there.</source>
+        <translation>Tulostinta ei ole valittu: viipaloija saa sijaistulostimen ja täyttää sen asetukset oletuksillaan, ei siellä valitulla tulostimella.</translation>
+    </message>
+    <message>
+        <source>No process is chosen: the slicer fills the process settings with its defaults.</source>
+        <translation>Prosessia ei ole valittu: viipaloija täyttää prosessiasetukset oletuksillaan.</translation>
     </message>
     <message>
         <source>No public key in ~/.ssh (id_ed25519.pub, id_ecdsa.pub or id_rsa.pub): make one with ssh-keygen -t ed25519</source>
@@ -13596,6 +13738,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Tallenna %1 kirjastoon</translation>
     </message>
     <message>
+        <source>Saved by a newer SolidCraft (format %1 with changes this import does not know: %2)</source>
+        <translation>Tallennettu uudemmalla SolidCraftilla (muoto %1 muutoksin, joita tämä tuonti ei tunne: %2)</translation>
+    </message>
+    <message>
+        <source>Saved by a newer SolidCraft (format %1; this import reads SolidCraft designs up to format %2)</source>
+        <translation>Tallennettu uudemmalla SolidCraftilla (muoto %1; tämä tuonti lukee SolidCraft-malleja muotoon %2 asti)</translation>
+    </message>
+    <message>
         <source>Saved mine as a copy: %1 (theirs: %2)</source>
         <translation>Oma versio tallennettiin kopiona: %1 (toisen versio: %2)</translation>
     </message>
@@ -13720,6 +13870,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
         <translation>Poikkileikkauksen koko</translation>
     </message>
     <message>
+        <source>Segment angle</source>
+        <translation>Osuuden kulma</translation>
+    </message>
+    <message>
+        <source>Segment height</source>
+        <translation>Osuuden korkeus</translation>
+    </message>
+    <message>
         <source>Send each version at once: %1; check for newer versions: %2</source>
         <translation>Lähetä jokainen versio heti: %1; tarkista uudemmat versiot: %2</translation>
     </message>
@@ -13770,6 +13928,10 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>Shared miter of %1 and %2</source>
         <translation>Kohteiden %1 ja %2 yhteinen jiiri</translation>
+    </message>
+    <message>
+        <source>Sheet metal</source>
+        <translation>Ohutlevy</translation>
     </message>
     <message>
         <source>Sheet rules</source>
@@ -14026,6 +14188,14 @@ Mitcad-komponenttikirjasto (%2). Hae se Mitcadissa valinnalla Kirjastot &gt; Lis
     <message>
         <source>Soluble filament</source>
         <translation>Liukeneva filamentti</translation>
+    </message>
+    <message>
+        <source>Some bodies have no material: they print with MitCad&apos;s generic PLA.</source>
+        <translation>Joillakin kappaleilla ei ole materiaalia: ne tulostetaan MitCadin yleisellä PLA:lla.</translation>
+    </message>
+    <message>
+        <source>Some process settings have no per-model setting in Cura and are not sent.</source>
+        <translation>Joillekin prosessiasetuksille ei ole Curassa mallikohtaista asetusta, eikä niitä lähetetä.</translation>
     </message>
     <message>
         <source>Sparse infill</source>
@@ -14368,6 +14538,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>Tekstin viimeiset merkit</translation>
     </message>
     <message>
+        <source>The materials chosen are not sent: each body gets its extruder number, and Cura prints with the materials loaded there.</source>
+        <translation>Valittuja materiaaleja ei lähetetä: kukin kappale saa suulakkeensa numeron, ja Cura tulostaa siellä ladatuilla materiaaleilla.</translation>
+    </message>
+    <message>
         <source>The moving panel is also joined to the stationary one elsewhere, so the bend cannot turn it alone.</source>
         <translation>Liikkuva paneeli on liitetty kiinteään myös muualla, joten taivutus ei voi kääntää sitä yksin.</translation>
     </message>
@@ -14378,6 +14552,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The plane cuts no body: %1 kept whole, %2 removed whole</source>
         <translation>Taso ei leikkaa yhtään kappaletta: %1 säilytettiin kokonaisena, %2 poistettiin kokonaan</translation>
+    </message>
+    <message>
+        <source>The printer chosen is not sent: Cura prints with the printer chosen in Cura.</source>
+        <translation>Valittua tulostinta ei lähetetä: Cura tulostaa Curassa valitulla tulostimella.</translation>
+    </message>
+    <message>
+        <source>The printer has only MitCad&apos;s own settings: the slicer fills the others with its defaults.</source>
+        <translation>Tulostimella on vain MitCadin omat asetukset: viipaloija täyttää muut oletuksillaan.</translation>
+    </message>
+    <message>
+        <source>The printer settings are not sent: Cura prints with the printer chosen in Cura.</source>
+        <translation>Tulostimen asetuksia ei lähetetä: Cura tulostaa Curassa valitulla tulostimella.</translation>
     </message>
     <message>
         <source>The project&apos;s own author was removed</source>
@@ -14414,6 +14600,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>The row number of a key in a table column; mode 0 exact, 1 or the next smaller, -1 or the next larger</source>
         <translation>Avaimen rivinumero taulukon sarakkeessa; tila 0 tarkka, 1 tai seuraava pienempi, -1 tai seuraava suurempi</translation>
+    </message>
+    <message>
+        <source>The slicer&apos;s project format cannot leave one body to the slicer&apos;s own filament while it sends materials for the others. Choose a material for this body, or choose None above the list and Set to all to send the geometry only.</source>
+        <translation>Viipaloijan projektimuoto ei voi jättää yhtä kappaletta viipaloijan omalle filamentille, kun se lähettää materiaalit muille. Valitse tälle kappaleelle materiaali tai valitse listan yläpuolelta Ei mitään ja Aseta kaikille, niin vain geometria lähetetään.</translation>
     </message>
     <message>
         <source>The version is recorded but was not sent: %1</source>
@@ -15398,6 +15588,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a Face&apos;s own rules must be sheet_rules</source>
         <translation>Face-piirteen omien sääntöjen on oltava sheet_rules</translation>
+    </message>
+    <message>
+        <source>a Flat Pattern part lies flat: it takes no face</source>
+        <translation>levitysosa on tasossa: se ei ota tahkoa</translation>
     </message>
     <message>
         <source>a JPEG file of %1 colour components</source>
@@ -16386,6 +16580,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a component placed nowhere</source>
         <translation>komponentti, jota ei ole sijoitettu mihinkään</translation>
+    </message>
+    <message>
+        <source>a component&apos;s origin datum is fixed where its placement puts it now</source>
+        <translation>komponentin origon peruste kiinnitetään siihen, mihin sen sijoitus sen nyt asettaa</translation>
+    </message>
+    <message>
+        <source>a component&apos;s origin datum on a placement the file does not have</source>
+        <translation>komponentin origon peruste sijoituksella, jota tiedostossa ei ole</translation>
+    </message>
+    <message>
+        <source>a component&apos;s origin datum that is not one</source>
+        <translation>komponentin origon peruste, joka ei ole sellainen</translation>
+    </message>
+    <message>
+        <source>a component&apos;s origin plane is fixed where its placement puts it now</source>
+        <translation>komponentin origon taso kiinnitetään siihen, mihin sen sijoitus sen nyt asettaa</translation>
     </message>
     <message>
         <source>a component, occurrence or body id like &quot;C2&quot;, &quot;O3&quot; or &quot;F7.b0&quot;</source>
@@ -17532,6 +17742,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>piirre ei ole objekti</translation>
     </message>
     <message>
+        <source>a feature that is not an object</source>
+        <translation>piirre, joka ei ole objekti</translation>
+    </message>
+    <message>
         <source>a feature without an id</source>
         <translation>piirre ilman tunnistetta</translation>
     </message>
@@ -18190,6 +18404,22 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a joint origin of the kind `%1`</source>
         <translation>liitoksen origo tyyppiä `%1`</translation>
+    </message>
+    <message>
+        <source>a joint origin on a plane other than an origin or explicit plane</source>
+        <translation>liitoksen origo muulla tasolla kuin origon tasolla tai erikseen määritetyllä tasolla</translation>
+    </message>
+    <message>
+        <source>a joint origin on an axis other than a world axis or a fixed line</source>
+        <translation>liitoksen origo muulla akselilla kuin maailman akselilla tai kiinteällä viivalla</translation>
+    </message>
+    <message>
+        <source>a joint origin&apos;s axis: %1</source>
+        <translation>liitoksen origon akseli: %1</translation>
+    </message>
+    <message>
+        <source>a joint origin&apos;s plane: %1</source>
+        <translation>liitoksen origon taso: %1</translation>
     </message>
     <message>
         <source>a jump beyond memory</source>
@@ -19016,6 +19246,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>vinojen nousujen etureunaprofiilia ei lueta</translation>
     </message>
     <message>
+        <source>a note (text anchored to a point in the model): not mapped</source>
+        <translation>huomautus (mallin pisteeseen ankkuroitu teksti): ei vastinetta</translation>
+    </message>
+    <message>
         <source>a note has a text, not a value&apos;s format or tolerance</source>
         <translation>huomautuksella on teksti, ei arvon muotoilua eikä toleranssia</translation>
     </message>
@@ -19296,6 +19530,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kuvio on käytössä useammin kuin kerran tai on k0</translation>
     </message>
     <message>
+        <source>a pattern&apos;s copies are now plain sketch geometry</source>
+        <translation>kuvion kopiot ovat nyt tavallista luonnosgeometriaa</translation>
+    </message>
+    <message>
         <source>a patterned feature was not imported</source>
         <translation>kuvioitua piirrettä ei tuotu</translation>
     </message>
@@ -19420,6 +19658,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>pelkkä luku</translation>
     </message>
     <message>
+        <source>a plane datum that is not a plane</source>
+        <translation>tasoperuste, joka ei ole taso</translation>
+    </message>
+    <message>
         <source>a plane is &quot;xy&quot;, &quot;xz&quot;, &quot;yz&quot;, a construction plane like &quot;F5&quot; or {&quot;face&quot;: ...}</source>
         <translation>taso on &quot;xy&quot;, &quot;xz&quot;, &quot;yz&quot;, aputaso, kuten &quot;F5&quot;, tai {&quot;face&quot;: ...}</translation>
     </message>
@@ -19458,6 +19700,14 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a plane through a line square to a plane is fixed where it is now</source>
         <translation>viivan kautta kulkeva, tasoa vastaan kohtisuora taso kiinnitetään nykyiseen paikkaansa</translation>
+    </message>
+    <message>
+        <source>a plane turned about a direction through a pivot of a kind this import does not resolve</source>
+        <translation>suunnan ympäri kierretty taso, jonka kiertopisteen lajia tämä tuonti ei selvitä</translation>
+    </message>
+    <message>
+        <source>a plane turned about a direction, on a plane without a frame</source>
+        <translation>suunnan ympäri kierretty taso tasolla, jolla ei ole kehystä</translation>
     </message>
     <message>
         <source>a plane turned about a line outside it is fixed where it is now</source>
@@ -21220,8 +21470,8 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kartiomaisessa kartioputkikierteessä ei ole päätyviisteitä: Chamfer Ends jätetään pois</translation>
     </message>
     <message>
-        <source>a target is {&quot;feature&quot;}, {&quot;body&quot;} with an optional &quot;face&quot;, &quot;edge&quot; or &quot;vertex&quot; and &quot;occurrence&quot;, {&quot;sketch&quot;} with one &quot;curve&quot;, &quot;point&quot;, &quot;constraint&quot; or &quot;dimension&quot;, {&quot;parameter&quot;}, or {&quot;at&quot;: [x, y, z]} with an optional &quot;component&quot; and &quot;occurrence&quot;</source>
-        <translation>kohde on {&quot;feature&quot;}, {&quot;body&quot;} ja valinnainen &quot;face&quot;, &quot;edge&quot; tai &quot;vertex&quot; sekä &quot;occurrence&quot;, {&quot;sketch&quot;} ja yksi &quot;curve&quot;, &quot;point&quot;, &quot;constraint&quot; tai &quot;dimension&quot;, {&quot;parameter&quot;} tai {&quot;at&quot;: [x, y, z]} ja valinnainen &quot;component&quot; ja &quot;occurrence&quot;</translation>
+        <source>a target is {&quot;feature&quot;}, {&quot;body&quot;} with an optional &quot;face&quot;, &quot;edge&quot; or &quot;vertex&quot; and &quot;occurrence&quot;, {&quot;sketch&quot;} with one &quot;curve&quot;, &quot;point&quot;, &quot;constraint&quot; or &quot;dimension&quot;, {&quot;parameter&quot;}, {&quot;at&quot;: [x, y, z]} with an optional &quot;component&quot; and &quot;occurrence&quot;, or {&quot;design&quot;: true}</source>
+        <translation>kohde on {&quot;feature&quot;}, {&quot;body&quot;} ja valinnainen &quot;face&quot;, &quot;edge&quot; tai &quot;vertex&quot; sekä &quot;occurrence&quot;, {&quot;sketch&quot;} ja yksi &quot;curve&quot;, &quot;point&quot;, &quot;constraint&quot; tai &quot;dimension&quot;, {&quot;parameter&quot;}, {&quot;at&quot;: [x, y, z]} ja valinnainen &quot;component&quot; sekä &quot;occurrence&quot;, tai {&quot;design&quot;: true}</translation>
     </message>
     <message>
         <source>a target of an unsupported kind</source>
@@ -21626,6 +21876,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>a whole number</source>
         <translation>kokonaisluku</translation>
+    </message>
+    <message>
+        <source>a whole opening is a loop by itself; sketch curves close a loop with single edges</source>
+        <translation>koko aukko on silmukka itsessään; luonnoskäyrät sulkevat silmukan yksittäisten särmien kanssa</translation>
     </message>
     <message>
         <source>a width extent of type %1 (not decoded)</source>
@@ -22204,6 +22458,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>akseli tai suora särmä</translation>
     </message>
     <message>
+        <source>an axis without a direction</source>
+        <translation>akseli ilman suuntaa</translation>
+    </message>
+    <message>
         <source>an axis, an edge or a face with an axis</source>
         <translation>akseli, särmä tai tahko, jolla on akseli</translation>
     </message>
@@ -22322,6 +22580,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an edge of a loop that is not on its face</source>
         <translation>silmukan särmä, joka ei ole tahkollaan</translation>
+    </message>
+    <message>
+        <source>an edge of it is split into stretches with bends of their own, which MitCad&apos;s flange does not take</source>
+        <translation>sen särmä on jaettu osuuksiin, joilla on omat taivutuksensa, mitä MitCadin laippa ei ota</translation>
     </message>
     <message>
         <source>an edge of it was not found</source>
@@ -23010,6 +23272,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>an outline is a pick of a curved face with a point of it</source>
         <translation>ääriviiva valitaan kaarevalle tahkolle ja sen pisteelle</translation>
+    </message>
+    <message>
+        <source>an outline of the letter %1 of a text is not closed, so it bounds no profile</source>
+        <translation>tekstin kirjaimen %1 ääriviiva ei ole suljettu, joten se ei rajaa profiilia</translation>
     </message>
     <message>
         <source>an outline of three or more points</source>
@@ -23976,6 +24242,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>laatikon leveys</translation>
     </message>
     <message>
+        <source>boxes of many shapes</source>
+        <translation>monimuotoiset laatikot</translation>
+    </message>
+    <message>
         <source>brep reference</source>
         <translation>B-rep-viittaus</translation>
     </message>
@@ -24144,6 +24414,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>kohteen %1 kopiota ei voi kirjoittaa projektiin: %2</translation>
     </message>
     <message>
+        <source>filament_map: a filament is assigned to an extruder the printer does not have</source>
+        <translation>filament_map: filamentti on määrätty suulakkeelle, jota tulostimessa ei ole</translation>
+    </message>
+    <message>
         <source>hanging flex items</source>
         <translation>riippuvat taipuisat osat</translation>
     </message>
@@ -24172,6 +24446,30 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>se on piste: sillä ei ole alkua</translation>
     </message>
     <message>
+        <source>it patches loops of a sketch&apos;s 3D curves, which this import does not bring in</source>
+        <translation>se paikkaa luonnoksen 3D-käyrien silmukoita, joita tämä tuonti ei tuo</translation>
+    </message>
+    <message>
+        <source>it runs to its object where the components stand now, where the file measures against where they stood when the object was picked</source>
+        <translation>se ulottuu kohteeseensa komponenttien nykyisissä paikoissa, kun taas tiedosto mittaa niistä paikoista, joissa ne olivat kohdetta poimittaessa</translation>
+    </message>
+    <message>
+        <source>its bridge layers are MitCad&apos;s print bridging: as thick as the print&apos;s layers, and only where the counterbore opens toward the print bed</source>
+        <translation>sen siltauskerrokset ovat MitCadin tulostussiltausta: tulosteen kerrosten paksuisia ja vain siellä, missä lieriöupotus avautuu tulostusalustaa kohti</translation>
+    </message>
+    <message>
+        <source>its copies are placed by their sources&apos; placements in another component, which MitCad&apos;s move does not take</source>
+        <translation>sen kopiot sijoitetaan niiden lähteiden toisessa komponentissa olevien sijoitusten mukaan, mitä MitCadin siirto ei ota</translation>
+    </message>
+    <message>
+        <source>its holes start at the sketch&apos;s plane, where the file moves a point inside a body back to the body&apos;s surface</source>
+        <translation>sen reiät alkavat luonnoksen tasolta, kun taas tiedosto siirtää kappaleen sisällä olevan pisteen takaisin kappaleen pinnalle</translation>
+    </message>
+    <message>
+        <source>its other faces&apos; threads start at the end nearest their picks</source>
+        <translation>sen muiden tahkojen kierteet alkavat siitä päästä, joka on lähimpänä niiden poimintoja</translation>
+    </message>
+    <message>
         <source>its values: %1</source>
         <translation>sen arvot: %1</translation>
     </message>
@@ -24188,8 +24486,16 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>minkään muun komponentin pää ei tule %1 mm:n päähän tästä päästä</translation>
     </message>
     <message>
+        <source>not projected yet</source>
+        <translation>ei vielä projisoitu</translation>
+    </message>
+    <message>
         <source>nothing to convert: none of the selected entities is projected geometry or an offset&apos;s curve</source>
         <translation>ei mitään muunnettavaa: yksikään valituista kohteista ei ole projisoitua geometriaa tai siirtymän käyrä</translation>
+    </message>
+    <message>
+        <source>nozzle_diameter: the printer has %1 extruders and the design one nozzle diameter, written for each of them</source>
+        <translation>nozzle_diameter: tulostimessa on %1 suulaketta ja suunnitelmassa yksi suuttimen halkaisija, joka kirjoitetaan jokaiselle</translation>
     </message>
     <message>
         <source>offset %1 is no longer linked to its source</source>
@@ -24212,6 +24518,18 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>p%1 ei ole kahden viivan tai kaaren kulma (siihen päättyy yksi käyrä)</translation>
     </message>
     <message>
+        <source>part %1 of %2 is a Flat Pattern: it takes no face</source>
+        <translation>kohteen %2 osa %1 on levitys: se ei ota tahkoa</translation>
+    </message>
+    <message>
+        <source>print_materials go with a slicer&apos;s settings: give the slicer (dialect)</source>
+        <translation>print_materials kuuluvat viipaloijan asetuksiin: anna viipaloija (dialect)</translation>
+    </message>
+    <message>
+        <source>pattern %1&apos;s copies are now plain sketch geometry</source>
+        <translation>kuvion %1 kopiot ovat nyt tavallista luonnosgeometriaa</translation>
+    </message>
+    <message>
         <source>recognised edge geometries</source>
         <translation>tunnistetut särmägeometriat</translation>
     </message>
@@ -24220,12 +24538,36 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tunnistetut tahkogeometriat</translation>
     </message>
     <message>
+        <source>saved by a newer SolidCraft: a `%1` feature, which this import does not know</source>
+        <translation>tallennettu uudemmalla SolidCraftilla: piirre `%1`, jota tämä tuonti ei tunne</translation>
+    </message>
+    <message>
         <source>texture coordinates that cannot be read are left out: their texture is projected as MitCad projects textures</source>
         <translation>luettavissa olemattomat tekstuurikoordinaatit jätetään pois: niiden tekstuuri projisoidaan niin kuin MitCad projisoi tekstuurit</translation>
     </message>
     <message>
+        <source>the axis&apos;s sketch did not come in</source>
+        <translation>akselin luonnos ei tullut mukaan</translation>
+    </message>
+    <message>
+        <source>the Flat Pattern of %1 cannot be drawn: %2</source>
+        <translation>kohteen %1 levitystä ei voi piirtää: %2</translation>
+    </message>
+    <message>
+        <source>the Flat Pattern of %1 has no outline</source>
+        <translation>kohteen %1 levityksellä ei ole ääriviivaa</translation>
+    </message>
+    <message>
         <source>the file&apos;s length unit is not one MitCad knows: millimeters assumed</source>
         <translation>tiedoston pituusyksikkö ei ole MitCadin tuntema: oletetaan millimetrit</translation>
+    </message>
+    <message>
+        <source>the first variant</source>
+        <translation>ensimmäinen muunnelma</translation>
+    </message>
+    <message>
+        <source>the job has %1 bodies, not %2</source>
+        <translation>työssä on %1 kappaletta, ei %2</translation>
     </message>
     <message>
         <source>the offset is no longer linked to its source</source>
@@ -24260,12 +24602,56 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>aukko ylittää symmetriatason: poista symmetria, jotta aukon voi täyttää</translation>
     </message>
     <message>
+        <source>the printer&apos;s lists per extruder have different lengths (%1): the slicer may misread its extruders; import the printer from the slicer again</source>
+        <translation>tulostimen suulakekohtaiset listat ovat eripituisia (%1): viipaloija voi lukea suulakkeet väärin; tuo tulostin viipaloijasta uudelleen</translation>
+    </message>
+    <message>
+        <source>the printer&apos;s lists per nozzle variant have different lengths (%1): the slicer may misread its nozzles</source>
+        <translation>tulostimen suutinmuunnelmakohtaiset listat ovat eripituisia (%1): viipaloija voi lukea suuttimet väärin</translation>
+    </message>
+    <message>
+        <source>the parameter `%1`, which this import cannot read</source>
+        <translation>parametri `%1`, jota tämä tuonti ei pysty lukemaan</translation>
+    </message>
+    <message>
+        <source>the path&apos;s edges lie on more than one body</source>
+        <translation>polun särmät ovat useammassa kuin yhdessä kappaleessa</translation>
+    </message>
+    <message>
+        <source>the point it turns about is fixed where it is now</source>
+        <translation>piste, jonka ympäri se kiertyy, kiinnitetään nykyiseen paikkaansa</translation>
+    </message>
+    <message>
+        <source>the point it turns about is fixed where its expressions put it now</source>
+        <translation>piste, jonka ympäri se kiertyy, kiinnitetään siihen, mihin sen lausekkeet sen nyt asettavat</translation>
+    </message>
+    <message>
+        <source>the pattern&apos;s copies are now plain sketch geometry</source>
+        <translation>kuvion kopiot ovat nyt tavallista luonnosgeometriaa</translation>
+    </message>
+    <message>
         <source>the second direction is not a direction</source>
         <translation>toinen suunta ei ole suunta</translation>
     </message>
     <message>
         <source>the second direction is parallel to the first</source>
         <translation>toinen suunta on yhdensuuntainen ensimmäisen kanssa</translation>
+    </message>
+    <message>
+        <source>the section `%1`, which this import cannot read</source>
+        <translation>osio `%1`, jota tämä tuonti ei pysty lukemaan</translation>
+    </message>
+    <message>
+        <source>the section `%1`, which this import does not know</source>
+        <translation>osio `%1`, jota tämä tuonti ei tunne</translation>
+    </message>
+    <message>
+        <source>the sketch curves of a patch have no direction</source>
+        <translation>paikkauksen luonnoskäyrillä ei ole suuntaa</translation>
+    </message>
+    <message>
+        <source>the turn&apos;s direction is square to the plane</source>
+        <translation>kierron suunta on kohtisuorassa tasoon</translation>
     </message>
     <message>
         <source>the two picked walls do not meet at a corner of %1</source>
@@ -24276,12 +24662,32 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>sillan kummallakin sivulla on oltava yhtä monta särmää</translation>
     </message>
     <message>
+        <source>the values %1 takes from its templates %2 (not found: only its own are in the file)</source>
+        <translation>arvot, jotka %1 ottaa mallipohjistaan %2 (ei löytynyt: tiedostossa on vain sen omat)</translation>
+    </message>
+    <message>
+        <source>there is no BOM Structure %1; the structures are %2</source>
+        <translation>osaluettelorakennetta %1 ei ole; rakenteet ovat %2</translation>
+    </message>
+    <message>
+        <source>there is no kind %1; the kinds are %2</source>
+        <translation>lajia %1 ei ole; lajit ovat %2</translation>
+    </message>
+    <message>
+        <source>there is no view %1; the views are list, structured and parts</source>
+        <translation>näkymää %1 ei ole; näkymät ovat list, structured ja parts</translation>
+    </message>
+    <message>
         <source>two openings of the cage meet at a vertex of the picked edges</source>
         <translation>häkin kaksi aukkoa kohtaavat poimittujen särmien kärkipisteessä</translation>
     </message>
     <message>
         <source>two openings of the cage meet at a vertex: the opening is not one loop of edges</source>
         <translation>häkin kaksi aukkoa kohtaavat kärkipisteessä: aukko ei ole yksi särmäsilmukka</translation>
+    </message>
+    <message>
+        <source>two rounds meeting at a sharp side edge meet as MitCad&apos;s fillet makes them (the file sweeps them round the edge)</source>
+        <translation>kaksi terävällä sivusärmällä kohtaavaa pyöristystä kohtaavat niin kuin MitCadin pyöristys ne tekee (tiedosto pyyhkäisee ne särmän ympäri)</translation>
     </message>
     <message>
         <source>units of a version MitCad does not read</source>
@@ -44242,6 +44648,34 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
         <translation>tahko seuraa luonnokseen %1 projisoitua reunaa: piirrä ja mitoita käyrä itse, tai muuta geometriaa, josta se projisoitiin</translation>
     </message>
     <message>
+        <source>a reference to the center of an edge, face or curve (a snap point), which this import does not resolve</source>
+        <translation>viittaus särmän, tahkon tai käyrän keskipisteeseen (kohdistuspiste), jota tämä tuonti ei ratkaise</translation>
+    </message>
+    <message>
+        <source>a reference to the middle of an edge, face or curve (a snap point), which this import does not resolve</source>
+        <translation>viittaus särmän, tahkon tai käyrän puoliväliin (kohdistuspiste), jota tämä tuonti ei ratkaise</translation>
+    </message>
+    <message>
+        <source>an occurrence placed where the file saved it: its moves typed as expressions are not kept</source>
+        <translation>esiintymä sijoitettu siihen, mihin tiedosto sen tallensi: sen lausekkeina kirjoitettuja siirtoja ei säilytetä</translation>
+    </message>
+    <message>
+        <source>its corner is fixed where its center and size put it now: a new length or width grows it from that corner</source>
+        <translation>sen kulma kiinnitetään siihen, mihin keskipiste ja koko sen nyt asettavat: uusi pituus tai leveys kasvattaa sitä siitä kulmasta</translation>
+    </message>
+    <message>
+        <source>BOM Structure</source>
+        <translation>Osaluettelon rakenne</translation>
+    </message>
+    <message>
+        <source>Bill of Materials</source>
+        <translation>Osaluettelo</translation>
+    </message>
+    <message>
+        <source>printer_extruder_id: a nozzle variant is of an extruder the printer does not have</source>
+        <translation>printer_extruder_id: suutinmuunnelma kuuluu suulakkeelle, jota tulostimessa ei ole</translation>
+    </message>
+    <message>
         <source>the face has no axis</source>
         <translation>tahkolla ei ole akselia</translation>
     </message>
@@ -47624,6 +48058,10 @@ Lisenssin teksti: https://spdx.org/licenses/%2.html
     <message>
         <source>the printer has no filament change G-code: the filament changes at print heights are written with M600 as its change_filament_gcode (the slicer also writes the tool change T&lt;n&gt;, which a printer of one extruder may report as unknown)</source>
         <translation>tulostimella ei ole filamentinvaihdon G-koodia: tulostuskorkeuksien filamentinvaihdot kirjoitetaan komennolla M600 sen change_filament_gcode-arvoksi (viipaloija kirjoittaa myös työkalunvaihdon T&lt;n&gt;, jonka yhden suulakkeen tulostin voi ilmoittaa tuntemattomaksi)</translation>
+    </message>
+    <message>
+        <source>the printer&apos;s variant (%1), else the first</source>
+        <translation>tulostimen muunnelma (%1), muuten ensimmäinen</translation>
     </message>
     <message>
         <source>the probe reference was there already</source>

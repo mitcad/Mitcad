@@ -595,8 +595,9 @@ impl<'a> SketchEdit<'a> {
     /// id. One the others imply only in part is kept (mitcad#1774): it
     /// raises the redundant count but takes at least one degree of freedom
     /// away (an arc's centre made coincident with a corner whose bisector
-    /// the arc's tangents already hold it on fixes its radius), and its
-    /// redundant part is a warning of the sketch's status like any other.
+    /// the arc's tangents already hold it on fixes its radius); the sketch
+    /// tells it as information that it partly repeats the others, not as a
+    /// warning (mitcad#1992, `SketchDef::freedom_taken`).
     pub fn require_needed(&self, before: Freedom) -> Result<(), String> {
         let now = match self.solve_def(&self.def) {
             Ok(solved) => Freedom::of(&solved.status),

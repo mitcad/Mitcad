@@ -80,7 +80,7 @@ if scenario == 'measure':
         'native-pointer-click input_b' if native else "click-logged '^Panel Measure input b at '",
         "click-logged '^Sketch entity F1/p8 at '", "expect-log 'Measure Selection 2: 1 vertex'",
         "expect-log 'distance 70'",
-        "expect-log '^Measure history row 1: .*: Distance 70 mm$'")
+        "expect-log '^Measure history row 1: .*: Minimum distance 70 mm$'")
     # One line a row: its number, its main value and the picks' kinds.
     if native:
         # A folded history has no visible AppKit row to inspect.
@@ -96,7 +96,7 @@ if scenario == 'measure':
         "expect-log '^Annotations: Distance1 distance$'", 'expect-undo-depth ${baseline} 1',
         'wait-idle 30', "expect-no-log '^Annotations: none$'", 'expect-model-bodies 1 252000', 'mark',
         'command inspect.measure', "expect-log 'Command Measure started'",
-        "expect-log '^Measure history row 1: .*: Distance 70 mm$'")
+        "expect-log '^Measure history row 1: .*: Minimum distance 70 mm$'")
     # History belongs to the document, but its presenter and selection are
     # recreated. Restore the actual row before using its menu.
     unfold_history()
@@ -110,9 +110,9 @@ if scenario == 'measure':
     add("expect-log '^Measure history showed row 1$'", "expect-log 'distance 70'")
     add('mark')
     row_menu('Copy')
-    add("expect-log '^Measure history copied row 1: 1 .*Distance 70 mm$'", 'mark')
+    add("expect-log '^Measure history copied row 1: 1 .*Minimum distance 70 mm$'", 'mark')
     history_menu('Copy All')
-    add("expect-log '^Measure history copied 1 rows: 1 .*Distance 70 mm$'", 'mark')
+    add("expect-log '^Measure history copied 1 rows: 1 .*Minimum distance 70 mm$'", 'mark')
     # A row's menu shows it again or copies it; keeping is the Dimension
     # panel's.
     row_menu('Show')

@@ -23,11 +23,21 @@ point where 0340's cut by the ridge's side starts.
   across N's seam lie past the faces at the ends, which cut them off.
 
 Upstream: new.
+
+Failures (mitcad#1986): the walk from one end of the spine to the other
+across the seam fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the ball cannot be rolled so: the
+stripe's own state is restored and its ends are left as before, which its
+caller is told. Any other failure (a broken invariant, a signal) is
+rethrown.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_corners.cpp (0340's
+rod with a ridge).
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index ae0ca00..30fb9df 100644
+index c27394630..78fcaedbd 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -994,6 +994,13 @@ private:
+@@ -1072,6 +1072,13 @@ private:
    //! piece is cut by the face beyond; the stripe ends in a point there.
    Standard_EXPORT bool RolledCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, const bool isFirst);
  
@@ -42,10 +52,10 @@ index ae0ca00..30fb9df 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 2cb4d40..7fd8688 100644
+index f20b3a79a..fa3dc0743 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -8122,6 +8122,282 @@ bool ChFi3d_Builder::RolledCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -8205,6 +8205,287 @@ bool ChFi3d_Builder::RolledCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    return true;
  }
  
@@ -275,8 +285,13 @@ index 2cb4d40..7fd8688 100644
 +                  tolesp, First, Last, true, true, true, false, false, false, Soldep);
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = doneSave;
@@ -328,7 +343,7 @@ index 2cb4d40..7fd8688 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -9511,6 +9787,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -9599,6 +9880,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
      {
        RolledCutToEnd(Stripe, false);
      }

@@ -244,7 +244,12 @@ SelectionItem openingEdgeItem(const QString& body, const QJsonObject& opening, c
 }
 
 QJsonObject openingOf(const SelectionItem& item) {
-  return isOpeningEdge(item) ? QJsonDocument::fromJson(item.name.toUtf8()).object() : QJsonObject();
+  if (!isOpeningEdge(item)) {
+    return QJsonObject();
+  }
+  const QJsonObject named = QJsonDocument::fromJson(item.name.toUtf8()).object();
+  // A single free edge's opening (mitcad#1955).
+  return isFreeEdge(item) ? named.value(QStringLiteral("opening")).toObject() : named;
 }
 
 namespace {

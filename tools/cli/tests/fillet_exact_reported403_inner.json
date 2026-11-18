@@ -1,0 +1,9 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #403's fifth design (mitcad#1954; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): the fourth design's stepped block and Fillet1 (F12, radius d5 = 5) with the inner edge between the lower top and the step's wall rounded too. The corners at both ends of the front's top edge meet in its middle, and the inner edge would leave a rounding of its own at the core's corner inside the step, which the core swept by the ball does not build: refused in words before any smaller retry (before: built 0.1 % smaller with its warning and slivers), with the radius below which some of the edge is left to round. At 2.4 the roundings do not meet: built by the kernel, no warning, no face under 0.01 mm2."},
+  {"expect": {"feature": "Fillet1", "status": "error", "error_contains": "inner corner's edge is rounded with them"}},
+  {"expect": {"feature": "Fillet1", "status": "error", "error_contains": "4.999 mm or less"}},
+  {"cmd": "set_parameter", "name": "d5", "value": 2.4},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F12"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "min_face_area": 0.01}}
+]

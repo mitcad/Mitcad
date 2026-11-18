@@ -12,8 +12,10 @@
 
 #include <gp_Pnt.hxx>
 
+#include "mitcad/geometry/path_sweep.hpp"
 #include "mitcad/geometry/profile.hpp"
 #include "mitcad/geometry/shape.hpp"
+#include "mitcad/geometry/surface_offsets.hpp"
 
 namespace mitcad::geometry {
 
@@ -55,10 +57,18 @@ std::vector<OpenBoundaryEdges> open_boundary_edges(const Shape& body);
 enum class Continuity { G0, G1, G2 };
 
 // The loop a patch fills: edge references of the body (every edge each
-// resolves to), or the open boundary of the body at `opening` (an index of
-// open_boundaries) when it is not negative.
+// resolves to) and free edges of its openings (mitcad#1955: single free
+// edges and named edges in one loop, which can close part of an opening),
+// or the open boundary of the body at `opening` (an index of
+// open_boundaries) when it is not negative. Beside the edges, `curves`
+// (mitcad#1972) are sketch curves in model space, in no order, whose ends
+// meet the edges' ends or each other within 0.01 mm: with free
+// edges, a line across an opening closes part of it. The patch only passes
+// through them (G0).
 struct PatchLoop {
   std::vector<std::string> edges;
+  std::vector<OpeningEdges> openings;
+  Path curves;
   int opening = -1;
   Continuity continuity = Continuity::G0;
   // Edges of the loop that meet their face otherwise.

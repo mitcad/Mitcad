@@ -13,18 +13,29 @@ when interferences have been added since), and those of a pair
 are found from the sub-shapes of its two faces; their vertices are added in
 the order the scan added them (by kind, then by index), so the maps filled
 are the same. GetStickVertices itself is unchanged. The results are
-unchanged.
+unchanged. The index's lists are OCCT's NCollection_Array1 (a pair's codes
+sorted in place, mitcad#1986).
+
+Test: geometry/tests/port/p1280-stick-vertices-many-bodies.cpp (ctest
+geometry.port.1280): the union of 48 stars of 40 square pyramids whose
+apexes meet (37 440 VV interferences, about 600 000 pairs of faces) and two
+overlapping boxes is valid, 1921 solids with the volume of its parts, its
+intersections within 25 s (the scan of every interference for each pair of
+faces grew with their square: 49 s without the patch, 7.5 s with it); a row of 12 touching boxes, each pierced by
+a cylinder, is one valid solid with the volume of its parts;
+geometry/tests/test_join_many_bodies.cpp (results).
 diff --git a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
-index 8611aaa8..a945999d 100644
+index 8611aaa8..b487088f 100644
 --- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
 +++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
-@@ -75,10 +75,203 @@
+@@ -75,10 +75,231 @@
  #include <TopoDS_Vertex.hxx>
  #include <TopoDS_Shape.hxx>
  #include <TopTools_ShapeMapHasher.hxx>
 +
++#include <NCollection_Array1.hxx>
++
 +#include <algorithm>
-+#include <vector>
  class BOPDS_PaveBlock;
  
  static double ToleranceFF(const BRepAdaptor_Surface& aBAS1, const BRepAdaptor_Surface& aBAS2);
@@ -58,7 +69,23 @@ index 8611aaa8..a945999d 100644
 +    {
 +      build(theDS);
 +    }
-+    myFound.clear();
++    // The candidates' codes, sorted and each once, in myFound(0) to
++    // myFound(aNbFound - 1); myFound holds at least every listed code of
++    // the shapes.
++    int aNbListed = 0;
++    for (NCollection_Map<int>::Iterator anIt(theMI); anIt.More(); anIt.Next())
++    {
++      const int nS = anIt.Value();
++      if (nS >= 0 && nS < myNbShapes)
++      {
++        aNbListed += myStarts(nS + 1) - myStarts(nS);
++      }
++    }
++    if (aNbListed > myFound.Length())
++    {
++      myFound.Resize(0, aNbListed - 1, false);
++    }
++    int aNbFound = 0;
 +    for (NCollection_Map<int>::Iterator anIt(theMI); anIt.More(); anIt.Next())
 +    {
 +      const int nS = anIt.Value();
@@ -66,22 +93,27 @@ index 8611aaa8..a945999d 100644
 +      {
 +        continue;
 +      }
-+      for (size_t k = myStarts[nS]; k < myStarts[nS + 1]; ++k)
++      for (int k = myStarts(nS); k < myStarts(nS + 1); ++k)
 +      {
-+        const BOPDS_Interf* anInt = interference(theDS, myCodes[k]);
++        const BOPDS_Interf* anInt = interference(theDS, myCodes(k));
 +        int                 nS1, nS2;
 +        anInt->Indices(nS1, nS2);
 +        if (anInt->HasIndexNew() && theMI.Contains(nS1) && theMI.Contains(nS2))
 +        {
-+          myFound.push_back(myCodes[k]);
++          myFound(aNbFound++) = myCodes(k);
 +        }
 +      }
 +    }
-+    std::sort(myFound.begin(), myFound.end());
-+    myFound.erase(std::unique(myFound.begin(), myFound.end()), myFound.end());
-+    for (const long long aCode : myFound)
++    if (aNbFound > 0)
 +    {
-+      int nVNew = interference(theDS, aCode)->IndexNew();
++      long long* const aFirst = &myFound(0);
++      std::sort(aFirst, aFirst + aNbFound);
++      aNbFound = static_cast<int>(std::unique(aFirst, aFirst + aNbFound) - aFirst);
++    }
++    for (int k = 0; k < aNbFound; ++k)
++    {
++      const long long aCode = myFound(k);
++      int             nVNew = interference(theDS, aCode)->IndexNew();
 +      theDS.HasShapeSD(nVNew, nVNew);
 +      theMVStick.Add(nVNew);
 +      if (kind(aCode) == 4)
@@ -169,7 +201,8 @@ index 8611aaa8..a945999d 100644
 +  void build(BOPDS_DS& theDS)
 +  {
 +    myNbShapes = theDS.NbShapes();
-+    myStarts.assign(static_cast<size_t>(myNbShapes) + 1, 0);
++    myStarts.Resize(0, myNbShapes, false);
++    myStarts.Init(0);
 +    for (int aPass = 0; aPass < 2; ++aPass)
 +    {
 +      if (aPass == 1)
@@ -178,10 +211,15 @@ index 8611aaa8..a945999d 100644
 +        // from its start (myFill) on.
 +        for (int nS = 0; nS < myNbShapes; ++nS)
 +        {
-+          myStarts[nS + 1] += myStarts[nS];
++          myStarts(nS + 1) += myStarts(nS);
 +        }
-+        myFill.assign(myStarts.begin(), myStarts.end() - 1);
-+        myCodes.assign(myStarts[myNbShapes], 0);
++        myFill.Resize(0, myNbShapes, false);
++        for (int nS = 0; nS <= myNbShapes; ++nS)
++        {
++          myFill(nS) = myStarts(nS);
++        }
++        // (At least one element: an array is never empty.)
++        myCodes.Resize(0, std::max(myStarts(myNbShapes), 1) - 1, false);
 +      }
 +      for (int aKind = 0; aKind < 5; ++aKind)
 +      {
@@ -198,11 +236,11 @@ index 8611aaa8..a945999d 100644
 +            }
 +            if (aPass == 0)
 +            {
-+              ++myStarts[nS[j] + 1];
++              ++myStarts(nS[j] + 1);
 +            }
 +            else
 +            {
-+              myCodes[myFill[nS[j]]++] = code(aKind, i);
++              myCodes(myFill(nS[j])++) = code(aKind, i);
 +            }
 +          }
 +        }
@@ -210,19 +248,19 @@ index 8611aaa8..a945999d 100644
 +    }
 +  }
 +
-+  int                    myNbShapes   = -1;
-+  int                    myLengths[5] = {-1, -1, -1, -1, -1};
-+  std::vector<size_t>    myStarts;
-+  std::vector<size_t>    myFill;
-+  std::vector<long long> myCodes;
-+  std::vector<long long> myFound;
++  int                           myNbShapes   = -1;
++  int                           myLengths[5] = {-1, -1, -1, -1, -1};
++  NCollection_Array1<int>       myStarts; // where each shape's list starts in myCodes
++  NCollection_Array1<int>       myFill;   // (where the next code of each list goes)
++  NCollection_Array1<long long> myCodes;  // the lists of the interferences' codes
++  NCollection_Array1<long long> myFound;  // (the codes of a pair, sorted)
 +};
 +} // namespace
 +
  //=================================================================================================
  
  static bool IsPlaneFF(const occ::handle<Geom_Surface>& theSurface)
-@@ -742,6 +935,8 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
+@@ -742,6 +963,8 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
    //
    // The vector aFFToRecheck contains indices of potentially problematic Face-Face intersections
    NCollection_DynamicArray<int> aFFToRecheck;
@@ -231,7 +269,7 @@ index 8611aaa8..a945999d 100644
    // aNbFF may be increased while processing this loop, because it is necessary to recheck
    // some of Face-Face intersections to avoid missing section edges
    // aNbFF will be increased to the number of potentially problematic Face-Face intersections
-@@ -815,7 +1010,7 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
+@@ -815,7 +1038,7 @@ void BOPAlgo_PaveFiller::MakeBlocks(const Message_ProgressRange& theRange)
      }
      //
      // 2. Treat Curves
@@ -240,7 +278,7 @@ index 8611aaa8..a945999d 100644
      //
      for (j = 0; j < aNbC; ++j)
      {
-@@ -1227,6 +1422,8 @@ void BOPAlgo_PaveFiller::PostTreatFF(
+@@ -1227,6 +1450,8 @@ void BOPAlgo_PaveFiller::PostTreatFF(
    // Find unused vertices
    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> VertsUnused;
    NCollection_Map<int>                                          IndMap;
@@ -249,7 +287,7 @@ index 8611aaa8..a945999d 100644
    for (int i = 0; i < aNbFF; i++)
    {
      BOPDS_InterfFF& aFF = aFFs(i);
-@@ -1234,7 +1431,7 @@ void BOPAlgo_PaveFiller::PostTreatFF(
+@@ -1234,7 +1459,7 @@ void BOPAlgo_PaveFiller::PostTreatFF(
      aFF.Indices(nF1, nF2);
  
      NCollection_Map<int> aMV, aMVEF, aMI;

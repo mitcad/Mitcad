@@ -1327,8 +1327,10 @@ void test_fillets_of_circles_in_pieces() {
 void test_fillets_of_knife_edges() {
   // A disk with a cove round its rim tangent to both faces: the edges where
   // the cove meets them are knife edges (the faces' normals opposite).
-  // OCCT's default tolerances find no start for the rolling ball there; it
-  // builds the rounding with tighter ones (mitcad#107).
+  // OCCT's default tolerances found no start for the rolling ball there and
+  // MitCad built the rounding with tighter ones (mitcad#107); since port
+  // patch 1770 OCCT starts the ball where it fits, with the defaults
+  // (mitcad#1984).
   const TopoDS_Shape disk = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), 20, 3).Shape();
   const TopoDS_Shape cove = BRepPrimAPI_MakeTorus(gp_Ax2(gp_Pnt(0, 0, 1.5), gp_Dir(0, 0, 1)), 20, 1.5).Shape();
   const ShapePtr body = import_body(BRepAlgoAPI_Cut(disk, cove).Shape(), "F1", 0);
@@ -1349,7 +1351,7 @@ void test_fillets_of_knife_edges() {
     BRepFilletAPI_MakeFillet plain(copy->occt());
     plain.Add(0.5, copy->edge(index));
     plain.Build();
-    CHECK(!plain.IsDone()); // why the parameters are tightened
+    CHECK(plain.IsDone()); // the start along a knife edge (port patch 1770)
   }
   const ShapePtr rounded = fillet("F5", *body, {knife}, 0.5);
   CHECK(mitcad::geometry::detail::is_valid(rounded->occt()));

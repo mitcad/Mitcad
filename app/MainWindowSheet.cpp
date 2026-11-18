@@ -215,6 +215,7 @@ bool MainWindow::editSketchInCommand(const QString& commandId, const QString& in
     m_sketchingAdded = added;
     m_session = nullptr;
     m_mode = Mode::Idle;
+    updateBrowserSketchCurves(SelectFilter()); // the command's curve rows wait too (mitcad#1978)
     editSketch(sketch);
     if (m_mode != Mode::Sketch) {
       // The sketch did not open: the panel comes back at once.

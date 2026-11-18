@@ -8,14 +8,15 @@
 #   1. Material > More... of the Lid's row in the browser (the Material
 #      tool, mitcad#1059) with the Lid picked, PETG HF chosen in its
 #      picker, OK: the Lid's default material.
-#   2. Send to Slicer, nothing selected: a row per filament (mitcad#1141),
-#      the Lid's material by its name, the Box's "No material: choose one".
+#   2. Send to Slicer, nothing selected: a row per body (mitcad#2008),
+#      the Lid's material by its name, and the Box without one takes it
+#      too: a print project cannot leave one body to the slicer, and the
+#      list shows what is sent; the line under it says the project is
+#      partly the slicer's defaults.
 #   3. Send to a (fake) Bambu Studio: the log names each part's material
-#      and own values; the 3MF's project settings (unzipped) give the Lid's
-#      part a filament of its own with PETG HF's temperatures, the Box's
-#      the print default's, PLA, with generic PLA values (mitcad#1727: not
-#      the design's default steel); the warning says so, and that no
-#      printer was chosen, in plain words.
+#      and own values; the 3MF's project settings (unzipped) give both
+#      parts PETG HF's filament with its temperatures; the warning says
+#      that no printer was chosen, in plain words (mitcad#1727).
 #
 # Runs headless on Xvfb (see ui-test-lib.sh).
 # Usage: tools/ui-print-send-material-test.sh
@@ -98,22 +99,22 @@ echo "--- 2. Send to Slicer names the Lid's material"
 ui_step "Escape (clear the selection)"     ui_key Escape
 ui_mark
 ui_command "Send to Slicer"
-# A row per filament (mitcad#1141): the Lid's material by its name, the
-# Box without a material of its own said plainly, not as Steel chosen.
-ui_expect_new "3D Print materials: Filament 1: PETG HF (1 body) | Filament 2: No material: choose one (1 body)" \
-  "the Lid's material by its name, the Box's row asks for one"
-ui_expect_new "Panel Send to Slicer input material_1 shows: PETG HF (1 body)" "Filament 1's field"
-ui_expect_new "Panel Send to Slicer input material_2 shows: No material: choose one (1 body)" "Filament 2's field"
+# A row per body (mitcad#2008): the Lid's material by its name, and the
+# Box without a material of its own sent with it, as its row shows.
+ui_expect_new "3D Print materials: Body1: PETG HF | Body2: PETG HF" \
+  "the Lid's material by its name, the Box's row the same"
+ui_expect_new "Panel Send to Slicer input material_1 shows: PETG HF" "the Lid's field"
+ui_expect_new "Panel Send to Slicer input material_2 shows: PETG HF" "the Box's field"
+ui_expect_new "3D Print delivery: project (partial)" "a print project, partly the slicer's defaults"
 
 echo "--- 3. Send to Bambu Studio: the Lid's filament carries PETG HF's values"
 rm -f "$ARGS"
 ui_mark
 ui_step "Send (Enter)"                     ui_key Return
-ui_expect_new "3D Print: print settings for bambu_studio, filaments 1,2" "Bambu Studio's settings, two filaments"
+ui_expect_new "3D Print delivery sent: project" "a print project"
+ui_expect_new "3D Print: print settings for bambu_studio, filaments 1,1" "Bambu Studio's settings, one filament"
 ui_expect_new "Print export: Body1 material petg-hf, " "the Lid's part is of PETG HF"
-ui_expect_new "Print export: Body2 material pla, " "the Box's without a material prints as PLA (mitcad#1727)"
-ui_expect_new "3D Print warnings: PLA Plastic (filament 2) sets no " \
-  "the print default's filament takes values it does not set, which the export says"
+ui_expect_new "Print export: Body2 material petg-hf, " "the Box's as its row shows (mitcad#2008)"
 # No printer chosen (mitcad#1727): the slicer gets a stand-in printer,
 # which the notice says in plain words, naming no command.
 ui_expect_new "no printer was chosen: the slicer gets a stand-in printer" \
@@ -129,10 +130,10 @@ done
 [ -f "$ARGS" ] || ui_fail "the slicer was not started"
 [ "$(cat "$ARGS")" = "$FOLDER/lid-box.3mf" ] || ui_fail "the slicer's arguments: $(cat "$ARGS")"
 echo "ok   the slicer got the 3MF"
-expect_3mf '.filament_settings_id' '["PETG HF","PLA Plastic"]' "a filament per material, the Lid's first"
-expect_3mf '.filament_type' '["PETG","PLA"]' "their types"
-expect_3mf '.nozzle_temperature' '["255","210"]' "PETG HF's nozzle temperature, generic PLA's for the other"
-expect_3mf '.hot_plate_temp' '["70","60"]' "PETG HF's bed temperature"
+expect_3mf '.filament_settings_id' '["PETG HF"]' "one filament, PETG HF"
+expect_3mf '.filament_type' '["PETG"]' "its type"
+expect_3mf '.nozzle_temperature' '["255"]' "PETG HF's nozzle temperature"
+expect_3mf '.hot_plate_temp' '["70"]' "PETG HF's bed temperature"
 model=$(unzip -p "$FOLDER/lid-box.3mf" Metadata/model_settings.config) || ui_fail "no model settings in the 3MF"
 lid=$(printf '%s\n' "$model" | grep -A1 -F '<metadata key="name" value="Body1"/>' | tail -1)
 case $lid in

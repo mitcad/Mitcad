@@ -47,6 +47,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Builder.hxx>
@@ -156,6 +157,31 @@ Inspection::Value valueRow(const QString& name, const QString& value) {
   row.name = name;
   row.value = value;
   return row;
+}
+
+// A place that paints the straight line between two points while the
+// pointer is over a row (Inspection::Value::places, mitcad#1979).
+QJsonArray segmentPlaces(const gp_Pnt& p, const gp_Pnt& q) {
+  QJsonObject segment{{QStringLiteral("kind"), QStringLiteral("segment")}};
+  segment.insert(QStringLiteral("from"), QJsonArray{p.X(), p.Y(), p.Z()});
+  segment.insert(QStringLiteral("to"), QJsonArray{q.X(), q.Y(), q.Z()});
+  QJsonArray places;
+  places.append(segment);
+  return places;
+}
+
+// The main distance as a dimension line (mitcad#1979): the line between its
+// points and each end as a vertex of its own, which the measurement wire
+// draws as a ball (its end marks), seen where the axis distance's guide
+// runs on through them.
+void addDimension(BRep_Builder& builder, TopoDS_Compound& drawn, const gp_Pnt& p, const gp_Pnt& q) {
+  if (p.Distance(q) > 1e-9) {
+    builder.Add(drawn, BRepBuilderAPI_MakeEdge(p, q).Edge());
+    builder.Add(drawn, BRepBuilderAPI_MakeVertex(p).Vertex());
+    builder.Add(drawn, BRepBuilderAPI_MakeVertex(q).Vertex());
+  } else {
+    builder.Add(drawn, BRepBuilderAPI_MakeVertex(p).Vertex());
+  }
 }
 
 // Δx, Δy and Δz from the first point to the second as rows of their own
@@ -398,7 +424,8 @@ QString pickedNames(const SelectionItem& first, const SelectionItem* second, con
 
 // The main values of a measure query's answer for the history
 // (mitcad#648): a single pick's volume, area, length or position; a circle's
-// radius and diameter; between two picks the main distance, its distinct
+// radius and diameter; between two picks the main distance (a plane gap's
+// Distance, else the Minimum distance, mitcad#1979), a plane gap's distinct
 // minimum, the angle and the axis and centre distances.
 QStringList recordValues(const QJsonObject& answer, const QString& unit) {
   QStringList values;
@@ -438,7 +465,7 @@ QStringList recordValues(const QJsonObject& answer, const QString& unit) {
   const bool planeGap = between.value(QStringLiteral("main")).toString() == QStringLiteral("offset");
   const double distance = between.value(planeGap ? QStringLiteral("offset") : QStringLiteral("distance")).toDouble();
   if (between.value(QStringLiteral("distance")).isDouble()) {
-    values << millimetres(QObject::tr("Distance"), distance);
+    values << millimetres(planeGap ? QObject::tr("Distance") : QObject::tr("Minimum distance"), distance);
     const double minimum = between.value(QStringLiteral("distance")).toDouble();
     if (planeGap && std::abs(minimum - distance) > 1e-6) {
       values << millimetres(QObject::tr("Minimum distance"), minimum);
@@ -579,17 +606,23 @@ Inspection measureShapes(const SelectionItem& first, const SelectionItem* second
     QStringList lines;
     BRepExtrema_DistShapeShape distance(a, b);
     if (distance.IsDone() && distance.NbSolution() > 0) {
-      lines << QObject::tr("<b>Distance: %1</b>").arg(lengthInUnit(distance.Value(), unit));
+      // The closest distance, named so (mitcad#1979), drawn as a dimension
+      // line with its end marks; hovering its row paints it.
+      lines << QObject::tr("<b>Minimum distance: %1</b>").arg(lengthInUnit(distance.Value(), unit));
       log << QStringLiteral("distance %1").arg(n(distance.Value()));
       const gp_Pnt p = distance.PointOnShape1(1);
       const gp_Pnt q = distance.PointOnShape2(1);
-      if (p.Distance(q) > 1e-9) {
-        result.shape = BRepBuilderAPI_MakeEdge(p, q).Edge();
-      }
+      TopoDS_Compound drawn;
+      BRep_Builder builder;
+      builder.MakeCompound(drawn);
+      addDimension(builder, drawn, p, q);
+      result.shape = drawn;
+      result.measurementWire = true;
       lines << QObject::tr("From %1 to %2").arg(pointTextIn(p, unit), pointTextIn(q, unit));
-      Inspection::Value row = valueRow(QObject::tr("Distance"), lengthInUnit(distance.Value(), unit));
+      Inspection::Value row = valueRow(QObject::tr("Minimum distance"), lengthInUnit(distance.Value(), unit));
       row.main = true;
       row.tip = QObject::tr("From %1 to %2").arg(pointTextIn(p, unit), pointTextIn(q, unit));
+      row.places = segmentPlaces(p, q);
       result.values.push_back(row);
       insertDeltaRows(result.values, p, q, unit);
     }
@@ -619,8 +652,12 @@ Inspection measureShapes(const SelectionItem& first, const SelectionItem* second
       const QString position =
           a.ShapeType() == TopAbs_VERTEX ? pointTextIn(BRep_Tool::Pnt(TopoDS::Vertex(a)), unit) : value;
       result.record.values << QStringLiteral("%1 %2").arg(QObject::tr("Position"), position);
+    } else if (key == QStringLiteral("distance")) {
+      // The closest distance, as the panel's row names it (mitcad#1979).
+      result.record.values << QStringLiteral("%1 %2").arg(QObject::tr("Minimum distance"),
+                                                          lengthInUnit(value.toDouble(), unit));
     } else if (key == QStringLiteral("radius") || key == QStringLiteral("diameter") ||
-               key == QStringLiteral("distance") || (key == QStringLiteral("length") && second == nullptr)) {
+               (key == QStringLiteral("length") && second == nullptr)) {
       QString label = key;
       label[0] = label[0].toUpper();
       result.record.values << QStringLiteral("%1 %2").arg(label, lengthInUnit(value.toDouble(), unit));
@@ -717,16 +754,20 @@ CommandDef measureCommand() {
     if (answer.contains(QStringLiteral("b"))) {
       parts << describeMeasured(answer.value(QStringLiteral("b")).toObject(), log, unit);
     }
-    // Drawn over the view: the axes of the picks (mitcad#647), the main
-    // distance and the axis distance.
+    // Drawn over the view: the main distance as a dimension line with its
+    // end marks, opaque (`drawn`); the axes of the picks (mitcad#647) and
+    // the axis distance dashed beside it (`guides`), so that the two
+    // distances are told apart where they lie on one line (mitcad#1979).
     TopoDS_Compound drawn;
+    TopoDS_Compound guides;
     BRep_Builder builder;
     builder.MakeCompound(drawn);
+    builder.MakeCompound(guides);
     int axes = 0;
     for (const QString& key : {QStringLiteral("a"), QStringLiteral("b")}) {
       const TopoDS_Shape line = axisLine(answer.value(key).toObject());
       if (!line.IsNull()) {
-        builder.Add(drawn, line);
+        builder.Add(guides, line);
         ++axes;
       }
     }
@@ -735,14 +776,17 @@ CommandDef measureCommand() {
       QStringList lines;
       const bool planeGap = between.value(QStringLiteral("main")).toString() == QStringLiteral("offset");
       const double minimum = between.value(QStringLiteral("distance")).toDouble();
-      result.measurementWire = planeGap;
       const double distance = between.value(planeGap ? QStringLiteral("offset") : QStringLiteral("distance")).toDouble();
-      lines << QObject::tr("<b>Distance: %1</b>").arg(lengthInUnit(distance, unit));
+      // A plane gap's main value is its Distance; every other pair's is
+      // the closest one, its Minimum distance (mitcad#1979), as the idle
+      // card names it.
+      const QString distanceName = planeGap ? QObject::tr("Distance") : QObject::tr("Minimum distance");
+      lines << QStringLiteral("<b>%1: %2</b>").arg(distanceName, lengthInUnit(distance, unit));
       log << QStringLiteral("distance %1").arg(n(distance));
       // The panel's rows (mitcad#1010): the distance first, larger, the
       // points it is measured between in its tooltip, Δx, Δy and Δz as
       // rows under it (mitcad#1167).
-      Inspection::Value distanceRow = valueRow(QObject::tr("Distance"), lengthInUnit(distance, unit));
+      Inspection::Value distanceRow = valueRow(distanceName, lengthInUnit(distance, unit));
       distanceRow.main = true;
       result.values.push_back(distanceRow);
       if (planeGap && std::abs(minimum - distance) > 1e-6) {
@@ -752,6 +796,12 @@ CommandDef measureCommand() {
         minimumRow.tip = QObject::tr("From %1 to %2")
                             .arg(xyzIn(between.value(QStringLiteral("on_a")), unit),
                                  xyzIn(between.value(QStringLiteral("on_b")), unit));
+        // Its own points painted while the pointer is over it (mitcad#1979).
+        const QJsonArray onA = between.value(QStringLiteral("on_a")).toArray();
+        const QJsonArray onB = between.value(QStringLiteral("on_b")).toArray();
+        if (onA.size() == 3 && onB.size() == 3) {
+          minimumRow.places = segmentPlaces(pointOf(onA), pointOf(onB));
+        }
         result.values.push_back(minimumRow);
       }
       if (between.value(QStringLiteral("angle")).isDouble()) {
@@ -776,10 +826,10 @@ CommandDef measureCommand() {
         lines << deltas;
         lines << QObject::tr("From %1 to %2").arg(xyzIn(a, unit), xyzIn(c, unit));
         result.values.front().tip = QObject::tr("From %1 to %2").arg(xyzIn(a, unit), xyzIn(c, unit));
+        result.values.front().places = segmentPlaces(p, q);
         insertDeltaRows(result.values, p, q, unit);
-        if (p.Distance(q) > 1e-9) {
-          builder.Add(drawn, BRepBuilderAPI_MakeEdge(p, q).Edge());
-        }
+        addDimension(builder, drawn, p, q);
+        result.measurementWire = true;
         if (planeGap) {
           log << QStringLiteral("plane dimension from %1 to %2").arg(xyz(a), xyz(c));
         }
@@ -798,8 +848,9 @@ CommandDef measureCommand() {
           axisRow.tip = QObject::tr("From %1 to %2").arg(xyzIn(points.at(0), unit), xyzIn(points.at(1), unit));
           const gp_Pnt p = pointOf(points.at(0));
           const gp_Pnt q = pointOf(points.at(1));
+          axisRow.places = segmentPlaces(p, q);
           if (p.Distance(q) > 1e-9) {
-            builder.Add(drawn, BRepBuilderAPI_MakeEdge(p, q).Edge());
+            builder.Add(guides, BRepBuilderAPI_MakeEdge(p, q).Edge());
           }
         }
         result.values.push_back(axisRow);
@@ -826,6 +877,10 @@ CommandDef measureCommand() {
     TopoDS_Iterator anything(drawn);
     if (anything.More()) {
       result.shape = drawn;
+    }
+    TopoDS_Iterator anyGuide(guides);
+    if (anyGuide.More()) {
+      result.guide = guides;
     }
     result.text = parts.join(QStringLiteral("<br><br>"));
     result.log = log.join(QStringLiteral(", "));

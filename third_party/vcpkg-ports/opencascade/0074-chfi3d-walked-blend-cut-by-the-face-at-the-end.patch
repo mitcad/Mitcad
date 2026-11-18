@@ -27,6 +27,15 @@ top edge before the corner's edge reaches the top.
   sets done: the whole fillet failed, OCCT's blend/encoderegularity A1).
 - ChFi3d_KPartLineParam: on a bounded line (a walked blend's contact) that
   has no foot of the point, the end of the line nearer to it.
+
+Failures (mitcad#1986): the walk on from the stripe's end and the cut
+piece fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the face at the end cannot be
+reached so: WalkedCutToEnd then reports that it made no cut, and the end
+is left to OCCT's corner as before (the builder's state restored). Any
+other failure (a broken invariant, a signal) is rethrown.
+Test: pending (mitcad#2003): the port test written for this patch passes
+without it too.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 index ba42ea6f..5b87977b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
@@ -46,10 +55,10 @@ index ba42ea6f..5b87977b 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index b679fac4..881887a5 100644
+index 030296cd..36ae24d9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -4370,7 +4370,17 @@ static bool ChFi3d_KPartLineParam(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -4376,7 +4376,17 @@ static bool ChFi3d_KPartLineParam(const TopOpeBRepDS_DataStructure&   DStr,
    GeomAPI_ProjectPointOnCurve aProj(P, C);
    if (aProj.NbPoints() == 0)
    {
@@ -68,7 +77,7 @@ index b679fac4..881887a5 100644
    }
    t = aProj.LowerDistanceParameter();
    if (C->IsPeriodic())
-@@ -6078,6 +6088,289 @@ static bool ChFi3d_KPartCutToEnd(
+@@ -6089,6 +6099,299 @@ static bool ChFi3d_KPartCutToEnd(
    return true;
  }
  
@@ -241,8 +250,13 @@ index b679fac4..881887a5 100644
 +    walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
 +                         Last, false, false, !isFirst, false, false, Soldep, intf, intl);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (The walk cannot be made: the end is left to OCCT's corner.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = aDone;
@@ -334,8 +348,13 @@ index b679fac4..881887a5 100644
 +                             isFirst ? &anEnd : &aJunction,
 +                             isFirst ? &aJunction : &anEnd);
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (The cut piece cannot be made: the end is left to OCCT's corner.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    G.Nullify();
 +  }
 +  if (G.IsNull())
@@ -358,7 +377,7 @@ index b679fac4..881887a5 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -7112,6 +7405,9 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -7123,6 +7426,9 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
  
    if (!Simul)
    {

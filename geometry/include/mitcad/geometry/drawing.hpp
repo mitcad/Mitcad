@@ -78,6 +78,11 @@ struct DrawingViewSpec {
   // follows the shapes' size alone). The triangulation never deviates less
   // than `deflection`.
   double quick_deviation = 0.0;
+  // The angle the polygonal algorithm's triangulation may turn through
+  // between two chords of a round edge, radians: finer at full size, up to
+  // a twelfth of a turn on a view reduced on its sheet
+  // (ViewSpec::quick_chord_angle, mitcad#2014).
+  double quick_chord_angle = 0.2;
 };
 
 enum class DrawnKind { Sharp, Smooth, Outline };

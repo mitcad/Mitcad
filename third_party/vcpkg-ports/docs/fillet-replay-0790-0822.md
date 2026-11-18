@@ -18,7 +18,7 @@ later ones in [0870 to 0911](fillet-replay-0870-0911.md). Back to the
 - **0800 to 0803** take the traits of stored bodies into OCCT's fillet: an
   OnSame end's cap points brought into one period however many periods
   apart (a cylinder trimmed turns below its basis's parameters), faces taken
-  for tangent within ten times the tolerance of their edge, a contact ending
+  for tangent within seven times the tolerance of their edge, a contact ending
   on the spine's own edge near the vertex where the spine goes on passed
   through that vertex, and the point where a cap leaves the prolongation
   tangentially given a tolerance that takes in their crossings near it (a
@@ -98,8 +98,10 @@ radian, were taken for faces meeting at an angle: a rounding round the
 chamfer cone stopped its contour at those edges' vertices (`FaceTangency`),
 three roundings meeting end to end that walked past each other, and a walk
 across such an edge stopped there (`IsG1` in `SearchFace`). The positions
-are compared within ten times the edge's tolerance now (at least 0.001; the
-normals within a tenth of a radian as before).
+are compared within seven times the edge's tolerance now (at least 0.001; the
+normals within a tenth of a radian as before): a curve 4.8 micrometres off on
+an edge of 1.4 is 3.43 tolerances off, two such curves 6.86 apart (mitcad#1986;
+it was ten times). Test: `geometry.port.0801`.
 
 ### 0802-chfi3d-contact-on-its-own-edge-near-a-vertex-passes-it
 

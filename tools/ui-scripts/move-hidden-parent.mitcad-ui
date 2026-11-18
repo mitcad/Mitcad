@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+# Move on a component hidden with its parent (mitcad#1995, GitHub
+# mitcad/Mitcad#430), on the reported design (the private test files'
+# MITCAD_MITCAD_REPORTED github-430): Fairlead:1 (O1) is hidden, Post:1
+# (O2, active) in it, and the component inserted from the web in Post:1
+# (O3), its own light bulb on. The shared input script of
+# tools/ui-move-hidden-parent-test.sh (Linux),
+# tools/ui-windows-move-hidden-parent-test.ps1 (Windows) and
+# tools/ui-macos-move-hidden-parent-test.sh (macOS):
+#   - the inserted occurrence's row and Post:1's are hidden with Fairlead:1;
+#   - picked in the Browser, Move/Copy takes it (Move Object: Components)
+#     and finds its middle although nothing of it is shown: 40 mm along X
+#     builds its preview, and OK moves it in one undo step. (Before
+#     mitcad#1995 the panel said "Select what moves." with it selected.)
+expect-ever 'View area' 600
+wait-idle 600
+expect-ever '^Browser Root/Fairlead:1/Post:1/[^/]+:1 at ' 60
+expect-ever '^Browser eye Root/Fairlead:1/Post:1: hidden with Fairlead:1$' 30
+expect-ever '^Browser eye Root/Fairlead:1/Post:1/[^/]+:1: hidden with Fairlead:1$' 30
+capture-undo-depth baseline
+
+mark
+click-logged '^Browser Root/Fairlead:1/Post:1/[^/]+:1 at '
+wait-idle
+mark
+command solid.move
+wait-log '^Command Move/Copy started' 20
+wait-log '^Move/Copy Objects: 1 component \[component C3 in O1/O2/O3\]$' 20
+wait-idle 60
+type-in '^Panel Move/Copy input tx at ' '40 mm'
+wait-log '^Preview Move/Copy: ok' 60
+expect-no-log 'Select what moves'
+wait-idle 60
+mark
+key Return
+wait-log '^Moved 1 components \(' 60
+wait-idle 60
+expect-undo-depth ${baseline} 1
+expect-never 'OCCT view event failed|TestDriver: FAIL'

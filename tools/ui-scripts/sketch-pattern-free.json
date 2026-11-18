@@ -1,0 +1,12 @@
+[
+  {"comment":"SPDX-License-Identifier: MIT"},
+  {"comment":"Sketch1 on XY for deleting, trimming and freeing sketch patterns (mitcad#2007): two free points that frame the view's fit at (-40, -30) and (40, 30) (p1, p2); a line c3 from (-30, -20) to (-20, -20) in a rectangular pattern of 4 along x, 15 mm apart (copies from (-15, -20), (0, -20) and (15, -20)); a line c6 from (25, 15) to (30, 15) in a circular pattern of 4 about (20, 15); and a line c9 from (5, -25) to (5, -15) across the second copy of c3."},
+  {"cmd":"sketch.create"},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[-40,-30]},
+  {"cmd":"sketch.add_point","sketch":"F1","at":[40,30]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[-30,-20],"end":[-20,-20]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[25,15],"end":[30,15]},
+  {"cmd":"sketch.add_line","sketch":"F1","start":[5,-25],"end":[5,-15]},
+  {"cmd":"sketch.rectangular_pattern","sketch":"F1","entities":["c3"],"direction":[1,0],"count":[4,1],"spacing":[15,10]},
+  {"cmd":"sketch.circular_pattern","sketch":"F1","entities":["c6"],"center":[20,15],"count":4}
+]

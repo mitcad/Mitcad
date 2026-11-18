@@ -45,6 +45,15 @@ pub const COMPUTED_SET: &str = "Computed";
 /// overrides one.
 pub const LIBRARY_SET: &str = "Library";
 
+/// The set of a component's BOM Structure (mitcad#1985): worked out
+/// (Purchased for a library part that is not cut to length, Normal
+/// otherwise) and never stored; a stored value of the same key, the user's
+/// choice, overrides it.
+pub const BOM_SET: &str = "Bill of Materials";
+
+/// The key of a component's BOM Structure in [`BOM_SET`].
+pub const BOM_STRUCTURE_KEY: &str = "BOM Structure";
+
 /// What a property belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PropertyOwner {

@@ -4,6 +4,7 @@
 // Measurements and descriptions of shapes.
 
 #include <array>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,7 +44,16 @@ struct BoundingBox {
   gp_Pnt max;
 };
 
+// The tight box of the shape's trimmed faces (trimmed_box.hpp,
+// mitcad#2020), not of their surfaces over the parameters their boundaries
+// span; a mesh body's from its triangulation. Kept with the shape.
 BoundingBox bounding_box(const Shape& shape);
+
+// bounding_box of each shape, the shapes on OCCT's threads (mitcad#1997: a
+// drawing view of 884 bodies boxed them one after another for seconds),
+// a shape given twice measured once; the first failure in their order
+// is thrown once all have run.
+std::vector<BoundingBox> bounding_boxes(const std::vector<std::shared_ptr<Shape>>& shapes);
 
 // A box that holds the shape, found from the faces' control points and the
 // shape's tolerances: looser than bounding_box's, but without its cost on
@@ -52,7 +62,8 @@ BoundingBox bounding_box(const Shape& shape);
 BoundingBox enclosing_box(const Shape& shape);
 
 // The tight box of each face (edge) at these indices of the shape's face
-// (edge) order, as bounding_box measures a body; empty for a face without
+// (edge) order, as bounding_box measures a body (a face's over the trimmed
+// face, trimmed_face_box); empty for a face without
 // geometry or a degenerate edge (the faces and edges queries, mitcad#714).
 std::vector<BoundingBox> face_bounding_boxes(const Shape& shape, const std::vector<int>& faces);
 std::vector<BoundingBox> edge_bounding_boxes(const Shape& shape, const std::vector<int>& edges);

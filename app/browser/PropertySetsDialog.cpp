@@ -284,6 +284,17 @@ protected:
     }
     QTreeWidget::keyPressEvent(event);
   }
+  // Typing a key's first letters goes to its row by its name (the first
+  // column), also after a click in the Value column made a value the
+  // current cell: Qt's search looks in the current cell's column, where no
+  // name is, and the row out of sight stayed there (0.66.0-rc1).
+  void keyboardSearch(const QString& search) override {
+    const QModelIndex current = currentIndex();
+    if (current.isValid() && current.column() != 0) {
+      selectionModel()->setCurrentIndex(current.siblingAtColumn(0), QItemSelectionModel::NoUpdate);
+    }
+    QTreeWidget::keyboardSearch(search);
+  }
 
 private:
   std::function<void(QTreeWidgetItem*, int)> m_edit;

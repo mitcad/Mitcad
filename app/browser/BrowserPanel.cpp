@@ -106,13 +106,17 @@ constexpr int kOwnerMarkRole = Qt::UserRole + 15;
 // the timeline's band under the component's features (ComponentColors.hpp);
 // none for a row of no component.
 constexpr int kComponentColorRole = Qt::UserRole + 16;
+// A row whose light bulb is on but which a hidden occurrence above it hides
+// (mitcad#1995): that occurrence's name. Its bulb is the closed eye, dimmed
+// as Isolate's, its tooltip names the occurrence.
+constexpr int kEyeParentRole = Qt::UserRole + 17;
 // Every item data role of the rows, each a number of its own: two features
 // that once shared one (mitcad#1143) misread each other's values, a
 // transparent row's name painted red. A new role goes in this block and in
 // this list.
 constexpr int kRowRoles[] = {kEyeRole,      kRadioRole, kLinkedRole,         kBindingsRole, kEyeTipRole,
                              kEyeBoundRole, kMakeRole,  kEyeTransparentRole, kTextRole,     kSharedRole,
-                             kEyeIsolatedRole, kOwnerMarkRole, kComponentColorRole};
+                             kEyeIsolatedRole, kOwnerMarkRole, kComponentColorRole, kEyeParentRole};
 constexpr bool rowRolesDistinct() {
   for (std::size_t i = 0; i < std::size(kRowRoles); ++i) {
     for (std::size_t j = i + 1; j < std::size(kRowRoles); ++j) {
@@ -124,6 +128,12 @@ constexpr bool rowRolesDistinct() {
   return true;
 }
 static_assert(rowRolesDistinct(), "two browser row roles share a number (mitcad#1143)");
+
+// The light bulb's tooltip of a row hidden with an occurrence above it
+// (mitcad#1995): its name, and what a click does.
+QString hiddenWithTip(const QString& parent) {
+  return BrowserPanel::tr("Hidden with %1: click to show it").arg(parent);
+}
 
 // The fx badge's font and text (mitcad#862).
 QFont bindingsFont(const QFont& font) {
@@ -535,8 +545,12 @@ public:
         // A conditioned row's bulb says what a click does to it (mitcad#863).
         // Left out by Isolate alone (mitcad#1700): a click shows it too and
         // changes no light bulb, conditioned or not.
+        // Hidden with an occurrence above it (mitcad#1995): a click shows
+        // that occurrence.
         tip = index.data(kEyeIsolatedRole).toBool() ? BrowserPanel::tr("Hidden by Isolate: click to show it too")
-                                                    : index.data(kEyeTipRole).toString();
+              : index.data(kEyeParentRole).isValid()
+                  ? hiddenWithTip(index.data(kEyeParentRole).toString())
+                  : index.data(kEyeTipRole).toString();
         if (tip.isEmpty()) {
           tip = index.data(kEyeRole).toBool() ? BrowserPanel::tr("Hide") : BrowserPanel::tr("Show");
         }
@@ -587,8 +601,9 @@ protected:
                            : index.data(kEyeTransparentRole).toBool() ? QStringLiteral("eye-half")
                                                                        : QStringLiteral("eye");
       auto* engine = new EyeIconEngine(themeIcon(bulb), option->icon, bulb);
-      // Shown by its light bulb, left out by Isolate (mitcad#1700).
-      if (index.data(kEyeIsolatedRole).toBool()) {
+      // Shown by its light bulb, left out by Isolate (mitcad#1700) or
+      // hidden with an occurrence above it (mitcad#1995).
+      if (index.data(kEyeIsolatedRole).toBool() || index.data(kEyeParentRole).isValid()) {
         engine->setDimmed();
       }
       // A row that follows a condition: the fx corner badge (mitcad#863).
@@ -923,6 +938,12 @@ SelectionItem BrowserNode::item() const {
     break;
   case Type::FlatPattern:
     item.kind = SelectKind::Body;
+    break;
+  case Type::SketchCurve:
+    // As the view's pick of the curve (mitcad#1978).
+    item.kind = SelectKind::SketchCurve;
+    item.name = curve;
+    item.geometry = featureType;
     break;
   default:
     return SelectionItem();
@@ -1595,6 +1616,7 @@ bool BrowserPanel::eventFilter(QObject* watched, QEvent* event) {
       hoverJoint(nodeOf(m_tree->itemAt(at)));
       hoverBodies(nodeOf(m_tree->itemAt(at))); // mitcad#1022
       hoverFeature(nodeOf(m_tree->itemAt(at))); // mitcad#1327
+      hoverCurve(nodeOf(m_tree->itemAt(at)));   // mitcad#1978
       hoverBindings(m_tree->itemAt(at), at); // mitcad#862
       break;
     }
@@ -1603,6 +1625,7 @@ bool BrowserPanel::eventFilter(QObject* watched, QEvent* event) {
       hoverJoint(BrowserNode());
       hoverBodies(BrowserNode());
       hoverFeature(BrowserNode());
+      hoverCurve(BrowserNode());
       hoverBindings(nullptr, QPoint());
       break;
     case QEvent::MouseButtonPress:
@@ -1629,6 +1652,102 @@ void BrowserPanel::hoverNode(const BrowserNode& node) {
   hoverJoint(node);
   hoverBodies(node);
   hoverFeature(node);
+  hoverCurve(node);
+}
+
+void BrowserPanel::hoverCurve(const BrowserNode& node) {
+  // A sketch curve's row (mitcad#1978): the view paints the curve.
+  const bool curve = node.type == BrowserNode::Type::SketchCurve;
+  const QString key = curve ? keyOf(node) : QString();
+  if (key == m_hoveredCurve) {
+    return;
+  }
+  m_hoveredCurve = key;
+  emit curveHovered(curve ? node : BrowserNode());
+}
+
+void BrowserPanel::setSketchCurves(const QHash<QString, QVector<BrowserSketchCurve>>& curves) {
+  if (curves == m_sketchCurves) {
+    return;
+  }
+  m_sketchCurves = curves;
+  // In place, without a rebuild: each sketch row's curve rows taken away
+  // and added again as the map has them now.
+  QVector<QTreeWidgetItem*> sketchRows;
+  QVector<QTreeWidgetItem*> curveRows;
+  for (auto it = m_nodes.cbegin(); it != m_nodes.cend(); ++it) {
+    if (it.value().type == BrowserNode::Type::Sketch) {
+      sketchRows.append(it.key());
+    } else if (it.value().type == BrowserNode::Type::SketchCurve) {
+      curveRows.append(it.key());
+    }
+  }
+  const bool wasBuilding = m_building;
+  m_building = true; // no selection or rename signals while the rows change
+  {
+    const QSignalBlocker blocker(m_tree);
+    for (QTreeWidgetItem* row : std::as_const(curveRows)) {
+      m_nodes.remove(row);
+      delete row; // takes itself out of its sketch's row
+    }
+    for (QTreeWidgetItem* row : std::as_const(sketchRows)) {
+      addCurveRows(row);
+    }
+  }
+  m_building = wasBuilding;
+  // A hovered curve row that went: its paint goes too.
+  if (!m_hoveredCurve.isEmpty()) {
+    bool there = false;
+    for (auto it = m_nodes.cbegin(); it != m_nodes.cend() && !there; ++it) {
+      there = it.value().type == BrowserNode::Type::SketchCurve && keyOf(it.value()) == m_hoveredCurve;
+    }
+    if (!there) {
+      hoverCurve(BrowserNode());
+    }
+  }
+  int count = 0;
+  for (const QVector<BrowserSketchCurve>& listed : curves) {
+    count += static_cast<int>(listed.size());
+  }
+  const QString line = curves.isEmpty() ? QStringLiteral("none")
+                                        : QStringLiteral("%1 sketches, %2 curves").arg(curves.size()).arg(count);
+  if (line != m_loggedSketchCurves) {
+    m_loggedSketchCurves = line;
+    qDebug().noquote() << QStringLiteral("Browser sketch curves: %1").arg(line);
+  }
+  emit contentHeightChanged();
+  emit rowsRestyled(); // another presentation reads the rows again
+  queueRowsRegion();
+  QTimer::singleShot(0, this, &BrowserPanel::logLayout);
+}
+
+void BrowserPanel::addCurveRows(QTreeWidgetItem* sketchRow) {
+  const BrowserNode sketch = m_nodes.value(sketchRow);
+  const auto listed = m_sketchCurves.constFind(sketch.uid);
+  if (listed == m_sketchCurves.cend()) {
+    return;
+  }
+  const QVariant sketchRole = sketchRow->data(kName, kTextRole);
+  const bool dimmed = sketchRole.isValid() && sketchRole.toInt() == static_cast<int>(ColorRole::TextHidden);
+  for (const BrowserSketchCurve& curve : listed.value()) {
+    BrowserNode node;
+    node.type = BrowserNode::Type::SketchCurve;
+    node.uid = sketch.uid;
+    node.occurrence = sketch.occurrence;
+    node.component = sketch.component;
+    node.feature = sketch.feature;
+    node.curve = curve.id;
+    node.featureType = curve.geometry;
+    node.name = curve.name;
+    // Named in words, never by its id (docs/ui-conventions.md).
+    const QString tip = curve.construction ? tr("%1 of %2, construction: click to pick it").arg(curve.name, sketch.name)
+                                           : tr("%1 of %2: click to pick it").arg(curve.name, sketch.name);
+    QTreeWidgetItem* row = addRow(sketchRow, node, curve.icon, tip);
+    // Gray as its sketch's row is (hidden, failed), or as construction.
+    if (dimmed || curve.construction) {
+      setNameRole(row, ColorRole::TextHidden);
+    }
+  }
 }
 
 void BrowserPanel::hoverFeature(const BrowserNode& node) {
@@ -1690,8 +1809,9 @@ QVector<BrowserPanel::PresentationRow> BrowserPanel::presentationRows() const {
     rows.append({key, parent, node, item->toolTip(0), icon, item->isExpanded(),
                  item->data(kName, kRadioRole).isValid(), item->data(kName, kRadioRole).toBool(),
                  item->data(kName, kBindingsRole).toInt(), rowTone(item),
-                 item->data(kName, kEyeIsolatedRole).toBool() ? tr("Hidden by Isolate: click to show it too")
-                                                              : item->data(kName, kEyeTipRole).toString(),
+                 item->data(kName, kEyeIsolatedRole).toBool()  ? tr("Hidden by Isolate: click to show it too")
+                 : item->data(kName, kEyeParentRole).isValid() ? hiddenWithTip(item->data(kName, kEyeParentRole).toString())
+                                                               : item->data(kName, kEyeTipRole).toString(),
                  item->data(kName, kEyeBoundRole).toBool(), item->data(kName, kMakeRole).toString(),
                  item->data(kName, kEyeRole).toBool() && item->data(kName, kEyeTransparentRole).toBool(),
                  item->data(kName, kEyeRole).toBool()});
@@ -1794,6 +1914,8 @@ QString BrowserPanel::keyOf(const BrowserNode& node) const {
     return QStringLiteral("cam-operation:") + node.uid;
   case BrowserNode::Type::BodyFolder: // mitcad#1802
     return QStringLiteral("body-folder:") + node.uid + at;
+  case BrowserNode::Type::SketchCurve: // mitcad#1978: under each of its sketch's rows
+    return QStringLiteral("curve:%1/%2>%3").arg(node.uid, node.curve, node.feature) + at;
   case BrowserNode::Type::None:
     break;
   }
@@ -1896,9 +2018,30 @@ QTreeWidgetItem* BrowserPanel::addRow(QTreeWidgetItem* parent, const BrowserNode
   if (node.hasEye) {
     // What the view shows (mitcad#1700): off while Isolate leaves the row
     // out, dimmed when its own light bulb is on.
-    item->setData(kName, kEyeRole, node.visible && !node.isolatedOut);
+    // Hidden with an occurrence above it (mitcad#1995): off too, dimmed
+    // when its own light bulb is on.
+    const bool parentHides = !m_hiddenWith.isEmpty() && !node.isolatedOut;
+    item->setData(kName, kEyeRole, node.visible && !node.isolatedOut && !parentHides);
     if (node.isolatedOut && node.visible) {
       item->setData(kName, kEyeIsolatedRole, true);
+    }
+    if (parentHides && node.visible) {
+      item->setData(kName, kEyeParentRole, m_hiddenWith);
+      stored.hiddenWith = m_hiddenWith;
+      stored.hiddenParents = m_hiddenParents;
+    }
+    // Logged when it comes and goes, for the UI tests ("Browser eye
+    // Root/Fairlead:1/Post:1: hidden with Fairlead:1", "...: not hidden with a
+    // parent").
+    const bool hiddenWith = parentHides && node.visible;
+    if (hiddenWith != m_loggedHiddenWith.contains(stored.path)) {
+      if (hiddenWith) {
+        m_loggedHiddenWith.insert(stored.path);
+      } else {
+        m_loggedHiddenWith.remove(stored.path);
+      }
+      qDebug().noquote() << (hiddenWith ? QStringLiteral("Browser eye %1: hidden with %2").arg(stored.path, m_hiddenWith)
+                                        : QStringLiteral("Browser eye %1: not hidden with a parent").arg(stored.path));
     }
   }
   // Logged when Isolate starts and stops leaving a body or component row
@@ -2338,6 +2481,9 @@ QTreeWidgetItem* BrowserPanel::addSketchRow(QTreeWidgetItem* parent, const Docum
     const QString before = row->toolTip(kName);
     row->setToolTip(kName, before.isEmpty() ? used : before + QLatin1Char('\n') + used);
   }
+  if (sketch) {
+    addCurveRows(row); // while an input takes sketch curves (mitcad#1978)
+  }
   return row;
 }
 
@@ -2744,10 +2890,23 @@ void BrowserPanel::rebuild(const DocumentSnapshot& snapshot, bool originShown) {
                                                snapshot.conditionParts(occurrence.visibleWhen)),
                               true);
           }
+          // Its rows and those of the occurrences in it are hidden with it
+          // while its light bulb is off (mitcad#1995): the nearest hidden
+          // occurrence is named.
+          const QString hiddenWith = m_hiddenWith;
+          const QStringList hiddenParents = m_hiddenParents;
+          if (!occurrence.visible) {
+            m_hiddenWith = occurrence.name;
+            m_hiddenParents.append(occurrence.path);
+          }
           addComponentRows(item, snapshot, occurrence.component, occurrence.path, visible, uses);
           place(item, occurrence.children, visible);
+          m_hiddenWith = hiddenWith;
+          m_hiddenParents = hiddenParents;
         }
       };
+  m_hiddenWith.clear();
+  m_hiddenParents.clear();
   place(rootItem, snapshot.occurrences, true);
   rootItem->setData(kName, kRadioRole, snapshot.activeComponent == rootNode.uid);
 

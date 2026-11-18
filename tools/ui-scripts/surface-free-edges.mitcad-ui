@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MIT
+# A surface body's free edges picked with no command, Extend started on
+# them, and its Whole Opening (mitcad#1955, GitHub mitcad/Mitcad#407), on the
+# reported design (two walls of a box cut at a slant: Body1 F2.b0 and its
+# offset copy Body7 F13.b0, each one planar face whose four edges are all
+# free, the slanted one included):
+#   with no command, Body7's free edges are offered as edges of their own
+#   (named by their opening and middle point), the pointer over one hovers
+#   it as an edge (not the face beside it) and a click selects it;
+#   Extend started then takes it into Edges as its whole opening (Whole
+#   Opening on at first), and the hover shows the whole loop;
+#   Whole Opening turned off takes that single edge again, the preview
+#   extends it, and OK adds the extension of one edge.
+# Run by tools/ui-surface-free-edges-test.sh (Linux),
+# tools/ui-windows-surface-free-edges-test.ps1 (Windows) and
+# tools/ui-macos-surface-free-edges-test.sh (macOS).
+expect-ever 'View area' 600
+wait-idle 600
+command view.fit
+wait-idle
+
+# No command: the free edges are places of their own, edges of Body7.
+mark
+idle-pick-places
+wait-log '^Pick edge F13[.]b0/[{]"at":\[[^]]*\],"opening":[{]"faces":' 20
+hover-logged '^Pick edge F13[.]b0/[{]"at":'
+wait-log '^Idle hover: edge [{]"at":[^ ]* of F13[.]b0' 20
+mark
+click-pick 'edge F13[.]b0/[{]"at":[^ ]* at '
+wait-log '^Selected: 1 edge [[]edge [{]"at":[^ ]* of F13[.]b0' 20
+wait-idle
+
+# Extend takes the selected edge, as its whole opening (Whole Opening on).
+mark
+command surface.extend
+wait-log '^Extend Edges: 1 edge [[]edge [{]"faces":\["F13:offset' 20
+expect-no-log ' not taken: '
+wait-log '^Preview Extend: ok' 60
+wait-idle 60
+# The pointer over a free edge of the loop shows the whole opening.
+wait-log '^Pick edge F13[.]b0/[{]"at":' 20
+hover-logged '^Pick edge F13[.]b0/[{]"at":'
+wait-log '^Hover opening: 4 edge[(]s[)] of F13[.]b0' 20
+
+# Whole Opening off: the edge it was picked by again, one edge extended.
+wait-log '^Panel Extend input whole_opening at ' 20
+mark
+click-logged '^Panel Extend input whole_opening at '
+wait-log '^Extend: Whole Opening = off$' 10
+wait-log '^Extend Edges: 1 edge [[]edge [{]"at":[^ ]* of F13[.]b0' 20
+wait-log '^Preview Extend: ok' 60
+wait-idle 60
+mark
+button '^OK$'
+wait-log '^Added extend of 1 edges and the open edges of 0 faces' 60
+wait-idle 60
+expect-never 'Recompute failed|OCCT view event failed|TestDriver: FAIL'

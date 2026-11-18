@@ -338,7 +338,7 @@ QJsonObject commentEntity(const QJsonObject& target) {
     }
     return entity;
   }
-  // A parameter or a free point: nothing to select.
+  // A parameter, a free point or the whole design: nothing to select.
   return {};
 }
 

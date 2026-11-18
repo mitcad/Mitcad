@@ -621,7 +621,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_select",
-            "Set the application's selection to the given entities, as clicks would, to show the user something; the user can then press Delete or run a command on them. Optionally pan or zoom the view to them. With comment instead of items: select that comment's target (a free point, a parameter or an orphaned comment's target selects nothing) and bring its place into the view.",
+            "Set the application's selection to the given entities, as clicks would, to show the user something; the user can then press Delete or run a command on them. Optionally pan or zoom the view to them. With comment instead of items: select that comment's target (a free point, a parameter, the whole design or an orphaned comment's target selects nothing) and bring its place into the view.",
             json!({
                 "document": document,
                 "items": {"type": "array", "items": item, "description": "The entities; empty clears the selection"},
@@ -652,7 +652,7 @@ fn ui_tools() -> Vec<Value> {
         ),
         tool(
             "ui_camera",
-            "Read or set the 3D view's camera, for inspection screenshots; the view changes at once (no animation) and the result is the camera as it then is. Without arguments it only reads. Given values replace the current camera's: eye and target (points), up, height (mm of the model the view shows at the target, top to bottom), fov (the perspective's vertical field of view in degrees), projection. Then box frames that box, or frame frames the shown bodies (only the isolated ones when the design isolates some) or the selection, seen along the resulting view direction with a small margin, in the part of the view no panel covers; or comment selects that comment's target and frames it (a free point or an orphaned comment's place is centred at the current zoom).",
+            "Read or set the 3D view's camera, for inspection screenshots; the view changes at once (no animation) and the result is the camera as it then is. Without arguments it only reads. Given values replace the current camera's: eye and target (points), up, height (mm of the model the view shows at the target, top to bottom), fov (the perspective's vertical field of view in degrees), projection. Then box frames that box, or frame frames the shown bodies (only the isolated ones when the design isolates some) or the selection, seen along the resulting view direction with a small margin, in the part of the view no panel covers; or comment selects that comment's target and frames it (a free point or an orphaned comment's place is centred at the current zoom; one on a parameter or the whole design has no place and is refused).",
             json!({
                 "eye": point,
                 "target": point,

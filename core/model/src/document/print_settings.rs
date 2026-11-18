@@ -91,6 +91,12 @@ pub struct EffectivePrint {
     pub material: String,
     pub material_name: String,
     pub filament: BTreeMap<String, (Value, PrintFrom)>,
+    /// Whether the material was chosen (mitcad#2008): the body's own, a
+    /// component's default or a print job's choice. False when none is
+    /// set anywhere ("None (slicer's own)"): the print default stands in
+    /// for it, and a slicer's file without any choice is geometry only
+    /// ([`crate::print_files::Delivery`]).
+    pub material_chosen: bool,
     /// The appearance it prints with (mitcad#1055): the body's, else its
     /// component's for its material, else the material's default. Its
     /// colour is the filament's `filament_colour`; a material and an
@@ -845,6 +851,40 @@ impl<K: Kernel> Document<K> {
         (print, own.or(print.appearance.as_deref()))
     }
 
+    /// A body's settings `base` with a print job's material choice
+    /// (mitcad#2008): `Some(id)` prints with that material, in the body's
+    /// own appearance when the material offers it, else the material's
+    /// default, and counts as chosen; `None` with none ("None (slicer's
+    /// own)"): the print default stands in and nothing counts as chosen.
+    /// An unknown material leaves `base` as it is.
+    pub fn job_print(
+        &self,
+        base: EffectivePrint,
+        body: BodyUid,
+        choice: Option<&str>,
+    ) -> EffectivePrint {
+        let id = choice.unwrap_or(PRINT_DEFAULT_MATERIAL);
+        let Some(material) = self.material(id) else {
+            return base;
+        };
+        let own = self
+            .state
+            .body_attributes
+            .get(&body)
+            .and_then(|a| a.appearance.as_deref())
+            .filter(|a| {
+                material.appearance.as_deref() == Some(*a)
+                    || material.appearances.iter().any(|m| m == a)
+            });
+        let look = own.or(material.appearance.as_deref());
+        let mut out = match self.change_filament_print(&base, id, look) {
+            Some(out) => out,
+            None => base,
+        };
+        out.material_chosen = choice.is_some();
+        out
+    }
+
     /// The material of the nearest component level that has a default,
     /// else the print default (mitcad#1727: PLA, not the design's default
     /// steel), with that component's appearance (mitcad#1055; none: the
@@ -1035,8 +1075,18 @@ impl<K: Kernel> Document<K> {
         // The filament: the body's material, else the nearest component's
         // default, else the print default (mitcad#1727).
         let (material, look) = match target {
-            PrintTarget::Body(body, path) => self.body_print_material(*body, path.as_deref()),
+            PrintTarget::Body(body, path) => {
+                out.material_chosen =
+                    self.body_material(*body, path.as_deref()).1 != MaterialSource::Default;
+                self.body_print_material(*body, path.as_deref())
+            }
             _ => {
+                out.material_chosen = levels.iter().any(|o| match o {
+                    PropertyOwner::Component(c) => self
+                        .component_material(*c)
+                        .is_some_and(|id| self.material(id).is_some()),
+                    _ => false,
+                });
                 let (material, own) = self.levels_material(&levels);
                 (material, own.or(material.appearance.as_deref()))
             }

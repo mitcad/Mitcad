@@ -33,3 +33,9 @@ mod side_lineup_tests;
 mod move_imported_tests;
 // Ends that meet and their shared miter (mitcad#1940).
 mod end_meets_tests;
+// A part started on another body's face along its normal (mitcad#2000).
+mod face_normal_tests;
+// A profile centred across a side with two slots (mitcad#2002).
+mod side_middle_tests;
+// A BUILD part's Kind (mitcad#1980) and BOM Structure (mitcad#1985).
+mod bom_kind_tests;

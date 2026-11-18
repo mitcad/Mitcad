@@ -28,13 +28,19 @@ pub struct PartInfo {
     pub meta: BuildMeta,
     /// The mount frames at the marker, in the part's coordinates.
     pub mounts: BTreeMap<String, Transform>,
+    /// The middles of its sides with two or more slots (mitcad#2002,
+    /// `side_middle.rs`), by name (`side_x+`): frames a profile can stand
+    /// on centred across the side. Not among `mounts`, which are the
+    /// design's.
+    pub middles: BTreeMap<String, Transform>,
     /// The design's parameter that sets its length, and its value.
     pub length: Option<(ParamId, f64)>,
 }
 
 impl PartInfo {
+    /// A frame by name: a mount frame, else a side's middle.
     pub fn mount(&self, name: &str) -> Option<&Transform> {
-        self.mounts.get(name)
+        self.mounts.get(name).or_else(|| self.middles.get(name))
     }
 
     /// The slot frames, by name.
@@ -69,9 +75,16 @@ impl PartInfo {
         out
     }
 
-    /// Whether a frame is a side frame (a slot, or a member's face).
+    /// Whether a frame is a side frame (a slot, a member's face, or a
+    /// side's middle between its slots).
     pub fn is_side(&self, name: &str) -> bool {
-        self.sides().iter().any(|(n, _)| *n == name)
+        self.is_side_middle(name) || self.sides().iter().any(|(n, _)| *n == name)
+    }
+
+    /// Whether a frame is the middle of a side between its slots
+    /// (mitcad#2002).
+    pub fn is_side_middle(&self, name: &str) -> bool {
+        !self.mounts.contains_key(name) && self.middles.contains_key(name)
     }
 
     /// Whether the part is a timber member (mitcad#478).
@@ -79,13 +92,15 @@ impl PartInfo {
         self.meta.is_timber()
     }
 
-    /// A frame's kind: the metadata's, else guessed from its name
-    /// (`end_a`, `slot_x+_1`).
+    /// A frame's kind: the metadata's, else `side` for a side's middle
+    /// (mitcad#2002), else guessed from its name (`end_a`, `slot_x+_1`).
     pub fn frame_kind(&self, name: &str) -> String {
         if let Some(frame) = self.meta.frame(name).filter(|f| !f.kind.is_empty()) {
             return frame.kind.clone();
         }
-        if name == "end_a" || name == "end_b" {
+        if self.is_side_middle(name) {
+            "side".to_owned()
+        } else if name == "end_a" || name == "end_b" {
             "end".to_owned()
         } else if name.starts_with("slot") {
             "slot".to_owned()
@@ -276,6 +291,7 @@ impl<K: Kernel> Document<K> {
             .and_then(|o| o.mounts.as_ref())
             .map(|m| (**m).clone())
             .unwrap_or_default();
+        let middles = super::side_middles(&mounts);
         let length = meta.length.as_ref().and_then(|l| {
             let id = *part_def.as_ref()?.parameters.get(&l.parameter)?;
             Some((id, self.parameters().value(id)?))
@@ -290,6 +306,7 @@ impl<K: Kernel> Document<K> {
             source,
             meta,
             mounts,
+            middles,
             length,
         })
     }

@@ -37,7 +37,20 @@ it as one.
   a stripe whose blend lies on another stripe's (the same faces and contact
   curves, ChFi3d_Builder::RemoveCoincidentStripes) stays a contour of the
   builder but gives no faces; the corners are those of the stripes kept.
+
+Failures (mitcad#1986): the overlapping stripes' second computation fails
+the fillet where it fails: as OCCT's own handler of the first computation
+in Compute, a stripe whose PerformSetOfSurf throws is a bad stripe (its
+spine's status an error), and the builder is not done. StartSolOverflow is
+reached only on StartSol's own failure (its status ChFiDS_StartsolFailure,
+see 0011) or for an overlapping stripe, whose start is found as an overflow
+without StartSol (the flag anOverflowOnly, set before the try: the throw
+that skips StartSol is this patch's own, not a failure); other failures are
+rethrown.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 886899ca..3a60958b 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -19,6 +19,10 @@
@@ -51,16 +64,10 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
  #include <ChFi3d_Builder.hxx>
  #include <ChFi3d_Builder_0.hxx>
  #include <ChFiDS_CommonPoint.hxx>
-@@ -169,6 +173,318 @@
-         break;
-       default:
-         break;
-+    }
-+  }
-+}
-+
-+//=================================================================================================
-+
+@@ -175,6 +179,318 @@ void ChFi3d_Builder::ExtentAnalyse()
+ 
+ //=================================================================================================
+ 
 +// The parameter of point P projected on curve C, and its distance.
 +static double projectOn(const occ::handle<Geom_Curve>& C, const gp_Pnt& P, double& Dist)
 +{
@@ -367,10 +374,16 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
 +    if (itel.Value()->Spine()->LastStatus() <= ChFiDS_BreakPoint)
 +    {
 +      myVDataMap.Add(itel.Value()->Spine()->LastVertex(), itel.Value());
-     }
-   }
- }
-@@ -292,6 +608,38 @@
++    }
++  }
++}
++
++//=================================================================================================
++
+ void ChFi3d_Builder::Compute()
+ {
+ 
+@@ -292,6 +608,38 @@ void ChFi3d_Builder::Compute()
      done = true;
    }
    done = (badstripes.IsEmpty());
@@ -409,7 +422,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
  
  #ifdef OCCT_DEBUG // perf
    ChFi3d_ResultChron(cl_perfsetofsurf, t_perfsetofsurf);
-@@ -357,6 +705,10 @@
+@@ -357,6 +705,10 @@ void ChFi3d_Builder::Compute()
      for (itel.Initialize(myListStripe), i1 = 0; itel.More(); itel.Next(), i1++)
      {
        const occ::handle<ChFiDS_Stripe>& st = itel.Value();
@@ -420,7 +433,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
        // 05/02/02 akm vvv : (OCC119) First we'll check ain't there
        //                    intersections between fillets
        NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel1;
-@@ -369,6 +721,10 @@
+@@ -369,6 +721,10 @@ void ChFi3d_Builder::Compute()
            continue;
          }
          occ::handle<ChFiDS_Stripe> aCheckStripe = itel1.Value();
@@ -431,7 +444,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
          try
          {
            OCC_CATCH_SIGNALS
-@@ -931,6 +1287,10 @@
+@@ -931,6 +1287,10 @@ void ChFi3d_Builder::Reset()
    myEVIMap.Clear();
    badstripes.Clear();
    badvertices.Clear();
@@ -443,9 +456,10 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
    for (itel.Initialize(myListStripe); itel.More();)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index 857a2a73..63137cae 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -761,6 +761,15 @@
+@@ -761,6 +761,15 @@ protected:
    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher>          myEdgeFirstFace;
    bool                                                                              done;
    bool                                                                              hasresult;
@@ -461,7 +475,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/Mod
  
  private:
    Standard_EXPORT bool FaceTangency(const TopoDS_Edge&   E0,
-@@ -829,12 +838,15 @@
+@@ -829,12 +838,15 @@ private:
                                  gp_Pnt2d&                              P2,
                                  double&                                First) const;
  
@@ -483,7 +497,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/Mod
    Standard_EXPORT int StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      S,
                                         const occ::handle<ChFiDS_ElSpine>&     HGuide,
                                         occ::handle<BRepAdaptor_Surface>&      HS1,
-@@ -844,10 +856,32 @@
+@@ -844,10 +856,32 @@ private:
                                         gp_Pnt2d&                              P1,
                                         gp_Pnt2d&                              P2,
                                         double&                                First,
@@ -521,9 +535,10 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/Mod
    //! Whether the common point of SurfData SD at its start or end on side
    //! ons lies on an edge of a face at the vertex Bout ending the spine.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index e583b66e..072bc3b1 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
-@@ -2596,6 +2596,108 @@
+@@ -2596,6 +2596,108 @@ bool ChFi3d_ArcEndsSpine(const ChFiDS_CommonPoint& CP,
    return false;
  }
  
@@ -632,7 +647,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
  //=======================================================================
  // function : ChFi3d_CutConsumedFaces
  // purpose  : A SurfData rolling on an obstacle edge (side ons) keeps the
-@@ -2654,56 +2756,80 @@
+@@ -2654,56 +2756,80 @@ void ChFi3d_CutConsumedFaces(TopOpeBRepDS_DataStructure&       DStr,
        {
          continue;
        }
@@ -643,12 +658,6 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
 -      {
 -        bool onObst = false;
 -        for (TopExp_Explorer exo(anObst, TopAbs_VERTEX); exo.More() && !onObst; exo.Next())
--        {
--          onObst = exo.Current().IsSame(ex.Current());
--        }
--        isStrip = onObst || aSpineVertices.Contains(ex.Current());
--      }
--      if (!isStrip)
 +      // The consumed faces: strips between the spine and the obstacle edge
 +      // (all their vertices on their edge toward the obstacle and on the
 +      // edge opposite it), from the one at the obstacle edge to the one at
@@ -685,12 +694,15 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
 +          }
 +        }
 +        if (aNext.IsNull() || aNext.IsSame(aFace) || containsSame(aStrips, aNext))
-+        {
+         {
+-          onObst = exo.Current().IsSame(ex.Current());
 +          break;
-+        }
+         }
+-        isStrip = onObst || aSpineVertices.Contains(ex.Current());
 +        aCur  = aNext;
 +        aNear = aFar;
-+      }
+       }
+-      if (!isStrip)
 +      if (!atSpine)
        {
          continue;
@@ -702,21 +714,16 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
        {
          const ChFiDS_CommonPoint& CP = Fd->Vertex(f == 0, ons);
 -        if (!CP.IsVertex())
--        {
++        if (CP.IsVertex())
+         {
 -          continue;
--        }
++          anEnds.Append(CP.Vertex());
+         }
 -        const TopoDS_Vertex& V      = CP.Vertex();
 -        const int            IV     = DStr.AddShape(V);
 -        TopoDS_Face          aLeftF = aLeft;
 -        aLeftF.Orientation(TopAbs_FORWARD);
 -        for (TopExp_Explorer ex(aLeftF, TopAbs_EDGE); ex.More(); ex.Next())
--        {
--          TopoDS_Edge E = TopoDS::Edge(ex.Current());
--          if (E.IsSame(anObst) || BRep_Tool::Degenerated(E))
-+        if (CP.IsVertex())
-+        {
-+          anEnds.Append(CP.Vertex());
-+        }
 +      }
 +      // Each strip's other edges at the ends of the blend (on the strips
 +      // beyond the first: at the ends of its edge toward the obstacle) are
@@ -730,7 +737,9 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
 +        }
 +        const TopoDS_Edge& aStripNear = TopoDS::Edge(itN.Value());
 +        for (TopExp_Explorer exv(aStripNear, TopAbs_VERTEX); exv.More(); exv.Next())
-+        {
+         {
+-          TopoDS_Edge E = TopoDS::Edge(ex.Current());
+-          if (E.IsSame(anObst) || BRep_Tool::Degenerated(E))
 +          if (first && !containsSame(anEnds, exv.Current()))
            {
              continue;
@@ -755,6 +764,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/M
        }
      }
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 18018a4f..c535885f 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -17,7 +17,9 @@
@@ -767,7 +777,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  #include <BRepLProp_SLProps.hxx>
  #include <BRepTools.hxx>
  #include <BRepTools_WireExplorer.hxx>
-@@ -1136,14 +1138,17 @@
+@@ -1136,14 +1138,17 @@ static double distanceToSegment(const gp_Pnt& P, const gp_Pnt& A, const gp_Pnt&
  
  // Whether a circle tangent to surface S1 at (U1, V1) and to S2 at (U2, V2)
  // exists: the normal lines through both points meet at a point as far from
@@ -793,15 +803,15 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  {
    gp_Pnt P1, P2;
    gp_Vec D1U, D1V, D2U, D2V;
-@@ -1168,7 +1173,28 @@
+@@ -1168,9 +1173,30 @@ static bool isTangentCircle(const Adaptor3d_Surface& S1,
    const double c  = (e - b * d) / den;
    const gp_Pnt C1 = P1.Translated(a * N1);
    const gp_Pnt C2 = P2.Translated(c * N2);
 +  C               = gp_Pnt(0.5 * (C1.XYZ() + C2.XYZ()));
 +  R               = 0.5 * (std::abs(a) + std::abs(c));
    return C1.Distance(C2) < Tol && std::abs(std::abs(a) - std::abs(c)) < Tol;
-+}
-+
+ }
+ 
 +// Whether the ball of centre C and radius R clears the faces: none comes
 +// nearer to its centre than R (within Tol).
 +static bool ballClears(const gp_Pnt&                         C,
@@ -819,15 +829,15 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    }
 +  }
 +  return true;
- }
- 
- // The occurrence of edge E in face F (taken FORWARD), or a null edge.
-@@ -1184,6 +1210,121 @@
-     }
-   }
-   return TopoDS_Edge();
 +}
 +
+ // The occurrence of edge E in face F (taken FORWARD), or a null edge.
+ static TopoDS_Edge edgeInFace(const TopoDS_Edge& E, const TopoDS_Face& F)
+ {
+@@ -1186,6 +1212,121 @@ static TopoDS_Edge edgeInFace(const TopoDS_Edge& E, const TopoDS_Face& F)
+   return TopoDS_Edge();
+ }
+ 
 +// The boundary edge of face F, other than Skip1 and Skip2, that crosses
 +// the plane Plane nearest to the segment [A, B]: its parameter W where it
 +// crosses and the distance Dist of the crossing from the segment. A null
@@ -941,10 +951,12 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    }
 +  }
 +  return Fn;
- }
- 
++}
++
  //=================================================================================================
-@@ -1217,10 +1358,14 @@
+ 
+ bool ChFi3d_Builder::ObstacleAtSpineEnd(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -1217,10 +1358,14 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
                                       gp_Pnt2d&                              P1,
                                       gp_Pnt2d&                              P2,
                                       double&                                First,
@@ -963,7 +975,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
  {
    const occ::handle<ChFiDS_Spine>& Spine      = Stripe->Spine();
    ChFiDS_ElSpine&                  els        = *HGuide;
-@@ -1229,7 +1374,8 @@
+@@ -1229,7 +1374,8 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
    const double wf = 0.9981 * Spine->FirstParameter(1) + 0.0019 * Spine->LastParameter(1);
    const double wl = 0.9973 * Spine->LastParameter(nbed) + 0.0027 * Spine->FirstParameter(nbed);
    const int    RC = Stripe->Choix();
@@ -973,7 +985,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    if (!isFillet)
    {
      return -1; // chamfers do not roll over edges
-@@ -1240,7 +1386,6 @@
+@@ -1240,7 +1386,6 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
                    Spine->FirstParameter(1),
                    Spine->LastParameter(nbed),
                    Precision::Confusion());
@@ -981,7 +993,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    for (int nbessai = 0; nbessai <= nbessaimax; nbessai++)
    {
      const double t     = double(nbessai) / nbessaimax;
-@@ -1255,6 +1400,7 @@
+@@ -1255,6 +1400,7 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
        continue;
      }
      double woned;
@@ -989,7 +1001,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
      Spine->Parameter(iedge, w, woned, true);
      const BRepAdaptor_Curve& Ced = Spine->CurrentElementarySpine(iedge);
      const gp_Pnt             pnt = Ced.Value(woned);
-@@ -1272,193 +1418,342 @@
+@@ -1272,193 +1418,342 @@ int ChFi3d_Builder::StartSolOverflow(const occ::handle<ChFiDS_Stripe>&      Stri
      {
        continue;
      }
@@ -1040,9 +1052,6 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 -    TopoDS_Edge arc;
 -    double      warc = 0., best = RealLast();
 -    for (TopExp_Explorer ex(Fk, TopAbs_EDGE); ex.More(); ex.Next())
--    {
--      const TopoDS_Edge& ecur = TopoDS::Edge(ex.Current());
--      if (ecur.IsSame(cured) || BRep_Tool::Degenerated(ecur))
 +
 +    // Each side's support: the face of the edge, or a face beyond it across
 +    // a boundary edge (`entry`, crossed at `went`; `before` the face on the
@@ -1146,9 +1155,12 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    // passed at this section.
 +    bool elsewhere = false;
 +    for (int iter = 0; iter < 8 && !failed && !rolls[0] && !rolls[1]; iter++)
-+    {
+     {
+-      const TopoDS_Edge& ecur = TopoDS::Edge(ex.Current());
+-      if (ecur.IsSame(cured) || BRep_Tool::Degenerated(ecur))
 +      if (!section(false))
-+      {
+       {
+-        continue;
 +        // Tangent to no point of the last face's surface (a sliver): the
 +        // face beyond its edge nearest to the last edge is tried, within the
 +        // size of the rounding; else the ball rolls on that edge.
@@ -1195,7 +1207,11 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      if (in[1])
 +      {
 +        uv[1].SetCoord(Sol(3), Sol(4));
-+      }
+       }
+-      occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(ecur);
+-      IntCurveSurface_HInter         inter;
+-      inter.Perform(hc, plane);
+-      if (!inter.IsDone())
 +      // A face of the edge narrower than this rounding and another stripe's
 +      // on its other edge (OverlappingStripes): the side goes on across that
 +      // edge.
@@ -1214,13 +1230,12 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
        {
          continue;
        }
--      occ::handle<BRepAdaptor_Curve> hc = new BRepAdaptor_Curve(ecur);
--      IntCurveSurface_HInter         inter;
--      inter.Perform(hc, plane);
--      if (!inter.IsDone())
--      {
+-      const double tolc = hc->Resolution(tolapp3d);
+-      for (int ip = 1; ip <= inter.NbPoints(); ip++)
 +      if (in[0] && in[1])
-+      {
+       {
+-        const double cw = inter.Point(ip).W();
+-        if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
 +        if (lastMoved < 0)
 +        {
 +          failed = true; // on the edge's faces: no overflow
@@ -1274,20 +1289,34 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      for (int k = 0; k < 2; k++)
 +      {
 +        if (in[k])
-+        {
-+          continue;
-+        }
+         {
+           continue;
+         }
+-        const double d = distanceToSegment(inter.Point(ip).Pnt(), P, Pc);
+-        if (d < best)
 +        const bool   atSpine = before[k].IsNull();
 +        const gp_Pnt Pa      = atSpine ? P : BRepAdaptor_Curve(entry[k]).Value(went[k]);
 +        double       dn      = RealLast();
 +        en[k] = crossedEdge(face[k], plane, Pa, Pc[k], entry[k], cured, tolapp3d, wn[k], dn);
 +        if (!en[k].IsNull() && dn <= 0.25 * Pa.Distance(Pc[k]) + tolapp3d)
-+        {
+         {
+-          best = d;
+-          arc  = ecur;
+-          warc = cw;
 +          continue;
-+        }
+         }
 +        en[k].Nullify();
 +        toRoll[k] = !atSpine;
-+      }
+       }
+-    }
+-    if (arc.IsNull())
+-    {
+-      continue;
+-    }
+-    TopoDS_Face Fn;
+-    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(arc)); it.More(); it.Next())
+-    {
+-      if (!it.Value().IsSame(Fk))
 +      if (toRoll[0] || toRoll[1])
 +      {
 +        for (int k = 0; k < 2; k++)
@@ -1301,7 +1330,8 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      }
 +      bool moved = false;
 +      for (int k = 0; k < 2; k++)
-+      {
+       {
+-        Fn = TopoDS::Face(it.Value());
 +        if (!en[k].IsNull() && moveOn(k, en[k], wn[k]))
 +        {
 +          moved = true;
@@ -1313,22 +1343,35 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +      {
 +        failed = true;
 +        break;
-+      }
-+    }
+       }
+     }
+-    if (Fn.IsNull())
+-    {
+-      continue;
+-    }
+-    // Beyond a tangent edge the blend can only run onto the next face.
+-    const bool isTangent = ChFi3d::IsTangentFaces(arc, Fk, Fn);
+-    const TopoDS_Edge arcOnFk = edgeInFace(arc, Fk);
+-    const TopoDS_Edge arcOnFn = edgeInFace(arc, Fn);
+-    if (arcOnFk.IsNull() || arcOnFn.IsNull())
 +    // A side that went on over a face its ball touches at no point and
 +    // reached no face it touches rolls on the edge before that face.
 +    if (blind >= 0 && !rolls[0] && !rolls[1] && !elsewhere)
-+    {
+     {
+-      continue;
 +      failed = false;
 +      roll(blind);
-+    }
+     }
+-    const occ::handle<Geom2d_Curve> pcFn = getCurveOnSurface(arcOnFn, Fn);
+-    if (pcFn.IsNull())
 +    // (A ball rolling on edges on both sides touches no face: no rounding
 +    // of the edge, the faces are too narrow for the ball on both sides.)
 +    if (failed || (!rolls[0] && !rolls[1]) || (rolls[0] && rolls[1]))
-+    {
-+      continue;
-+    }
-+
+     {
+       continue;
+     }
+ 
+-    // The blend touching the next face.
 +    // The blend rolling on the boundary edge of one side or both: an
 +    // obstacle as StartSol sets it up when a walking meets one.
 +    occ::handle<BRepAdaptor_Surface> HS[2]    = {HS1, HS2};
@@ -1339,76 +1382,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 +    gp_Pnt2d                         Pk[2];
 +    bool                             ok = true;
 +    for (int k = 0; k < 2 && ok; k++)
-+    {
-+      HS[k] = new BRepAdaptor_Surface(face[k]);
-+      if (!rolls[k])
-+      {
-+        Pk[k] = uv[k];
-         continue;
-       }
--      const double tolc = hc->Resolution(tolapp3d);
--      for (int ip = 1; ip <= inter.NbPoints(); ip++)
--      {
--        const double cw = inter.Point(ip).W();
--        if (cw < hc->FirstParameter() - tolc || cw > hc->LastParameter() + tolc)
--        {
--          continue;
--        }
--        const double d = distanceToSegment(inter.Point(ip).Pnt(), P, Pc);
--        if (d < best)
--        {
--          best = d;
--          arc  = ecur;
--          warc = cw;
--        }
--      }
--    }
--    if (arc.IsNull())
-+      const TopoDS_Edge onBefore = edgeInFace(entry[k], before[k]);
-+      const TopoDS_Edge onFace   = edgeInFace(entry[k], face[k]);
-+      if (onBefore.IsNull() || onFace.IsNull())
-+      {
-+        ok = false;
-+        break;
-+      }
-+      HSref[k] = new BRepAdaptor_Surface(before[k]);
-+      HCref[k] = new BRepAdaptor_Curve2d(onBefore, before[k]);
-+      HC[k]    = new BRepAdaptor_Curve2d(onFace, face[k]);
-+      W[k]     = went[k];
-+      Pk[k]    = HC[k]->Value(W[k]);
-+    }
-+    if (!ok)
      {
-       continue;
-     }
--    TopoDS_Face Fn;
--    for (NCollection_List<TopoDS_Shape>::Iterator it(myEFMap(arc)); it.More(); it.Next())
--    {
--      if (!it.Value().IsSame(Fk))
--      {
--        Fn = TopoDS::Face(it.Value());
--      }
--    }
--    if (Fn.IsNull())
--    {
--      continue;
--    }
--    // Beyond a tangent edge the blend can only run onto the next face.
--    const bool isTangent = ChFi3d::IsTangentFaces(arc, Fk, Fn);
--    const TopoDS_Edge arcOnFk = edgeInFace(arc, Fk);
--    const TopoDS_Edge arcOnFn = edgeInFace(arc, Fn);
--    if (arcOnFk.IsNull() || arcOnFn.IsNull())
--    {
--      continue;
--    }
--    const occ::handle<Geom2d_Curve> pcFn = getCurveOnSurface(arcOnFn, Fn);
--    if (pcFn.IsNull())
--    {
--      continue;
--    }
--
--    // The blend touching the next face.
--    {
 -      occ::handle<BRepAdaptor_Surface> Hn = new BRepAdaptor_Surface(Fn);
 -      occ::handle<BRepAdaptor_Surface> Ho = ons == 1 ? HS2 : HS1;
 -      math_Vector                      SolN(1, 4);
@@ -1421,9 +1395,17 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 -        SolN(4) = SolDep(4);
 -        I1->Initialize((const occ::handle<Adaptor3d_Surface>&)Hn);
 -        I2->Initialize((const occ::handle<Adaptor3d_Surface>&)Ho);
--      }
++      HS[k] = new BRepAdaptor_Surface(face[k]);
++      if (!rolls[k])
++      {
++        Pk[k] = uv[k];
++        continue;
+       }
 -      else
--      {
++      const TopoDS_Edge onBefore = edgeInFace(entry[k], before[k]);
++      const TopoDS_Edge onFace   = edgeInFace(entry[k], face[k]);
++      if (onBefore.IsNull() || onFace.IsNull())
+       {
 -        SolN(1) = SolDep(1);
 -        SolN(2) = SolDep(2);
 -        SolN(3) = pn.X();
@@ -1456,13 +1438,21 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 -        P2.SetCoord(SolN(3), SolN(4));
 -        First = w;
 -        return 0;
--      }
--    }
++        ok = false;
++        break;
+       }
++      HSref[k] = new BRepAdaptor_Surface(before[k]);
++      HCref[k] = new BRepAdaptor_Curve2d(onBefore, before[k]);
++      HC[k]    = new BRepAdaptor_Curve2d(onFace, face[k]);
++      W[k]     = went[k];
++      Pk[k]    = HC[k]->Value(W[k]);
+     }
 -
 -    if (isTangent)
--    {
--      continue;
--    }
++    if (!ok)
+     {
+       continue;
+     }
 -    // The blend rolling on the boundary edge: an obstacle as StartSol sets
 -    // it up when a walking meets one.
 -    HSref = new BRepAdaptor_Surface(Fk);
@@ -1503,21 +1493,34 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
    }
    return -1;
  }
-@@ -2712,49 +3007,41 @@
+@@ -2709,58 +3004,52 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+     // sinon solution approchee.
+     Inside = true;
+ 
++    // (A face between this edge and another stripe's narrower than both
++    // roundings: the start overflows it.)
++    const bool anOverflowOnly = myOverlapStripes.Contains(Stripe);
      try
      {
        OCC_CATCH_SIGNALS
-+      if (myOverlapStripes.Contains(Stripe))
++      if (anOverflowOnly)
 +      {
-+        // (A face between this edge and another stripe's narrower than both
-+        // roundings: the start overflows it.)
 +        throw Standard_Failure("overlapping roundings");
 +      }
        StartSol(Stripe, HGuide, HS1, HS2, It1, It2, pp1, pp2, First);
      }
      catch (Standard_Failure const&)
      {
--      // The contact line may leave a face at once (edge overflow).
+       // StartSol's own failure, no start found (it sets the spine's status
+-      // so before it throws): the contact line may leave a face at once
++      // so before it throws), or a start that overflows by the stripe's
++      // kind (thrown above): the contact lines may leave the faces at once
+       // (edge overflow). Any other failure is the stripe's.
+-      if (Spine->ErrorStatus() != ChFiDS_StartsolFailure)
++      if (!anOverflowOnly && Spine->ErrorStatus() != ChFiDS_StartsolFailure)
+       {
+         throw;
+       }
 -      occ::handle<BRepAdaptor_Curve2d> HCo;
 -      occ::handle<BRepAdaptor_Surface> HSrefo;
 -      occ::handle<BRepAdaptor_Curve2d> HCrefo;
@@ -1536,7 +1539,6 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
 -                                        HCrefo,
 -                                        Wo);
 -      if (side < 0)
-+      // The contact lines may leave the faces at once (edge overflow).
 +      const int sides = StartSolOverflow(Stripe,
 +                                         HGuide,
 +                                         HS1,
@@ -1580,7 +1582,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
      }
  
      Last = wf;
-@@ -3534,7 +3821,7 @@
+@@ -3540,7 +3829,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
  
      ConexFaces(Spine, iedge, HS1, HS2);
  
@@ -1590,9 +1592,10 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/M
        intf = ((iedge == 1) && !Spine->IsPeriodic());
        intl = ((iedge == Spine->NbEdges()) && !Spine->IsPeriodic());
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+index 1dc894eb..a4216532 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -1259,6 +1259,10 @@
+@@ -1259,6 +1259,10 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
      for (; aStrIt.More(); aStrIt.Next())
      {
        occ::handle<ChFiDS_Stripe> aCheckStripe = aStrIt.Value();

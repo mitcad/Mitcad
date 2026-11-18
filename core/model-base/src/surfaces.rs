@@ -42,7 +42,10 @@ impl PatchContinuity {
 /// The closed loop a patch fills ([`PatchLoopSpec`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PatchBoundary<'a> {
-    /// Named edges of the body: every edge each name resolves to.
+    /// Named edges of the body (every edge each name resolves to), the
+    /// free edges of [`PatchLoopSpec::openings`] (mitcad#1955) and the
+    /// sketch curves of [`PatchLoopSpec::curves`] (mitcad#1972): together
+    /// one loop, so that a patch can close part of an opening.
     Edges(&'a [EdgeName]),
     /// The body's open boundary with this index in the list
     /// [`crate::kernel::Kernel::open_boundaries`] gives: free edges, which
@@ -57,6 +60,14 @@ pub struct PatchLoopSpec<'a, S> {
     pub feature: FeatureUid,
     pub body: &'a S,
     pub boundary: PatchBoundary<'a>,
+    /// With [`PatchBoundary::Edges`]: free edges of the body's openings
+    /// in the loop beside the named ones (mitcad#1955); empty otherwise.
+    pub openings: &'a [crate::surface_modelling::OpeningEdges<'a>],
+    /// With [`PatchBoundary::Edges`]: sketch curves in the loop beside its
+    /// edges (mitcad#1972; model space, in no order), which the patch
+    /// passes through (G0): with free edges they close part of an opening
+    /// across it. Their ends meet the edges' ends or each other.
+    pub curves: &'a [crate::sweeps::PathCurve],
     /// How the patch meets the face beside each edge of the loop.
     pub continuity: PatchContinuity,
     /// Edges of the loop that meet their face otherwise, by name.

@@ -1,0 +1,416 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a convex and a concave rounding whose contacts cross on the face
+between their edges before their ends, the ends being the two vertices of
+one sharp edge of that face that neither rounds, are reported as
+overlapping (Failure_Overlap), as 1400 reports such a pair ending at a
+common vertex; and the end of a rounding whose contact crossed from a face
+of its edge onto a face beside it before the end drops that face's edge
+with the face at the end (mitcad#1987).
+
+A block standing on a plate, its top sloping up at 45 degrees from a front
+face lower than the two roundings together (2 high), its sides rounded
+with 2 where they stand on the plate (concave) and with 0.5 along the top
+(convex): on each side the foot's contact (2 above the plate) and the
+top's (0.71 below the top edge, in height) cross 0.71 behind the front
+face. The foot's rounding ends at the front face's bottom vertex, the
+top's at its top vertex. Past the crossing the two blends cannot be cut by
+each other (both are tangent to the side, on its two sides), and the ends
+have no corner in common: OCCT's fillet computed both and failed at the
+crossing ("intersect each other", Failure_Intersecting) or, on a block
+standing alone, built an invalid result.
+
+- convexConcaveCrossBeforeLinkedEnds (Compute, beside 1400's
+  convexConcaveCrossBeforeEnd, once the stripes are computed): open
+  stripes A and B, one convex and one concave on a face F of both their
+  edges, an end of each at a vertex of a sharp edge E of F that neither
+  spine holds, each the only stripe ending at its vertex, their contacts
+  on F crossing inside both, within the larger radius of such an edge
+  (the two balls reach each other between the crossing and the edge).
+  Both fail as overlapping; the caller builds the convex one first and
+  the concave one on its result (MitCad's fillet, as for 1400's pairs),
+  the concave ball riding over the convex blend from the crossing to the
+  front face.
+- dropEdgeOfFaceGoneBeforeEnd (PerformFilletOnVertex, after
+  PerformOneCorner): that later rounding's contact crosses from the side
+  onto the convex blend before the front face, so its end SurfData lies on
+  the plate and that blend, not on the side. The side's edge with the face
+  at the end, from the end vertex to the vertex where the side, the blend
+  and the face at the end meet, lies under the new blend all along; the
+  corner put no point on it and it was left in the face at the end, whose
+  wire was then not closed. It is now cut at both its vertices and goes.
+
+Test: geometry/tests/test_fillet_linked_ends.cpp: the block's foot and top
+rounded together with 2 and 0.5 at front faces 1.5 and 2 high: OCCT's
+fillet reports the overlap with the four contours (an invalid result
+without the patch); the rounding of the foot on the result of the top's
+rounding is valid (its front face's wire not closed without the patch);
+MitCad's fillet of both is valid and equals that result. At 3 high the
+contacts do not cross and the roundings are built together as before.
+
+Upstream: new.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index 7d4b755d..f5fc73d0 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -882,6 +882,196 @@ static bool convexConcaveCrossBeforeEnd(const occ::handle<ChFiDS_Stripe>& A,
+   return false;
+ }
+ 
++// Whether open stripes A and B, one rounding a convex edge and the other a
++// concave one on a face F of both their edges, end at the two vertices of
++// one sharp edge E of F that neither rounds, each the only stripe ending at
++// its vertex, and have contacts on F that cross each other there (inside
++// both): F narrows to E between the two edges, and the concave rounding's
++// ball, rolling on F, reaches the convex rounding's blend before E (a
++// block's side rounded where it stands on a plate and along its sloping
++// top, its front face square to both edges, lower than the two roundings
++// together). The two blends cannot be cut by each other there (they are
++// both tangent to F, on its two sides) and no corner joins them, the ends
++// being apart: they are to be built one after the other, the concave one
++// on the convex one's result, as convexConcaveCrossBeforeEnd's are. The
++// crossing lies within the larger radius of E: the two balls reach each
++// other between the crossing and E. OneStripeAt tells whether a vertex is
++// the end of one stripe only.
++template <typename OneStripeAt>
++static bool convexConcaveCrossBeforeLinkedEnds(const occ::handle<ChFiDS_Stripe>& A,
++                                               const occ::handle<ChFiDS_Stripe>& B,
++                                               const ChFiDS_Map&                 EFMap,
++                                               const ChFiDS_Map&                 VEMap,
++                                               const TopOpeBRepDS_DataStructure& DStr,
++                                               const double                      tol2d,
++                                               const OneStripeAt&                oneStripeAt)
++{
++  const occ::handle<ChFiDS_Spine>& SA = A->Spine();
++  const occ::handle<ChFiDS_Spine>& SB = B->Spine();
++  if (SA.IsNull() || SB.IsNull() || SA->IsClosed() || SB->IsClosed() || SA->IsPeriodic()
++      || SB->IsPeriodic() || A->SetOfSurfData().IsNull() || B->SetOfSurfData().IsNull())
++  {
++    return false;
++  }
++  const occ::handle<ChFiDS_FilSpine> aFsA = occ::down_cast<ChFiDS_FilSpine>(SA);
++  const occ::handle<ChFiDS_FilSpine> aFsB = occ::down_cast<ChFiDS_FilSpine>(SB);
++  if (aFsA.IsNull() || aFsB.IsNull() || !aFsA->IsConstant() || !aFsB->IsConstant())
++  {
++    return false;
++  }
++  const double aReach = std::max(aFsA->Radius(), aFsB->Radius());
++  // The type of the edge of a spine on face F.
++  const auto typeOn = [&EFMap](const occ::handle<ChFiDS_Spine>& Sp, const TopoDS_Face& F) {
++    const TopoDS_Edge E = spineEdgeOf(Sp, F);
++    if (E.IsNull() || !EFMap.Contains(E) || EFMap(E).Extent() != 2)
++    {
++      return ChFiDS_Other;
++    }
++    return ChFi3d::DefineConnectType(E,
++                                     TopoDS::Face(EFMap(E).First()),
++                                     TopoDS::Face(EFMap(E).Last()),
++                                     1.e-6,
++                                     false);
++  };
++  // The faces holding a sharp edge that joins an end of A's spine to an end
++  // of B's, neither spine holding it, each end the only stripe's there, and
++  // those edges.
++  NCollection_List<TopoDS_Shape> aFaces, aLinks;
++  for (const TopoDS_Vertex& VA : {SA->FirstVertex(), SA->LastVertex()})
++  {
++    if (!VEMap.Contains(VA) || !oneStripeAt(VA))
++    {
++      continue;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itE(VEMap(VA)); itE.More(); itE.Next())
++    {
++      const TopoDS_Edge& E = TopoDS::Edge(itE.Value());
++      if (SA->Index(E) != 0 || SB->Index(E) != 0 || BRep_Tool::Degenerated(E) || !EFMap.Contains(E)
++          || EFMap(E).Extent() != 2)
++      {
++        continue;
++      }
++      TopoDS_Vertex V1, V2;
++      TopExp::Vertices(E, V1, V2);
++      const TopoDS_Vertex VO = V1.IsSame(VA) ? V2 : V1;
++      if (VO.IsNull() || VO.IsSame(VA) || !(VO.IsSame(SB->FirstVertex()) || VO.IsSame(SB->LastVertex()))
++          || !oneStripeAt(VO))
++      {
++        continue;
++      }
++      const TopoDS_Face F1 = TopoDS::Face(EFMap(E).First());
++      const TopoDS_Face F2 = TopoDS::Face(EFMap(E).Last());
++      if (F1.IsSame(F2) || ChFi3d::DefineConnectType(E, F1, F2, 1.e-6, false) == ChFiDS_Tangential)
++      {
++        continue;
++      }
++      for (const TopoDS_Face& F : {F1, F2})
++      {
++        const ChFiDS_TypeOfConcavity aTypeA = typeOn(SA, F);
++        const ChFiDS_TypeOfConcavity aTypeB = typeOn(SB, F);
++        if ((aTypeA == ChFiDS_Convex && aTypeB == ChFiDS_Concave)
++            || (aTypeA == ChFiDS_Concave && aTypeB == ChFiDS_Convex))
++        {
++          aFaces.Append(F);
++          aLinks.Append(E);
++        }
++      }
++    }
++  }
++  if (aFaces.IsEmpty())
++  {
++    return false;
++  }
++  for (int ia = 1; ia <= A->SetOfSurfData()->Length(); ia++)
++  {
++    const occ::handle<ChFiDS_SurfData>& a = A->SetOfSurfData()->Value(ia);
++    for (int ib = 1; ib <= B->SetOfSurfData()->Length(); ib++)
++    {
++      const occ::handle<ChFiDS_SurfData>& b = B->SetOfSurfData()->Value(ib);
++      for (int ka = 1; ka <= 2; ka++)
++      {
++        for (int kb = 1; kb <= 2; kb++)
++        {
++          if (a->Index(ka) <= 0 || a->Index(ka) != b->Index(kb) || a->IsOnCurve(ka)
++              || b->IsOnCurve(kb))
++          {
++            continue;
++          }
++          const TopoDS_Shape& F = DStr.Shape(a->Index(ka));
++          // (The joining edges on F.)
++          NCollection_List<TopoDS_Shape> aLinksOnF;
++          {
++            NCollection_List<TopoDS_Shape>::Iterator itL(aLinks);
++            for (NCollection_List<TopoDS_Shape>::Iterator itF(aFaces); itF.More(); itF.Next(), itL.Next())
++            {
++              if (itF.Value().IsSame(F))
++              {
++                aLinksOnF.Append(itL.Value());
++              }
++            }
++          }
++          if (aLinksOnF.IsEmpty())
++          {
++            continue;
++          }
++          const ChFiDS_FaceInterference& FA = a->Interference(ka);
++          const ChFiDS_FaceInterference& FB = b->Interference(kb);
++          if (IsEqual(FA.FirstParameter(), FA.LastParameter())
++              || IsEqual(FB.FirstParameter(), FB.LastParameter()) || FA.PCurveOnFace().IsNull()
++              || FB.PCurveOnFace().IsNull())
++          {
++            continue;
++          }
++          Geom2dAdaptor_Curve aCA(FA.PCurveOnFace(),
++                                  std::min(FA.FirstParameter(), FA.LastParameter()),
++                                  std::max(FA.FirstParameter(), FA.LastParameter()));
++          Geom2dAdaptor_Curve aCB(FB.PCurveOnFace(),
++                                  std::min(FB.FirstParameter(), FB.LastParameter()),
++                                  std::max(FB.FirstParameter(), FB.LastParameter()));
++          Geom2dInt_GInter    anInter(aCA, aCB, tol2d, Precision::PConfusion());
++          if (!anInter.IsDone())
++          {
++            continue;
++          }
++          // (A crossing inside both contacts, not where one ends.)
++          const double aTolA = 1.e-6 * (aCA.LastParameter() - aCA.FirstParameter());
++          const double aTolB = 1.e-6 * (aCB.LastParameter() - aCB.FirstParameter());
++          for (int ip = 1; ip <= anInter.NbPoints(); ip++)
++          {
++            const IntRes2d_IntersectionPoint& aP    = anInter.Point(ip);
++            const IntRes2d_TypeTrans          aType = aP.TransitionOfFirst().TransitionType();
++            if ((aType == IntRes2d_In || aType == IntRes2d_Out)
++                && aP.ParamOnFirst() > aCA.FirstParameter() + aTolA
++                && aP.ParamOnFirst() < aCA.LastParameter() - aTolA
++                && aP.ParamOnSecond() > aCB.FirstParameter() + aTolB
++                && aP.ParamOnSecond() < aCB.LastParameter() - aTolB)
++            {
++              const gp_Pnt PA = BRep_Tool::Surface(TopoDS::Face(F))->Value(aP.Value().X(), aP.Value().Y());
++              // (Its distance from the nearest such edge, or from that
++              // edge's nearer vertex where its foot lies beyond the edge.)
++              double aFromE = RealLast();
++              for (NCollection_List<TopoDS_Shape>::Iterator itL(aLinksOnF); itL.More(); itL.Next())
++              {
++                const TopoDS_Edge& E = TopoDS::Edge(itL.Value());
++                aFromE               = std::min(aFromE, distanceToEdge(PA, E));
++                for (TopExp_Explorer exv(E, TopAbs_VERTEX); exv.More(); exv.Next())
++                {
++                  aFromE = std::min(aFromE, PA.Distance(BRep_Tool::Pnt(TopoDS::Vertex(exv.Current()))));
++                }
++              }
++              if (aFromE < aReach)
++              {
++                return true;
++              }
++            }
++          }
++        }
++      }
++    }
++  }
++  return false;
++}
++
+ // Removes the rides (RideOnOverlap) of stripe S, or on it, from their
+ // parallel lists.
+ static void removeRideOf(const occ::handle<ChFiDS_Stripe>&             S,
+@@ -7794,6 +7984,17 @@ void ChFi3d_Builder::Compute()
+   // result.
+   if (done)
+   {
++    // (Whether vertex V is the end of one stripe only.)
++    const auto aOneStripeAt = [this](const TopoDS_Vertex& V) {
++      for (int j = 1; j <= myVDataMap.Extent(); j++)
++      {
++        if (myVDataMap.FindKey(j).IsSame(V))
++        {
++          return myVDataMap.FindFromIndex(j).Extent() == 1;
++        }
++      }
++      return false;
++    };
+     for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itA(myListStripe); itA.More();
+          itA.Next())
+     {
+@@ -7807,7 +8008,8 @@ void ChFi3d_Builder::Compute()
+       {
+         const occ::handle<ChFiDS_Stripe>& B = itB.Value();
+         if (myRideStripes.Contains(B) || myRideOn.Contains(B)
+-            || !convexConcaveCrossBeforeEnd(A, B, myEFMap, myVEMap, myDS->DS(), tol2d))
++            || !(convexConcaveCrossBeforeEnd(A, B, myEFMap, myVEMap, myDS->DS(), tol2d)
++                 || convexConcaveCrossBeforeLinkedEnds(A, B, myEFMap, myVEMap, myDS->DS(), tol2d, aOneStripeAt)))
+         {
+           continue;
+         }
+@@ -9679,6 +9881,125 @@ static void ChFi3d_SeamRunOnAtPointEnd(TopOpeBRepDS_DataStructure&
+   }
+ }
+ 
++// At the end of stripe S at vertex Vtx, cut by the face at the end (a
++// corner of one stripe): where the end's SurfData D no longer lies on a
++// face F of the spine's edge at Vtx, its contact having crossed from F
++// onto a face X beside it before the end (the face between narrowing to
++// nothing under the blend, as where a concave rounding rides on over a
++// convex one's blend), F's edge E with the face at the end, from Vtx to a
++// vertex of X, lies under the blend all along and goes: E is cut at both
++// its vertices. (The corner put no point on E, as its contact never
++// reaches F there; E would be left in the face at the end, its wire not
++// closed.)
++static void dropEdgeOfFaceGoneBeforeEnd(TopOpeBRepDS_DataStructure&       DStr,
++                                        const ChFiDS_Map&                 EFMap,
++                                        const ChFiDS_Map&                 VEMap,
++                                        const occ::handle<ChFiDS_Stripe>& S,
++                                        const occ::handle<ChFiDS_SurfData>& D,
++                                        const bool                        isFirst,
++                                        const TopoDS_Vertex&              Vtx)
++{
++  const occ::handle<ChFiDS_Spine>& Sp = S->Spine();
++  if (Sp.IsNull() || D.IsNull() || !VEMap.Contains(Vtx))
++  {
++    return;
++  }
++  const TopoDS_Edge& Es = isFirst ? Sp->Edges(1) : Sp->Edges(Sp->NbEdges());
++  if (!EFMap.Contains(Es) || EFMap(Es).Extent() != 2)
++  {
++    return;
++  }
++  // D's faces (on no curve).
++  TopoDS_Face aDF[2];
++  for (int k = 1; k <= 2; k++)
++  {
++    if (D->Index(k) <= 0 || D->IsOnCurve(k) || DStr.Shape(D->Index(k)).ShapeType() != TopAbs_FACE)
++    {
++      return;
++    }
++    aDF[k - 1] = TopoDS::Face(DStr.Shape(D->Index(k)));
++  }
++  const TopoDS_Face aSF[2] = {TopoDS::Face(EFMap(Es).First()), TopoDS::Face(EFMap(Es).Last())};
++  for (int i = 0; i < 2; i++)
++  {
++    const TopoDS_Face& F = aSF[i];
++    if (F.IsSame(aSF[1 - i]) || F.IsSame(aDF[0]) || F.IsSame(aDF[1]))
++    {
++      continue;
++    }
++    // X: D's face that is not a face of the spine's edge.
++    TopoDS_Face X;
++    for (int k = 0; k < 2; k++)
++    {
++      if (!aDF[k].IsSame(aSF[0]) && !aDF[k].IsSame(aSF[1]))
++      {
++        X = X.IsNull() ? aDF[k] : TopoDS_Face();
++      }
++    }
++    if (X.IsNull())
++    {
++      continue;
++    }
++    for (NCollection_List<TopoDS_Shape>::Iterator itE(VEMap(Vtx)); itE.More(); itE.Next())
++    {
++      const TopoDS_Edge& E = TopoDS::Edge(itE.Value());
++      if (E.IsSame(Es) || BRep_Tool::Degenerated(E) || !EFMap.Contains(E) || EFMap(E).Extent() != 2)
++      {
++        continue;
++      }
++      const TopoDS_Face F1 = TopoDS::Face(EFMap(E).First());
++      const TopoDS_Face F2 = TopoDS::Face(EFMap(E).Last());
++      if (!(F1.IsSame(F) || F2.IsSame(F)) || F1.IsSame(F2))
++      {
++        continue;
++      }
++      const TopoDS_Face Fe = F1.IsSame(F) ? F2 : F1;
++      if (Fe.IsSame(aSF[1 - i]) || Fe.IsSame(X))
++      {
++        continue;
++      }
++      TopoDS_Vertex V1, V2;
++      TopExp::Vertices(E, V1, V2);
++      const TopoDS_Vertex Vo = V1.IsSame(Vtx) ? V2 : V1;
++      if (Vo.IsNull() || Vo.IsSame(Vtx))
++      {
++        continue;
++      }
++      bool aOnX = false;
++      for (TopExp_Explorer exv(X, TopAbs_VERTEX); exv.More() && !aOnX; exv.Next())
++      {
++        aOnX = exv.Current().IsSame(Vo);
++      }
++      // (And Vo a vertex of the face at the end as well: F, X and Fe meet
++      // there.)
++      bool aOnFe = false;
++      for (TopExp_Explorer exv(Fe, TopAbs_VERTEX); exv.More() && !aOnFe; exv.Next())
++      {
++        aOnFe = exv.Current().IsSame(Vo);
++      }
++      if (!aOnX || !aOnFe)
++      {
++        continue;
++      }
++      const int   IE = DStr.AddShape(E);
++      if (!DStr.ShapeInterferences(IE).IsEmpty())
++      {
++        continue;
++      }
++      TopoDS_Edge anE = E;
++      anE.Orientation(TopAbs_FORWARD);
++      for (TopExp_Explorer exv(anE, TopAbs_VERTEX); exv.More(); exv.Next())
++      {
++        const TopoDS_Vertex& vv = TopoDS::Vertex(exv.Current());
++        DStr.ChangeShapeInterferences(IE).Append(ChFi3d_FilVertexInDS(TopAbs::Reverse(vv.Orientation()),
++                                                                      IE,
++                                                                      DStr.AddShape(vv),
++                                                                      BRep_Tool::Parameter(vv, anE)));
++      }
++    }
++  }
++}
++
+ //=================================================================================================
+ 
+ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -9891,6 +10212,7 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+           {
+             myCorner = Corner_End;
+             PerformOneCorner(Index);
++            dropEdgeOfFaceGoneBeforeEnd(myDS->ChangeDS(), myEFMap, myVEMap, stripe, Fd, isfirst, Vtx);
+           }
+ #ifdef OCCT_DEBUG // perf
+           ChFi3d_ResultChron(cl_perform1corner, t_perform1corner);

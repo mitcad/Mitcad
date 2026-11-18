@@ -4,10 +4,13 @@
 //! (`document.json`) and its blobs (STEP text and meshes). No geometry.
 //!
 //! A design of any format is first upgraded to one format, [`PINNED`]
-//! (50, the format of SolidCraft's release 0.40), by SolidCraft's own
+//! (57, the format of SolidCraft's release 0.43.0), by SolidCraft's own
 //! upgrade steps (`third_party/solidcraft/format.rs`), so that the import
-//! maps a single version. A SolidCraft drawing (a file of its own) is
-//! refused with a message saying so. Feature inputs without parameter names get them as
+//! maps a single version. A design a newer build saved (a format past it,
+//! or changes this reader does not know) is read as far as this reader
+//! reads it and says so ([`SolidcraftFile::newer`], mitcad#1994). A
+//! SolidCraft drawing (a file of its own) is refused with a message saying
+//! so. Feature inputs without parameter names get them as
 //! SolidCraft gives them when it opens such a design, and components
 //! without an occurrence get one at the identity.
 //!
@@ -53,7 +56,66 @@ pub struct SolidcraftFile {
     pub upgrades: Vec<String>,
     /// A zip container rather than plain JSON.
     pub container: bool,
+    /// Set when a newer build of SolidCraft saved the design (a format past
+    /// [`PINNED`], or changes this reader does not know): it is read as far
+    /// as this reader reads it (mitcad#1994).
+    pub newer: Option<format::Newer>,
+    /// What of a newer design this reader left out, in words: sections it
+    /// does not know or cannot read, parameters and features it cannot read
+    /// (a feature kept in its place with an unknown kind).
+    pub left_out: Vec<String>,
 }
+
+/// The top-level sections of a design SolidCraft 0.43.0 (format
+/// [`PINNED`]) writes (`crates/doc/src/document.rs`, `Document`), and the
+/// blobs its container adds: a newer design's other sections are named in
+/// [`SolidcraftFile::left_out`].
+pub const KNOWN_SECTIONS: [&str; 44] = [
+    "render",
+    "format",
+    "format_pending",
+    "name",
+    "units",
+    "metadata",
+    "params",
+    "text_params",
+    "features",
+    "marker",
+    "next_id",
+    "reserved_body_names",
+    "components",
+    "next_component_color_index",
+    "occurrences",
+    "assembly",
+    "sheet",
+    "plastic",
+    "parts",
+    "links",
+    "configs",
+    "favorites",
+    "canvases",
+    "point_clouds",
+    "param_comments",
+    "materials",
+    "print_faces",
+    "user_materials",
+    "appearances",
+    "body_components",
+    "body_offsets",
+    "browser_groups",
+    "timeline_groups",
+    "browser_order",
+    "named_views",
+    "notes",
+    "visibility",
+    "plugin_data",
+    "step_blob",
+    "mesh_blob",
+    "image_blob",
+    "points_blob",
+    "hdr_blob",
+    "texture_blob",
+];
 
 /// The largest file read (SolidCraft's own cap on an expanded part).
 pub const MAX_BYTES: usize = 256 << 20;
@@ -125,7 +187,12 @@ impl SolidcraftFile {
             ),
             Some(_) => return Err("damaged design: `format_pending` is not a list".to_owned()),
         };
+        let newer = format::newer(version, pending.as_deref());
         let upgrades = format::upgrade(&mut v, version, pending.as_deref())?;
+        let mut left_out = Vec::new();
+        if newer.is_some() {
+            read_around(&mut v, &mut left_out);
+        }
         format::name_all_feature_inputs(&mut v, &|f| inputs::inputs(f).len());
         let mut design: Design =
             serde_json::from_value(v).map_err(|e| format!("design file: {e}"))?;
@@ -136,7 +203,86 @@ impl SolidcraftFile {
             saved_pending: pending.unwrap_or_default(),
             upgrades,
             container: false,
+            newer,
+            left_out,
         })
+    }
+}
+
+/// A newer design's JSON as far as this reader reads it (SolidCraft's
+/// `newer_file::salvage`, mitcad#1994): a section it does not know, or
+/// cannot read, is left out; a parameter it cannot read is left out; a
+/// feature it cannot read keeps its place with its kind (unknown when the
+/// file names none) and an id of its own when it has none, so the import
+/// makes it a placeholder with the reason. What it leaves out is named in
+/// `left_out`.
+fn read_around(v: &mut Value, left_out: &mut Vec<String>) {
+    let Some(top) = v.as_object_mut() else {
+        return;
+    };
+    let unknown: Vec<String> = top
+        .keys()
+        .filter(|k| !KNOWN_SECTIONS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    for key in unknown {
+        top.remove(&key);
+        left_out.push(format!(
+            "the section `{key}`, which this import does not know"
+        ));
+    }
+    if let Some(Value::Array(features)) = top.get_mut("features") {
+        let mut free = features
+            .iter()
+            .filter_map(|f| f.get("id").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
+        features.retain(|f| {
+            let keep = f.is_object();
+            if !keep {
+                left_out.push("a feature that is not an object".to_owned());
+            }
+            keep
+        });
+        for feature in features.iter_mut().filter_map(Value::as_object_mut) {
+            if !feature.get("id").is_some_and(Value::is_u64) {
+                feature.insert("id".into(), free.into());
+                free = free.saturating_add(1);
+            }
+            if !feature.get("type").is_some_and(Value::is_string) {
+                feature.insert("type".into(), Value::from("unknown"));
+            }
+        }
+    }
+    if let Some(Value::Array(params)) = top.get_mut("params") {
+        params.retain(|p| {
+            let read = serde_json::from_value::<Param>(p.clone()).is_ok();
+            if !read {
+                let name = p.get("name").and_then(Value::as_str).unwrap_or("unnamed");
+                left_out.push(format!(
+                    "the parameter `{name}`, which this import cannot read"
+                ));
+            }
+            read
+        });
+    }
+    // Any other section that does not read as this reader reads it, by
+    // itself.
+    let keys: Vec<String> = top
+        .keys()
+        .filter(|k| !matches!(k.as_str(), "params" | "features"))
+        .cloned()
+        .collect();
+    for key in keys {
+        let mut piece = serde_json::Map::new();
+        piece.insert(key.clone(), top[&key].clone());
+        if serde_json::from_value::<Design>(Value::Object(piece)).is_err() {
+            top.remove(&key);
+            left_out.push(format!(
+                "the section `{key}`, which this import cannot read"
+            ));
+        }
     }
 }
 

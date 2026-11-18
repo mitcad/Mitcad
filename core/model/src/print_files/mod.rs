@@ -53,6 +53,12 @@ mod bambu;
 #[cfg(any(test, feature = "testing"))]
 pub use bambu::version as bambu_version;
 mod cura;
+// Geometry-only and print-project delivery (mitcad#2008).
+mod delivery;
+pub use delivery::{
+    CURA_NOTE, Capabilities, Common, Delivery, MIXED_NONE_MESSAGE, Readiness, Status, capabilities,
+    check_job, choose, chooses, common, delivery_of, prefill, readiness,
+};
 mod prusa;
 pub(crate) mod source;
 // The installed Bambu-family slicers' own presets (mitcad#830).
@@ -285,7 +291,7 @@ pub(crate) fn read_flat(
     let mut process_kept = BTreeMap::new();
     let mut filament_kept: Vec<BTreeMap<String, String>> = vec![BTreeMap::new(); filaments];
     for key in source.keys() {
-        if source::BOOKKEEPING.contains(&key.as_str()) {
+        if source::is_bookkeeping(&key) {
             continue;
         }
         // The purge table: the reader's own (mitcad#705).
@@ -299,6 +305,13 @@ pub(crate) fn read_flat(
         let set = layers
             .single()
             .unwrap_or_else(|| source::leftover_set(&key));
+        // Preset metadata a project carries in its own form, kept in that
+        // form (mitcad#2008: a preset's `filament_id` as `filament_ids`).
+        let stored = if dialect.bambu_family() {
+            source::project_key(&key).to_owned()
+        } else {
+            key.clone()
+        };
         match set {
             PrintSet::Filament if layers.filament => {
                 let per_filament = filaments > 1 && source.count(&key) == Some(filaments);
@@ -308,18 +321,18 @@ pub(crate) fn read_flat(
                     } else {
                         raw.clone()
                     };
-                    kept.insert(key.clone(), text);
+                    kept.insert(stored.clone(), text);
                 }
             }
             PrintSet::Printer if layers.printer => {
-                printer_kept.insert(key.clone(), raw);
+                printer_kept.insert(stored.clone(), raw);
             }
             PrintSet::Process if layers.process => {
-                process_kept.insert(key.clone(), raw);
+                process_kept.insert(stored.clone(), raw);
             }
             _ => continue,
         }
-        out.report.kept.insert(key);
+        out.report.kept.insert(stored);
     }
     let mut problems = Vec::new();
     if layers.printer {
@@ -642,6 +655,8 @@ pub struct ExportOutput {
     pub warnings: Vec<String>,
     /// The filament changes and pauses written (mitcad#1596).
     pub layer_events: Vec<WrittenEvent>,
+    /// Geometry only or a print project (mitcad#2008).
+    pub delivery: Delivery,
 }
 
 /// A part of an export: its name, settings, number of triangles and of
@@ -911,6 +926,26 @@ pub fn export_print(
         }
         Dialect::PrusaSlicer | Dialect::Cura => Vec::new(),
     };
+    // Nothing chosen: the geometry alone, the receiver's own printer,
+    // process and filaments (mitcad#2008, `delivery.rs`).
+    let events: usize = changes.plates.iter().map(|p| p.events.len()).sum();
+    if delivery_of(parts, changes.filaments.len() + events) == Delivery::Geometry {
+        let mut shared = Shared::new(dialect, parts, purge, &[]);
+        // Every part in slot 1: no filament is sent.
+        shared.slots = vec![0; parts.len()];
+        shared.slot_settings.truncate(1);
+        let mut out = match dialect {
+            Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
+                delivery::bambu_geometry(&shared, model_name, objects, plates)
+            }
+            Dialect::PrusaSlicer => delivery::prusa_geometry(&shared),
+            Dialect::Cura => cura::export(&shared),
+        };
+        out.delivery = Delivery::Geometry;
+        out.slots = shared.slots.clone();
+        out.own_values = vec![0; parts.len()];
+        return out;
+    }
     let shared = Shared::new(dialect, parts, purge, &extra);
     let mut out = match dialect {
         Dialect::BambuStudio | Dialect::OrcaSlicer | Dialect::QidiStudio => {
@@ -919,6 +954,11 @@ pub fn export_print(
         Dialect::PrusaSlicer => prusa::export(&shared, !plates.is_empty()),
         Dialect::Cura => cura::export(&shared),
     };
+    // What Cura's export leaves out of the settings chosen (mitcad#2008).
+    if dialect == Dialect::Cura {
+        let settings: Vec<&EffectivePrint> = parts.iter().map(|p| p.settings).collect();
+        out.warnings.extend(readiness(dialect, &settings).left_out);
+    }
     let filaments = shared.slot_settings.len();
     if let Some(slots) = shared.printer_slots()
         && filaments as i64 > slots
@@ -940,6 +980,7 @@ pub fn export_print(
         })
         .collect();
     layer_events::write(&shared, changes, &mut out);
+    out.delivery = Delivery::Project;
     out
 }
 

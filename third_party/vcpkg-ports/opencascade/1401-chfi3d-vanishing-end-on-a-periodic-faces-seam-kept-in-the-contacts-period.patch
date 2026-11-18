@@ -30,6 +30,7 @@ MITCAD_GEOMETRY_CASES: valid, the volume the one after the other gives;
 Upstream: new.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index dd1c5629..600b5c51 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -91,6 +91,7 @@
@@ -40,7 +41,7 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
  
  #ifdef OCCT_DEBUG
    #include <OSD_Chronometer.hxx>
-@@ -4334,7 +4335,23 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
+@@ -4919,7 +4920,23 @@ static bool ChFi3d_ShrinkVanishingEnd(TopOpeBRepDS_DataStructure&         DStr,
        aPole2d[k] = aPole2d[k] == 1 ? 1 : aC2d[k]->NbPoles();
      }
      aC3d[k]->SetPole(aPole3d[k], PV);
@@ -62,6 +63,6 @@ diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/Mod
 +      aVUV.SetY(aVUV.Y() + T * std::round((aEnd.Y() - aVUV.Y()) / T));
 +    }
 +    aC2d[k]->SetPole(aPole2d[k], aVUV);
-     TopOpeBRepDS_Curve& aCurve = DStr.ChangeCurve(aFi.LineIndex());
-     if (aSurf.IsNull())
-     {
+     // Moving a B-spline's end pole by d moves each point of it by d times
+     // the pole's basis function there, d at most: the curve keeps to the
+     // blend surface's boundary within its tolerance before and d.

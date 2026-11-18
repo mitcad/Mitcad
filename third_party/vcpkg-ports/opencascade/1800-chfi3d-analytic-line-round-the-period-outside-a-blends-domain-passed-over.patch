@@ -1,0 +1,128 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a line of the analytic intersection between two blends that goes
+round a periodic surface's period outside its domain is not taken as the
+curve between the ends; the next line, or the walk from the ends, is
+(mitcad#2009).
+
+A pad's end face whose top edge (between two planes) and side edge (an
+arc, the pad's outer wall a cylinder) are rounded with 0.5, the corner
+where the two roundings meet built by PerformTwoCornerbyInter: the curve
+between the rounding of the straight edge (a cylinder whose domain is a
+quarter turn, its contacts at u = 0 and u = pi/2) and the rounding of the
+arc (a torus) is ChFi3d_ComputeCurves' analytic intersection (GeomInt_IntSS
+of the two bounded surfaces). Its ends lie on the cylinder's domain
+boundary, at u = 0 and u = pi/2. Depending on the last bits of the input
+(the same pad on a body built with a bend radius of 31, 32, 34, 37, 41, 42,
+43 or 44 instead of 30, 33, 35, 36, 38 to 40 or 45), GeomInt's line ran
+from u = 4 pi down to 5 pi / 2: between the right ends, but the other way
+round the cylinder, three quarters of a turn outside the domain. The
+rounding's face was trimmed by that curve: the shape checked valid, but
+the rounding of the straight edge covered three quarters of its cylinder,
+reached 3.8 beyond the pad's end and added 4.8 mm3 to the body instead of
+taking 0.33 away.
+
+- ChFi3d_LeavesPeriodicDomain: whether a line's pcurve, at nine points
+  inside its trimmed range, leaves the surface's domain in a periodic
+  direction by more than a hundredth of the period, each point brought
+  into the period that starts at the domain's start (a domain of a whole
+  period is never left).
+- ChFi3d_ComputeCurves: in GeomInt's lines, after the ends are found on a
+  line and before it is trimmed, a line that leaves either surface's
+  domain so is passed over: the next line is tried, then, as when no line
+  fits, the walk between the known ends (IntWalk_PWalking), which stays
+  inside the domains. A line inside them is taken as before.
+- No catch is added.
+
+Test: cli.fcstd_bend_reported (tools/cli/fcstd-bend-reported-test.cmake),
+the reported bent guide imported with its bend radius set to 32: every
+feature rebuilds and the body stays within its two pads' ends (before: the
+rounding at a pad's end reached 3.8 beyond it). No body built from OCCT's
+primitives alone reproduced the line round the period: it depends on the
+input's last bits.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index d587317..f4d6954 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -93,6 +93,8 @@
+ #include <TopOpeBRepDS_InterferenceIterator.hxx>
+ #include <TopOpeBRepDS_SolidSurfaceInterference.hxx>
+ 
++#include <cmath>
++
+ #ifdef OCCT_DEBUG
+ extern bool   ChFi3d_GetcontextFORCEBLEND();
+ extern bool   ChFi3d_GettraceDRAWINT();
+@@ -5920,6 +5922,56 @@ static void CurveCleaner(occ::handle<Geom_BSplineCurve>& BS, const double Tol, c
+   }
+ }
+ 
++//=======================================================================
++// function : ChFi3d_LeavesPeriodicDomain
++// purpose  : Whether the pcurve Pc of a line of the intersection, between
++//            Uf and Ul, leaves the domain of S in a periodic direction of
++//            S (a line that goes round the period the other way, outside
++//            the domain, between two ends on its boundary): a point inside
++//            the line, brought into the period that starts at the domain's
++//            start, lies past the domain's end by more than a hundredth of
++//            the period.
++//=======================================================================
++
++static bool ChFi3d_LeavesPeriodicDomain(const occ::handle<Adaptor3d_Surface>& S,
++                                        const occ::handle<Geom2d_Curve>&      Pc,
++                                        const double                          Uf,
++                                        const double                          Ul)
++{
++  const bool isUPer = S->IsUPeriodic(), isVPer = S->IsVPeriodic();
++  if ((!isUPer && !isVPer) || Pc.IsNull())
++  {
++    return false;
++  }
++  const auto isOutside = [](const double theX, const double theA, const double theB, const double theT) {
++    if (theB - theA >= theT * (1. - 1.e-2))
++    {
++      return false;
++    }
++    const double aTol = 1.e-2 * theT;
++    double       aX   = std::fmod(theX - theA, theT);
++    if (aX < 0.)
++    {
++      aX += theT;
++    }
++    return aX > theB - theA + aTol && aX < theT - aTol;
++  };
++  const int aNb = 10;
++  for (int i = 1; i < aNb; i++)
++  {
++    const gp_Pnt2d aP = Pc->Value(Uf + (Ul - Uf) * i / aNb);
++    if (isUPer && isOutside(aP.X(), S->FirstUParameter(), S->LastUParameter(), S->UPeriod()))
++    {
++      return true;
++    }
++    if (isVPer && isOutside(aP.Y(), S->FirstVParameter(), S->LastVParameter(), S->VPeriod()))
++    {
++      return true;
++    }
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : ComputeCurves
+ // purpose  : Calculates intersection between two HSurfaces.
+@@ -6260,6 +6312,13 @@ bool ChFi3d_ComputeCurves(const occ::handle<Adaptor3d_Surface>& S1,
+                 }
+               }
+             }
++            // A line that leaves a surface's domain round its period is
++            // not the one between the ends: the next line, or the walk.
++            if (ChFi3d_LeavesPeriodicDomain(S1, Pc1, Uf, Ul)
++                || ChFi3d_LeavesPeriodicDomain(S2, Pc2, Uf, Ul))
++            {
++              continue;
++            }
+             C3d = new Geom_TrimmedCurve(C3d, Uf, Ul);
+             Pc1 = new Geom2d_TrimmedCurve(Pc1, Uf, Ul);
+             Pc2 = new Geom2d_TrimmedCurve(Pc2, Uf, Ul);

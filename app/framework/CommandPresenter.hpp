@@ -62,6 +62,11 @@ public:
     // InputDef::choicePlaces painted meanwhile (mitcad#1794). The Qt
     // panel's list calls it.
     std::function<void(const QString&, const QString&)> choiceHovered;
+    // The pointer came over a row of an inspection's answer (true) or left
+    // it: the row's key ("Minimum distance", "1 Radius"), its
+    // Inspection::Value::places painted meanwhile (mitcad#1979). The Qt
+    // panel's ResultRows calls it for the rows that have places.
+    std::function<void(const QString&, bool)> resultHovered;
     // The button beside the message was clicked (setMessageAction,
     // mitcad#1634).
     std::function<void()> messageAction;

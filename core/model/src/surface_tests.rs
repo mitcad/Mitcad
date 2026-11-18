@@ -459,3 +459,204 @@ fn surface_features_refuse_mesh_bodies() {
     assert_eq!(doc.kernel().count("stitch"), 0);
     assert_eq!(doc.kernel().count("thicken"), 0);
 }
+
+/// Sketch1 (F1) with the 20 x 10 rectangle of `two_rectangles` extruded
+/// 5 mm as a surface (F2): an open tube of four walls, `F2.b0`, whose
+/// corners are named edges and whose walls' top and bottom edges are free
+/// (the mock kernel has one opening per wall). The walls and one corner.
+fn open_tube() -> (Document<MockKernel>, Vec<String>, String) {
+    let (mut doc, sketch, a, _) = two_rectangles();
+    let tube = add(
+        &mut doc,
+        json!({"type": "extrude", "surface": true, "operation": "new_body",
+               "profiles": [{"sketch": sketch, "region": a}],
+               "extent": {"type": "distance", "distance": 5}}),
+    );
+    ok(&doc, tube);
+    let walls = faces(&doc, body("F2.b0"));
+    assert_eq!(walls.len(), 4, "{walls:?}");
+    let shape = doc.body_shape(body("F2.b0")).expect("the tube");
+    let (x, y) = shape.edges.first().expect("a corner of the tube").clone();
+    let corner = crate::topo::EdgeName::new(x, y).to_string();
+    (doc, walls, corner)
+}
+
+#[test]
+fn a_patch_closes_part_of_an_opening_with_free_and_named_edges() {
+    // mitcad#1955: single free edges, each an opening and a point that
+    // picks its edge, and a named edge make one loop: a patch closes part
+    // of an opening instead of the whole loop.
+    let (mut doc, walls, corner) = open_tube();
+    let patch = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0", "edges": [corner],
+               "openings": [{"opening": {"faces": [walls[0]]}, "at": [[10, 0, 5]]},
+                            {"opening": {"faces": [walls[1]]}, "at": [[20, 5, 0], [20, 6, 0]]}]}}),
+    );
+    ok(&doc, patch);
+    assert_eq!(faces(&doc, body("F3.b0")), ["F3:patch"]);
+    assert_eq!(
+        specs(&doc, "patch_loop"),
+        [format!(
+            "patch_loop(F3: edges {corner} opening 0 at 1 opening 1 at 2, g0, 0 points)"
+        )]
+    );
+    // Written back as given: the free edges with their points.
+    let entry = doc.features().find(|f| f.uid == patch).unwrap();
+    let named = entry
+        .def
+        .map_params(&mut |_, id: &crate::ParamId| Ok::<_, ()>(doc.parameters().name(*id)))
+        .unwrap();
+    let written = serde_json::to_value(&named).unwrap();
+    assert_eq!(written["boundary"]["edges"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        written["boundary"]["openings"][1]["at"][1],
+        json!([20.0, 6.0, 0.0])
+    );
+    assert!(written["boundary"].get("opening").is_none(), "{written}");
+
+    // Free edges alone, stitched onto the tube: no new body.
+    let alone = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0", "stitch": true,
+               "openings": [{"opening": {"faces": [walls[2]]}, "at": [[10, 10, 5]]}]}}),
+    );
+    ok(&doc, alone);
+    assert_eq!(
+        specs(&doc, "patch_loop").last().map(String::as_str),
+        Some("patch_loop(F4: edges opening 2 at 1, g0, 0 points)")
+    );
+    assert!(doc.bodies().iter().all(|b| b.uid != body("F4.b0")));
+}
+
+#[test]
+fn a_patch_of_free_edges_refuses_what_it_cannot_name() {
+    let (mut doc, walls, corner) = open_tube();
+    for (value, expected) in [
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0",
+                   "opening": {"faces": [walls[0]]},
+                   "openings": [{"opening": {"faces": [walls[1]]}, "at": [[20, 5, 0]]}]}}),
+            "a patch fills its edges or an opening, not both",
+        ),
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0", "edges": [corner],
+                   "openings": [{"faces": [walls[1]], "at": [[20, 5, 0]]}]}}),
+            "points pick free edges of one opening; name the opening",
+        ),
+    ] {
+        let message = refused(&mut doc, value.clone());
+        assert!(message.contains(expected), "{value}: {message}");
+    }
+    // An opening the tube does not have fails when it is computed.
+    let missing = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0", "edges": [corner],
+               "openings": [{"opening": {"faces": [walls[1]], "index": 1}, "at": [[20, 5, 0]]}]}}),
+    );
+    let message = failure(&doc, missing);
+    assert!(
+        message.contains("openings along the faces") && message.ends_with("not 2"),
+        "{message}"
+    );
+}
+
+/// A sketch on xy (F3, after the tube) with one line from `a` to `b`: the
+/// sketch and the line's name.
+fn sketch_line(doc: &mut Document<MockKernel>, a: [f64; 2], b: [f64; 2]) -> (FeatureUid, String) {
+    let sketch = doc.add_sketch(SketchPlane::Xy).unwrap().uid;
+    let (line, _) = doc
+        .edit_sketch(sketch, "Add Line", |e| {
+            e.add_line(
+                crate::sketch::edit::PointInput::At(a),
+                crate::sketch::edit::PointInput::At(b),
+                false,
+                false,
+            )
+        })
+        .unwrap();
+    (sketch, line.curve_name())
+}
+
+#[test]
+fn a_patch_closes_part_of_an_opening_with_free_edges_and_a_sketch_line() {
+    // mitcad#1972 (GitHub mitcad/Mitcad#407): the bottom free edges of two
+    // walls of the open tube and a sketch line across its opening, from
+    // corner to corner, close a triangle of the opening.
+    let (mut doc, walls, corner) = open_tube();
+    let (sketch, line) = sketch_line(&mut doc, [0.0, 0.0], [20.0, 10.0]);
+    assert_eq!(sketch.to_string(), "F3");
+    let patch = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0",
+               "openings": [{"opening": {"faces": [walls[0]]}, "at": [[10, 0, 0]]},
+                            {"opening": {"faces": [walls[1]]}, "at": [[20, 5, 0]]}],
+               "sketch_curves": [{"sketch": sketch, "curves": [line]}]}}),
+    );
+    ok(&doc, patch);
+    assert_eq!(faces(&doc, body("F4.b0")), ["F4:patch"]);
+    assert_eq!(
+        specs(&doc, "patch_loop"),
+        [format!(
+            "patch_loop(F4: edges opening 0 at 1 opening 1 at 1 curve {line}, g0, 0 points)"
+        )]
+    );
+    // The patch depends on the sketch, and is written back as given.
+    let entry = doc.features().find(|f| f.uid == patch).unwrap();
+    assert!(entry.def.references().features.contains(&sketch));
+    let named = entry
+        .def
+        .map_params(&mut |_, id: &crate::ParamId| Ok::<_, ()>(doc.parameters().name(*id)))
+        .unwrap();
+    let written = serde_json::to_value(&named).unwrap();
+    assert_eq!(
+        written["boundary"]["sketch_curves"],
+        json!([{"sketch": "F3", "curves": [line]}])
+    );
+
+    // Named edges, free edges and the line together.
+    let mixed = add(
+        &mut doc,
+        json!({"type": "patch", "boundary": {"body": "F2.b0", "edges": [corner],
+               "openings": [{"opening": {"faces": [walls[0]]}, "at": [[10, 0, 0]]}],
+               "sketch_curves": [{"sketch": sketch, "curves": [line]}]}}),
+    );
+    ok(&doc, mixed);
+    assert_eq!(
+        specs(&doc, "patch_loop").last().cloned(),
+        Some(format!(
+            "patch_loop(F5: edges {corner} opening 0 at 1 curve {line}, g0, 0 points)"
+        ))
+    );
+
+    // Sketch curves close a loop with single edges, never alone or with a
+    // whole opening, and only curves the sketch has.
+    for (value, expected) in [
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0",
+                   "sketch_curves": [{"sketch": sketch, "curves": [line]}]}}),
+            "no edges or opening to fill selected",
+        ),
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0",
+                   "opening": {"faces": [walls[0]]},
+                   "sketch_curves": [{"sketch": sketch, "curves": [line]}]}}),
+            "a whole opening is a loop by itself",
+        ),
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0",
+                   "openings": [{"opening": {"faces": [walls[0]]}, "at": [[10, 0, 0]]}],
+                   "sketch_curves": [{"sketch": sketch, "curves": [line], "reversed": true}]}}),
+            "have no direction",
+        ),
+        (
+            json!({"type": "patch", "boundary": {"body": "F2.b0",
+                   "openings": [{"opening": {"faces": [walls[0]]}, "at": [[10, 0, 0]]}],
+                   "sketch_curves": [{"sketch": sketch, "curves": ["c99"]}]}}),
+            "has no curve",
+        ),
+    ] {
+        let message = refused(&mut doc, value.clone());
+        assert!(message.contains(expected), "{value}: {message}");
+    }
+}

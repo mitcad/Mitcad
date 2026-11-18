@@ -14,7 +14,8 @@
 // ({name}: an Intersection Curve), an `occurrence` on a face, edge or
 // vertex of another component's body, and `body` ({body, occurrence}: a
 // whole body where the occurrence by uids places it; a Properties row's,
-// mitcad#1816).
+// mitcad#1816), and `segment` ({from, to}: a straight line between two
+// points of the design; a Measure row's distance, mitcad#1979).
 // Plain Qt Core.
 
 #include <QJsonArray>

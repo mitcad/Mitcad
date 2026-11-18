@@ -28,11 +28,13 @@ has the stored body's area, and the result the stored body's faces.
 
 Upstream: new.
 
+(The walk's failure handler moved into walkOn is 0074's, narrowed there to
+OCCT's reported computation failures, mitcad#1986.)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 6d31ff06..6e3394b0 100644
+index 4c55013a..354be538 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -17485,60 +17485,97 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17507,65 +17507,102 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
                                       Stripe->OrientationOnFace1(),
                                       Stripe->OrientationOnFace2(),
                                       Stripe->Choix());
@@ -61,8 +63,24 @@ index 6d31ff06..6e3394b0 100644
 -    walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
 -                         Last, false, false, !isFirst, false, false, Soldep, intf, intl);
 -  }
--  catch (Standard_Failure const&)
+-  catch (Standard_Failure const& anException)
 -  {
+-    // (The walk cannot be made: the end is left to OCCT's corner.)
+-    if (!ChFi3d_IsComputationFailure(anException))
++  // The walk from P's section at its end (aWhole false) or at its other
++  // end (aWhole), up to Q on Eq: X, in a SurfData of its own.
++  const double WPs    = isFirst ? P->LastSpineParam() : P->FirstSpineParam();
++  const auto   walkOn = [&](const bool aWhole, occ::handle<ChFiDS_SurfData>& X) {
++    const bool aSide = aWhole ? !isFirst : isFirst;
++    // (P's other end is where the guide begins, to the rounding of its
++    // parameter.)
++    const double aTolW = aWhole ? tolesp : 0.;
++    double       W0    = aWhole ? WPs : WP;
++    if (W0 < HGuide->FirstParameter() - aTolW || W0 > HGuide->LastParameter() + aTolW)
+     {
+-      throw;
++      return false;
+     }
 -    walked = false;
 -  }
 -  done = aDone;
@@ -91,19 +109,6 @@ index 6d31ff06..6e3394b0 100644
 -  {
 -    return false;
 -  }
-+  // The walk from P's section at its end (aWhole false) or at its other
-+  // end (aWhole), up to Q on Eq: X, in a SurfData of its own.
-+  const double WPs    = isFirst ? P->LastSpineParam() : P->FirstSpineParam();
-+  const auto   walkOn = [&](const bool aWhole, occ::handle<ChFiDS_SurfData>& X) {
-+    const bool aSide = aWhole ? !isFirst : isFirst;
-+    // (P's other end is where the guide begins, to the rounding of its
-+    // parameter.)
-+    const double aTolW = aWhole ? tolesp : 0.;
-+    double       W0    = aWhole ? WPs : WP;
-+    if (W0 < HGuide->FirstParameter() - aTolW || W0 > HGuide->LastParameter() + aTolW)
-+    {
-+      return false;
-+    }
 +    W0 = std::min(std::max(W0, HGuide->FirstParameter()), HGuide->LastParameter());
 +    math_Vector    Soldep(1, 4);
 +    const gp_Pnt2d uv1 = P->Interference(1).PCurveOnFace()->Value(P->Interference(1).Parameter(aSide));
@@ -126,8 +131,13 @@ index 6d31ff06..6e3394b0 100644
 +      walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
 +                           Last, false, false, !isFirst, false, false, Soldep, intf, intl);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (The walk cannot be made: the end is left to OCCT's corner.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      walked = false;
 +    }
 +    done = aDone;
@@ -182,7 +192,7 @@ index 6d31ff06..6e3394b0 100644
    TopoDS_Face BF = B, FoF = Fo;
    BF.Orientation(TopAbs_FORWARD);
    FoF.Orientation(TopAbs_FORWARD);
-@@ -17575,14 +17612,21 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17602,14 +17639,21 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
      anEnd.CPO.SetPoint(Q);
      anEnd.CPO.SetArc(tolapp3d, Eq, wQ, aTrO);
    }
@@ -207,7 +217,7 @@ index 6d31ff06..6e3394b0 100644
    const occ::handle<ChFiDS_SurfData> aNone;
    occ::handle<ChFiDS_SurfData>       G;
    try
-@@ -17614,6 +17658,36 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
+@@ -17642,6 +17686,36 @@ bool ChFi3d_Builder::WalkedCutToEnd(const occ::handle<ChFiDS_Stripe>& Stripe, co
    {
      return false;
    }

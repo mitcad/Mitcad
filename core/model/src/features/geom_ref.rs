@@ -2352,7 +2352,8 @@ impl<K: Kernel> EvalContext<'_, K> {
     }
 
     /// A mount frame of a derived part before this one (mitcad#375), in
-    /// the coordinates of that part's component.
+    /// the coordinates of that part's component; or the middle of one of
+    /// its sides between its slots (mitcad#2002, `build/side_middle.rs`).
     pub fn mount(&mut self, feature: FeatureUid, name: &str) -> Result<Transform, String> {
         let result = self.env.result_of(feature);
         let output = result.and_then(|r| r.output.clone());
@@ -2361,9 +2362,7 @@ impl<K: Kernel> EvalContext<'_, K> {
         let failed = result.is_some_and(|r| !r.status.is_ok());
         let frames = output.as_ref().and_then(|o| o.mounts.clone());
         match frames {
-            Some(frames) if !failed => frames
-                .get(name)
-                .copied()
+            Some(frames) if !failed => crate::build::frame_or_side_middle(&frames, name)
                 .ok_or_else(|| format!("{} has no frame {name}", self.feature_name(feature))),
             _ => Err(format!(
                 "{} has no frames at this point of the timeline",

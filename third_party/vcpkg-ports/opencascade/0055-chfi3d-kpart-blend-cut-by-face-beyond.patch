@@ -41,8 +41,22 @@ closer to the part's side than the rounding is wide.
   T4 T7 U4 (a box's edge rounded past a cylinder standing out of its face)
   lost the cylinder or came out invalid. A chamfer is still cut by such a
   face (teeth standing on a flange's top).
+
+Failures (mitcad#1986): where ChFi3d_KPartCutCurve fails with one of the
+failures OCCT reports a computation it cannot make with
+(ChFi3d_IsComputationFailure, 0016), the cut is not made and the gap is
+not filled, which its caller reports as before (no piece; OCCT's blend
+there). Any other failure (a broken invariant, a signal) is rethrown.
+Test: geometry/tests/port/p0055-kpart-blend-cut-by-face-beyond.cpp (ctest
+geometry.port.0055): a block's top edge rounded with 3 past a round hole of
+radius 2 through its side face whose top lies 1.5 under the edge (the
+contact leaves the side across the hole's rim and comes back), and the same
+hole through the top: built, valid, the blend cut by the hole's wall; the
+hole 4 under the edge (no gap) as stock. The case is complete with 0057
+(the gaps next to a closed spine's start, filled in order): the test fails
+without 0055 and still with 0055 alone, and passes from 0057 on.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 69467ba4..f90b0bd8 100644
+index e1836771..7e7f2ec0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -51,8 +51,23 @@
@@ -69,7 +83,7 @@ index 69467ba4..f90b0bd8 100644
  #include <IntCurveSurface_IntersectionPoint.hxx>
  #include <gp_Pnt.hxx>
  #include <gp_Pnt2d.hxx>
-@@ -3864,6 +3879,967 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3870,6 +3885,972 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
  
  //=================================================================================================
  
@@ -598,8 +612,13 @@ index 69467ba4..f90b0bd8 100644
 +                                      Pc,
 +                                      tolreached);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (The cut cannot be made: no piece, the gap left as OCCT leaves it.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      computed = false;
 +    }
 +  }
@@ -1037,7 +1056,7 @@ index 69467ba4..f90b0bd8 100644
  void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure&      DStr  = myDS->ChangeDS();
-@@ -3908,11 +4884,21 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -3914,11 +4895,21 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
    double WEndPeriodic   = Spine->LastParameter(Spine->NbEdges());
    Spine->D1(WEndPeriodic, PEndPeriodic, TEndPeriodic);
  
@@ -1063,7 +1082,7 @@ index 69467ba4..f90b0bd8 100644
      ConexFaces(Spine, iedge, HS1, HS2);
  
      if (ChFi3d_KParticular(Spine, iedge, *HS1, *HS2) && !myOverlapStripes.Contains(Stripe)
-@@ -3928,17 +4914,56 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -3934,17 +4925,56 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
        It1->Initialize(HSon1);
        It2->Initialize(HSon2);
  

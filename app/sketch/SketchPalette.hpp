@@ -118,6 +118,8 @@ private:
   // level's icon (mitcad#1040: redundant constraints, unmet inactive ones).
   QLabel* m_solve = nullptr;
   QString m_loggedSolve; // its line last logged (UI tests)
+  // The constraint whose notice the pointer is over (mitcad#1992).
+  QString m_hoveredNotice;
   PaletteWarnings* m_warnings = nullptr; // under the status (mitcad#264)
   // The warnings' texts and the redundant constraints' ids last logged (UI
   // tests; mitcad#1171: the warnings group the redundant constraints).

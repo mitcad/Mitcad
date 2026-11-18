@@ -466,6 +466,17 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
                 ));
             }
         }
+        // A glyph outline that cannot bound a profile is told, the letter
+        // its place (mitcad#1993).
+        for dropped in texts.iter().flat_map(|t| &t.dropped) {
+            ctx.warn_at(
+                format!(
+                    "an outline of the letter {} of a text is not closed, so it bounds no profile",
+                    dropped.character
+                ),
+                vec![letter_place(&frame, dropped.low, dropped.high)],
+            );
+        }
         let boundary = face_boundary(self, &plane, &frame, ctx)?;
         let (region_info, layout, own) = if boundary.is_empty() {
             let (region_info, layout) = def.regions_and_layout_of(&solved, &texts);
@@ -502,6 +513,31 @@ impl<K: Kernel> Evaluate<K> for SketchDef {
             ..FeatureOutput::default()
         })
     }
+}
+
+/// The place of a letter's outline in the sketch (`low` and `high` its
+/// corners in the sketch's coordinates): a box about it in the component's
+/// coordinates, a little larger than the outline so that it has a size
+/// across the sketch plane too.
+fn letter_place(frame: &SketchFrame, low: [f64; 2], high: [f64; 2]) -> crate::notice::NoticePlace {
+    let corners = [
+        frame.point(low),
+        frame.point([high[0], low[1]]),
+        frame.point(high),
+        frame.point([low[0], high[1]]),
+    ];
+    let margin = 0.05 * (high[0] - low[0]).max(high[1] - low[1]).max(0.2);
+    let min = std::array::from_fn(|i| {
+        corners.iter().map(|c| c[i]).fold(f64::INFINITY, f64::min) - margin
+    });
+    let max = std::array::from_fn(|i| {
+        corners
+            .iter()
+            .map(|c| c[i])
+            .fold(f64::NEG_INFINITY, f64::max)
+            + margin
+    });
+    crate::notice::NoticePlace::Box { min, max }
 }
 
 /// Implicit profile boundaries of the supporting face. They follow the

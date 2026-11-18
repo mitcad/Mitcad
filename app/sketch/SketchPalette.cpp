@@ -130,6 +130,28 @@ SketchPalette::SketchPalette(SketchController& controller, CommandRegistry& regi
   m_solve->setObjectName(QStringLiteral("paletteSolveNotices"));
   m_solve->setWordWrap(true);
   m_solve->setTextFormat(Qt::RichText);
+  // A notice about one constraint (mitcad#1992: one redundant only in
+  // part) is a link: the pointer over it paints the constraint in the view,
+  // a click selects it.
+  m_solve->setOpenExternalLinks(false);
+  m_solve->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+  connect(m_solve, &QLabel::linkHovered, this, [this](const QString& id) {
+    if (id.isEmpty()) {
+      if (!m_hoveredNotice.isEmpty() && m_c.hoverAnnotation() == m_hoveredNotice) {
+        m_c.setHoverAnnotation(QString());
+      }
+    } else if (m_c.isActive()) {
+      m_c.setHoverAnnotation(id);
+    }
+    m_hoveredNotice = id;
+    qDebug().noquote() << QStringLiteral("Palette: notice about %1 hovered")
+                              .arg(id.isEmpty() ? QStringLiteral("none") : id);
+  });
+  connect(m_solve, &QLabel::linkActivated, this, [this](const QString& id) {
+    const bool selected = m_c.selectItems(QStringList{id}, Qt::NoModifier);
+    qDebug().noquote() << QStringLiteral("Palette: notice selects %1: %2")
+                              .arg(id, selected ? QStringLiteral("yes") : QStringLiteral("no"));
+  });
   m_solve->hide();
   layout->addWidget(m_solve);
   // The warnings under the status; a click on one selects what it is about
@@ -654,7 +676,15 @@ void SketchPalette::refresh() {
     if (level == NoticeLevel::Warning && model.warnings.contains(message)) {
       continue; // the warnings below list it
     }
-    solve << noticeHtml(level, message, palette());
+    const QString target = notice.value(QStringLiteral("target")).toString();
+    if (target.isEmpty()) {
+      solve << noticeHtml(level, message, palette());
+    } else {
+      // About one constraint (mitcad#1992): a link to it.
+      solve << QStringLiteral("%1&nbsp;<a href='%2' style='color:%3; text-decoration: underline;'>%4</a>")
+                   .arg(noticeIconHtml(level), target.toHtmlEscaped(), noticeColor(level, palette()).name(),
+                        noticeLevelText(level, message).toHtmlEscaped());
+    }
     solveLog << QStringLiteral("%1: %2").arg(noticeLevelName(level), message);
   }
   m_solve->setText(solve.join(QStringLiteral("<br>")));

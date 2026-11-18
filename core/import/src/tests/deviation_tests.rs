@@ -230,6 +230,50 @@ fn a_later_item_that_does_not_give_its_change_there_brings_the_files_bodies_back
 }
 
 #[test]
+fn the_note_of_a_deviating_result_says_why_it_was_not_taken() {
+    // The decoded definition built a result whose own change is off the
+    // file's: that is the item's cause in its note, before whatever the
+    // definitions after it said (mitcad#1926: a fillet that built in 14 s
+    // was noted only as out of time, from the guesses after it).
+    let deviated =
+        "its result comes close to the file's, but the volume it adds or removes is 8.4 % off";
+    let note = crate::decoded_cause(
+        crate::OUT_OF_TIME.to_owned(),
+        None,
+        Some(deviated.to_owned()),
+    );
+    assert_eq!(
+        note,
+        format!("{deviated}; the other definitions: {}", crate::OUT_OF_TIME)
+    );
+    // Said once where the last definition was that one.
+    assert_eq!(
+        crate::decoded_cause(deviated.to_owned(), None, Some(deviated.to_owned())),
+        deviated
+    );
+    // A decoded definition that failed comes first where the guesses after
+    // it only missed the state (mitcad#325), as before.
+    let missed = crate::NOT_IN_HISTORY.to_owned();
+    assert_eq!(
+        crate::decoded_cause(missed.clone(), Some("fillet failed".to_owned()), None),
+        format!("fillet failed; the other definitions: {missed}")
+    );
+    assert_eq!(crate::decoded_cause(missed.clone(), None, None), missed);
+    // The mock's rounding, 20 % off: its note and its deviation say so.
+    let (report, _) = deviating_rounding(0.2, AcceptDeviations::None);
+    let text = report.text();
+    let note = report.items[2].note.as_deref().unwrap_or_default();
+    assert!(
+        note.starts_with(
+            "its result comes close to the file's, but the volume it adds or removes is 20.0 % off"
+        ),
+        "{note}\n{text}"
+    );
+    let reason = &report.items[2].deviation.as_ref().expect(&text).reason;
+    assert!(reason.starts_with("its result comes close"), "{reason}");
+}
+
+#[test]
 fn other_items_are_not_kept() {
     let (report, _) = deviating_rounding(0.2, AcceptDeviations::Items(BTreeSet::from([3])));
     let text = report.text();

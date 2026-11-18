@@ -58,7 +58,7 @@ else
   ui_fail "the captions' column is not its widest caption's: '$column_line', '$check_line'"
 fi
 ui_expect_log '^Native command layout: ' 'the form keeps its captions and controls in aligned columns'
-ui_expect_log '^Panel Measure result values: Distance = 50 mm, ' 'Measure shows Distance, then the deltas, as rows'
+ui_expect_log '^Panel Measure result values: Minimum distance = 50 mm, ' 'Measure shows Minimum distance, then the deltas, as rows'
 ui_expect_log '^Panel Measure result group 1 folded$' "a pick's group folds by its header"
 ui_expect_log '^TestDriver: done' 'the check box text and the result rows are shown as in the Qt frontend'
 for problem in 'TestDriver: FAIL' 'Unable to simultaneously satisfy constraints'; do

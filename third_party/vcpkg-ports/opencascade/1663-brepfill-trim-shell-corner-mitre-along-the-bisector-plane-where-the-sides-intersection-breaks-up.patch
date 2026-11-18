@@ -44,10 +44,17 @@ lines on XZ and an arc on XY, and along two B-spline pieces meeting at 3,
 degrees, its volume within 0.0004 %; it leaned up to 78.7 degrees and
 held 32.6 % less (the ten lines), 3, 0.3 and 0.05 degrees.
 
+The cut's samples, breaks and edges are held in OCCT's containers
+(NCollection_DynamicArray; sorted with std::sort over an NCollection_Array1
+copy, FilledArray and SortArray; mitcad#1986).
+
+Test: geometry/tests/test_pipe_square_section.cpp
+(geometry.pipe_square_section: the pipes mitred square to their paths).
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
+index ff0bf415..34cca427 100644
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
-@@ -56,6 +56,20 @@
+@@ -56,6 +56,21 @@
  #include <NCollection_Map.hxx>
  #include <BRepExtrema_ExtCC.hxx>
  #include <ShapeFix_Edge.hxx>
@@ -55,7 +62,8 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +#include <BRepAdaptor_Curve.hxx>
 +#include <Bnd_Box.hxx>
 +#include <algorithm>
-+#include <vector>
++#include <NCollection_Array1.hxx>
++#include <NCollection_DynamicArray.hxx>
 +#include <NCollection_Array2.hxx>
 +#include <BRepLib.hxx>
 +#include <BRepTools.hxx>
@@ -68,7 +76,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
  
  static TopoDS_Edge FindEdgeCloseToBisectorPlane(const TopoDS_Vertex& theVertex,
                                                  TopoDS_Compound&     theComp,
-@@ -271,6 +285,36 @@
+@@ -271,6 +286,36 @@ void BRepFill_TrimShellCorner::AddVEdges(
  //=================================================================================================
  
  void BRepFill_TrimShellCorner::Perform()
@@ -105,7 +113,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
  {
    int  anIndex1, anIndex2, nF1, nF2, i, j, aNbP, aNbC;
    bool bhassec;
-@@ -1109,8 +1153,9 @@
+@@ -1109,8 +1154,9 @@ bool BRepFill_TrimShellCorner::ChooseSection(const TopoDS_Shape&  Comp,
          {
            // trim <FirstEdge> and <LastEdge> in the points of extrema
            // these points become new vertex with centre between them
@@ -116,7 +124,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
            {
              int imin = 1;
              for (i = 2; i <= Extrema.NbExt(); i++)
-@@ -2943,3 +2988,691 @@
+@@ -2943,3 +2989,724 @@ static bool FindCommonVertex(const TopoDS_Edge&   theFirstEdge,
  
    return false;
  }
@@ -249,17 +257,50 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  }
 +};
 +
++// An OCCT dynamic array of theNb copies of theValue.
++template <class TheItem>
++static NCollection_DynamicArray<TheItem> FilledArray(const int theNb, const TheItem& theValue)
++{
++  NCollection_DynamicArray<TheItem> anArray(std::max(theNb, 1));
++  for (int i = 0; i < theNb; ++i)
++  {
++    anArray.Append(theValue);
++  }
++  return anArray;
++}
++
++// theArray sorted by theLess with std::sort, over a contiguous copy.
++template <class TheItem, class TheLess>
++static void SortArray(NCollection_DynamicArray<TheItem>& theArray, TheLess theLess)
++{
++  const int aNb = theArray.Length();
++  if (aNb < 2)
++  {
++    return;
++  }
++  NCollection_Array1<TheItem> aCopy(0, aNb - 1);
++  for (int i = 0; i < aNb; ++i)
++  {
++    aCopy(i) = theArray(i);
++  }
++  std::sort(&aCopy(0), &aCopy(0) + aNb, theLess);
++  for (int i = 0; i < aNb; ++i)
++  {
++    theArray(i) = aCopy(i);
++  }
++}
++
 +// Where one side's faces cross the plane: its rows' faces and, at kNb + 1
 +// points of each row from its U-edge to the next, the path parameter and
 +// the point of the crossing. A place on the cut is a row and a fraction of
 +// it.
 +struct SideCut
 +{
-+  static const int                 kNb = 64;
-+  gp_Pln                           Plane;
-+  std::vector<SweptFace>           Faces;
-+  std::vector<std::vector<double>> T;
-+  std::vector<std::vector<gp_Pnt>> P;
++  static const int                                           kNb = 64;
++  gp_Pln                                                     Plane;
++  NCollection_DynamicArray<SweptFace>                        Faces;
++  NCollection_DynamicArray<NCollection_DynamicArray<double>> T;
++  NCollection_DynamicArray<NCollection_DynamicArray<gp_Pnt>> P;
 +
 +  // The crossing at the fraction of the row, the one nearest to theNear.
 +  bool At(const int theRow, const double theFrac, const gp_Pnt& theNear, double& theT, gp_Pnt& theP) const
@@ -273,9 +314,9 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  bool Sample(const gp_Pnt& theStart)
 +  {
 +    gp_Pnt aNear = theStart;
-+    T.assign(Faces.size(), std::vector<double>(kNb + 1, 0.));
-+    P.assign(Faces.size(), std::vector<gp_Pnt>(kNb + 1));
-+    for (size_t r = 0; r < Faces.size(); ++r)
++    T = FilledArray(Faces.Length(), FilledArray(kNb + 1, 0.));
++    P = FilledArray(Faces.Length(), FilledArray(kNb + 1, gp_Pnt()));
++    for (size_t r = 0; r < Faces.Size(); ++r)
 +    {
 +      for (int j = 0; j <= kNb; ++j)
 +      {
@@ -296,7 +337,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    double aBest = RealLast();
 +    int    aJ    = 0;
 +    theFound     = -1;
-+    for (size_t r = 0; r < Faces.size(); ++r)
++    for (size_t r = 0; r < Faces.Size(); ++r)
 +    {
 +      if (theRow >= 0 && static_cast<int>(r) != theRow)
 +      {
@@ -400,8 +441,8 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  };
 +
 +  // Each U-edge's crossing.
-+  std::vector<gp_Pnt> aUP[2];
-+  std::vector<double> aUT[2];
++  NCollection_DynamicArray<gp_Pnt> aUP[2];
++  NCollection_DynamicArray<double> aUT[2];
 +  for (int c = 0; c < 2; ++c)
 +  {
 +    for (int k = 0; k < aNbRows; ++k)
@@ -419,8 +460,8 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      {
 +        return false;
 +      }
-+      aUP[c].push_back(aP);
-+      aUT[c].push_back(aT);
++      aUP[c].Append(aP);
++      aUT[c].Append(aT);
 +    }
 +  }
 +
@@ -438,7 +479,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      {
 +        return false;
 +      }
-+      aCut[c].Faces.push_back(aF);
++      aCut[c].Faces.Append(aF);
 +    }
 +    if (!aCut[c].Sample(aUP[c][0]))
 +    {
@@ -462,14 +503,14 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +
 +  // The breaks: the first side's U-edges', and the second side's where
 +  // they do not meet one of those.
-+  std::vector<MitreBreak> aBreaks;
++  NCollection_DynamicArray<MitreBreak> aBreaks;
 +  for (int k = 0; k < aNbRows; ++k)
 +  {
 +    MitreBreak aB;
 +    aB.Lambda    = k;
 +    aB.UEdge[0]  = k;
 +    aB.UParam[0] = aUT[0][static_cast<size_t>(k)];
-+    aBreaks.push_back(aB);
++    aBreaks.Append(aB);
 +  }
 +  for (int k = 0; k < aNbRows; ++k)
 +  {
@@ -506,9 +547,9 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    aB.Lambda    = aRow + aFrac;
 +    aB.UEdge[1]  = k;
 +    aB.UParam[1] = aUT[1][static_cast<size_t>(k)];
-+    aBreaks.push_back(aB);
++    aBreaks.Append(aB);
 +  }
-+  std::sort(aBreaks.begin(), aBreaks.end(), [](const MitreBreak& a, const MitreBreak& b) {
++  SortArray(aBreaks, [](const MitreBreak& a, const MitreBreak& b) {
 +    return a.Lambda < b.Lambda;
 +  });
 +
@@ -539,7 +580,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    aMaxGap           = std::max(aMaxGap, aGap);
 +    aBB.MakeVertex(aB.Vertex, gp_Pnt(0.5 * (aP[0].XYZ() + aP[1].XYZ())), 0.5 * aGap + Precision::Confusion());
 +  }
-+  const int aNbBreaks = static_cast<int>(aBreaks.size());
++  const int aNbBreaks = static_cast<int>(aBreaks.Size());
 +
 +  // The edges between consecutive breaks, each within one face of either
 +  // side: through the middles of the two cuts.
@@ -549,7 +590,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    int         Row[2] = {0, 0};
 +    double      Frac[2][2] = {{0., 0.}, {0., 0.}}; // each side's fraction at its ends
 +  };
-+  std::vector<MitreEdge> aEdges;
++  NCollection_DynamicArray<MitreEdge> aEdges;
 +  const int              aNbS = 32;
 +  for (int b = 0; b < aNbBreaks; ++b)
 +  {
@@ -581,7 +622,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      aME.Row[1] = aRow;
 +    }
 +    gp_Pnt              aNear = BRep_Tool::Pnt(aB0.Vertex);
-+    std::vector<double> aFrac[2], aT[2];
++    NCollection_DynamicArray<double> aFrac[2], aT[2];
 +    for (int j = 0; j <= aNbS; ++j)
 +    {
 +      const double aFrac0 = aF0 + (aF1 - aF0) * j / aNbS;
@@ -595,10 +636,10 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      }
 +      aNear   = aP[0];
 +      aMaxGap = std::max(aMaxGap, aP[0].Distance(aP[1]));
-+      aFrac[0].push_back(aFrac0);
-+      aFrac[1].push_back(aFrac1);
-+      aT[0].push_back(aT0);
-+      aT[1].push_back(aT1);
++      aFrac[0].Append(aFrac0);
++      aFrac[1].Append(aFrac1);
++      aT[0].Append(aT0);
++      aT[1].Append(aT1);
 +      gp_Pnt aM(0.5 * (aP[0].XYZ() + aP[1].XYZ()));
 +      if (j == 0)
 +      {
@@ -613,7 +654,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    }
 +    // An end on the seam of a closed section's face is at the side of the
 +    // seam the edge comes from.
-+    std::vector<double>& aF2 = aFrac[1];
++    NCollection_DynamicArray<double>& aF2 = aFrac[1];
 +    if (std::abs(aF2[0] - aF2[1]) > 0.5)
 +    {
 +      aF2[0] = 1. - aF2[0];
@@ -629,8 +670,8 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      {
 +        aUV[c]->SetValue(j + 1, aF.UV(aF.Section(aFrac[c][static_cast<size_t>(j)]), aT[c][static_cast<size_t>(j)]));
 +      }
-+      aME.Frac[c][0] = aFrac[c].front();
-+      aME.Frac[c][1] = aFrac[c].back();
++      aME.Frac[c][0] = aFrac[c].First();
++      aME.Frac[c][1] = aFrac[c].Last();
 +    }
 +    GeomAPI_Interpolate aI3d(aPoints, aParams, false, Precision::Confusion());
 +    aI3d.Perform();
@@ -667,7 +708,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      }
 +    }
 +    aME.Edge = aE;
-+    aEdges.push_back(aME);
++    aEdges.Append(aME);
 +  }
 +
 +  // The two cuts apart by more than allowed: the mitre would not join them.
@@ -718,7 +759,7 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +    {
 +      const SweptFace& aF = aCut[c].Faces[static_cast<size_t>(r)];
 +      // This face's edges, from its U-edge to the next.
-+      std::vector<std::pair<double, TopoDS_Shape>> aOwn;
++      NCollection_DynamicArray<std::pair<double, TopoDS_Shape>> aOwn;
 +      for (const MitreEdge& aME : aEdges)
 +      {
 +        if (aME.Row[c] != r)
@@ -726,14 +767,14 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +          continue;
 +        }
 +        const bool bAlong = aME.Frac[c][1] >= aME.Frac[c][0];
-+        aOwn.emplace_back(std::min(aME.Frac[c][0], aME.Frac[c][1]),
++        aOwn.EmplaceAppend(std::min(aME.Frac[c][0], aME.Frac[c][1]),
 +                          aME.Edge.Oriented(bAlong ? TopAbs_FORWARD : TopAbs_REVERSED));
 +      }
-+      if (aOwn.empty())
++      if (aOwn.IsEmpty())
 +      {
 +        return false;
 +      }
-+      std::sort(aOwn.begin(), aOwn.end(), [](const std::pair<double, TopoDS_Shape>& a,
++      SortArray(aOwn, [](const std::pair<double, TopoDS_Shape>& a,
 +                                             const std::pair<double, TopoDS_Shape>& b) {
 +        return a.first < b.first;
 +      });
@@ -750,9 +791,9 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +      const bool     bAlong = aDs * (aF.To - aF.From) > 0.;
 +      TopoDS_Wire    aW;
 +      aBB.MakeWire(aW);
-+      for (size_t i = 0; i < aOwn.size(); ++i)
++      for (size_t i = 0; i < aOwn.Size(); ++i)
 +      {
-+        const TopoDS_Shape& aE = bAlong ? aOwn[i].second : aOwn[aOwn.size() - 1 - i].second.Reversed();
++        const TopoDS_Shape& aE = bAlong ? aOwn[i].second : aOwn[aOwn.Size() - 1 - i].second.Reversed();
 +        aBB.Add(aW, aE);
 +      }
 +
@@ -809,9 +850,10 @@ diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.cxx
 +  return true;
 +}
 diff --git a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
+index 7342f9e6..8e51922f 100644
 --- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
 +++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_TrimShellCorner.hxx
-@@ -66,6 +66,16 @@
+@@ -66,6 +66,16 @@ public:
    Standard_EXPORT void Modified(const TopoDS_Shape& S, NCollection_List<TopoDS_Shape>& theModified);
  
  private:

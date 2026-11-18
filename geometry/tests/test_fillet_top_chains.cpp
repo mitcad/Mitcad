@@ -21,10 +21,11 @@
 // 1711: with the foot's rounding of 3 as well (which consumes each arm's
 // outer side, port patch 1700), the corner where an arm's outer side, its
 // top and the plate meet met the top's outer edge twice in its parse round
-// the vertex, read past a stripe's surfdata and did not return. Checks:
-// the fillet returns; built, the result is valid, else it fails at a
-// corner (the 0.5 rounding along an edge whose face the rounding of 3
-// consumes is not built by OCCT's fillet).
+// the vertex, read past a stripe's surfdata and did not return. 1728: the
+// top's outer 0.5 now rides on from where its contact on the wall crosses
+// the foot's, over the foot's rounding down to the plate, which cuts both.
+// Checks: built, valid, the 0.5's ends on the plate where the walk puts
+// them.
 //
 // The design's whole rounding, fifteen sets: twelve of them build together
 // with the port's patches, valid (test_twelve_sets); the other three need a
@@ -71,7 +72,19 @@
 // foot's rounding meets the plate (y 435.283, where the file's stored body
 // has the foot's end, 435.28) and where its contact on the top meets the
 // plate, on the top's edge with the plate prolonged past the end vertex.
+//
+// 1728: the whole of the design's Fillet1 in one fillet (the twelve sets
+// with sets 5, 6 and 2): built, valid, its volume within 3 mm3 of the
+// body stored in the file.
+//
+// 1781 (mitcad#1987): the same with the top's 0.5 given right after the
+// foot's 3, as MitCad's fillet gives the file's sets: the corner patches
+// beside the pit (the wall's foot rounded with 1 or 0.8 between the
+// plate's rounding of 5 and the arm's end) had vertices 0.54 and 0.66 off
+// in that order. Checks: every vertex within 0.05, and the same volume in
+// both orders.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -185,6 +198,9 @@ void top_chains(const TopoDS_Shape& body, std::vector<TopoDS_Edge>& outer, std::
   }
 }
 
+// Whether `shape` has a vertex within 1e-3 of `p`.
+bool has_vertex_near(const TopoDS_Shape& shape, const gp_Pnt& p);
+
 // Rounds `edges` of `body` with `radius`; the result, or a null shape.
 TopoDS_Shape round_with(const std::vector<TopoDS_Edge>& edges, double radius, BRepFilletAPI_MakeFillet& maker) {
   for (const TopoDS_Edge& e : edges) {
@@ -272,7 +288,9 @@ void test_reported_body() {
     }
   }
 
-  // 1711: with the foot's rounding of 3; the fillet returns.
+  // 1711, 1728: with the foot's rounding of 3. At the outer arm ends the
+  // top's outer 0.5 rides on from where its contact on the wall crosses
+  // the foot's down over the foot's rounding to the plate, which cuts both.
   BRepFilletAPI_MakeFillet with_foot(body);
   for (const TopoDS_Edge& e : outer_foot(body)) {
     if (with_foot.Contour(e) == 0) {
@@ -280,11 +298,17 @@ void test_reported_body() {
     }
   }
   const TopoDS_Shape all = round_with(both, 0.5, with_foot);
-  if (!all.IsNull()) {
-    check(BRepCheck_Analyzer(all).IsValid(), "with the foot's rounding, the result is valid");
-  } else {
-    check(with_foot.Failure() == ChFi3d_Builder::Failure_Corner, "with the foot's rounding, it fails at a corner");
+  check(!all.IsNull(), "with the foot's rounding, the outer arm ends build");
+  if (all.IsNull()) {
+    return;
   }
+  check(BRepCheck_Analyzer(all).IsValid(), "with the foot's rounding, the result is valid");
+  // (Each arm: the 0.5's end where it comes down to the foot's contact with
+  // the plate, and where its contact on the top meets the plate.)
+  check(has_vertex_near(all, gp_Pnt(-292.9307, 435.2831, kPlate)), "the left arm's 0.5 ends on the foot's contact");
+  check(has_vertex_near(all, gp_Pnt(-270.4307, 435.2831, kPlate)), "the right arm's 0.5 ends on the foot's contact");
+  check(has_vertex_near(all, gp_Pnt(-292.2492, 435.417, kPlate)), "the left arm's top contact meets the plate");
+  check(has_vertex_near(all, gp_Pnt(-271.1122, 435.417, kPlate)), "the right arm's top contact meets the plate");
 }
 
 // One edge of the design's rounding: its radius, the middle of the edge
@@ -631,6 +655,164 @@ void test_inner_arm_ends() {
   check(has_vertex_near(rounded, gp_Pnt(-275.8187, 435.417, kPlate)), "the right arm's top contact meets the plate");
 }
 
+// 1729: the pit's edge, one inner arm's foot rounded (with its pit side's
+// edge) and the other's not, and the top's edges: the arm end whose foot is
+// not rounded was done but not valid (the plate's wire open). Never done
+// and not valid; either arm, and the pit's edge with the top's edges alone.
+void test_one_inner_arm() {
+  const std::string dir = cases_dir();
+  if (dir.empty()) {
+    std::printf("test_one_inner_arm: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  TopoDS_Shape body;
+  BRep_Builder builder;
+  if (!BRepTools::Read(body, (dir + "/fillet-wall-run-on/body.brep").c_str(), builder) || body.IsNull()) {
+    std::printf("test_one_inner_arm: skipped (no case fillet-wall-run-on)\n");
+    return;
+  }
+  std::vector<TopoDS_Edge> top_edges;
+  const TopoDS_Face top = top_of(body);
+  for (TopExp_Explorer ex(top, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+    if (!BRep_Tool::Degenerated(e) && !on_plate(e)) {
+      top_edges.push_back(e);
+    }
+  }
+  const std::vector<std::vector<int>> cases = {{12, 8, 9}, {12, 10, 42}, {12}};
+  for (const std::vector<int>& sets : cases) {
+    BRepFilletAPI_MakeFillet maker(body);
+    for (const int i : sets) {
+      const TopoDS_Edge e = listed_edge(body, kTwelveSets[i]);
+      check(!e.IsNull(), "an inner foot's or the pit's edge is on the body");
+      if (e.IsNull()) {
+        return;
+      }
+      maker.Add(kTwelveSets[i].radius, e);
+    }
+    const TopoDS_Shape rounded = round_with(top_edges, 0.5, maker);
+    check(rounded.IsNull() || BRepCheck_Analyzer(rounded).IsValid(),
+          "one inner arm's foot rounded: never done and not valid");
+    if (rounded.IsNull()) {
+      check(maker.Failure() == ChFi3d_Builder::Failure_Corner, "one inner arm's foot rounded: fails at a corner");
+    }
+  }
+}
+
+// 1728: the whole of the design's Fillet1, the twelve sets with sets 5, 6
+// and the top's edges (set 2), in one fillet: built, valid, its volume
+// within 3 mm3 of the body stored in the file (6092.117: the tower slots'
+// corners and the outer arm ends' last pieces differ a little).
+// The whole of Fillet1 with its contours in the order the test lists them
+// (top_first false: the foot's 3, the twelve sets, the tower top, the
+// plate's 2 and the top's 0.5 last), or with the top's 0.5 right after the
+// foot's 3, as MitCad's fillet gives the file's sets (top_first). Its
+// volume (out), or a negative one where it fails.
+double whole_fillet1(const TopoDS_Shape& body, bool top_first) {
+  std::vector<RoundedEdge> wanted(std::begin(kTwelveSets), std::end(kTwelveSets));
+  wanted.push_back({1, -281.681, 447.909, -504.000, 18.850});
+  wanted.push_back({2, -287.681, 439.909, -547.000, 4.000});
+  wanted.push_back({2, -281.681, 447.909, -547.000, 18.850});
+  wanted.push_back({2, -275.681, 439.909, -547.000, 4.000});
+  std::vector<TopoDS_Edge> picked;
+  std::vector<double> radii;
+  std::vector<TopoDS_Edge> top_edges;
+  const TopoDS_Face top = top_of(body);
+  for (TopExp_Explorer ex(top, TopAbs_EDGE); ex.More(); ex.Next()) {
+    const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+    if (!BRep_Tool::Degenerated(e) && !on_plate(e)) {
+      top_edges.push_back(e);
+    }
+  }
+  for (std::size_t i = 0; i < wanted.size(); ++i) {
+    // (The foot's 3 are the first eight of the twelve sets.)
+    if (top_first && i == 8) {
+      for (const TopoDS_Edge& e : top_edges) {
+        picked.push_back(e);
+        radii.push_back(0.5);
+      }
+    }
+    const TopoDS_Edge found = listed_edge(body, wanted[i]);
+    check(!found.IsNull(), "each edge of Fillet1 is on the body");
+    if (found.IsNull()) {
+      return -1.0;
+    }
+    picked.push_back(found);
+    radii.push_back(wanted[i].radius);
+  }
+  if (!top_first) {
+    for (const TopoDS_Edge& e : top_edges) {
+      picked.push_back(e);
+      radii.push_back(0.5);
+    }
+  }
+  BRepFilletAPI_MakeFillet maker(body);
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> selected;
+  for (const TopoDS_Edge& e : picked) {
+    selected.Add(e);
+  }
+  maker.StopChainsAtTurns(selected);
+  for (std::size_t i = 0; i < picked.size(); ++i) {
+    if (maker.Contour(picked[i]) == 0) {
+      maker.Add(radii[i], picked[i]);
+    }
+  }
+  try {
+    OCC_CATCH_SIGNALS
+    maker.Build();
+  } catch (const Standard_Failure& e) {
+    std::fprintf(stderr, "Fillet1 throws: %s\n", e.what());
+  }
+  check(maker.IsDone(), "the whole of Fillet1 builds");
+  if (!maker.IsDone()) {
+    return -1.0;
+  }
+  check(BRepCheck_Analyzer(maker.Shape()).IsValid(), "the whole of Fillet1 is valid");
+  // Its vertices tight: the corner patches beside the pit, where the
+  // wall's foot rounded with 1 or 0.8 meets the plate's rounding of 5,
+  // had vertices half a millimetre off with the top's 0.5 given first
+  // (port patch 1781, mitcad#1987). (The legs' fronts keep a few
+  // hundredths, the corners of their foot's 2 and top's 0.5.)
+  double widest = 0.0;
+  for (TopExp_Explorer ex(maker.Shape(), TopAbs_VERTEX); ex.More(); ex.Next()) {
+    widest = std::max(widest, BRep_Tool::Tolerance(TopoDS::Vertex(ex.Current())));
+  }
+  check(widest < 0.05, "Fillet1's vertices are within 0.05 of their edges");
+  if (widest >= 0.05) {
+    std::fprintf(stderr, "Fillet1's widest vertex tolerance %.4f\n", widest);
+  }
+  GProp_GProps props;
+  BRepGProp::VolumeProperties(maker.Shape(), props);
+  const bool near = std::abs(props.Mass() - 6092.117) < 3.0;
+  check(near, "the whole of Fillet1 holds the stored body's material within 3 mm3");
+  if (!near) {
+    std::fprintf(stderr, "Fillet1's volume %.6f, the stored body's 6092.117\n", props.Mass());
+  }
+  return props.Mass();
+}
+
+void test_whole_fillet1() {
+  const std::string dir = cases_dir();
+  if (dir.empty()) {
+    std::printf("test_whole_fillet1: skipped (MITCAD_GEOMETRY_CASES is not set)\n");
+    return;
+  }
+  TopoDS_Shape body;
+  BRep_Builder builder;
+  if (!BRepTools::Read(body, (dir + "/fillet-wall-run-on/body.brep").c_str(), builder) || body.IsNull()) {
+    std::printf("test_whole_fillet1: skipped (no case fillet-wall-run-on)\n");
+    return;
+  }
+  const double listed = whole_fillet1(body, false);
+  const double top_first = whole_fillet1(body, true);
+  // The same body in either order (the corners of three stripes before
+  // those of two, 1781).
+  check(listed > 0 && std::abs(top_first - listed) < 1e-6 * listed, "Fillet1 does not depend on its contours' order");
+  if (std::abs(top_first - listed) >= 1e-6 * listed) {
+    std::fprintf(stderr, "Fillet1's volume %.6f in the listed order, %.6f with the top first\n", listed, top_first);
+  }
+}
+
 } // namespace
 
 int main() {
@@ -646,6 +828,8 @@ int main() {
     test_thirteen_sets(true, true);
     test_pit_beside_the_foot();
     test_inner_arm_ends();
+    test_one_inner_arm();
+    test_whole_fillet1();
   } catch (const Standard_Failure& e) {
     std::fprintf(stderr, "unexpected OCCT error: %s\n", e.what());
     ++failures;

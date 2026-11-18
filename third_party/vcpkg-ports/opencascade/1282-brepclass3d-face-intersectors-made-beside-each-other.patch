@@ -8,9 +8,17 @@ of a solid of thousands of faces, which a union of many bodies loads several
 times (the placement of its cavities in BOPAlgo_BuilderSolid, the checker's
 BRepCheck_Solid; mitcad#1279). The intersectors are now made beside each
 other (OSD_Parallel, from 64 faces on) and bound to their faces in the
-faces' order, as before. The results are unchanged.
+faces' order, as before. The results are unchanged. The faces and their
+intersectors are held in OCCT's containers (NCollection_DynamicArray and
+NCollection_Array1, mitcad#1986).
+
+Test: geometry/tests/test_classifier_pool_joins.cpp (joins with the
+classifier's intersectors made beside each other, on several threads at
+once, mitcad#1553). The speed itself: none, because the gain is the
+machine's cores (a parallel loop over the faces); no bound holds on a
+machine with one.
 diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
-index c92cb6e4..79ae20dd 100644
+index c92cb6e4..54fde971 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.cxx
 @@ -33,6 +33,7 @@
@@ -21,16 +29,16 @@ index c92cb6e4..79ae20dd 100644
  #include <Precision.hxx>
  #include <TopAbs_Orientation.hxx>
  #include <TopExp_Explorer.hxx>
-@@ -42,6 +43,8 @@
+@@ -41,6 +42,8 @@
+ #include <TopoDS_Shape.hxx>
  #include <TopoDS_Shell.hxx>
  #include <TopExp.hxx>
++#include <NCollection_Array1.hxx>
++#include <NCollection_DynamicArray.hxx>
  
-+#include <vector>
-+
  //=======================================================================
  // function : FindAPointInTheFace
- // purpose  : Compute a point P in the face  F. Param is a Real in
-@@ -917,12 +920,28 @@ void BRepClass3d_SolidExplorer::InitShape(const TopoDS_Shape& S)
+@@ -917,12 +920,30 @@ void BRepClass3d_SolidExplorer::InitShape(const TopoDS_Shape& S)
  
    myReject = true; //-- case of infinite solid (without any face)
  
@@ -39,27 +47,29 @@ index c92cb6e4..79ae20dd 100644
 +  // faces' order, as they were made one by one: each samples its face's
 +  // surface, which took most of the loading of a solid of thousands of
 +  // faces (mitcad#1279).
-+  std::vector<TopoDS_Face> aFaces;
-+  TopExp_Explorer          Expl;
++  NCollection_DynamicArray<TopoDS_Face> aFaces;
++  TopExp_Explorer                       Expl;
    for (Expl.Init(S, TopAbs_FACE); Expl.More(); Expl.Next())
    {
 -    const TopoDS_Face Face = TopoDS::Face(Expl.Current());
 -    void* ptr = (void*)(new IntCurvesFace_Intersector(Face, Precision::Confusion(), true, false));
 -    myMapOfInter.Bind(Face, ptr);
-+    aFaces.push_back(TopoDS::Face(Expl.Current()));
++    aFaces.Append(TopoDS::Face(Expl.Current()));
 +  }
-+  std::vector<IntCurvesFace_Intersector*> anIntersectors(aFaces.size(), nullptr);
++  const int                                       aNbFaces = aFaces.Length();
++  NCollection_Array1<IntCurvesFace_Intersector*> anIntersectors(0, aNbFaces - 1);
++  anIntersectors.Init(nullptr);
 +  OSD_Parallel::For(
 +    0,
-+    static_cast<int>(aFaces.size()),
++    aNbFaces,
 +    [&](const int theIndex) {
-+      anIntersectors[theIndex] =
-+        new IntCurvesFace_Intersector(aFaces[theIndex], Precision::Confusion(), true, false);
++      anIntersectors(theIndex) =
++        new IntCurvesFace_Intersector(aFaces.Value(theIndex), Precision::Confusion(), true, false);
 +    },
-+    aFaces.size() < 64);
-+  for (size_t i = 0; i < aFaces.size(); ++i)
++    aNbFaces < 64);
++  for (int i = 0; i < aNbFaces; ++i)
 +  {
-+    myMapOfInter.Bind(aFaces[i], (void*)anIntersectors[i]);
++    myMapOfInter.Bind(aFaces.Value(i), (void*)anIntersectors(i));
      myReject = false; //-- at least one face in the solid
    }
  

@@ -160,6 +160,11 @@ pub struct Occurrence {
     pub transform: Mat,
     #[serde(default)]
     pub grounded: bool,
+    /// Moves typed as expressions over the design's parameters (formats 56
+    /// and 57), which the occurrence follows; `transform` is where they put
+    /// it when the file was saved.
+    #[serde(default)]
+    pub expressed_moves: Vec<Value>,
 }
 
 fn identity() -> Mat {
@@ -251,6 +256,9 @@ pub struct Design {
     /// Scanned points kept as a reference (format 43).
     #[serde(default)]
     pub point_clouds: Vec<Value>,
+    /// Notes: text anchored to a point in the model (format 52).
+    #[serde(default)]
+    pub notes: Vec<Value>,
 }
 
 fn mm() -> String {
@@ -292,6 +300,7 @@ impl Design {
                 name: format!("{name}:1"),
                 transform: IDENTITY,
                 grounded: false,
+                expressed_moves: Vec::new(),
             });
         }
     }
@@ -366,6 +375,37 @@ impl Design {
             }
         }
         None
+    }
+}
+
+/// `a` after `b`: a point goes through `b`, then `a`.
+pub fn mat_mul(a: &Mat, b: &Mat) -> Mat {
+    let mut r = [[0.0; 4]; 4];
+    for (c, col) in r.iter_mut().enumerate() {
+        for (row, cell) in col.iter_mut().enumerate() {
+            *cell = (0..4).map(|k| a[k][row] * b[c][k]).sum();
+        }
+    }
+    r
+}
+
+impl Design {
+    /// A component's world placement: through its first occurrence and
+    /// its parents' (the root's is the identity).
+    pub fn component_world(&self, component: u64) -> Mat {
+        let mut m = IDENTITY;
+        let mut c = component;
+        for _ in 0..1000 {
+            if c == 0 {
+                break;
+            }
+            let Some(o) = self.occurrences.iter().find(|o| o.component == c) else {
+                break;
+            };
+            m = mat_mul(&o.transform, &m);
+            c = o.parent;
+        }
+        m
     }
 }
 

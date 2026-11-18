@@ -47,6 +47,7 @@
 
 #include "check.hpp"
 #include "mitcad/geometry/drawing.hpp"
+#include "mitcad/geometry/query.hpp"
 
 namespace {
 
@@ -1217,6 +1218,110 @@ void test_box_from_the_iso_view() {
   }
 }
 
+bool same_curves(const DrawnView& a, const DrawnView& b) {
+  if (a.curves.size() != b.curves.size() || a.polygonal != b.polygonal) {
+    return false;
+  }
+  for (std::size_t i = 0; i < a.curves.size(); ++i) {
+    const DrawnCurve& x = a.curves[i];
+    const DrawnCurve& y = b.curves[i];
+    if (x.type != y.type || x.visible != y.visible || x.kind != y.kind || x.source != y.source ||
+        x.points != y.points || x.center != y.center || x.radius != y.radius || x.start != y.start ||
+        x.end != y.end) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A view of many parts on the quick path (mitcad#1997): its parts are
+// boxed and meshed beside each other on OCCT's threads, each as it would
+// be alone, so the view is the same every time and each part's lines are
+// its own; and the bodies' boxes measured beside each other are those
+// measured one by one, a shape given twice measured once.
+void test_many_parts_on_the_quick_path() {
+  std::vector<ShapePtr> parts;
+  for (int k = 0; k < 24; ++k) {
+    const double x = 30.0 * (k % 8);
+    const double y = 30.0 * (k / 8);
+    const TopoDS_Shape post = cylinder(x, y, 0.0, 10.0 + k, 6.0 + 0.25 * k);
+    parts.push_back(std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(post, true).Shape()));
+  }
+  // An exact block across the first row, behind its posts from the front.
+  parts.push_back(std::make_shared<Shape>(BRepPrimAPI_MakeBox(gp_Pnt(-10.0, 8.0, 0.0), 240.0, 5.0, 8.0).Shape()));
+  DrawingViewSpec spec = view(gp_Dir(0, -1, 0), gp_Dir(1, 0, 0), true);
+  spec.quick = true;
+  spec.quick_deviation = 0.05;
+  const DrawnView first = project_view(parts, spec);
+  const DrawnView again = project_view(parts, spec);
+  CHECK(first.polygonal);
+  CHECK(same_curves(first, again));
+  std::vector<int> lines(parts.size(), 0);
+  for (const DrawnCurve& c : first.curves) {
+    CHECK(c.source >= 0 && c.source < static_cast<int>(parts.size()));
+    if (c.source >= 0 && c.source < static_cast<int>(parts.size())) {
+      ++lines[static_cast<std::size_t>(c.source)];
+    }
+  }
+  for (std::size_t k = 0; k < parts.size(); ++k) {
+    if (lines[k] == 0) {
+      std::fprintf(stderr, "part %zu has no lines of its own\n", k);
+      ++test::failures;
+    }
+  }
+  std::vector<ShapePtr> boxed = parts;
+  boxed.push_back(parts[3]);
+  // Fresh shapes: a box is kept on its shape once measured.
+  std::vector<ShapePtr> alone;
+  for (const ShapePtr& part : boxed) {
+    alone.push_back(std::make_shared<Shape>(part->occt()));
+  }
+  const std::vector<BoundingBox> together = bounding_boxes(boxed);
+  CHECK(together.size() == boxed.size());
+  for (std::size_t k = 0; k < together.size() && k < alone.size(); ++k) {
+    const BoundingBox one = bounding_box(*alone[k]);
+    CHECK(!together[k].empty && !one.empty);
+    CHECK(together[k].min.Distance(one.min) == 0.0 && together[k].max.Distance(one.max) == 0.0);
+  }
+}
+
+// Small round edges on the quick path at a small scale (mitcad#2014): a
+// 2 m free-form plate at 1:20, where the triangulation may deviate by
+// 0.27 mm, so that its holes of 2 to 5 mm and its rounded corners of 4 mm
+// get the fewest chords the triangulation's angle allows. Their circles
+// and quarter circles are still drawn as arcs, and every line lies within
+// the view's deviation of the exact view's.
+void test_small_round_edges_at_a_small_scale() {
+  TopoDS_Shape plate = rounded_bar(gp_Pnt(0.0, 0.0, 0.0), gp_Vec(2000.0, 60.0, 10.0), 2, 4.0);
+  plate = BRepAlgoAPI_Cut(plate, cylinder(100.0, 30.0, -1.0, 11.0, 2.0)).Shape();
+  plate = BRepAlgoAPI_Cut(plate, cylinder(200.0, 30.0, -1.0, 11.0, 3.0)).Shape();
+  plate = BRepAlgoAPI_Cut(plate, cylinder(300.0, 30.0, -1.0, 11.0, 5.0)).Shape();
+  const ShapePtr exact_plate = std::make_shared<Shape>(plate);
+  const ShapePtr free_plate = std::make_shared<Shape>(BRepBuilderAPI_NurbsConvert(plate, true).Shape());
+  DrawingViewSpec spec = view(gp_Dir(0, 0, 1), gp_Dir(1, 0, 0), false);
+  spec.quick = true;
+  spec.quick_deviation = 0.4;               // 0.02 mm on the sheet at 1:20
+  spec.quick_chord_angle = 3.14159265358979 / 6.0; // ViewSpec::quick_chord_angle at 1:20
+  const DrawnView quick = project_view({free_plate}, spec);
+  DrawingViewSpec exact_spec = spec;
+  exact_spec.quick = false;
+  const DrawnView exact = project_view({exact_plate}, exact_spec);
+  CHECK(quick.polygonal);
+  CHECK(!exact.polygonal);
+  CHECK(has_arc_near(quick, 100.0, 30.0, 2.0));
+  CHECK(has_arc_near(quick, 200.0, 30.0, 3.0));
+  CHECK(has_arc_near(quick, 300.0, 30.0, 5.0));
+  CHECK(has_arc_near(quick, 4.0, 4.0, 4.0));
+  CHECK(has_arc_near(quick, 1996.0, 4.0, 4.0));
+  CHECK(has_arc_near(quick, 4.0, 56.0, 4.0));
+  CHECK(has_arc_near(quick, 1996.0, 56.0, 4.0));
+  const double there = deviation(quick, exact, true);
+  const double back = deviation(exact, quick, true);
+  std::fprintf(stderr, "small round edges at 1:20: the quick view %.4f mm from the exact one, the exact %.4f mm from it\n",
+               there, back);
+  CHECK(there <= spec.quick_deviation && back <= spec.quick_deviation);
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -1233,6 +1338,8 @@ int main(int argc, char* argv[]) {
   test::guarded("the quick path at the view's scale", test_quick_path_at_the_view_scale);
   test::guarded("the tangent edges of a filleted block", test_tangent_edges_of_a_filleted_block);
   test::guarded("a box from the iso view", test_box_from_the_iso_view);
+  test::guarded("many parts on the quick path", test_many_parts_on_the_quick_path);
+  test::guarded("small round edges at a small scale", test_small_round_edges_at_a_small_scale);
   if (test::failures == 0) {
     std::puts("test_drawing: all checks passed");
   }

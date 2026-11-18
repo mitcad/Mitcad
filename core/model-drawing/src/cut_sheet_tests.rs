@@ -234,11 +234,13 @@ fn parts() -> Vec<PlacedPart> {
             id: 1,
             name: "Rib 3".to_owned(),
             loops: placed(&outline, [60.0, 40.0], 0.0),
+            bends: Vec::new(),
         },
         PlacedPart {
             id: 2,
             name: "Rib 3".to_owned(),
             loops: placed(&outline, [180.0, 40.0], 0.0),
+            bends: Vec::new(),
         },
     ]
 }
@@ -296,6 +298,7 @@ fn a_polyline_is_a_spline_of_degree_one_and_a_path() {
                 Piece::Line([20.0, 0.0], [0.0, 0.0]),
             ],
         }],
+        bends: Vec::new(),
     };
     let drawing = dxf(std::slice::from_ref(&part), false);
     let text = mitcad_dxf::write_string(&drawing, &mitcad_dxf::WriteOptions::default()).unwrap();
@@ -512,6 +515,7 @@ fn a_spline_edge_is_written_as_a_dxf_spline_and_an_svg_path() {
         id: 1,
         name: "Curved".to_owned(),
         loops: placed(&outline, mid, 0.0),
+        bends: Vec::new(),
     };
     let text = mitcad_dxf::write_string(
         &dxf(std::slice::from_ref(&part), false),

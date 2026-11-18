@@ -14,9 +14,16 @@ Surface, Polyhedra), the same intersection as Perform(Curve, Surface) with
 the polyhedron of each piece taken from Polyhedra where made before for
 the same bounds and kept there where made now, and IntTools_Context keeps
 the polyhedra of each face for its edge/face intersections: the same
-polyhedra, so the same intersection points.
+polyhedra, so the same intersection points. The kept polyhedra are listed
+in an NCollection_List (OCCT's containers, mitcad#1986).
+
+Test: geometry/tests/test_kernel_repeated_work.cpp
+(geometry.kernel_repeated_work: the intersections with the kept polyhedra
+are those made without them). The speed itself: none, because the gain (a
+third of a closed offset's time) is below what a bound in a test of
+seconds can tell on a loaded machine.
 diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
-index cedd74772..3c1e57f38 100644
+index cedd7477..3c1e57f3 100644
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_BeanFaceIntersector.cxx
 @@ -568,7 +568,17 @@ void IntTools_BeanFaceIntersector::ComputeAroundExactIntersection()
@@ -39,7 +46,7 @@ index cedd74772..3c1e57f38 100644
    if (anExactIntersector.IsDone())
    {
 diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
-index e53ec8dfe..9bf0b2398 100644
+index e53ec8df..9bf0b239 100644
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.cxx
 @@ -61,6 +61,7 @@ IntTools_Context::IntTools_Context()
@@ -94,7 +101,7 @@ index e53ec8dfe..9bf0b2398 100644
  {
    Geom2dHatch_Hatcher* pHatcher = nullptr;
 diff --git a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
-index 1c78357ea..71ecea094 100644
+index 1c78357e..71ecea09 100644
 --- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
 +++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Context.hxx
 @@ -20,6 +20,7 @@
@@ -127,7 +134,7 @@ index 1c78357ea..71ecea094 100644
    double myPOnSTolerance;
  
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
-index 1ef15c81b..ef40e0aab 100644
+index 1ef15c81..b7540a7f 100644
 --- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
 +++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.cxx
 @@ -117,6 +117,152 @@ void IntCurveSurface_HInter::Perform(const TheCurve& curve, const TheSurface& su
@@ -167,7 +174,7 @@ index 1ef15c81b..ef40e0aab 100644
 +                                                            const double   V2,
 +                                                            ThePolyhedron* thePolyhedron)
 +{
-+  myEntries.push_back(Entry{U1, V1, U2, V2, thePolyhedron});
++  myEntries.Append(Entry{U1, V1, U2, V2, thePolyhedron});
 +  return *thePolyhedron;
 +}
 +
@@ -284,19 +291,18 @@ index 1ef15c81b..ef40e0aab 100644
                                       const TheSurface& surface,
                                       const double      U1,
 diff --git a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
-index 1c4b806e5..cfa1ac52a 100644
+index 1c4b806e..cd4762f5 100644
 --- a/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
 +++ b/src/ModelingAlgorithms/TKGeomAlgo/IntCurveSurface/IntCurveSurface_HInter.hxx
-@@ -24,6 +24,8 @@
+@@ -23,6 +23,7 @@
+ #include <gp_Pnt.hxx>
  #include <NCollection_Array2.hxx>
  #include <NCollection_Array1.hxx>
++#include <NCollection_List.hxx>
  
-+#include <vector>
-+
  class IntCurveSurface_TheHCurveTool;
  class Adaptor3d_HSurfaceTool;
- class IntCurveSurface_ThePolygonOfHInter;
-@@ -90,6 +92,52 @@ public:
+@@ -90,6 +91,52 @@ public:
                                 const occ::handle<Adaptor3d_Surface>&        Surface,
                                 const IntCurveSurface_ThePolyhedronOfHInter& Polyhedron);
  
@@ -333,7 +339,7 @@ index 1c4b806e5..cfa1ac52a 100644
 +      IntCurveSurface_ThePolyhedronOfHInter* Polyhedron;
 +    };
 +
-+    std::vector<Entry> myEntries;
++    NCollection_List<Entry> myEntries;
 +  };
 +
 +  //! Compute the Intersection between the curve and the surface, as
@@ -349,7 +355,7 @@ index 1c4b806e5..cfa1ac52a 100644
  protected:
    //! Compute the Intersection between the curve and the
    //! surface
-@@ -186,6 +234,17 @@ protected:
+@@ -186,6 +233,17 @@ protected:
                                       const occ::handle<Adaptor3d_Surface>& Surface);
  
  private:

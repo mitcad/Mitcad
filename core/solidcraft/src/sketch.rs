@@ -95,6 +95,10 @@ pub enum CurveKind {
         /// clamped uniform B-spline.
         #[serde(default)]
         nurbs: Option<Nurbs>,
+        /// A fit spline's dragged tangent handles (format 55), points by
+        /// index; none: the tangents its fit gives.
+        #[serde(default)]
+        handles: Vec<usize>,
     },
     /// A conic from `a` to `b` shaped by `apex` and `rho`.
     Conic {
@@ -315,6 +319,13 @@ pub enum ConstraintKind {
         #[serde(default)]
         circles: Option<String>,
     },
+    /// Point `p` at the share `at` (0 to 1) of curve `c`'s length (format
+    /// 51).
+    PointAlong {
+        p: usize,
+        c: usize,
+        at: f64,
+    },
     /// A kind of a later format than this reader knows: left out of the
     /// sketch, which keeps the rest.
     #[serde(other)]
@@ -398,6 +409,7 @@ impl ConstraintKind {
             LineCircleDistance { .. } => "line_circle_distance",
             PointCircleDistance { .. } => "point_circle_distance",
             CircleCircleDistance { .. } => "circle_circle_distance",
+            PointAlong { .. } => "point_along",
             Other => "a constraint of a later format",
         }
     }

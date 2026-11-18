@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: MIT
+# Comments as a conversation with an agent (mitcad#2010, GitHub
+# mitcad/Mitcad#401), on an empty design (comments-empty.json):
+#   1. Add Comment with Whole Design: On hidden, nothing to pick; C1 on
+#      the whole design, without a pin.
+#   2. The browser's root row: Add Comment… on the whole design, C2.
+#   3. An agent asks back on C1 with a long reply of several lines (as
+#      MCP's reply_comment does): C1 open, waiting for your answer.
+#   4. The Comments panel: the reply's row shows the reply in full in the
+#      details pane, the comment's row the whole thread; selecting C1
+#      selects nothing and frames nothing.
+#   5. Reply… on the agent's reply shows that reply whole above the text
+#      box; the user's answer ends the waiting. Reply… on the comment's row
+#      answers its latest reply.
+# Run by tools/ui-comments-test.sh (Linux), tools/ui-windows-comments-
+# thread-test.ps1 (Windows) and tools/ui-macos-comments-thread-test.sh
+# (macOS).
+wait-idle
+expect-ever '^Comments: none$' 30
+
+# 1. Add Comment with Whole Design, in a design without geometry.
+mark
+command comment.add
+wait-log '^Command Add Comment started'
+wait-log '^Panel Add Comment input whole_design at '
+click-logged '^Panel Add Comment input whole_design at '
+wait-log '^Panel Add Comment input target at .*[(]hidden[)]$'
+type-in '^Panel Add Comment input text at ' 'Plan a wall bracket for a 40 mm pipe'
+mark
+key Return
+wait-log '^Done Add Comment$'
+wait-log '^Comment added on the whole design$'
+wait-log '^Comment C1: open, user, Design: Plan a wall bracket for a 40 mm pipe$'
+wait-log '^Comment C1 pin: none$'
+wait-log '^Comments open: 1$'
+
+# 2. The browser's root row: Add Comment… on the whole design.
+mark
+context-menu-logged '^Browser Root at ' 'Add Comment…'
+focus-dialog '^Add Comment$'
+wait-log '^Comment dialog opened: Add Comment: Whole design$'
+focus-widget commentText
+type 'Name the bodies after their use'
+key Return
+focus-main
+wait-log '^Comment added on Whole design$'
+wait-log '^Comment C2: open, user, Design: Name the bodies after their use$'
+wait-log '^Comments open: 2$'
+
+# 3. The agent asks back on C1, a reply of several lines and paragraphs.
+mark
+model-command '{"cmd":"reply_comment","id":"C1","author":"claude-code","text":"Before I start, two questions:\n1. Which wall material is it, concrete, brick or wood?\n2. Which screws do you have at hand?\n\nUntil then I would make the bracket of 3 mm steel with two M6 holes 50 mm apart, a clamp of 40 mm inner diameter and a 15 mm wide strap, rounded at every outer corner. Tell me if any of that should change."}'
+wait-log '^Comment C1 reply 1: claude-code: Before I start, two questions: / 1[.] Which wall material'
+
+# 4. The Comments panel: the status, the reply in full, the whole thread.
+mark
+command view.comments
+focus-dialog '^Comments$'
+wait-log '^Comments status C1: Open, waiting for your answer$'
+wait-log '^Comments status C2: Open$'
+wait-log '^Comments row C1 reply 1 at '
+mark
+dialog-click-logged '^Comments row C1 reply 1 at '
+wait-log '^Comments selected: C1 reply 1$'
+wait-log '^Comments details: C1 reply 1: On Design, Open, waiting for your answer / Reply 1 by claude-code, .* / Before I start, two questions: / 1[.] Which wall material is it, concrete, brick or wood[?] / 2[.] Which screws do you have at hand[?] / .*a 15 mm wide strap, rounded at every outer corner[.] Tell me if any of that should change[.]$'
+# Its target, the whole design: nothing selected, nothing framed.
+wait-log '^Comment target shown: C1: nothing selected [(]view none[)]$'
+expect-widget-property commentsDetails readOnly true
+mark
+dialog-click-logged '^Comments row C1 at '
+wait-log '^Comments selected: C1$'
+wait-log '^Comments details: C1: On Design, Open, waiting for your answer / Comment 1 by user, .* / Plan a wall bracket for a 40 mm pipe / Reply 1 by claude-code, .* / Before I start, two questions: / .*Tell me if any of that should change[.]$'
+
+# 5. Reply… on the agent's reply: that reply whole above the text box.
+mark
+dialog-click-logged '^Comments row C1 reply 1 at '
+wait-log '^Comments selected: C1 reply 1$'
+mark
+dialog-click-logged '^Comments Reply at '
+focus-dialog '^Reply to Comment 1$'
+wait-log '^Comment dialog answers: Reply 1 by claude-code, .*: Before I start, two questions: / .*Tell me if any of that should change[.]$'
+wait-log '^Comment dialog opened: Reply to Comment 1: Design$'
+expect-widget-property commentAnswering readOnly true
+focus-widget commentText
+type 'Concrete wall, M6 screws. The rest is fine.'
+key Return
+wait-log '^Comment C1 reply 2: user: Concrete wall, M6 screws[.] The rest is fine[.]$'
+focus-dialog '^Comments$'
+wait-log '^Comments status C1: Open$'
+
+# Reply… on the comment's row answers its latest reply, the user's; Esc
+# cancels.
+mark
+dialog-click-logged '^Comments row C1 at '
+wait-log '^Comments selected: C1$'
+wait-log '^Comments details: C1: On Design, Open / Comment 1 by user, .* / Reply 2 by user, .* / Concrete wall, M6 screws[.] The rest is fine[.]$'
+mark
+dialog-click-logged '^Comments Reply at '
+focus-dialog '^Reply to Comment 1$'
+wait-log '^Comment dialog answers: Reply 2 by user, .*: Concrete wall, M6 screws[.] The rest is fine[.]$'
+focus-widget commentText
+key Escape
+wait-log '^Comment dialog cancelled: Reply to Comment 1$'
+focus-dialog '^Comments$'
+button '^Close$' commentsClose
+focus-main
+expect-never 'TestDriver: FAIL'

@@ -9,6 +9,7 @@
 #include "../MainWindow.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -487,6 +488,19 @@ void MainWindow::createDrawing(const QString& component) {
   if (drawingOpen() && !cut) {
     m_drawingWorkspace->startTool(QStringLiteral("drawing.base_view"));
   }
+}
+
+bool MainWindow::queryInJob(const QString& label, const QJsonObject& query, QObject* context, QueryDone done) {
+  if (modelBusy()) {
+    return false;
+  }
+  // Read on the worker, handed over when the job ends.
+  auto answer = std::make_shared<QJsonObject>();
+  return m_documentSession->queryAsync(
+      label, query, [answer](const QJsonValue& value) { *answer = value.toObject(); }, context,
+      [answer, done = std::move(done)](const DocumentSession::AsyncResult& outcome) {
+        done(*answer, outcome.cancelled, outcome.cancelled ? QString() : outcome.error);
+      });
 }
 
 QJsonArray MainWindow::selectedModelBodies() const {

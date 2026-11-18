@@ -478,6 +478,8 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
   const QString partNumber = webPartNumber(name);
   const QString absolute = QFileInfo(path).absoluteFilePath();
   const int depth = undoDepth();
+  // Hidden parents the insert shows (mitcad#1995), said again with Move.
+  m_shownParentsNote.clear();
   const auto undoBack = [this, depth] {
     while (undoDepth() > depth && runModelCommand(cmd("undo"))) {
     }
@@ -557,6 +559,7 @@ bool MainWindow::importWebDownload(const QString& path, WebFileKind kind, QStrin
   m_webMoveComponent = component;
   m_webMoveOccurrence = occurrence;
   m_webMoveName = shownName;
+  m_webMoveNote = m_shownParentsNote;
   m_webMovePending = true;
   return true;
 }
@@ -588,7 +591,13 @@ void MainWindow::startWebDownloadMove() {
   startCommand(QStringLiteral("solid.move"), {item}, nullptr);
   if (m_mode != Mode::Command) {
     qInfo().noquote() << QStringLiteral("Component from Web: Move did not start for %1").arg(m_webMoveName);
+  } else if (!m_webMoveNote.isEmpty()) {
+    // The parents the insert showed (mitcad#1995): said with Move's start,
+    // and again when it closes.
+    m_placementNote = m_webMoveNote;
+    showHint(m_placementNote);
   }
+  m_webMoveNote.clear();
 }
 
 } // namespace mitcad

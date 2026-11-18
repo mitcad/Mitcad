@@ -353,6 +353,10 @@ private:
   // isolated too) leaves it, one undo step that changes no light bulb.
   // False when the click is the light bulb's as before.
   bool toggleIsolated(const BrowserNode& node);
+  // An eye hidden with an occurrence above its row (mitcad#1995): a click
+  // shows every hidden occurrence above it, one undo step, its own light
+  // bulb as it is. False when the row is not hidden so.
+  bool showHiddenParents(const BrowserNode& node);
   // The isolation with a row's items added: the body, the occurrence, or
   // a Bodies folder's bodies.
   Selection isolationWith(const BrowserNode& node) const;

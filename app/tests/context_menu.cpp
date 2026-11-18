@@ -175,6 +175,30 @@ int contextMenuTests() {
   InputDef openings = edges;
   openings.withOpenings();
   CHECK(openings.accepts(edge) && openings.accepts(opening));
+
+  // A single free edge (mitcad#1955): the opening and a point on the edge;
+  // taken by the same inputs, kept as its whole opening while their Whole
+  // Opening is on, and back as the edge when it goes off.
+  const SelectionItem freeEdge = freeEdgeItem(QStringLiteral("F2.b0"), wall, {10.0, 0.0, 5.0});
+  CHECK(freeEdge.kind == SelectKind::Edge && isOpeningEdge(freeEdge) && isFreeEdge(freeEdge) && !isFreeEdge(opening));
+  CHECK(freeEdge.name.startsWith(QStringLiteral("{\"at\":[10,0,5],\"opening\":")));
+  CHECK(openingOf(freeEdge) == wall);
+  const std::array<double, 3> middle{10.0, 0.0, 5.0};
+  CHECK(freeEdgePoint(freeEdge) == middle);
+  CHECK(!freeEdgePoint(opening));
+  CHECK(openings.accepts(freeEdge) && !edges.accepts(freeEdge));
+  const SelectionItem whole = wholeOpeningItem(freeEdge);
+  CHECK(whole == opening && whole.at == freeEdgePoint(freeEdge));
+  CHECK(singleFreeEdgeItem(whole) == freeEdge);
+  CHECK(singleFreeEdgeItem(opening) == opening); // no edge to go back to
+  CHECK(wholeOpeningItem(edge) == edge && singleFreeEdgeItem(edge) == edge);
+  InputDef checked = edges;
+  checked.withOpenings(QStringLiteral("whole_opening"));
+  CommandState state;
+  state.setChecked(QStringLiteral("whole_opening"), true);
+  CHECK(checked.takesWholeOpenings(state) && openings.takesWholeOpenings(state) && !edges.takesWholeOpenings(state));
+  state.setChecked(QStringLiteral("whole_opening"), false);
+  CHECK(!checked.takesWholeOpenings(state) && openings.takesWholeOpenings(state));
   return failures;
 }
 MITCAD_UNIT_TEST(contextMenuTests);

@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the BUILD face-normal UI test (mitcad#2000; tools/ui-build-face-normal-test.sh): a box standing for an imported machine's leg (F1, its body F1.b0), 40 along X and 60 along Y from (100, 200), 500 high, its bottom face on the XY plane with its centre at (120, 230, 0) and its longest edges along Y. No BUILD part yet: Profile starts with a ground placement. All geometry is synthetic."},
+  {"cmd": "add_feature", "def": {"type": "box", "plane": {"type": "origin", "plane": "xy"},
+   "corner": [100, 200], "length": 40, "width": 60, "height": 500, "operation": "new_body"}},
+  {"expect": {"bodies": 1}}
+]

@@ -273,6 +273,7 @@ fn a_kept_pattern_binds_its_copies_in_the_plane() {
         },
         entities: vec![Ref::Point(p(1))],
         copies,
+        skipped: Vec::new(),
     });
     let converted = spatial_from_planar(&planar, None).unwrap();
     assert_eq!(converted.kept, ["k1 (pattern)"]);

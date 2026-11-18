@@ -38,6 +38,26 @@ inline void setVisibleHeight(Graphic3d_Camera& camera, double height) {
   camera.SetScale(cameraScaleForHeight(height, camera.Aspect()));
 }
 
+// Puts a saved camera (`saved`: the view before a sketch) back on the
+// view's `camera` in the view's own aspect, showing the height `saved`
+// showed (mitcad#1996). A copy alone carries the aspect of the view as it
+// was saved, and a window resized meanwhile then showed the model squashed
+// until it was resized again. The height is kept as a resize keeps it
+// (mitcad#1000). An aspect of `camera` that is no number or not positive
+// leaves the saved one.
+inline void copyCameraKeepingAspect(Graphic3d_Camera& camera, const occ::handle<Graphic3d_Camera>& saved) {
+  const double aspect = camera.Aspect();
+  const double height = saved->ViewDimensions().Y();
+  camera.Copy(saved);
+  if (!std::isfinite(aspect) || !(aspect > 0.0) || aspect == saved->Aspect()) {
+    return;
+  }
+  camera.SetAspect(aspect);
+  if (std::isfinite(height) && height > 0.0) {
+    setVisibleHeight(camera, height);
+  }
+}
+
 // The perspective camera's focal length (mitcad#1717), in mm as on a
 // 35 mm frame, 36 x 24 mm: OCCT's field of view (FOVy, degrees) spans
 // the frame's 24 mm, the view's height in a view wider than tall, so it

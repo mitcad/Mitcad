@@ -4,7 +4,9 @@
 #include <utility>
 
 #include <QCheckBox>
+#include <QColor>
 #include <QDialogButtonBox>
+#include <QFont>
 #include <QFormLayout>
 #include <QKeyEvent>
 #include <QPlainTextEdit>
@@ -16,7 +18,11 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
+#include <QSplitter>
+#include <QTextEdit>
+#include <QTextOption>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -35,8 +41,44 @@ namespace {
 enum Column { kNumber, kText, kAuthor, kTarget, kStatus, kResolution, kColumns };
 
 constexpr int kIdRole = Qt::UserRole + 1;
+// A reply's row: its number among the comment's replies, from 1
+// (mitcad#2010); the comment's own row has none.
+constexpr int kReplyRole = Qt::UserRole + 2;
 
-QString oneLine(QString text) { return text.replace(QLatin1Char('\n'), QStringLiteral(" / ")); }
+// Where the divider between the list and the details pane was left.
+constexpr const char* kDetailsSplitterKey = "comments/detailsSplitter";
+
+QString oneLine(QString text) {
+  // A text document's lines and paragraphs too, as they come out of it.
+  text.replace(QChar::LineSeparator, QLatin1Char('\n')).replace(QChar::ParagraphSeparator, QLatin1Char('\n'));
+  return text.replace(QLatin1Char('\n'), QStringLiteral(" / "));
+}
+
+// The parts of a thread as rich text: each heading in bold over its text,
+// whose lines and paragraphs stay as written and wrap at the width.
+QString entriesHtml(const QVector<CommentEntry>& entries) {
+  QString html;
+  for (const CommentEntry& entry : entries) {
+    html += QStringLiteral("<p style=\"margin-top:8px; margin-bottom:2px\"><b>%1</b></p>")
+                .arg(entry.heading.toHtmlEscaped());
+    html += QStringLiteral("<p style=\"white-space:pre-wrap; margin-top:0px\">%1</p>").arg(entry.text.toHtmlEscaped());
+  }
+  return html;
+}
+
+// A read-only, selectable text that wraps at its width: the details pane
+// and the reply dialog's quote.
+QTextEdit* threadText(QWidget* parent, const QString& name, const QString& accessible) {
+  auto* text = new QTextEdit(parent);
+  text->setObjectName(name);
+  text->setAccessibleName(accessible);
+  text->setReadOnly(true);
+  text->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+  text->setLineWrapMode(QTextEdit::WidgetWidth);
+  text->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+  text->setTabChangesFocus(true);
+  return text;
+}
 
 // Enter in the comment's text accepts the dialog; Shift+Enter is a new
 // line, as in the chat.
@@ -70,7 +112,7 @@ CommentsWindow::CommentsWindow(QWidget* parent) : QDialog(parent) {
   setWindowTitle(tr("Comments"));
   setWindowIcon(themeIcon(QStringLiteral("comment")));
   setObjectName(QStringLiteral("commentsWindow"));
-  resize(820, 380);
+  resize(820, 560);
   auto* layout = new QVBoxLayout(this);
 
   // The filter: which statuses are listed.
@@ -115,7 +157,26 @@ CommentsWindow::CommentsWindow(QWidget* parent) : QDialog(parent) {
   m_tree->header()->setSectionResizeMode(kText, QHeaderView::Stretch);
   m_tree->header()->setSectionResizeMode(kResolution, QHeaderView::Stretch);
   requestNativeColumnContents(m_tree->header());
-  layout->addWidget(m_tree, 1);
+
+  // Under the list, the selected row in full (mitcad#2010): the comment's
+  // whole thread, or one reply; the divider between them is kept.
+  m_details = threadText(this, QStringLiteral("commentsDetails"), tr("Selected comment or reply"));
+  m_details->setAccessibleDescription(tr("The selected comment or reply in full, to read and copy"));
+  m_details->setPlaceholderText(tr("Select a comment or a reply to read it in full here."));
+  m_splitter = new QSplitter(Qt::Vertical, this);
+  m_splitter->setObjectName(QStringLiteral("commentsSplitter"));
+  m_splitter->setChildrenCollapsible(false);
+  m_splitter->addWidget(m_tree);
+  m_splitter->addWidget(m_details);
+  m_splitter->setStretchFactor(0, 3);
+  m_splitter->setStretchFactor(1, 2);
+  m_splitter->setSizes({300, 200});
+  m_splitter->restoreState(QSettings().value(QLatin1String(kDetailsSplitterKey)).toByteArray());
+  connect(m_splitter, &QSplitter::splitterMoved, this, [this] {
+    QSettings().setValue(QLatin1String(kDetailsSplitterKey), m_splitter->saveState());
+    TestSync::singleShot(0, this, [this] { logLayout(); });
+  });
+  layout->addWidget(m_splitter, 1);
 
   auto* buttons = new QHBoxLayout;
   m_resolve = new QPushButton(tr("&Resolve"), this);
@@ -123,7 +184,7 @@ CommentsWindow::CommentsWindow(QWidget* parent) : QDialog(parent) {
   m_reopen = new QPushButton(tr("Reope&n"), this);
   m_reopen->setToolTip(tr("The comment needs more work: open again, with a reply if you give one"));
   m_reply = new QPushButton(tr("Re&ply…"), this);
-  m_reply->setToolTip(tr("Adds a reply to the comment"));
+  m_reply->setToolTip(tr("Answers the selected reply, or the comment's latest one"));
   m_retarget = new QPushButton(tr("Retar&get"), this);
   m_retarget->setToolTip(tr("Pins a comment whose target is gone to another face, edge, body or feature"));
   m_delete = new QPushButton(themeIcon(QStringLiteral("delete")), tr("&Delete"), this);
@@ -168,8 +229,14 @@ QString CommentsWindow::selectedComment() const {
   return items.isEmpty() ? QString() : items.first()->data(kNumber, kIdRole).toString();
 }
 
+int CommentsWindow::selectedReply() const {
+  const QList<QTreeWidgetItem*> items = m_tree->selectedItems();
+  return items.isEmpty() ? 0 : items.first()->data(kNumber, kReplyRole).toInt();
+}
+
 void CommentsWindow::fill() {
   const QString selected = selectedComment();
+  const int selectedReplyNumber = selectedReply();
   const int scrolledDown = m_tree->verticalScrollBar()->value();
   m_filling = true;
   // Which comments' replies were shown, kept through the rebuild.
@@ -190,6 +257,9 @@ void CommentsWindow::fill() {
                        oneLine(comment.text),
                        comment.resolution.isEmpty() ? QStringLiteral("-") : oneLine(comment.resolution))
                   .arg(comment.replies.size());
+    // Its Status column, "Open, waiting for your answer" when an agent
+    // asked something back (mitcad#2010).
+    logged << QStringLiteral("Comments status %1: %2").arg(comment.id, commentStatusText(comment));
     if (!m_filter.shows(comment)) {
       continue;
     }
@@ -227,10 +297,17 @@ void CommentsWindow::fill() {
         item->setForeground(column, palette().color(QPalette::Disabled, QPalette::Text));
       }
     }
+    if (commentWaitingForYou(comment)) {
+      // An agent asked something back: the user's turn, in bold.
+      QFont bold = item->font(kStatus);
+      bold.setBold(true);
+      item->setFont(kStatus, bold);
+    }
     int replyNumber = 0;
     for (const CommentShown::Reply& reply : comment.replies) {
       auto* child = new QTreeWidgetItem(item);
       child->setData(kNumber, kIdRole, comment.id);
+      child->setData(kNumber, kReplyRole, replyNumber + 1);
       child->setText(kText, oneLine(reply.text));
       child->setText(kAuthor, reply.author);
       child->setToolTip(kText, reply.text);
@@ -244,12 +321,15 @@ void CommentsWindow::fill() {
     }
     item->setExpanded(!collapsed.contains(comment.id));
   }
-  // The selection kept.
+  // The selection kept: the comment's row, or the reply's.
   for (int row = 0; row < m_tree->topLevelItemCount(); ++row) {
     QTreeWidgetItem* item = m_tree->topLevelItem(row);
     if (!selected.isEmpty() && item->data(kNumber, kIdRole).toString() == selected) {
-      item->setSelected(true);
-      m_tree->setCurrentItem(item, 0, QItemSelectionModel::NoUpdate);
+      QTreeWidgetItem* chosen =
+          selectedReplyNumber > 0 && selectedReplyNumber <= item->childCount() ? item->child(selectedReplyNumber - 1)
+                                                                               : item;
+      chosen->setSelected(true);
+      m_tree->setCurrentItem(chosen, 0, QItemSelectionModel::NoUpdate);
     }
   }
   m_tree->doItemsLayout();
@@ -306,12 +386,14 @@ void CommentsWindow::selectComment(const QString& id) {
   const QString logged =
       QStringLiteral("Comments selected: %1").arg(selectedComment().isEmpty() ? QStringLiteral("none") : selectedComment());
   m_loggedSelection = logged;
+  m_followedComment = selectedComment();
   qDebug().noquote() << logged;
   followSelection();
 }
 
 void CommentsWindow::followSelection() {
   const QString id = selectedComment();
+  const int reply = selectedReply();
   const CommentShown* comment = id.isEmpty() ? nullptr : commentById(m_comments, id);
   const QString status = comment != nullptr ? comment->status : QString();
   m_resolve->setEnabled(comment != nullptr && status != QLatin1String("resolved"));
@@ -319,15 +401,44 @@ void CommentsWindow::followSelection() {
   m_reply->setEnabled(comment != nullptr);
   m_delete->setEnabled(comment != nullptr);
   m_retarget->setEnabled(comment != nullptr && comment->orphaned);
-  const QString logged = QStringLiteral("Comments selected: %1").arg(id.isEmpty() ? QStringLiteral("none") : id);
+  const QString row = id.isEmpty() ? QStringLiteral("none")
+                      : reply > 0  ? QStringLiteral("%1 reply %2").arg(id).arg(reply)
+                                   : id;
+  const QString logged = QStringLiteral("Comments selected: %1").arg(row);
   if (logged != m_loggedSelection) {
     m_loggedSelection = logged;
     qDebug().noquote() << logged;
-    if (!id.isEmpty() && m_actions.selected) {
+    // Its target selected and framed once per comment, not again for
+    // each of its replies.
+    if (!id.isEmpty() && id != m_followedComment && m_actions.selected) {
+      m_followedComment = id;
       m_actions.selected(id);
     }
   }
+  if (id.isEmpty()) {
+    m_followedComment.clear();
+  }
+  showDetails(comment, reply, row);
   TestSync::singleShot(0, this, [this] { logLayout(); });
+}
+
+void CommentsWindow::showDetails(const CommentShown* comment, int reply, const QString& row) {
+  if (comment == nullptr) {
+    m_details->clear();
+  } else {
+    const CommentDetails details = commentDetails(*comment, reply);
+    const QColor muted = palette().color(QPalette::Disabled, QPalette::Text);
+    m_details->setHtml(QStringLiteral("<p style=\"color:%1\">%2</p>").arg(muted.name(), details.summary.toHtmlEscaped()) +
+                       entriesHtml(details.entries));
+  }
+  // For UI tests: what the pane holds, as its text reads.
+  const QString logged =
+      QStringLiteral("Comments details: %1: %2")
+          .arg(row, comment == nullptr ? QStringLiteral("none") : oneLine(m_details->toPlainText().trimmed()));
+  if (logged != m_loggedDetails) {
+    m_loggedDetails = logged;
+    qDebug().noquote() << logged;
+  }
 }
 
 void CommentsWindow::clickedButton(const char* name, const std::function<void(const QString&)>& action) {
@@ -376,19 +487,31 @@ void CommentsWindow::logLayout() {
                  .arg(QLatin1String(name), at(widget, widget->rect().center()),
                       widget->isEnabled() ? QString() : QStringLiteral(" (disabled)"));
   }
-  for (int row = 0; row < m_tree->topLevelItemCount(); ++row) {
-    QTreeWidgetItem* item = m_tree->topLevelItem(row);
+  const auto logRow = [&](QTreeWidgetItem* item, const QString& name) {
     const QRect rect = m_tree->visualItemRect(item);
     if (!rect.isValid() || !m_tree->viewport()->rect().contains(rect.center())) {
-      continue;
+      return;
     }
     // On its text, clear of the branch's arrow.
     const QHeaderView* header = m_tree->header();
     const QRect text(header->sectionViewportPosition(kText), rect.top(), header->sectionSize(kText), rect.height());
     lines << QStringLiteral("Comments row %1 at %2")
-                 .arg(item->data(kNumber, kIdRole).toString(),
-                      at(m_tree->viewport(), text.width() > 0 ? text.center() : rect.center()));
+                 .arg(name, at(m_tree->viewport(), text.width() > 0 ? text.center() : rect.center()));
+  };
+  for (int row = 0; row < m_tree->topLevelItemCount(); ++row) {
+    QTreeWidgetItem* item = m_tree->topLevelItem(row);
+    const QString id = item->data(kNumber, kIdRole).toString();
+    logRow(item, id);
+    // Its replies' rows (mitcad#2010): "Comments row C1 reply 2 at x,y".
+    for (int reply = 0; item->isExpanded() && reply < item->childCount(); ++reply) {
+      logRow(item->child(reply), QStringLiteral("%1 reply %2").arg(id).arg(reply + 1));
+    }
   }
+  // The details pane: where it is and how large.
+  lines << QStringLiteral("Comments details at %1 size %2x%3")
+               .arg(at(m_details, m_details->rect().center()))
+               .arg(m_details->width())
+               .arg(m_details->height());
   const QString logged = lines.join(QLatin1Char('\n'));
   if (logged != m_loggedPlaces) {
     m_loggedPlaces = logged;
@@ -398,15 +521,31 @@ void CommentsWindow::logLayout() {
   }
 }
 
-std::optional<QString> askCommentText(QWidget* parent, const QString& title, const QString& what, bool optional) {
+std::optional<QString> askCommentText(QWidget* parent, const QString& title, const QString& what, bool optional,
+                                      const CommentEntry& answers) {
   QDialog dialog(parent);
   dialog.setWindowTitle(title);
   dialog.setObjectName(QStringLiteral("commentDialog"));
   auto* layout = new QVBoxLayout(&dialog);
-  auto* form = new QFormLayout;
-  layout->addLayout(form);
   if (!what.isEmpty()) {
-    form->addRow(QObject::tr("On:"), new QLabel(what, &dialog));
+    auto* form = new QFormLayout;
+    layout->addLayout(form);
+    auto* on = new QLabel(what, &dialog);
+    on->setObjectName(QStringLiteral("commentTarget"));
+    on->setWordWrap(true);
+    on->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(QObject::tr("On:"), on);
+  }
+  // What the reply answers (mitcad#2010): the reply or the comment whole,
+  // wrapped, scrolled when long, selectable to copy from.
+  const bool answering = !answers.heading.isEmpty();
+  if (answering) {
+    layout->addWidget(new QLabel(QObject::tr("In answer to:"), &dialog));
+    QTextEdit* quote = threadText(&dialog, QStringLiteral("commentAnswering"), QObject::tr("In answer to"));
+    quote->setHtml(entriesHtml(QVector<CommentEntry>{answers}));
+    quote->setMinimumHeight(quote->fontMetrics().lineSpacing() * 4 + 12);
+    layout->addWidget(quote, 2);
+    qDebug().noquote() << QStringLiteral("Comment dialog answers: %1: %2").arg(answers.heading, oneLine(answers.text));
   }
   auto* text = new CommentText(&dialog);
   text->setObjectName(QStringLiteral("commentText"));
@@ -415,8 +554,15 @@ std::optional<QString> askCommentText(QWidget* parent, const QString& title, con
   text->setPlaceholderText(optional ? QObject::tr("A reply, if you want to give one")
                                     : QObject::tr("What should change here, for the agent"));
   text->setMinimumWidth(360);
-  text->setFixedHeight(text->fontMetrics().lineSpacing() * 4 + 12);
-  form->addRow(QObject::tr("&Text:"), text);
+  // At least four lines; it grows with the dialog.
+  text->setMinimumHeight(text->fontMetrics().lineSpacing() * 4 + 12);
+  auto* label = new QLabel(QObject::tr("&Text:"), &dialog);
+  label->setBuddy(text);
+  layout->addWidget(label);
+  layout->addWidget(text, 3);
+  if (answering) {
+    dialog.resize(560, 460);
+  }
   auto* message = new QLabel(&dialog);
   message->setObjectName(QStringLiteral("commentValidation"));
   message->setWordWrap(true);

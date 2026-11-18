@@ -294,6 +294,74 @@ void pinTests() {
   CHECK(open.pixelColor(ring) != ringed.pixelColor(ring));
 }
 
+// mitcad#2010: waiting for the user's answer, the details pane's thread
+// and reply, and what a reply answers.
+void threadTests() {
+  QJsonObject asked = comment("C5", "open", QJsonValue());
+  asked.insert(QStringLiteral("target"), QJsonObject{{QStringLiteral("design"), true}});
+  asked.insert(QStringLiteral("label"), QStringLiteral("Design"));
+  QJsonArray replies;
+  replies.append(QJsonObject{{QStringLiteral("author"), QStringLiteral("claude-code")},
+                             {QStringLiteral("text"), QStringLiteral("Which material?\n\nAnd which screws?")},
+                             {QStringLiteral("created"), QStringLiteral("2026-11-01T18:00:00Z")}});
+  asked.insert(QStringLiteral("replies"), replies);
+  QJsonArray list;
+  list.append(asked);
+  CommentShown shown = commentsOf({{QStringLiteral("comments"), list}}).comments.first();
+  CHECK(commentWaitingForYou(shown));
+  CHECK(commentStatusText(shown) == QStringLiteral("Open, waiting for your answer"));
+  CHECK(!shown.place.has_value());
+  CHECK(commentPinLook(shown) == CommentPinLook::Hidden); // no pin for the whole design
+  // The details of the comment's row: the whole thread, lines kept.
+  CommentDetails details = commentDetails(shown, 0);
+  CHECK(details.summary.contains(QStringLiteral("Design")));
+  CHECK(details.summary.contains(QStringLiteral("waiting for your answer")));
+  CHECK(details.entries.size() == 2);
+  if (details.entries.size() == 2) {
+    CHECK(details.entries.at(0).heading.startsWith(QStringLiteral("Comment 5 by user, ")));
+    CHECK(details.entries.at(0).text == QStringLiteral("make this hole\nan M6 thread"));
+    CHECK(details.entries.at(1).heading.startsWith(QStringLiteral("Reply 1 by claude-code, ")));
+    CHECK(details.entries.at(1).text == QStringLiteral("Which material?\n\nAnd which screws?"));
+  }
+  // A reply's row: that reply alone; one it does not have: nothing.
+  details = commentDetails(shown, 1);
+  CHECK(details.entries.size() == 1 && details.entries.first().text.endsWith(QStringLiteral("which screws?")));
+  CHECK(commentDetails(shown, 2).entries.isEmpty());
+  CHECK(commentEntry(shown, 3).heading.isEmpty());
+  // What Reply… answers: the reply selected, else the latest one.
+  CHECK(commentAnswered(shown, 1) == 1);
+  CHECK(commentAnswered(shown, 0) == 1);
+  CHECK(commentAnswered(shown, 7) == 1);
+
+  // The user's answer: no longer waiting; nor a comment without replies,
+  // nor an addressed one.
+  shown.replies.append({QStringLiteral("user"), QStringLiteral("Steel, M6"), QStringLiteral("2026-11-01T18:05:00Z")});
+  CHECK(!commentWaitingForYou(shown));
+  CHECK(commentStatusText(shown) == QStringLiteral("Open"));
+  CHECK(commentAnswered(shown, 0) == 2);
+  CHECK(commentAnswered(shown, 1) == 1);
+  shown.replies.append({QStringLiteral("claude-code"), QStringLiteral("Done?"), QString()});
+  shown.status = QStringLiteral("addressed");
+  shown.resolution = QStringLiteral("Bracket1");
+  shown.addressedBy = QStringLiteral("claude-code");
+  CHECK(!commentWaitingForYou(shown));
+  details = commentDetails(shown, 0);
+  CHECK(details.entries.size() == 5);
+  CHECK(details.entries.last().heading == QStringLiteral("Resolution by claude-code"));
+  CHECK(details.entries.last().text == QStringLiteral("Bracket1"));
+  const CommentsShown plain = commentsOf(answer());
+  const CommentShown* first = commentById(plain.comments, QStringLiteral("C1"));
+  CHECK(first != nullptr && !commentWaitingForYou(*first) && commentAnswered(*first, 0) == 0);
+  // C2's latest reply is the user's.
+  CHECK(!commentWaitingForYou(*commentById(plain.comments, QStringLiteral("C2"))));
+  CHECK(commentById(plain.comments, QStringLiteral("C2"))->addressedBy.isEmpty());
+
+  // Times: a time in the locale's short form, anything else as it is.
+  CHECK(commentTimeText(QStringLiteral("not a time")) == QStringLiteral("not a time"));
+  CHECK(!commentTimeText(QStringLiteral("2026-11-01T18:00:00Z")).isEmpty());
+  CHECK(commentTimeText(QStringLiteral("2026-11-01T18:00:00Z")) != QStringLiteral("2026-11-01T18:00:00Z"));
+}
+
 } // namespace
 
 int commentsTests() {
@@ -302,6 +370,7 @@ int commentsTests() {
   logTests();
   targetTests();
   pinTests();
+  threadTests();
   return failures;
 }
 MITCAD_UNIT_TEST(commentsTests);

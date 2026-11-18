@@ -7,8 +7,8 @@
 #      its text, a row across the form with no caption: the captions'
 #      column is as wide as its widest caption (the runner compares the
 #      logged widths), and the form keeps its aligned columns;
-#   2. Measure between the sketch's two points shows Distance 50 mm, then
-#      Δx 30 mm, Δy 40 mm and Δz 0 mm as rows of their own, the distance's
+#   2. Measure between the sketch's two points shows Minimum distance 50 mm,
+#      then Δx 30 mm, Δy 40 mm and Δz 0 mm as rows of their own, the distance's
 #      tooltip the points it is measured between, then a group for each
 #      pick that its header folds and unfolds; the text is not shown.
 # Run by tools/ui-macos-native-panel-rows-test.sh.
@@ -45,7 +45,7 @@ wait-idle
 mark
 click-logged 'Sketch entity F2/p2 at'
 expect-log 'Measure Selection 2: 1 sketch point' 30
-expect-log '^Panel Measure result values: Distance = 50 mm, .x = 30 mm, .y = 40 mm, .z = 0 mm' 30
+expect-log '^Panel Measure result values: Minimum distance = 50 mm, .x = 30 mm, .y = 40 mm, .z = 0 mm' 30
 wait-idle
 expect-native-visible commandResultRows true
 expect-native-visible commandResult false

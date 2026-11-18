@@ -2638,6 +2638,11 @@ target_sources(mitcad PRIVATE framework/ParameterUnits.cpp framework/ParameterUn
 # icon, the setting and its notifier.
 target_sources(mitcad PRIVATE framework/RibbonLabels.cpp framework/RibbonLabels.hpp)
 
+# Sketch curves picked in the Browser (mitcad#1978): a sketch's curves as
+# rows under its row while a command's active input takes sketch curves,
+# named in words, the pointer over one painting it in the view.
+target_sources(mitcad PRIVATE MainWindowBrowserCurves.cpp browser/SketchCurveRows.cpp browser/SketchCurveRows.hpp)
+
 # app.unit's test files (mitcad#1925): each tests/<file>.cpp registers its
 # entry point (tests/UnitTests.hpp) and its sources in tests/unit/<file>.cmake,
 # included here, after every variable they may use, in sorted order: a new

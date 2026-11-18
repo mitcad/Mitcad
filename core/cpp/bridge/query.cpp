@@ -137,4 +137,8 @@ rust::Vec<BoundingBox> edge_bounding_boxes(const geometry::Shape& shape, rust::S
   return boxes(geometry::edge_bounding_boxes(shape, indices(edges)));
 }
 
+rust::Vec<BoundingBox> bounding_boxes(const ShapeList& shapes) {
+  return boxes(geometry::bounding_boxes(shapes.items()));
+}
+
 } // namespace mitcad::bridge

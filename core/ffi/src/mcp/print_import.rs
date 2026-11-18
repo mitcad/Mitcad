@@ -250,6 +250,16 @@ impl PresetFiles {
     }
 }
 
+/// Whether a file is a Bambu-family preset (`.json`) that inherits from
+/// another (`inherits`) or includes templates (`include`, mitcad#2008):
+/// such a preset is resolved through the confined slicer folder.
+fn builds_on_another(path: &Path, bytes: &[u8]) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        && serde_json::from_slice::<Map<String, Value>>(bytes)
+            .is_ok_and(|map| installed::builds_on_another(&map))
+}
+
 impl Workspace {
     fn preset_folder(&self, path: &str) -> Result<PathBuf, String> {
         let candidate = self.candidate(path)?;
@@ -308,15 +318,7 @@ impl Workspace {
             let path = self.read_path(string(&command, "path")?)?;
             let source = path_text(&path)?.to_owned();
             let bytes = budget.read(self, &path)?;
-            let inherits = path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
-                && serde_json::from_slice::<Map<String, Value>>(&bytes).is_ok_and(|map| {
-                    map.get("inherits")
-                        .and_then(Value::as_str)
-                        .is_some_and(|v| !v.trim().is_empty())
-                });
-            let resolved = if inherits {
+            let resolved = if builds_on_another(&path, &bytes) {
                 // Infer only a local slicer layout. Never discover installed
                 // folders, or search ancestors beyond the workspace root.
                 let folder = path.ancestors().skip(1).take_while(|p| p.starts_with(&self.root))
@@ -324,7 +326,7 @@ impl Workspace {
                         && path.strip_prefix(p).is_ok_and(|r| r.components().count() >= 3))
                     .and_then(Path::parent)
                     .filter(|p| p.starts_with(&self.root))
-                    .ok_or_else(|| "inherited JSON requires a confined slicer folder; use import_slicer_presets with folder".to_owned())?;
+                    .ok_or_else(|| "JSON that inherits or includes presets requires a confined slicer folder; use import_slicer_presets with folder".to_owned())?;
                 let files = self.preset_sources(folder, std::slice::from_ref(&path), budget)?;
                 let resolved = files.resolve(folder, &path)?;
                 budget.resolved(&resolved)?;

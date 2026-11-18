@@ -61,6 +61,17 @@ pub struct ViewSpec {
 /// round however large the assembly (mitcad#1671).
 pub const SHEET_DEVIATION: f64 = 0.02;
 
+/// The angle between two chords of a round edge in the polygonal
+/// algorithm's triangulation of a view at full size (radians, about a
+/// thirtieth of a turn; mitcad#962). See [`ViewSpec::quick_chord_angle`].
+pub const FULL_SIZE_CHORD_ANGLE: f64 = 0.2;
+
+/// The largest such angle, on a view reduced to a third or less: a twelfth
+/// of a turn, so that a round edge stays an arc to the fitting of the lines
+/// (a whole circle five points at least, a quarter of one three chords;
+/// mitcad#2014).
+pub const REDUCED_CHORD_ANGLE: f64 = std::f64::consts::PI / 6.0;
+
 impl ViewSpec {
     /// How far the quick path's lines may lie from the edges, model mm:
     /// [`SHEET_DEVIATION`] at the view's scale, 0.1 mm at 1:5; at least the
@@ -71,6 +82,24 @@ impl ViewSpec {
         self.scale
             .filter(|s| s.is_finite() && *s > 0.0)
             .map(|s| (SHEET_DEVIATION / s).max(self.deflection))
+    }
+
+    /// The angle the polygonal algorithm's triangulation may turn through
+    /// between two chords of a round edge (radians, mitcad#2014):
+    /// [`FULL_SIZE_CHORD_ANGLE`] on a view at full size or larger and
+    /// without a scale, that divided by the scale on a reduced view, up to
+    /// [`REDUCED_CHORD_ANGLE`]. The deviation ([`Self::quick_deviation`])
+    /// keeps the lines within [`SHEET_DEVIATION`] on the sheet whatever the
+    /// angle; on a reduced view the finer angle only made triangles on the
+    /// round faces that are small on the sheet (a view of 884 bodies at
+    /// 1:17: 6 million, and 67 s of hidden-line removal).
+    pub fn quick_chord_angle(&self) -> f64 {
+        match self.scale.filter(|s| s.is_finite() && *s > 0.0) {
+            Some(s) => {
+                (FULL_SIZE_CHORD_ANGLE / s).clamp(FULL_SIZE_CHORD_ANGLE, REDUCED_CHORD_ANGLE)
+            }
+            None => FULL_SIZE_CHORD_ANGLE,
+        }
     }
 
     /// The view's y axis.
@@ -178,4 +207,38 @@ pub struct RoundHole {
     pub counterbore: Option<(f64, f64)>,
     /// Diameter and the full included angle (radians).
     pub countersink: Option<(f64, f64)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FULL_SIZE_CHORD_ANGLE, REDUCED_CHORD_ANGLE, ViewSpec};
+
+    fn at(scale: Option<f64>) -> f64 {
+        ViewSpec {
+            toward_eye: [0.0, 0.0, 1.0],
+            x_axis: [1.0, 0.0, 0.0],
+            hidden: false,
+            smooth: false,
+            exact: true,
+            quick: true,
+            section: None,
+            deflection: 0.01,
+            scale,
+        }
+        .quick_chord_angle()
+    }
+
+    /// The triangulation's chord angle follows a reduced view's scale up to
+    /// a twelfth of a turn, and stays the full size one at full size,
+    /// enlarged and without a scale (mitcad#2014).
+    #[test]
+    fn the_chord_angle_follows_a_reduced_scale() {
+        assert_eq!(at(None), FULL_SIZE_CHORD_ANGLE);
+        assert_eq!(at(Some(1.0)), FULL_SIZE_CHORD_ANGLE);
+        assert_eq!(at(Some(2.0)), FULL_SIZE_CHORD_ANGLE);
+        assert!((at(Some(0.5)) - 2.0 * FULL_SIZE_CHORD_ANGLE).abs() < 1e-12);
+        assert_eq!(at(Some(1.0 / 17.0)), REDUCED_CHORD_ANGLE);
+        assert_eq!(at(Some(0.0)), FULL_SIZE_CHORD_ANGLE);
+        assert_eq!(at(Some(f64::NAN)), FULL_SIZE_CHORD_ANGLE);
+    }
 }

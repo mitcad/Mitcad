@@ -5366,6 +5366,17 @@ mod linked_looks;
 // Acknowledged warnings: a feature's warning the user has seen, no longer
 // shown as one until it changes (mitcad#1935).
 mod acknowledged_warnings;
+// A component's Kind in a Bill of Materials, and the Sheet Metal list
+// (mitcad#1980).
+mod bom_kind;
+pub use bom_kind::{ComponentKind, SheetMetalRow};
+// A component's BOM Structure and the Bill of Materials' structured and
+// parts-only views (mitcad#1985).
+mod bom_structure;
+pub use bom_structure::{BomStructure, BomView, BomViewList, BomViewRow};
+// Hidden parents of new content: the occurrences that keep a component out
+// of sight, shown again by the commands that add to it (mitcad#1995).
+mod hidden_parents;
 
 /// Results taken from a document for its result store
 /// ([`Document::take_results_to_write`], mitcad#1796), written by

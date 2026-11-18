@@ -11,6 +11,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDate>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -28,6 +29,7 @@
 #include <QPageLayout>
 #include <QPageSize>
 #include <QPainter>
+#include <QPair>
 #include <QPdfWriter>
 #include <QPrinter>
 #include <QPushButton>
@@ -401,6 +403,15 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
   if (linked) {
     parts.columns.insert(5, QObject::tr("Product Pages"));
   }
+  // A structured or parts-only view (mitcad#1985): each row's item number
+  // first and its mass of one after the component, indented by its level
+  // in the structured view.
+  const QString view = answer.value(QStringLiteral("view")).toString();
+  const bool numbered = view == QStringLiteral("structured") || view == QStringLiteral("parts");
+  if (numbered) {
+    parts.columns.insert(2, QObject::tr("Mass (kg)"));
+    parts.columns.prepend(QObject::tr("Item"));
+  }
   parts.columns << keys;
   for (const QJsonValue& value : listed) {
     const QJsonObject row = value.toObject();
@@ -421,6 +432,16 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
       const QJsonObject own = material.value(text(row, "component"));
       cells << text(own, "species") << text(own, "grade");
     }
+    if (numbered) {
+      const int level = std::max(1, row.value(QStringLiteral("level")).toInt(1));
+      cells[1] = QString(2 * (level - 1), QLatin1Char(' ')) + cells[1];
+      // A Reference counts for no quantity (mitcad#1985).
+      if (text(row, "bom_structure") == QStringLiteral("Reference")) {
+        cells[0] = QObject::tr("Ref");
+      }
+      cells.insert(2, massText(row.value(QStringLiteral("mass"))));
+      cells.prepend(text(row, "item"));
+    }
     // The chosen property keys (mitcad#496): empty where the part has none.
     const QJsonObject properties = row.value(QStringLiteral("properties")).toObject();
     for (const QString& key : keys) {
@@ -434,6 +455,28 @@ QVector<ListTable> partsListTables(const QJsonObject& answer, const QJsonObject&
     parts.tooltips.append(names.join(QLatin1Char('\n')));
   }
   return {parts};
+}
+
+QVector<ListTable> sheetMetalTables(const QJsonObject& answer) {
+  ListTable sheets{QObject::tr("Sheet Metal"),
+                   {QObject::tr("Quantity"), QObject::tr("Component"), QObject::tr("Body"), QObject::tr("Thickness (mm)"),
+                    QObject::tr("Material"), QObject::tr("Flat Width (mm)"), QObject::tr("Flat Height (mm)"),
+                    QObject::tr("Area (mm²)"), QObject::tr("Bends"), QObject::tr("Flat Pattern")},
+                   {}};
+  const auto number = [](const QJsonValue& value, int decimals) {
+    return value.isDouble() ? QString::number(value.toDouble(), 'f', decimals) : QString();
+  };
+  for (const QJsonValue& value : answer.value(QStringLiteral("rows")).toArray()) {
+    const QJsonObject row = value.toObject();
+    sheets.rows.append({countText(row.value(QStringLiteral("quantity"))), text(row, "component_name"), text(row, "name"),
+                        number(row.value(QStringLiteral("thickness")), 2), text(row, "material"),
+                        number(row.value(QStringLiteral("width")), 1), number(row.value(QStringLiteral("height")), 1),
+                        number(row.value(QStringLiteral("area")), 1),
+                        row.value(QStringLiteral("bends")).isDouble() ? countText(row.value(QStringLiteral("bends")))
+                                                                     : QString(),
+                        text(row, "problem")});
+  }
+  return {sheets};
 }
 
 bool writeListPdf(const QString& path, const QString& title, const QString& subtitle,
@@ -545,7 +588,9 @@ int paintListPages(QPagedPaintDevice& device, const QString& title, const QStrin
 
 BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& design, Page page, QWidget* parent)
     : QDialog(parent), m_model(model), m_design(design) {
-  setWindowTitle(page == Page::CutList ? tr("Cut List") : tr("Bill of Materials"));
+  setWindowTitle(page == Page::CutList ? tr("Cut List")
+                 : page == Page::SheetMetal ? tr("Sheet Metal")
+                                            : tr("Bill of Materials"));
   resize(980, 600);
   auto* layout = new QVBoxLayout(this);
   m_tabs = new QTabWidget;
@@ -589,10 +634,84 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
   m_groupIdentical->setToolTip(tr("Combine equal measured geometry and material in this report; the design is unchanged"));
   m_groupIdentical->setChecked(QSettings().value(QStringLiteral("build/groupIdenticalParts"), false).toBool());
   parts->addWidget(m_groupIdentical);
+  // The view (mitcad#1985): every component as before, or as the assembly
+  // nests them, or the parts only, both applying the BOM Structures; the
+  // rows of one kind (mitcad#1980) and of one BOM Structure (the model's
+  // `parts_list` filters them).
+  auto* filters = new QHBoxLayout;
+  m_view = new QComboBox;
+  m_view->setObjectName(QStringLiteral("buildPartsView"));
+  m_view->setToolTip(tr("Lists every component, the components as the assembly nests them, or only the parts"));
+  m_view->addItem(tr("Every component"), QStringLiteral("list"));
+  m_view->addItem(tr("Structured"), QStringLiteral("structured"));
+  m_view->addItem(tr("Parts only"), QStringLiteral("parts"));
+  auto* viewLabel = new QLabel(tr("&View:"));
+  viewLabel->setBuddy(m_view);
+  filters->addWidget(viewLabel);
+  filters->addWidget(m_view);
+  filters->addSpacing(12);
+  m_kind = new QComboBox;
+  m_kind->setObjectName(QStringLiteral("buildPartsKind"));
+  m_kind->setToolTip(tr("Lists only the components of the kind chosen, such as sheet metal or library parts"));
+  m_kind->addItem(tr("All kinds"), QString());
+  // Shown in words, sent as the model names them.
+  const QList<QPair<QString, QString>> kinds{
+      {tr("Sheet metal"), QStringLiteral("Sheet metal")}, {tr("Build profile"), QStringLiteral("Build profile")},
+      {tr("Library part"), QStringLiteral("Library part")}, {tr("Imported"), QStringLiteral("Imported")},
+      {tr("Solid"), QStringLiteral("Solid")},             {tr("Mixed"), QStringLiteral("Mixed")},
+      {tr("Assembly"), QStringLiteral("Assembly")}};
+  for (const auto& kind : kinds) {
+    m_kind->addItem(kind.first, kind.second);
+  }
+  auto* kindLabel = new QLabel(tr("Kin&d:"));
+  kindLabel->setBuddy(m_kind);
+  m_structure = new QComboBox;
+  m_structure->setObjectName(QStringLiteral("buildPartsStructure"));
+  m_structure->setToolTip(tr("Lists only the components of the BOM Structure chosen, such as Normal or Purchased"));
+  m_structure->addItem(tr("All structures"), QString());
+  const QList<QPair<QString, QString>> structures{
+      {tr("Normal"), QStringLiteral("Normal")},       {tr("Purchased"), QStringLiteral("Purchased")},
+      {tr("Phantom"), QStringLiteral("Phantom")},     {tr("Reference"), QStringLiteral("Reference")},
+      {tr("Inseparable"), QStringLiteral("Inseparable")}};
+  for (const auto& structure : structures) {
+    m_structure->addItem(structure.first, structure.second);
+  }
+  auto* structureLabel = new QLabel(tr("BOM &Structure:"));
+  structureLabel->setBuddy(m_structure);
+  filters->addWidget(kindLabel);
+  filters->addWidget(m_kind);
+  filters->addSpacing(12);
+  filters->addWidget(structureLabel);
+  filters->addWidget(m_structure);
+  filters->addStretch(1);
+  parts->addLayout(filters);
   m_partsTable = newTable(QStringLiteral("buildPartsList"));
   parts->addWidget(m_partsTable, 1);
   m_tabs->addTab(partsPage, tr("Bill of Materials"));
-  m_tabs->setCurrentIndex(page == Page::CutList ? 0 : 1);
+
+  // The Sheet Metal list (mitcad#1980): each sheet part's developed blank.
+  auto* sheetPage = new QWidget;
+  auto* sheet = new QVBoxLayout(sheetPage);
+  m_sheetTable = newTable(QStringLiteral("buildSheetMetalList"));
+  sheet->addWidget(m_sheetTable, 1);
+  auto* toSheet = new QHBoxLayout;
+  m_cutSheet = new QComboBox;
+  m_cutSheet->setObjectName(QStringLiteral("sheetMetalCutSheet"));
+  m_cutSheet->setToolTip(tr("The cut sheet the Flat Patterns go onto: a new one or one of the design's"));
+  auto* cutSheetLabel = new QLabel(tr("Cut s&heet:"));
+  cutSheetLabel->setBuddy(m_cutSheet);
+  auto* addButton = new QPushButton(tr("&Add All to Cut Sheet"));
+  addButton->setObjectName(QStringLiteral("sheetMetalAddToCutSheet"));
+  addButton->setToolTip(tr("Puts every sheet part's Flat Pattern on the cut sheet, as many as the design has"));
+  m_sheetNote = new QLabel;
+  m_sheetNote->setObjectName(QStringLiteral("sheetMetalNote"));
+  toSheet->addWidget(cutSheetLabel);
+  toSheet->addWidget(m_cutSheet);
+  toSheet->addWidget(addButton);
+  toSheet->addWidget(m_sheetNote, 1);
+  sheet->addLayout(toSheet);
+  m_tabs->addTab(sheetPage, tr("Sheet Metal"));
+  m_tabs->setCurrentIndex(page == Page::CutList ? 0 : page == Page::SheetMetal ? 2 : 1);
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
   auto* copy = buttons->addButton(tr("Copy as &CSV"), QDialogButtonBox::ActionRole);
@@ -640,6 +759,10 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
                      index.data().toString().split(QLatin1Char(' '), Qt::SkipEmptyParts));
   });
   connect(m_kerf, &QDoubleSpinBox::valueChanged, this, [this] { load(); });
+  connect(m_kind, &QComboBox::currentIndexChanged, this, [this] { load(); });
+  connect(m_structure, &QComboBox::currentIndexChanged, this, [this] { load(); });
+  connect(m_view, &QComboBox::currentIndexChanged, this, [this] { load(); });
+  connect(addButton, &QPushButton::clicked, this, &BuildListsDialog::addToCutSheet);
   connect(m_columns, &QLineEdit::editingFinished, this, [this] {
     if (propertyKeys(m_columns->text()) != propertyKeys(lastPropertyColumns())) {
       lastPropertyColumns() = m_columns->text();
@@ -650,6 +773,7 @@ BuildListsDialog::BuildListsDialog(const CommandContext& model, const QString& d
     qInfo().noquote() << QStringLiteral("Build lists tab: %1").arg(m_tabs->tabText(index).remove(QLatin1Char('&')));
     QTimer::singleShot(0, this, &BuildListsDialog::logLayout);
   });
+  loadCutSheets();
   load();
   mac::styleDialog(this);
 }
@@ -665,10 +789,29 @@ void BuildListsDialog::load() {
     qWarning().noquote() << QStringLiteral("Cut list not read: %1").arg(errorText(error));
   }
   try {
+    // Group identical parts groups the list of every component; the views
+    // list each component once (mitcad#1985).
+    const QString view = m_view->currentData().toString();
+    const bool everyComponent = view == QStringLiteral("list");
+    m_groupIdentical->setEnabled(everyComponent);
     QJsonObject query{{QStringLiteral("query"), QStringLiteral("parts_list")},
-                      {QStringLiteral("group_identical"), m_groupIdentical->isChecked()}};
+                      {QStringLiteral("group_identical"), everyComponent && m_groupIdentical->isChecked()},
+                      {QStringLiteral("view"), view}};
     if (!keys.isEmpty()) {
       query.insert(QStringLiteral("properties"), QJsonArray::fromStringList(keys));
+    }
+    // The filters (mitcad#1980).
+    const QString kind = m_kind->currentData().toString();
+    if (!kind.isEmpty()) {
+      QJsonArray kinds;
+      kinds.append(kind);
+      query.insert(QStringLiteral("kind"), kinds);
+    }
+    const QString structure = m_structure->currentData().toString();
+    if (!structure.isEmpty()) {
+      QJsonArray wanted;
+      wanted.append(structure);
+      query.insert(QStringLiteral("bom_structure"), wanted);
     }
     parts = m_model.queryObject(query);
     // The articles' product links (mitcad#950).
@@ -676,8 +819,17 @@ void BuildListsDialog::load() {
   } catch (const std::exception& error) {
     qWarning().noquote() << QStringLiteral("Parts list not read: %1").arg(errorText(error));
   }
+  QJsonObject sheets;
+  try {
+    sheets = m_model.queryObject({{QStringLiteral("query"), QStringLiteral("sheet_metal_list")}});
+  } catch (const std::exception& error) {
+    qWarning().noquote() << QStringLiteral("Sheet metal list not read: %1").arg(errorText(error));
+  }
+  m_sheetRows = sheets.value(QStringLiteral("rows")).toArray();
   m_cut = cutListTables(cut);
   m_parts = partsListTables(parts, cut, keys);
+  m_sheets = sheetMetalTables(sheets);
+  fill(m_sheetTable, m_sheets.first());
   for (int i = 0; i < m_cut.size() && i < m_cutTables.size(); ++i) {
     fill(m_cutTables[i], m_cut[i]);
   }
@@ -737,16 +889,52 @@ void BuildListsDialog::load() {
                            .arg(m_cut[2].rows.size())
                            .arg(m_kerf->value());
   qInfo().noquote() << QStringLiteral("Build parts list: %1 row(s)").arg(m_parts.first().rows.size());
+  // The filters (mitcad#1980).
+  qInfo().noquote() << QStringLiteral("Build parts list filter: kind %1, structure %2")
+                           .arg(m_kind->currentData().toString().isEmpty() ? QStringLiteral("all")
+                                                                         : m_kind->currentData().toString(),
+                                m_structure->currentData().toString().isEmpty()
+                                    ? QStringLiteral("all")
+                                    : m_structure->currentData().toString());
+  // The view (mitcad#1985): its rows with their items, quantities and
+  // structures, indented by level, and the design's totals.
+  const bool numbered = m_view->currentData().toString() != QStringLiteral("list");
+  const int at = numbered ? 1 : 0;
+  qInfo().noquote() << QStringLiteral("Build parts list view: %1").arg(m_view->currentData().toString());
+  if (numbered) {
+    const QJsonArray viewRows = parts.value(QStringLiteral("rows")).toArray();
+    for (const QJsonValue& value : viewRows) {
+      const QJsonObject row = value.toObject();
+      const int level = std::max(1, row.value(QStringLiteral("level")).toInt(1));
+      const QString item = text(row, "item").isEmpty() ? QStringLiteral("-") : text(row, "item");
+      qInfo().noquote() << QStringLiteral("Build BOM item: %1%2 %3 x %4 (%5)")
+                               .arg(QString(2 * (level - 1), QLatin1Char(' ')), item,
+                                    text(row, "designation").isEmpty() ? text(row, "name") : text(row, "designation"),
+                                    countText(row.value(QStringLiteral("quantity"))), text(row, "bom_structure"));
+    }
+    const QJsonObject totals = parts.value(QStringLiteral("totals")).toObject();
+    qInfo().noquote() << QStringLiteral("Build BOM totals: %1 kg").arg(massText(totals.value(QStringLiteral("mass"))));
+  }
+  // The Sheet Metal list (mitcad#1980).
+  for (const QStringList& row : std::as_const(m_sheets.first().rows)) {
+    const QString problem = row.value(9).isEmpty() ? QString() : QStringLiteral(": ") + row.value(9);
+    qInfo().noquote() << QStringLiteral("Sheet metal row: %1 x %2 / %3: %4 mm %5, %6 x %7 mm, %8 mm2, %9 bend(s)")
+                                 .arg(row.value(0), row.value(1), row.value(2), row.value(3), row.value(4), row.value(5),
+                                      row.value(6), row.value(7), row.value(8)) +
+                             problem;
+  }
+  qInfo().noquote() << QStringLiteral("Sheet metal list: %1 row(s)").arg(m_sheets.first().rows.size());
   const qsizetype pages = m_parts.first().columns.indexOf(QObject::tr("Product Pages"));
   if (pages >= 0) {
     for (const QStringList& row : std::as_const(m_parts.first().rows)) {
       if (!row.value(pages).isEmpty()) {
-        qInfo().noquote() << QStringLiteral("Build BOM product pages: %1: %2").arg(row.value(1), row.value(pages));
+        qInfo().noquote() << QStringLiteral("Build BOM product pages: %1: %2")
+                                 .arg(row.value(1 + at).trimmed(), row.value(pages));
       }
     }
   }
   for (const QStringList& row : std::as_const(m_parts.first().rows)) {
-    qInfo().noquote() << QStringLiteral("Build BOM row: %1 x %2").arg(row.value(0), row.value(1));
+    qInfo().noquote() << QStringLiteral("Build BOM row: %1 x %2").arg(row.value(at), row.value(1 + at).trimmed());
   }
   // The property columns (mitcad#496): the keys and each row's values.
   if (!keys.isEmpty()) {
@@ -754,7 +942,7 @@ void BuildListsDialog::load() {
     const int first = static_cast<int>(m_parts.first().columns.size() - keys.size());
     for (const QStringList& row : std::as_const(m_parts.first().rows)) {
       qInfo().noquote() << QStringLiteral("Build parts list row: %1: %2")
-                               .arg(row.value(1), row.mid(first).join(QStringLiteral(" | ")));
+                               .arg(row.value(1 + at).trimmed(), row.mid(first).join(QStringLiteral(" | ")));
     }
   }
   QTimer::singleShot(0, this, &BuildListsDialog::logLayout);
@@ -779,7 +967,102 @@ void BuildListsDialog::logLayout() {
   }
 }
 
-QVector<ListTable> BuildListsDialog::shownTables() const { return m_tabs->currentIndex() == 0 ? m_cut : m_parts; }
+QVector<ListTable> BuildListsDialog::shownTables() const {
+  switch (m_tabs->currentIndex()) {
+  case 0:
+    return m_cut;
+  case 2:
+    return m_sheets;
+  default:
+    return m_parts;
+  }
+}
+
+QString BuildListsDialog::shownTitle() const {
+  switch (m_tabs->currentIndex()) {
+  case 0:
+    return tr("Cut List");
+  case 2:
+    return tr("Sheet Metal");
+  default:
+    return tr("Bill of Materials");
+  }
+}
+
+void BuildListsDialog::loadCutSheets() {
+  const QString chosen = m_cutSheet->currentData().toString();
+  m_cutSheet->clear();
+  m_cutSheet->addItem(tr("New Cut Sheet"), QString());
+  QJsonArray drawings;
+  try {
+    drawings = m_model.queryArray(QStringLiteral("drawings"));
+  } catch (const std::exception& error) {
+    qWarning().noquote() << QStringLiteral("Cut sheets not read: %1").arg(errorText(error));
+  }
+  for (const QJsonValue& value : drawings) {
+    const QJsonObject drawing = value.toObject();
+    if (text(drawing, "kind") == QStringLiteral("cut_sheet")) {
+      m_cutSheet->addItem(text(drawing, "name"), drawing.value(QStringLiteral("drawing")).toVariant().toString());
+    }
+  }
+  const int at = m_cutSheet->findData(chosen);
+  m_cutSheet->setCurrentIndex(at < 0 ? 0 : at);
+}
+
+void BuildListsDialog::addToCutSheet() {
+  // Each part that can be developed, as many times as the design has it.
+  QJsonArray bodies;
+  int count = 0;
+  for (const QJsonValue& value : std::as_const(m_sheetRows)) {
+    const QJsonObject row = value.toObject();
+    const int quantity = row.value(QStringLiteral("quantity")).toInt();
+    if (!text(row, "problem").isEmpty() || quantity <= 0) {
+      continue;
+    }
+    QJsonObject body;
+    body.insert(QStringLiteral("body"), text(row, "body"));
+    body.insert(QStringLiteral("count"), quantity);
+    bodies.append(body);
+    count += quantity;
+  }
+  if (bodies.isEmpty()) {
+    m_sheetNote->setText(tr("No sheet part's Flat Pattern can be developed"));
+    qInfo().noquote() << QStringLiteral("Sheet metal parts not added: none can be developed");
+    return;
+  }
+  auto* host = dynamic_cast<DocumentHost*>(parentWidget());
+  if (host == nullptr) {
+    return;
+  }
+  const QString drawing = m_cutSheet->currentData().toString();
+  QJsonObject command{{QStringLiteral("flat"), true}, {QStringLiteral("bodies"), bodies}};
+  if (drawing.isEmpty()) {
+    command.insert(QStringLiteral("cmd"), QStringLiteral("add_cut_sheet"));
+  } else {
+    command.insert(QStringLiteral("cmd"), QStringLiteral("add_cut_sheet_parts"));
+    command.insert(QStringLiteral("drawing"), drawing);
+  }
+  QJsonObject result;
+  if (!host->runModelCommand(command, &result)) {
+    m_sheetNote->setText(host->lastError());
+    qWarning().noquote() << QStringLiteral("Sheet metal parts not added: %1").arg(host->lastError());
+    return;
+  }
+  const QString uid = result.value(QStringLiteral("drawing")).toVariant().toString();
+  loadCutSheets();
+  const int at = m_cutSheet->findData(uid);
+  if (at >= 0) {
+    m_cutSheet->setCurrentIndex(at);
+  }
+  const QString name = m_cutSheet->currentText();
+  const int warnings = static_cast<int>(result.value(QStringLiteral("warnings")).toArray().size());
+  m_sheetNote->setText(warnings == 0 ? tr("%n Flat Pattern(s) added to %1", nullptr, count).arg(name)
+                                     : tr("%n Flat Pattern(s) added to %1, with warnings", nullptr, count).arg(name));
+  qInfo().noquote() << QStringLiteral("Sheet metal parts added to %1: %2 part(s), %3 warning(s)")
+                           .arg(name)
+                           .arg(count)
+                           .arg(warnings);
+}
 
 void BuildListsDialog::copyCsv() {
   const QString csv = csvOf(shownTables());
@@ -802,9 +1085,8 @@ void BuildListsDialog::copyText() {
 }
 
 void BuildListsDialog::print() {
-  const bool cutList = m_tabs->currentIndex() == 0;
   const QString name = m_design.isEmpty() ? tr("Untitled") : m_design;
-  const QString title = cutList ? tr("Cut List") : tr("Bill of Materials");
+  const QString title = shownTitle();
   const QString subtitle = tr("%1, %2").arg(name, QDate::currentDate().toString(Qt::ISODate));
   // The PDF's paper and margins to start with; the dialog may change them.
   // Found without freezing the window (mitcad#1591).
@@ -863,8 +1145,8 @@ bool BuildListsDialog::saveList(const QString& caption, const QString& extension
 }
 
 void BuildListsDialog::savePdf() {
-  const bool cutList = m_tabs->currentIndex() == 0;
-  const QString what = cutList ? tr("cut list") : tr("bill of materials");
+  const int tab = m_tabs->currentIndex();
+  const QString what = tab == 0 ? tr("cut list") : tab == 2 ? tr("sheet metal list") : tr("bill of materials");
   const QString name = m_design.isEmpty() ? tr("Untitled") : m_design;
   // The Export group's folder (mitcad#498), else the design's, else Documents.
   const auto* host = dynamic_cast<const DocumentHost*>(parentWidget());
@@ -874,14 +1156,15 @@ void BuildListsDialog::savePdf() {
   }
   const QString suggested = QDir(dialogStartFolder(DialogGroup::Export, folder))
                                 .filePath(QStringLiteral("%1 %2.pdf").arg(QFileInfo(name).completeBaseName(), what));
-  const QString path =
-      dialogSaveFileName(this, cutList ? tr("Save Cut List as PDF") : tr("Save Bill of Materials as PDF"), suggested,
-                         tr("PDF documents (*.pdf)"));
+  const QString caption = tab == 0   ? tr("Save Cut List as PDF")
+                          : tab == 2 ? tr("Save Sheet Metal List as PDF")
+                                     : tr("Save Bill of Materials as PDF");
+  const QString path = dialogSaveFileName(this, caption, suggested, tr("PDF documents (*.pdf)"));
   if (path.isEmpty()) {
     return;
   }
   rememberDialogFolder(DialogGroup::Export, path);
-  const QString title = cutList ? tr("Cut List") : tr("Bill of Materials");
+  const QString title = shownTitle();
   const QString subtitle = tr("%1, %2").arg(name, QDate::currentDate().toString(Qt::ISODate));
   QString error;
   if (!writeListPdf(path, title, subtitle, shownTables(), error)) {

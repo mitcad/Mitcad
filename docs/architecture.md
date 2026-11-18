@@ -218,7 +218,10 @@ design in a project.
   minutes, mitcad#1788) and healing (Delete Face's defeaturing, which ran
   300 s in a fillet's retry, mitcad#1337, and the ShapeFix healing of a
   body built from its boundary, whose repair of intersecting wires once
-  never returned, mitcad#495). It gives the call up
+  never returned, mitcad#495), and drawings' views (OCCT's hidden-line
+  removal has no range; a large view's ran for over a minute, mitcad#1997:
+  a drawing command's job and the `drawing` query drawn in a job of its
+  own run it under their monitor). It gives the call up
   within 10 ms of the monitor's cancel (the call fails as cancelled), or
   once the call has run for the kernel's time limit (300 s by default,
   `MITCAD_KERNEL_TIME_LIMIT`, 0 for none; on the wall clock): the
@@ -1639,9 +1642,20 @@ the `Shape` type.
   faces the whole check took seconds after every join and cut.
 - A shape keeps its faces' kinds and areas once measured
   (`Shape::face_measures`, `face_infos` measures them on all cores), and
-  its optimal bounding box is its faces' boxes found on all cores (the
-  same box as OCCT's `BRepBndLib::AddOptimal`): the `.f3d` import asked
-  for the faces of the same large body dozens of times an extrusion.
+  its tight bounding box is its faces' boxes found on all cores: the
+  `.f3d` import asked for the faces of the same large body dozens of times
+  an extrusion. Each face's box is the trimmed face's
+  (`geometry::trimmed_face_box`, mitcad#2020): its edges' optimal box,
+  widened only to interior points where the surface has an extreme along
+  an axis, searched from a grid of points inside the face; a face ruled
+  along a parameter (a plane, cylinder, cone, extrusion, a spline of one
+  straight span) has none and gets its edges' box without the search,
+  which took seconds on a gear's planar face of 120 edges. OCCT's
+  `BRepBndLib::AddOptimal` boxes the surface over the parameter rectangle
+  the boundary spans (the whole surface on a face flagged as its natural
+  restriction), so a fillet's corner plate trimmed from a larger surface
+  read millimetres larger than the body. The looser, quicker box that
+  holds a shape is `enclosing_box`.
 - A shape also keeps its edges' middles and curves once worked out
   (`edge_middles`, `edge_geometries`) and a box that holds each face
   (`face_boxes`, `Kernel::face_boxes`, on all cores; faces of offset,

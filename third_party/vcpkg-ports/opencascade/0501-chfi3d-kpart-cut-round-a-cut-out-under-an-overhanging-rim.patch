@@ -54,7 +54,7 @@ Upstream: the new paths are taken where the cuts of 0055 and 0071 fail;
 the ordering and the period's start change nothing where no piece has no
 length or starts at the spine's start.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 8cda613..5df681c 100644
+index fb0285a0..b5500224 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -116,6 +116,7 @@
@@ -65,7 +65,7 @@ index 8cda613..5df681c 100644
  #include <gp_Ax3.hxx>
  
  namespace
-@@ -5156,7 +5157,8 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -5162,7 +5163,8 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
                                   occ::handle<Geom_Curve>&         Cc,
                                   occ::handle<Geom2d_Curve>&       Ps,
                                   occ::handle<Geom2d_Curve>&       Pc,
@@ -75,7 +75,7 @@ index 8cda613..5df681c 100644
  {
    const occ::handle<Geom_Surface> SB = BRep_Tool::Surface(B);
    if (S.IsNull() || SB.IsNull())
-@@ -5345,12 +5347,42 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -5351,12 +5353,42 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
      }
      return true;
    };
@@ -119,7 +119,7 @@ index 8cda613..5df681c 100644
        {
          continue;
        }
-@@ -5393,6 +5425,31 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -5399,6 +5431,31 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
    return false;
  }
  
@@ -151,7 +151,7 @@ index 8cda613..5df681c 100644
  //=======================================================================
  // function : ChFi3d_KeepCutInPiece
  // purpose  : The cut of a piece of an analytic blend by the face beyond
-@@ -5833,7 +5890,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5839,7 +5896,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
                                                           const ChFi3d_KPartCutEnd* GivenStart = nullptr,
                                                           const ChFi3d_KPartCutEnd* GivenEnd   = nullptr,
                                                           const NCollection_List<TopoDS_Shape>* CutEdges = nullptr,
@@ -161,7 +161,7 @@ index 8cda613..5df681c 100644
  {
    const int opp = 3 - ons;
    // (A walked Full's sections are not those through the spine's points: an
-@@ -5846,7 +5904,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5852,7 +5910,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
      isFirst = std::abs(W - Full->FirstSpineParam()) <= std::abs(W - Full->LastSpineParam());
      return std::abs(W - (isFirst ? Full->FirstSpineParam() : Full->LastSpineParam())) <= Precision::PConfusion();
    };
@@ -170,7 +170,7 @@ index 8cda613..5df681c 100644
    {
      return occ::handle<ChFiDS_SurfData>();
    }
-@@ -5933,6 +5991,16 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5939,6 +5997,16 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
      Par[k](3) = uvB.X();
      Par[k](4) = uvB.Y();
    }
@@ -187,7 +187,7 @@ index 8cda613..5df681c 100644
    const occ::handle<Geom_Surface>& S = DStr.Surface(Full->Surf()).Surface();
    occ::handle<Geom_Curve>          Cc;
    occ::handle<Geom2d_Curve>        Ps, Pc;
-@@ -5943,9 +6011,31 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5949,9 +6017,31 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
      const occ::handle<Geom2d_Curve>& aPO = Full->Interference(opp).PCurveOnSurf();
      const occ::handle<Geom2d_Curve>& aPN = Full->Interference(ons).PCurveOnSurf();
      const gp_Pnt2d                   a = aPO->Value(tO[0]), b = aPO->Value(tO[1]);
@@ -220,7 +220,7 @@ index 8cda613..5df681c 100644
      try
      {
        OCC_CATCH_SIGNALS
-@@ -5962,7 +6052,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5968,7 +6058,8 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
                                        Cc,
                                        Ps,
                                        Pc,
@@ -228,9 +228,9 @@ index 8cda613..5df681c 100644
 +                                      tolreached,
 +                                      aExpected);
      }
-     catch (Standard_Failure const&)
+     catch (Standard_Failure const& anException)
      {
-@@ -6095,7 +6186,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -6106,7 +6197,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
        return occ::handle<ChFiDS_SurfData>();
      }
      const gp_Pnt2d a = aPO->Value(tO[0]), b = aPO->Value(tO[1]);
@@ -239,7 +239,7 @@ index 8cda613..5df681c 100644
      // (On a blend surface closed along the spine, the piece's sections in
      // the periods of the cut's ends: a gap across the start of a closed
      // spine runs across the period's end.)
-@@ -6179,7 +6270,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -6190,7 +6281,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
      const gp_Pnt PO = DStr.Curve(FO.LineIndex()).Curve()->Value(tO[k]);
      CPO.SetPoint(PO);
      const ChFi3d_KPartCutEnd* Given = k == 0 ? GivenStart : GivenEnd;
@@ -248,7 +248,7 @@ index 8cda613..5df681c 100644
      {
        CPO = Given->CPO;
        if (CPO.IsOnArc())
-@@ -6231,7 +6322,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -6242,7 +6333,7 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
          {
            continue;
          }
@@ -257,7 +257,7 @@ index 8cda613..5df681c 100644
          {
            // A seam: its side the piece's contact runs into the face from,
            // toward the contact's point at the piece's middle section (the
-@@ -6269,6 +6360,15 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -6280,6 +6371,15 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
          const TopAbs_Orientation aTr = k == 0 ? TopAbs::Reverse(TopAbs::Compose(FO.Transition(), E.Orientation()))
                                                : TopAbs::Compose(FO.Transition(), E.Orientation());
          CPO.SetArc(tol3d, E, w, aTr);
@@ -273,7 +273,7 @@ index 8cda613..5df681c 100644
          break;
        }
      }
-@@ -6324,7 +6424,8 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -6353,7 +6453,8 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
                                       const TopoDS_Edge&                  E,
                                       const double                        W1,
                                       const double                        W2,
@@ -283,7 +283,7 @@ index 8cda613..5df681c 100644
  {
    if (BRep_Tool::Degenerated(E))
    {
-@@ -6345,7 +6446,7 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -6374,7 +6475,7 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
    NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> aNVertices;
    TopExp::MapShapes(N, TopAbs_VERTEX, aNVertices);
    const bool atA = aNVertices.Contains(Va), atB = aNVertices.Contains(Vb);
@@ -292,7 +292,7 @@ index 8cda613..5df681c 100644
    {
      return false;
    }
-@@ -6379,22 +6480,36 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -6408,22 +6509,36 @@ static bool ChFi3d_KPartEdgeCrossing(const TopOpeBRepDS_DataStructure&   DStr,
    const occ::handle<Geom_Curve>& CN = DStr.Curve(Full->Interference(ons).LineIndex()).Curve();
    const double aWidth =
      std::max(CO->Value(t1).Distance(CN->Value(u1)), CO->Value(t2).Distance(CN->Value(u2)));
@@ -339,7 +339,7 @@ index 8cda613..5df681c 100644
  }
  
  static bool ChFi3d_KPartEdgeCrossingOn(const TopOpeBRepDS_DataStructure&   DStr,
-@@ -6546,10 +6661,11 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
+@@ -6575,10 +6690,11 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
                                       const ChFiDS_Map&                                EFMap,
                                       const int                                        depth,
                                       NCollection_Sequence<TopoDS_Face>&               Faces,
@@ -353,7 +353,7 @@ index 8cda613..5df681c 100644
    {
      return true;
    }
-@@ -6578,19 +6694,28 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
+@@ -6607,19 +6723,28 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
      {
        continue;
      }
@@ -385,7 +385,7 @@ index 8cda613..5df681c 100644
      {
        return true;
      }
-@@ -6600,6 +6725,10 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
+@@ -6629,6 +6754,10 @@ static bool ChFi3d_KPartCutChainFrom(const TopOpeBRepDS_DataStructure&
    return false;
  }
  
@@ -396,7 +396,7 @@ index 8cda613..5df681c 100644
  static bool ChFi3d_KPartCutChain(const TopOpeBRepDS_DataStructure&           DStr,
                                   const occ::handle<ChFiDS_Spine>&            Spine,
                                   const occ::handle<ChFiDS_SurfData>&         Full,
-@@ -6611,7 +6740,8 @@ static bool ChFi3d_KPartCutChain(const TopOpeBRepDS_DataStructure&           DSt
+@@ -6640,7 +6769,8 @@ static bool ChFi3d_KPartCutChain(const TopOpeBRepDS_DataStructure&           DSt
                                   const double                                Wn,
                                   const ChFiDS_Map&                           EFMap,
                                   NCollection_Sequence<TopoDS_Face>&          Faces,
@@ -406,7 +406,7 @@ index 8cda613..5df681c 100644
  {
    Faces.Clear();
    Crossings.Clear();
-@@ -6622,7 +6752,7 @@ static bool ChFi3d_KPartCutChain(const TopOpeBRepDS_DataStructure&           DSt
+@@ -6651,7 +6781,7 @@ static bool ChFi3d_KPartCutChain(const TopOpeBRepDS_DataStructure&           DSt
    {
      Fo = DStr.Shape(Full->Index(opp));
    }
@@ -415,7 +415,7 @@ index 8cda613..5df681c 100644
  }
  
  //=======================================================================
-@@ -6804,10 +6934,18 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6833,10 +6963,18 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
    }
    for (int k = 1; k <= n; k++)
    {
@@ -438,7 +438,7 @@ index 8cda613..5df681c 100644
      {
        // A cut along a section: the section between its ends lies on Bk.
        const gp_Pnt2d a = uvAt(k - 1), b = uvAt(k);
-@@ -6831,7 +6969,79 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6860,7 +6998,79 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
      {
        return false;
      }
@@ -518,7 +518,7 @@ index 8cda613..5df681c 100644
      const occ::handle<ChFiDS_SurfData> G = ChFi3d_KPartCutPiece(DStr,
                                                                  Spine,
                                                                  Full,
-@@ -6845,7 +7055,9 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6874,7 +7084,9 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
                                                                  tol3d,
                                                                  aGivenStart,
                                                                  aGivenEnd,
@@ -529,7 +529,7 @@ index 8cda613..5df681c 100644
      if (G.IsNull())
      {
        return false;
-@@ -7063,6 +7275,24 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
+@@ -7298,6 +7510,24 @@ static void ChFi3d_FillKPartGaps(TopOpeBRepDS_DataStructure&
          G1.IsNull() ? G1 : ChFi3d_KPartCutPiece(DStr, Spine, A, ons, N, B, Wm, Wb, aNone, C, tol3d);
        if (G1.IsNull() || G2.IsNull())
        {
@@ -554,7 +554,7 @@ index 8cda613..5df681c 100644
          continue;
        }
        aFilled = true;
-@@ -7215,6 +7445,477 @@ static void ChFi3d_FillKPartGapsAcrossEdges(
+@@ -7489,6 +7719,477 @@ static void ChFi3d_FillKPartGapsAcrossEdges(
    }
  }
  
@@ -1032,7 +1032,7 @@ index 8cda613..5df681c 100644
  //=======================================================================
  // function : ChFi3d_KPartCutToEnd
  // purpose  : Pieces of an analytic blend split by the domains of its faces,
-@@ -9577,6 +10278,58 @@ static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, cons
+@@ -9855,6 +10556,58 @@ static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, cons
    }
  }
  
@@ -1091,7 +1091,7 @@ index 8cda613..5df681c 100644
  //=======================================================================
  // function : ChFi3d_PCurvesOnSurfAfter
  // purpose  : Moves the p-curves on the blend surface S of SD (a piece put
-@@ -9621,6 +10374,115 @@ static void ChFi3d_PCurvesOnSurfAfter(const occ::handle<ChFiDS_SurfData>& SD,
+@@ -9899,6 +10652,115 @@ static void ChFi3d_PCurvesOnSurfAfter(const occ::handle<ChFiDS_SurfData>& SD,
    }
  }
  
@@ -1207,7 +1207,7 @@ index 8cda613..5df681c 100644
  void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const bool Simul)
  {
    TopOpeBRepDS_DataStructure&      DStr  = myDS->ChangeDS();
-@@ -9704,6 +10566,13 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -9982,6 +10844,13 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
        }
        else
        {
@@ -1221,7 +1221,7 @@ index 8cda613..5df681c 100644
          if (!Simul)
          {
            aFull(iedge) = ChFi3d_CopyKPartData(DStr, SD);
-@@ -9735,6 +10604,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10013,6 +10882,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
    {
      // Gaps over holes from one edge to another.
      ChFi3d_FillKPartGapsAcrossEdges(DStr, Spine, aLSD, aFull, aState, myEFMap, tolapp3d);
@@ -1229,7 +1229,7 @@ index 8cda613..5df681c 100644
      // Contacts running into the face at an end of the spine before it.
      for (const bool isFirst : {true, false})
      {
-@@ -9742,6 +10612,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10020,6 +10890,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
      }
    }
  
@@ -1237,7 +1237,7 @@ index 8cda613..5df681c 100644
    for (int iedge = 1; iedge <= nbed; iedge++)
    {
      if (aState(iedge) != 0)
-@@ -9774,6 +10645,28 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10052,6 +10923,28 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
            }
            wfp = wwf;
            wlp = wfp + period;
@@ -1266,7 +1266,7 @@ index 8cda613..5df681c 100644
          }
          for (int j = 1; j < nbsd; j++)
          {
-@@ -9786,7 +10679,11 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10064,7 +10957,11 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
              jwf                              = ChFi3d_InPeriod(jwf, wfp, wlp, tolesp);
              double kwf                       = kSD->FirstSpineParam();
              kwf                              = ChFi3d_InPeriod(kwf, wfp, wlp, tolesp);
@@ -1279,7 +1279,7 @@ index 8cda613..5df681c 100644
              {
                LSD.SetValue(j, kSD);
                LSD.SetValue(k, jSD);
-@@ -9896,6 +10793,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10174,6 +11071,7 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
            SimulKPart(curSD);
          }
          SeqSurf.Append(curSD);
@@ -1287,7 +1287,7 @@ index 8cda613..5df681c 100644
          if (!Simul)
          {
            li.Append(curSD->Surf());
-@@ -9988,6 +10886,37 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -10266,6 +11164,37 @@ void ChFi3d_Builder::PerformSetOfKPart(occ::handle<ChFiDS_Stripe>& Stripe, const
      }
    }
  

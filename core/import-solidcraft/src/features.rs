@@ -217,6 +217,24 @@ fn map_kind<K: Kernel>(
                     .to_owned(),
             ));
         }
+        // Kinds of formats 52 to 57 (mitcad#1994).
+        "frame_end_cap" => {
+            return Err(NotMapped::Unmapped(
+                "MitCad has no frame member end cap (a plate closing a frame member's end)"
+                    .to_owned(),
+            ));
+        }
+        "cell_grid" => {
+            return Err(NotMapped::Unmapped(
+                "MitCad has no cell grid feature (a sketch's profiles filled with cells cut from bodies)"
+                    .to_owned(),
+            ));
+        }
+        other if im.report.newer.is_some() => {
+            return Err(NotMapped::Unmapped(format!(
+                "saved by a newer SolidCraft: a `{other}` feature, which this import does not know"
+            )));
+        }
         other => {
             return Err(NotMapped::Unmapped(format!(
                 "`{other}` is not a feature kind this import knows"
@@ -255,7 +273,36 @@ fn extrude<K: Kernel>(
             "the taper closes the sharp corners as MitCad does (the file: `{corner}`)"
         ));
     }
+    // Where the other components stood when its object was picked (format
+    // 57): MitCad measures against the placements the file shows.
+    if moved_since_picked(im.design, f.component, &e.extent.picked_placements) {
+        notes.push(
+            "it runs to its object where the components stand now, where the file measures against where they stood when the object was picked"
+                .to_owned(),
+        );
+    }
     Ok(Mapped::partial(notes))
+}
+
+/// Whether a component of `pins` (an extrude's `picked_placements`,
+/// relative to its own component `own`) stands elsewhere now.
+fn moved_since_picked(design: &mitcad_solidcraft::Design, own: u64, pins: &[Value]) -> bool {
+    use mitcad_solidcraft::document::{Mat, mat_mul};
+    let world = design.component_world(own);
+    pins.iter().any(|pin| {
+        let Some(component) = pin.get("component").and_then(Value::as_u64) else {
+            return false;
+        };
+        let Ok(placement) = serde_json::from_value::<Mat>(pin["placement"].clone()) else {
+            return false;
+        };
+        let then = mat_mul(&world, &placement);
+        let now = design.component_world(component);
+        then.iter()
+            .flatten()
+            .zip(now.iter().flatten())
+            .any(|(a, b)| (a - b).abs() > 1e-6)
+    })
 }
 
 /// The definition of an extrude; `profiles` instead of the file's
@@ -310,14 +357,25 @@ pub(super) fn extrude_def<K: Kernel>(
         }
         with_taper(object, &taper)
     } else if x.distance2.is_some() {
-        if x.direction == Direction::Negative {
-            flip = true;
-        }
+        let negative = x.direction == Direction::Negative;
         let d1 = im.slot(f, "/extent/distance")?;
         let d2 = im.slot(f, "/extent/distance2")?;
-        json!({"type": "two_sides",
+        let mut two = json!({"type": "two_sides",
             "side1": with_taper(json!({"type": "distance", "distance": d1}), &taper),
-            "side2": with_taper(json!({"type": "distance", "distance": d2}), &taper)})
+            "side2": with_taper(json!({"type": "distance", "distance": d2}), &taper)});
+        if x.second_follows_first {
+            // Designs before format 51: the first side goes where its sign
+            // sends it, the second to the other side of it, each by its
+            // distance's size (MitCad's unsigned sides).
+            let first = im.eval(x.distance.as_str(), Kind::Length)?;
+            flip = negative != (first < 0.0);
+        } else {
+            // Format 51: Direction fixes the sides and a sign turns only
+            // its own side over, as MitCad's signed sides (mitcad#765).
+            flip = negative;
+            two["signed"] = json!(true);
+        }
+        two
     } else {
         let d = im.slot(f, "/extent/distance")?;
         match x.direction {
@@ -457,13 +515,31 @@ fn revolve_axis<K: Kernel>(
         let line = im.doc.resolve_axis(&r)?;
         return Ok((reference, line.origin, line.direction));
     }
+    // A fixed line; its origin's expressions (format 51) where they put it
+    // now.
+    if let k::AxisRef::Line { origin, dir } = axis {
+        let o = [
+            im.eval(origin[0].as_str(), Kind::Length)?,
+            im.eval(origin[1].as_str(), Kind::Length)?,
+            im.eval(origin[2].as_str(), Kind::Length)?,
+        ];
+        return Ok((json!({"origin": o, "direction": dir}), o, *dir));
+    }
+    // A line of another sketch than the profile's (format 52).
+    let sketch = match axis {
+        k::AxisRef::SketchLine {
+            sketch: Some(other),
+            ..
+        } => *other,
+        _ => sketch,
+    };
     let s = im
         .sketches
         .get(&sketch)
-        .ok_or("the sketch did not come in")?;
+        .ok_or("the axis's sketch did not come in")?;
     let frame = s.frame;
     Ok(match axis {
-        k::AxisRef::SketchLine { curve } => {
+        k::AxisRef::SketchLine { curve, .. } => {
             let i = s
                 .sketch
                 .curve_index(curve)
@@ -496,10 +572,7 @@ fn revolve_axis<K: Kernel>(
             };
             (json!(axis.to_ascii_lowercase()), [0.0; 3], d)
         }
-        k::AxisRef::Line { origin, dir } => {
-            (json!({"origin": origin, "direction": dir}), *origin, *dir)
-        }
-        k::AxisRef::Construction { .. } | k::AxisRef::Model { .. } => {
+        k::AxisRef::Line { .. } | k::AxisRef::Construction { .. } | k::AxisRef::Model { .. } => {
             unreachable!("taken above")
         }
     })
@@ -515,7 +588,22 @@ fn revolve<K: Kernel>(
     let r: k::Revolve = f.typed()?;
     let def = revolve_def(im, f, component, &r, None)?;
     im.add(&def, Some(&f.name), component)?;
-    Ok(Mapped::partial(Vec::new()))
+    Ok(Mapped::partial(line_axis_notes(&r.axis)))
+}
+
+/// A revolve's fixed axis whose origin is expressions (format 51) is fixed
+/// where they put it now.
+pub(super) fn line_axis_notes(axis: &k::AxisRef) -> Vec<String> {
+    match axis {
+        k::AxisRef::Line { origin, .. }
+            if origin
+                .iter()
+                .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none()) =>
+        {
+            vec!["its axis is fixed where its expressions put it now".to_owned()]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// The definition of a revolve; `profiles` instead of the file's selection
@@ -632,6 +720,14 @@ fn fillet<K: Kernel>(
         ));
     }
     let mut notes = Vec::new();
+    // Rounds that turn round a sharp side edge swept round it (format 51):
+    // MitCad's meet as its fillet makes them.
+    if fl.turn.as_deref().is_some_and(|t| t != "mitre") {
+        notes.push(
+            "two rounds meeting at a sharp side edge meet as MitCad's fillet makes them (the file sweeps them round the edge)"
+                .to_owned(),
+        );
+    }
     let groups = edges_by_body(im, component, fl.body.as_deref(), &fl.edges, &f.edge_names)?;
     let radius = im.slot(f, "/radius")?;
     let size = match &fl.style {
@@ -831,9 +927,11 @@ fn primitive<K: Kernel>(
     component: ComponentUid,
 ) -> MapResult {
     let mut notes = Vec::new();
+    let mut centred = false;
     let (corner_key, axis, op) = match f.kind.as_str() {
         "box" => {
             let b: k::BoxPrimitive = f.typed()?;
+            centred = b.centred;
             ("corner", [0.0, 0.0, 1.0], b.operation)
         }
         "cylinder" => {
@@ -864,7 +962,7 @@ fn primitive<K: Kernel>(
                 .unwrap_or_else(|| "0".to_owned())
         })
         .collect();
-    let p = [
+    let mut p = [
         im.eval(&at[0], Kind::Length)?,
         im.eval(&at[1], Kind::Length)?,
         im.eval(&at[2], Kind::Length)?,
@@ -874,6 +972,21 @@ fn primitive<K: Kernel>(
         .any(|e| mitcad_solidcraft::expr::literal(e, 1.0).is_none())
     {
         notes.push("its position is fixed where its expressions put it now".to_owned());
+    }
+    // A box placed by its center (format 54): its corner where its size
+    // puts it now, its height both ways.
+    if centred {
+        let half = |im: &mut Importer<'_, '_, K>, pointer: &str| -> Result<f64, String> {
+            let (_, expr) = im.input(f, pointer);
+            let expr = expr.ok_or_else(|| format!("{} has no {pointer}", f.name))?;
+            Ok(im.eval(&expr, Kind::Length)? / 2.0)
+        };
+        p[0] -= half(im, "/length")?;
+        p[1] -= half(im, "/width")?;
+        notes.push(
+            "its corner is fixed where its center and size put it now: a new length or width grows it from that corner"
+                .to_owned(),
+        );
     }
     // The plane across the axis through the point: an origin plane when
     // the axis is one of the model's, moved along its normal.
@@ -925,7 +1038,7 @@ fn primitive<K: Kernel>(
     let def = match f.kind.as_str() {
         "box" => json!({"type": "box", "plane": plane, "corner": uv,
             "length": im.slot(f, "/length")?, "width": im.slot(f, "/width")?,
-            "height": im.slot(f, "/height")?, "operation": operation}),
+            "height": im.slot(f, "/height")?, "symmetric": centred, "operation": operation}),
         "cylinder" => json!({"type": "cylinder", "plane": plane, "center": uv,
             "diameter": im.slot_of(f, "/radius", |n| format!("2 * {n}"))?,
             "height": im.slot(f, "/height")?, "operation": operation}),
@@ -1142,6 +1255,22 @@ fn hole<K: Kernel>(
                 .iter()
                 .map(|p| s.point(p))
                 .collect::<Result<_, _>>()?;
+            // A design before format 53 moves a point inside a body back to
+            // the body's surface; MitCad drills from the sketch's plane, as
+            // the file does since. Only a sketch on a derived plane can lie
+            // inside a body that way.
+            let derived = im
+                .design
+                .feature(points.sketch)
+                .and_then(|sk| sk.def.pointer("/plane/type"))
+                .and_then(Value::as_str)
+                .is_some_and(|t| !matches!(t, "origin" | "face" | "custom"));
+            if h.old_surface_start && derived && !points.single {
+                notes.push(
+                    "its holes start at the sketch's plane, where the file moves a point inside a body back to the body's surface"
+                        .to_owned(),
+                );
+            }
             (
                 json!({"type": "sketch_points", "sketch": s.uid.to_string(), "points": ids}),
                 points.flip,
@@ -1191,13 +1320,25 @@ fn hole<K: Kernel>(
     match &h.hole {
         k::HoleKind::Simple => def["flat"] = json!(true),
         k::HoleKind::Drilled { .. } => def["tip_angle"] = json!(im.slot(f, "/hole/tip_angle")?),
-        k::HoleKind::Counterbore { tip_angle, .. } => {
+        k::HoleKind::Counterbore {
+            tip_angle, bridge, ..
+        } => {
             def["kind"] = json!({"type": "counterbore", "diameter": im.slot(f, "/hole/cb_diameter")?,
                 "depth": im.slot(f, "/hole/cb_depth")?});
             // A drill point below the bore (format 36), else flat.
             match tip_angle {
                 Some(_) => def["tip_angle"] = json!(im.slot(f, "/hole/tip_angle")?),
                 None => def["flat"] = json!(true),
+            }
+            // Printing bridge layers below the counterbore's floor (format
+            // 51): MitCad's stepped bridging, a slot as wide as the hole
+            // and then its square.
+            if bridge.is_some() {
+                def["print_bridging"] = json!("stepped");
+                notes.push(
+                    "its bridge layers are MitCad's print bridging: as thick as the print's layers, and only where the counterbore opens toward the print bed"
+                        .to_owned(),
+                );
             }
         }
         k::HoleKind::Countersink { tip_angle, .. } => {
@@ -1313,32 +1454,6 @@ fn thread<K: Kernel>(
             )));
         }
     };
-    let (body, face) = im.face_named(
-        component,
-        None,
-        t.face,
-        f.face_names.first().map(String::as_str),
-    )?;
-    // The length is measured from the end of the face it starts at: the one
-    // near `from` (format 49), else the one nearest the pick.
-    let start = t.from.unwrap_or(t.face);
-    let location = match im.doc.body_shape(body).and_then(|s| {
-        let name: mitcad_model::FaceName = face.parse().ok()?;
-        im.doc.kernel().face_cylinder(s, &name).ok()
-    }) {
-        Some(c) => {
-            let along = dot(
-                mitcad_import_base::geom::sub(start, c.axis.origin),
-                c.axis.direction,
-            );
-            if along >= c.length / 2.0 {
-                "high_end"
-            } else {
-                "low_end"
-            }
-        }
-        None => "high_end",
-    };
     let designation = t.designation.clone().unwrap_or_default();
     if designation.is_empty() {
         return Err(NotMapped::Failed(if t.old_auto_size {
@@ -1347,31 +1462,84 @@ fn thread<K: Kernel>(
             "a thread without a designation (sized by its face's diameter)".to_owned()
         }));
     }
-    let mut def = thread_def(&body.to_string(), &face, &designation, t.modeled, location);
-    if let Some(standard) = standard {
-        def["thread"]["standard"] = json!(standard);
-    }
-    if !right_handed {
-        def["thread"]["right_handed"] = json!(false);
-    }
-    if t.starts > 1 {
-        def["starts"] = json!(im.params.unnamed(im.doc, &t.starts.to_string()));
-    }
-    if t.length.is_some() {
-        def["length"] = json!(im.slot(f, "/length")?);
+    // Its face, and the other faces it threads with the same options
+    // (format 57), each on its body when the file names them: a MitCad
+    // thread each, the first named as the file's.
+    let faces: Vec<[f64; 3]> = std::iter::once(t.face)
+        .chain(t.additional_faces.iter().copied())
+        .collect();
+    let length = match t.length {
+        Some(_) => Some(im.slot(f, "/length")?),
+        None => None,
+    };
+    let starts = (t.starts > 1).then(|| im.params.unnamed(im.doc, &t.starts.to_string()));
+    for (k, pick) in faces.iter().enumerate() {
+        let (body, face) = im.face_named(
+            component,
+            t.target_bodies.get(k).map(String::as_str),
+            *pick,
+            f.face_names.get(k).map(String::as_str),
+        )?;
+        // The length is measured from the end of the face it starts at: the
+        // one near `from` (format 49), else the one nearest the pick.
+        let start = match t.from {
+            Some(from) if k == 0 => from,
+            _ => *pick,
+        };
+        let location = match im.doc.body_shape(body).and_then(|s| {
+            let name: mitcad_model::FaceName = face.parse().ok()?;
+            im.doc.kernel().face_cylinder(s, &name).ok()
+        }) {
+            Some(c) => {
+                let along = dot(
+                    mitcad_import_base::geom::sub(start, c.axis.origin),
+                    c.axis.direction,
+                );
+                if along >= c.length / 2.0 {
+                    "high_end"
+                } else {
+                    "low_end"
+                }
+            }
+            None => "high_end",
+        };
+        let mut def = thread_def(&body.to_string(), &face, &designation, t.modeled, location);
+        if let Some(standard) = standard {
+            def["thread"]["standard"] = json!(standard);
+        }
+        if !right_handed {
+            def["thread"]["right_handed"] = json!(false);
+        }
+        if let Some(starts) = &starts {
+            def["starts"] = json!(starts);
+        }
+        if let Some(length) = &length {
+            def["length"] = json!(length);
+        }
+        if t.modeled {
+            // Its finished ends (format 49): the chamfered tips, MitCad's
+            // chamfer at the same ends; the runout is left out.
+            match t.tip.as_deref() {
+                Some("start") => def["chamfer"] = json!("start"),
+                Some("both") => def["chamfer"] = json!("both"),
+                _ => {}
+            }
+        }
+        let name = if k == 0 {
+            f.name.clone()
+        } else {
+            format!("{} ({})", f.name, k + 1)
+        };
+        im.add(&def, Some(&name), component)?;
     }
     if t.modeled {
         notes.push(
             "the modeled thread's profile is ISO 68-1's at the size's basic diameters".to_owned(),
         );
-        // Its finished ends (format 49): the chamfered tips, MitCad's
-        // chamfer at the same ends; the runout is left out.
-        match t.tip.as_deref() {
-            Some("start") => def["chamfer"] = json!("start"),
-            Some("both") => def["chamfer"] = json!("both"),
-            _ => {}
-        }
-        if def.get("chamfer").is_some() && (t.chamfer_angle.is_some() || t.chamfer_depth.is_some())
+        if t.tip
+            .as_deref()
+            .is_some_and(|tip| matches!(tip, "start" | "both"))
+            && (t.chamfer_angle.is_some() || t.chamfer_depth.is_some())
         {
             notes.push("the end chamfers take MitCad's default angle and size".to_owned());
         }
@@ -1379,7 +1547,9 @@ fn thread<K: Kernel>(
             notes.push("its runout at the inner end is left out".to_owned());
         }
     }
-    im.add(&def, Some(&f.name), component)?;
+    if !t.additional_faces.is_empty() && t.from.is_some() {
+        notes.push("its other faces' threads start at the end nearest their picks".to_owned());
+    }
     Ok(Mapped::partial(notes))
 }
 
@@ -1578,21 +1748,57 @@ fn mirror<K: Kernel>(
     Ok(Mapped::partial(notes))
 }
 
-/// Move: turned about the axis through the origin, then moved (SolidCraft's
-/// `kernel::transform`): a rotate and a translate.
+/// Move: turned about the axis through the origin (or the move's own point,
+/// format 55), then moved (SolidCraft's `kernel::transform`): a rotate and
+/// a translate.
 fn move_bodies<K: Kernel>(
     im: &mut Importer<'_, '_, K>,
     f: &Feature,
     component: ComponentUid,
 ) -> MapResult {
     let m: k::Move = f.typed()?;
+    // Copies placed by their sources' frames in another component (format
+    // 57): MitCad copies a body in its own component.
+    if m.copy_frames.iter().any(|frame| {
+        frame
+            .iter()
+            .flatten()
+            .zip(mitcad_solidcraft::document::IDENTITY.iter().flatten())
+            .any(|(a, b)| (a - b).abs() > 1e-9)
+    }) {
+        return Err(NotMapped::Unmapped(
+            "its copies are placed by their sources' placements in another component, which MitCad's move does not take"
+                .to_owned(),
+        ));
+    }
+    let mut notes = Vec::new();
     let bodies = im.body_ids(&m.bodies)?;
     let mut moved = bodies.clone();
     let mut copy = m.copy;
     if m.angle.is_some() {
         let axis = m.rotate_axis.unwrap_or([0.0, 0.0, 1.0]);
+        // The point it turns about (format 55), where its expressions put
+        // it now; else the origin.
+        let origin = match &m.origin {
+            Some(o) => {
+                if o.iter()
+                    .any(|e| mitcad_solidcraft::expr::literal(e.as_str(), 1.0).is_none())
+                {
+                    notes.push(
+                        "the point it turns about is fixed where its expressions put it now"
+                            .to_owned(),
+                    );
+                }
+                [
+                    im.eval(o[0].as_str(), Kind::Length)?,
+                    im.eval(o[1].as_str(), Kind::Length)?,
+                    im.eval(o[2].as_str(), Kind::Length)?,
+                ]
+            }
+            None => [0.0; 3],
+        };
         let def = json!({"type": "move", "bodies": moved, "copy": copy,
-            "transform": {"type": "rotate", "axis": {"origin": [0, 0, 0], "direction": axis},
+            "transform": {"type": "rotate", "axis": {"origin": origin, "direction": axis},
                 "angle": im.slot(f, "/angle")?}});
         let name = format!("{} (turn)", f.name);
         let before: Vec<BodyUid> = im.doc.bodies().iter().map(|b| b.uid).collect();
@@ -1612,7 +1818,7 @@ fn move_bodies<K: Kernel>(
         "transform": {"type": "translate_xyz", "x": im.slot(f, "/translate/0")?,
             "y": im.slot(f, "/translate/1")?, "z": im.slot(f, "/translate/2")?}});
     im.add(&def, Some(&f.name), component)?;
-    Ok(Mapped::parametric())
+    Ok(Mapped::partial(notes))
 }
 
 fn scale_bodies<K: Kernel>(
@@ -1738,7 +1944,10 @@ fn split_face<K: Kernel>(
     } else {
         im.feature_plane(f, &s.plane, "/plane", component, &mut notes)?
     };
-    let def = json!({"type": "split_face", "body": body.to_string(), "faces": faces, "tool": tool, "extend": true});
+    // The sketch's curves joined end to end first (format 55): a closed loop
+    // cuts along itself only, its curves not extended past their ends.
+    let extend = !(s.loops && s.sketch.is_some());
+    let def = json!({"type": "split_face", "body": body.to_string(), "faces": faces, "tool": tool, "extend": extend});
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
 }
@@ -1841,7 +2050,7 @@ fn sweep<K: Kernel>(
 ) -> MapResult {
     let s: k::Sweep = f.typed()?;
     let mut notes = Vec::new();
-    let def = sweep_def(im, f, &s, None, &mut notes)?;
+    let def = sweep_def(im, f, &s, None, component, &mut notes)?;
     im.add(&def, Some(&f.name), component)?;
     Ok(Mapped::partial(notes))
 }
@@ -1853,22 +2062,45 @@ pub(super) fn sweep_def<K: Kernel>(
     f: &Feature,
     s: &k::Sweep,
     profiles: Option<Vec<Value>>,
+    component: ComponentUid,
     notes: &mut Vec<String>,
 ) -> Result<Value, NotMapped> {
     let profiles = match profiles {
         Some(profiles) => profiles,
         None => im.profiles(s.sketch, &s.profiles)?,
     };
-    let ps = im
-        .sketches
-        .get(&s.path_sketch)
-        .cloned()
-        .ok_or("the path's sketch did not come in")?;
-    let curves: Vec<String> = s
-        .path
-        .iter()
-        .map(|c| ps.curve(c))
-        .collect::<Result<_, _>>()?;
+    let path = match (&s.path_body, s.path_edges.as_slice()) {
+        // A chain of a body's edges, a point on each (format 53).
+        (Some(name), [_, ..]) => {
+            let mut body = None;
+            let mut edges = Vec::new();
+            for p in &s.path_edges {
+                let (b, edge) = im.edge_named(component, Some(name), *p, None)?;
+                if body.is_some_and(|first| first != b) {
+                    return Err(NotMapped::Failed(
+                        "the path's edges lie on more than one body".to_owned(),
+                    ));
+                }
+                body = Some(b);
+                edges.push(edge);
+            }
+            let body = body.ok_or("the path has no edges")?;
+            json!({"body": body.to_string(), "edges": edges})
+        }
+        _ => {
+            let ps = im
+                .sketches
+                .get(&s.path_sketch)
+                .cloned()
+                .ok_or("the path's sketch did not come in")?;
+            let curves: Vec<String> = s
+                .path
+                .iter()
+                .map(|c| ps.curve(c))
+                .collect::<Result<_, _>>()?;
+            json!({"sketch": ps.uid.to_string(), "curves": curves})
+        }
+    };
     let orientation = match &s.orientation {
         Some(Value::String(o)) if o == "parallel" => "parallel",
         Some(Value::Object(_)) => {
@@ -1879,7 +2111,7 @@ pub(super) fn sweep_def<K: Kernel>(
     };
     let (operation, participants) = im.operation(s.operation, &s.targets)?;
     let mut def = json!({"type": "sweep", "profiles": profiles,
-        "path": {"sketch": ps.uid.to_string(), "curves": curves}, "orientation": orientation,
+        "path": path, "orientation": orientation,
         "operation": operation, "participants": participants});
     if s.twist.is_some() {
         def["twist_angle"] = json!(im.slot(f, "/twist")?);

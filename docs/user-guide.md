@@ -376,7 +376,8 @@ and the history.
 ## Work with an agent through comments
 
 A comment is a note pinned to the place it is about: a face, an edge, a
-body, a point on a face, a feature, a sketch or a user parameter. Pin
+body, a point on a face, a feature, a sketch or a user parameter, or the
+whole design. Pin
 "make this hole an M6 thread" on the hole, "this fillet is too small" on
 the fillet, and an AI agent (the chat panel's or one connected over MCP)
 finds the open comments, does the work and marks each one addressed with
@@ -392,7 +393,11 @@ saved with the design, so they wait for the next session.
    on a face or an edge instead of the whole face or edge. A feature's or
    a sketch's row in the browser or the timeline, a body's row, and a
    user parameter's row in **Edit Parameters…** have **Add Comment…** in
-   their context menus too.
+   their context menus too. For a request about the design as a whole
+   ("plan a wall bracket for a 40 mm pipe"), check **Whole Design** in
+   the panel instead of picking, or use **Add Comment…** in the menu of
+   the browser's top row; this works in an empty design too. Such a
+   comment has no pin.
 2. **The agent addresses it.** Each comment has a numbered pin in the
    view: open ones in full color, addressed ones dimmed. The agent reads
    the open comments, makes the change and writes what it did as the
@@ -402,9 +407,22 @@ saved with the design, so they wait for the next session.
    what they are on, status and the agent's resolution, and the replies
    under them. **Open**, **Addressed** and **Resolved** choose what it
    lists. A click on a row selects the comment's target and frames it.
+   The pane under the list shows the selected row in full, its lines
+   wrapped, to read and copy: a reply's row that reply, a comment's row
+   the whole conversation with the resolution. Drag the divider to give
+   it more room; it stays where you leave it.
    **Resolve** when the work is right (its pin goes), **Reopen** with a
-   reply when it is not, **Reply…** to add to it, **Delete** to remove
-   it. Every change is one undo step.
+   reply when it is not, **Reply…** to answer, **Delete** to remove
+   it. Reply… shows the reply you answer above the text: the one you
+   selected, or the latest one when the comment's row is selected. Every
+   change is one undo step.
+
+When the agent needs to know something before it starts, it asks in a
+reply and leaves the comment open: its status reads **Open, waiting for
+your answer** until you reply. An agent connected over MCP can work
+this way in a loop: it takes the open comments, asks back where needed,
+waits for your answer and then makes the change ([comments for
+agents](mcp.md#comments-for-agents)).
 
 A comment whose target is gone (the face was removed by a later change)
 keeps its pin at its last place with a warning look; select a new target
@@ -1498,7 +1516,7 @@ still in the group's menu.
 | Press Pull | Q | Offset a face, fillet an edge or extrude a profile ([Press Pull](#press-pull)) |
 | Move/Copy | M | Move bodies or components: a free move with handles, a move along axes, a rotation, or a move from point to point |
 | Measure | I | Measure a distance, an angle, a length, an area or a position. Also whole bodies ([Inspect: Measure, Annotations and Section Analysis](#inspect-measure-annotations-and-section-analysis)) |
-| Add Comment | Shift+N | Pin a note for an AI agent to a face, an edge, a body or a point ([Work with an agent through comments](#work-with-an-agent-through-comments)) |
+| Add Comment | Shift+N | Pin a note for an AI agent to a face, an edge, a body, a point or the whole design ([Work with an agent through comments](#work-with-an-agent-through-comments)) |
 | Rename | F2 | Rename a browser row. On the timeline, use the context menu |
 | Search Timeline | Ctrl+F (Cmd+F) | Available when the timeline or the browser has the keyboard focus. Find features by name, type, component and status ([Timeline filter and search](#timeline-filter-and-search)). Also Edit › Search Timeline |
 
@@ -3403,15 +3421,22 @@ their finite boundaries do not overlap in projection, *Minimum distance*
 below it gives the longer distance between their closest points. This
 secondary row is omitted when the two values agree within 0.000001 mm.
 The view draws the main dimension along the normal, starting at a face's
-center when there is no common projection. Other pairs keep their
-closest-point distance as the main result.
+center when there is no common projection. Other pairs show the
+distance between their closest points as the main result, *Minimum
+distance*.
 
 The Measure panel reads from top to bottom in the order you work: what
 you pick, the result, what to do with it, and the history. The result
 comes right under the picks. Between two picks their values come first,
-the *Distance* in a larger type, right under it its *Δx*, *Δy* and *Δz*, its distinct *Minimum distance*, then the *Angle*, the
-*Axis distance* and the *Center distance*; hover over the distance to see
-the points it is measured between. Under them each pick
+the *Minimum distance* (or two planes' *Distance*) in a larger type,
+right under it its *Δx*, *Δy* and *Δz*, two planes' distinct *Minimum
+distance*, then the *Angle*, the *Axis distance* and the *Center
+distance*; hover over a distance to see the points it is measured
+between, and its line lights up in the view. The view draws the main
+distance as a solid line with a dot at each end, and the axes and the
+axis distance as dashed lines, so you can tell them apart where they lie
+on one line, for example between the edge of one hole and the wall of a
+parallel hole. Under them each pick
 has a group titled by what it is, for example *Selection 1: cylindrical
 face*, with its *Diameter*, *Radius*, *Area*, *Length*, *Volume*,
 *Position*, *Axis through* and *Axis direction* as they apply. Click a
@@ -3433,7 +3458,8 @@ Points* picks only sketch geometry, also where it lies on a body.
 
 Measure also works with axes. When you pick a round face, a circle, an
 arc or a construction axis, the panel shows its axis: the center and the
-direction. The view draws the axis as a line while Measure is open.
+direction. The view draws the axis as a dashed line while Measure is
+open.
 Measure gives the angle between any two picks with an axis, an edge
 direction or a plane. When one of the picks has an axis, Measure also
 shows the *Axis distance*: between two parallel axes their distance,
@@ -4408,6 +4434,15 @@ Symmetric Direction Type puts the copies on both sides of the originals
 the second direction later: turn off At Right Angles and pick a line or
 an axis as Direction 2 (empty, it keeps the pattern's own), or turn At
 Right Angles on to make the rows square to Direction again.
+
+To leave one copy of a pattern out, select it and delete it: the
+pattern no longer makes that copy, and Edit Pattern still works. Trim,
+Extend, Sketch Fillet and Chamfer on a curve of a pattern first turn the
+whole pattern into plain sketch geometry, as the status line says, so
+that you can cut and round its curves like any others. To do that
+without an edit, right-click a curve of the pattern and choose **Free
+Pattern**: the originals and copies stay where they are, but the copies
+no longer follow the originals.
 
 **Mirror** (Create › Patterns) copies the curves and points of Objects
 to the other side of the Mirror Line. Each copy gets a Symmetry
@@ -5784,6 +5819,22 @@ again. Neither click changes the item's own visibility, and each is one
 undo step. Click the closed eye of an item that you hid yourself to
 show it and add it to the isolated items in one step. **Unisolate**
 shows every item again as its own visibility says.
+
+A hidden component hides everything in it: its bodies, sketches and the
+components inside it, whatever their own eyes say. Their rows have the
+same dimmed, closed eye, and its tooltip names the hidden component
+(**Hidden with Fairlead:1**). Click such an eye to show the hidden
+components above that row, in one undo step; the row's own visibility
+stays as it is.
+
+When you add something to a component that is hidden this way, MitCad
+shows the hidden components above it so that you can see what you added:
+an inserted design (**Insert Component**, **Insert from Library**,
+**Component from Web**), a **New Component** or a new body. The status
+bar says which components were hidden, for example "Fairlead:1 was
+hidden; shown so the new component can be seen." This is part of the
+same undo step: **Undo** hides them again with what you added. A
+component that follows **Show When** keeps its condition.
 
 The eyes also work while a command's panel or a sketch is open: the eyes
 of bodies, components, sketches, construction geometry, a section
@@ -7830,9 +7881,10 @@ the right where it comes from: **This design**, **This
 project**, **My library**, **Built-in** (the groups of the Printers and
 Processes managers), or the 3MF file it was imported from, so two
 printers of the same name can be told apart. The current choice is
-checked. A choice is set at once, as one Undo step. **Slicer default**,
-always at the top, takes the design's printer or process away: the
-slicer then uses its own. **New printer…** or **New process…**, at the
+checked. A choice is set at once, as one Undo step. **None (slicer's
+own)**, always at the top, takes the design's printer or process away:
+the slicer then uses its own (see [Geometry only or a print
+project](#geometry-only-or-a-print-project)). **New printer…** or **New process…**, at the
 bottom below a line, makes a new one in this design (named Printer 1 or Process 1, then
 Printer 2, …), sets it for the design and opens it to edit (Copy to
 puts it in a library). **Edit printers…** (in the Printer picker) or
@@ -7849,7 +7901,7 @@ the row reads **Per body**; hover over it to see each process with its
 bodies. A process chosen in the row is set where the shown one comes
 from: on the bodies that have a process of their own, on the design for
 the others, so that every body sent prints with it (still one Undo
-step). **Slicer default** takes the bodies' own processes away, and the
+step). **None (slicer's own)** takes the bodies' own processes away, and the
 design's when some of them print with it. With
 **Send the Design's Plates** on, the bodies sent are those on the
 plates, whichever bodies are selected: the row shows what they print
@@ -8160,7 +8212,13 @@ Tab reaches its Copy or Override, and Shift+Tab from the list reaches
 the filter. The button says how many presets are ticked, for example
 **Import 3 Presets**; it brings them in with the
 values they take from the slicer's own presets filled in (the
-temperatures and the color as much as the rest). Each filament comes in
+temperatures and the color as much as the rest), and from the templates
+a preset includes, such as a two-extruder printer's start and end
+G-code. If a preset it builds on or a template is missing, the import
+says which values were left out instead of reporting a complete import.
+A printer of several extruders keeps a value per extruder and per
+nozzle where the slicer has one, and the 3MF sent to the slicer keeps
+them so. Each filament comes in
 with an appearance in its color: the slicer keeps a filament's color in
 its projects rather than its presets, so a filament preset that sets
 only its default color gets that one, and one with no color anywhere
@@ -9185,7 +9243,12 @@ The first profile goes on a plane or a face. The view says *Click a
 plane or a face, or press Enter*. Or press Enter to place it at the
 origin.
 
-- On a face, one click places it where you click.
+- On a face, one click places it there. On a flat face it snaps to the
+  middle of the face, and its sides line up with the face's longest
+  straight edge. **Direction** becomes **Face normal**: the profile runs
+  out of the face, square to it. On the bottom face of a machine's leg,
+  it runs down and continues the leg. **Rotate** turns it on the face in
+  90 degree steps. The preview shows where it goes before you place it.
 - On a plane, two clicks: the first one selects the plane. Click the
   icon of one of the origin's planes or of a construction plane, or its
   row in the Browser (**XY**, **XZ** or **YZ** in the Origin folder).
@@ -9198,7 +9261,9 @@ origin.
 
 The view shows the origin's planes when the eye of the Origin folder is
 on; else use the Origin folder's rows in the Browser.
-The X, Y and Z buttons select the axis it runs along (Z: standing). Drag
+The X, Y and Z buttons select the axis it runs along (Z: standing), and
+the -X, -Y and -Z buttons the other way along it (-Z: hanging down from
+the plane or face). Face normal is there while a face is picked. Drag
 the handle at its free end, or type a length. The length also shows in a
 box at the cursor.
 
@@ -9238,6 +9303,18 @@ the profile's name, such as "in line with Profile 3" or "flush with
 Profile 3". The click fills **Offset** and **From** as elsewhere: the
 nearer end and the distance from it. Type an offset to place it
 elsewhere.
+
+Across a side with two or more slots, such as the long side of a
+30x60, where you click across the side decides how the new profile
+stands. Click near the side's center line, between the slots: the new
+profile stands centered on the side. Two profiles of the same section
+then have flush side faces, and their center planes line up. Click near
+a slot: the new profile stands on that slot. The preview says which
+("centered on the side" or "on a slot"), next to the snap along the
+side, such as "flush B". The snaps along the side work the same either
+way. A centered profile stays centered when the profile it is on
+becomes longer or gets another section size. Only a profile stands
+centered; a slider, a nut or a bracket goes in a slot.
 
 The profile stays bound to that place. When the profile it is on becomes
 longer, one flush with end B stays flush with end B. One on the middle
@@ -9479,6 +9556,52 @@ Clipboard, CSV file and PDF all use the list as currently shown.
 A **Material** property column shows each row's physical material in its actual
 placement, including inherited defaults; **Computed/Material** does the same.
 A qualified custom field such as **Identity/Material** keeps its own text.
+
+**Kind and BOM Structure.** Type `Kind, BOM Structure` in **Property
+columns** to see what each component is and how it enters the Bill of
+Materials. **Kind** is worked out from the component's own bodies:
+*Sheet metal* (a sheet metal body), *Build profile* (a profile of the
+Build tab, cut to length), *Library part*, *Imported* (a body from an
+imported file, with no history), *Solid*, *Mixed* (bodies of different
+kinds) or *Assembly* (no bodies of its own). The **Kind** and **BOM
+Structure** lists above the table show only the components of one kind
+or one structure. A drawing's Bill of Materials takes them as columns too, and
+sorts by them.
+
+**BOM Structure** is *Purchased* for a library part that is not cut to
+length and *Normal* for everything else; choose another in the
+component's **Properties…** (the **Bill of Materials** set), and your
+choice stays with the design:
+
+- *Normal*: listed, numbered and counted.
+- *Purchased*: one line item, bought as a whole: what it holds is not
+  listed.
+- *Phantom*: a grouping only. It is not listed; what it holds moves up
+  to its place, as many times more as it is placed.
+- *Reference*: shown for information, without an item number, and left
+  out of the quantities, the mass and the volume.
+- *Inseparable*: made as one piece (a weldment, say): one item among the
+  parts, while the structured view still shows what it holds.
+
+**View** chooses how the list shows them: **Every component** as above,
+**Structured** (each component under the one that holds it, numbered
+`2`, `2.1`, with how many its parent holds) or **Parts only** (each part
+once, with how many the whole design needs). Both views add the item
+number and each row's mass, an assembly's with what it holds. A drawing's
+Bill of Materials follows the structures too, at **First Level** and at
+**Components Only**: a Phantom's components are listed and numbered at
+its level, Purchased and Inseparable components are one item among the
+parts, and a Reference has no number (`REF` as its quantity) and no
+balloon.
+
+**Sheet Metal** (the tab after Bill of Materials) lists every sheet metal
+part with its quantity, thickness and material, and its flat blank: the
+width and height of the Flat Pattern's outline, its area and how many
+bends it has. A part whose Flat Pattern cannot be made says why in the
+last column. Copy, save and print it as the other tabs. **Add All to Cut
+Sheet** puts the Flat Pattern of every part, as many as the design has,
+on a new cut sheet or on the one chosen in **Cut sheet**, in one undo
+step ([Cut sheets](#cut-sheets)).
 
 **Print…** (or Ctrl+P) in either window prints the tab shown as its PDF
 lays it out. The system's print dialog chooses the printer, the paper
@@ -9732,13 +9855,28 @@ normal of that face. At corners, the strips meet mitered or rounded.
 **Extend** makes a surface body longer past its open edges by a
 distance along the surface. With Natural, the surface continues. The
 other options keep the edge tangent to the surface, or also keep its
-curvature. Extend works only on a face that is bounded by the natural
-sides of its surface, that is, four sides and no holes.
+curvature. Extend works on a face that is bounded by the natural
+sides of its surface, that is, four sides and no holes. A flat face of
+any outline, for example a wall cut at a slant, extends past its
+straight open edges: the plane continues square to each edge.
 
-The open edges of a surface body are edges of one face only. You cannot
-select open edges themselves. Ruled Surface and Extend take them through
-**Open Edges Of**: the faces whose open edges you mean. All open edges
-of each selected face are used.
+The open edges of a surface body are edges of one face only. You select
+them as other edges: click an open edge with no command, or in Patch,
+Ruled Surface, Extend, Blend Surface, Boundary Surface and Match Surface.
+The pointer over an open edge highlights the edge, not the face beside
+it. A command that you start with open edges selected takes them.
+
+These commands have **Whole Opening**, on at first. With Whole Opening
+on, a click on an open edge takes the whole opening that the edge is on:
+all open edges of that loop, also across sharp corners. The pointer over
+an open edge then shows the whole loop. With Whole Opening off, a click
+takes only the edge that you click. Turn Whole Opening off after you
+picked an opening, and the command takes the edge you picked it by
+again.
+
+Ruled Surface and Extend also take open edges through **Open Edges
+Of**: the faces whose open edges you mean. All open edges of each
+selected face are used.
 
 **Trim** cuts a surface body with a plane, a face, a body or sketch
 curves, like Split Body. Trim keeps only the pieces you click under
@@ -9813,7 +9951,19 @@ edges with a new surface body. When the loop lies in a plane, the new
 body is a flat face. Otherwise the new body is a surface fitted to the
 edges. The loop can be edges you select, or an opening of a surface
 body. An opening is the free edges of the body, which MitCad finds by
-the faces around the opening.
+the faces around the opening. With Whole Opening off, the loop can also
+be single open edges together with other edges of the body, so that a
+patch closes part of an opening. Sketch curves can be part of the loop
+too: select them in the view beside the edges, or in the Browser. While
+an input that takes sketch curves is active, each sketch in the Browser
+lists its curves under it, named by their kind and number (Line 1,
+Arc 2). Open the sketch's row and click a curve's row to select it; the
+pointer over the row shows the curve in the view. For
+example, two open edges that meet at a corner and a sketch line between
+their other ends close a triangle of the opening. The ends of each curve
+must meet the ends of the edges or of another curve. The patch only
+passes through the curves; the continuity is for the edges. With
+Stitch, the patch of open edges is sewn onto their body.
 
 The patch can meet the faces beside the loop in three ways:
 
@@ -9843,10 +9993,10 @@ come from. The details are in
 [commands.md](../core/model-api/src/commands.md#patch-stitch-and-thicken).
 
 The panels of Patch, Stitch and Thicken accept what the panel shows: a
-patch of profiles, or a patch of edges you select with one continuity
-for the loop. A script or an import can make other patches: a patch of an
-opening, a patch with points, or a patch with edges that each have their
-own continuity. Such a patch keeps its definition. But you cannot edit it in the
+patch of profiles, or a patch of edges, open edges, sketch curves or an
+opening you select, with one continuity for the loop. A script or an import can make
+other patches: a patch with points, or a patch with edges that each
+have their own continuity. Such a patch keeps its definition. But you cannot edit it in the
 panel.
 
 ### Plastic part features
@@ -13359,9 +13509,10 @@ The panel also has these options:
 - **Import from Slicer…**, **Printer**, **Process**, **Own settings**
   and **Materials** (3MF only, grayed out with STL): Import from
   slicer… first, above the design's printer and process, then the
-  bodies' own process settings (whatever the process, Slicer default
-  too: the slicer gets them all the same) and the bodies' materials (see
-  [Print settings](#print-settings)).
+  bodies' own process settings (whatever the process, None too: the
+  slicer gets them all the same) and the bodies' materials (see
+  [Print settings](#print-settings) and [Geometry only or a print
+  project](#geometry-only-or-a-print-project)).
 - **Refinement:** Low, Medium, High (the default) or Custom. The
   refinement sets how far the triangles can lie from the surface (mm)
   and the angle between neighboring triangles.
@@ -13395,6 +13546,50 @@ MitCad finds slicers in these places:
 | Windows  | The usual install folders and the list of installed programs |
 | macOS    | The Applications folders. An application gets the files through `open -a`. |
 | Linux    | `PATH`, Flatpaks and desktop files                        |
+
+#### Geometry only or a print project
+
+A 3MF for a slicer is sent in one of two ways. What you choose in the
+panel decides which; there is no separate switch.
+
+- **Geometry only.** When no body has a material, and no printer and no
+  process are chosen, MitCad sends the bodies, where they lie and their
+  colors, and nothing else. The slicer keeps the printer, process and
+  filaments that are chosen in it. Every body goes to the slicer's first
+  filament slot.
+- **A print project.** As soon as something is chosen, MitCad sends the
+  printer, the process and the materials with the settings you changed.
+  The slicer then takes the project's settings, not the ones chosen in
+  it. A setting that the project does not carry comes from the slicer's
+  defaults, not from its current selection: when no printer or no
+  process is chosen, or the printer has only MitCad's own settings, the
+  line under the material rows says so before you send.
+
+The material rows list every body that you send, each with its own
+material. A body whose component has a material shows it; a body
+without one shows **None (slicer's own)**. In a print project every body
+needs a material: the slicer's project format has one list of filaments
+for the whole project, so it cannot leave one body to the slicer's
+filament while it sends materials for the others. That is why:
+
+- when every body is None and you choose a material for one body, every
+  body gets it; after that a choice changes only its own body;
+- you cannot set one body back to None while other bodies have a
+  material; MitCad says so;
+- with two or more bodies, **All bodies** above the rows shows the
+  material all bodies have, or **Mixed**. Choose a material there and
+  click **Set to all** to give it to every body. Choose **None (slicer's
+  own)** and click **Set to all** to send the geometry only again.
+
+Printer and Process show **None (slicer's own)** when nothing is chosen.
+Choosing a material in the rows gives it to the bodies in the design
+(one undo step); None and Set to all only change what is sent.
+
+**UltiMaker Cura** takes no print project from MitCad. MitCad sends the
+bodies, each body's extruder number and its own process settings; Cura
+prints with the printer and materials chosen in Cura. With Cura in
+**Open in**, the Printer row and the material rows are grayed out, and
+the line under them says what Cura does not take.
 
 #### The print bed face
 
@@ -14234,6 +14429,14 @@ from the top left of the sheet; it does not nest them.
 A component that overlaps another or reaches past the material's edge is
 named in the panel and in the status bar. A component whose body is deleted
 keeps a red box on the sheet until it is deleted or the body comes back.
+
+**Flat Patterns.** A sheet metal part can go on a cut sheet as its Flat
+Pattern: the flat blank, seen from the side its Flat Pattern is set to,
+with its outline to cut and its bend lines on the layers `BEND_UP` and
+`BEND_DOWN`, as the Flat Pattern's own DXF has them. The Sheet Metal tab
+of the Build tab's Bill of Materials window adds them (**Add All to Cut
+Sheet**). A part whose Flat Pattern can no longer be made stays on the
+sheet with a warning, as a part whose body is deleted does.
 
 **Writing the file.** The Cut Sheet tab's **Export** › **DXF…** or **SVG…** writes the
 components at 1:1: an SVG file in millimeters, a DXF file in the

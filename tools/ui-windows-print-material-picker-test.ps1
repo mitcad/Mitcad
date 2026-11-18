@@ -104,14 +104,14 @@ Ui-ExpectLog 'boxes.mitcad' 'the design opened'
 Ui-Step 'fit (F6)'                       { Ui-Key 'F6' }
 Ui-ExpectLog 'Browser Root/Bodies/Body3 at' 'the browser lists the bodies'
 
-Write-Host '--- 1. Body1 without a material: "No material: choose one"'
+Write-Host '--- 1. Body1 without a material: "None (slicer''s own)"'
 Ui-Mark
 Ui-Step 'click Body1'                    { Ui-ClickLogged 'Browser Root/Bodies/Body1' }
 Ui-ExpectNew 'Browser selected: Root/Bodies/Body1' 'Body1 selected'
 Ui-Mark
 Ui-Step 'Send to Slicer (F8)'            { Ui-Key 'F8' }
-Ui-ExpectNew '3D Print materials: Material: No material: choose one' 'one row, Body1 without a material'
-Ui-ExpectNew 'Panel Send to Slicer input material_1 shows: No material: choose one' `
+Ui-ExpectNew '3D Print materials: Body1: None (slicer''s own)' 'one row, Body1 without a material (mitcad#2008)'
+Ui-ExpectNew 'Panel Send to Slicer input material_1 shows: None (slicer''s own)' `
   'the field says so, not Default (Steel)'
 Ui-ExpectNew 'Panel Send to Slicer input material_1 at ' 'the Material row has its place'
 No-SteelWarning
@@ -121,7 +121,7 @@ Row-Choose 'Panel Send to Slicer input material_1' 'Shop TPU' 'Shop TPU'
 Ui-FocusMain
 Ui-ExpectNew '3D Print material: Shop TPU for Body1' 'given to Body1 at once'
 Ui-ExpectNew 'Material shop-tpu set for 1 body(ies), appearance replace' 'as the Material tool logs it'
-Ui-ExpectNew '3D Print materials: Material: Shop TPU' 'the row shows Shop TPU'
+Ui-ExpectNew '3D Print materials: Body1: Shop TPU' 'the row shows Shop TPU'
 Ui-ExpectNew 'Panel Send to Slicer input material_1 shows: Shop TPU' 'the field shows Shop TPU'
 No-SteelWarning
 Ui-Mark
@@ -147,15 +147,15 @@ Ui-Step 'Ctrl+click Body3'               { Ui-ClickWith 'ctrl' $at[0] $at[1] }
 Ui-ExpectNew 'Browser selected: Root/Bodies/Body2, Root/Bodies/Body3' 'Body2 and Body3 selected'
 Ui-Mark
 Ui-Step 'Send to Slicer (F8)'            { Ui-Key 'F8' }
-Ui-ExpectNew '3D Print materials: Filament 1: Shop PETG (1 body) | Filament 2: Shop PLA (1 body)' 'a row per filament'
-Ui-ExpectNew 'Panel Send to Slicer label material_1: Filament 1' 'the first row is Filament 1'
-Ui-ExpectNew 'Panel Send to Slicer label material_2: Filament 2' 'the second Filament 2'
-Ui-ExpectNew 'Panel Send to Slicer input material_1 at ' 'Filament 1 has its place'
+Ui-ExpectNew '3D Print materials: Body2: Shop PETG | Body3: Shop PLA' 'a row per body'
+Ui-ExpectNew 'Panel Send to Slicer label material_1: Body2' 'the first row is Body2''s'
+Ui-ExpectNew 'Panel Send to Slicer label material_2: Body3' 'the second Body3''s'
+Ui-ExpectNew 'Panel Send to Slicer input material_1 at ' 'Body2''s row has its place'
 Row-Choose 'Panel Send to Slicer input material_1' 'Shop TPU' 'Shop TPU'
 Ui-FocusMain
 Ui-ExpectNew '3D Print material: Shop TPU for Body2' 'given to Body2 only'
-Ui-ExpectNew '3D Print materials: Filament 1: Shop TPU (1 body) | Filament 2: Shop PLA (1 body)' `
-  'Filament 2 stays Shop PLA'
+Ui-ExpectNew '3D Print materials: Body2: Shop TPU | Body3: Shop PLA' `
+  'Body3 stays Shop PLA'
 
 Write-Host '--- 4. Edit materials... of Filament 2: the Materials window on Shop PLA'
 Ui-ExpectLog 'Panel Send to Slicer input material_2 at ' 'Filament 2 has its place'

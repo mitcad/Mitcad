@@ -41,3 +41,7 @@ mod remove_name_tests;
 // A linked projection whose source edge was merged with, or split from,
 // edges on the same curve (mitcad#1784).
 mod projection_successor_tests;
+// Letters of a text on a path picked where they overlapped, found again
+// when the text moves them apart; a letter whose outline does not close
+// (mitcad#1993).
+mod text_profiles_1993_tests;

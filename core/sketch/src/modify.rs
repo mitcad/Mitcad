@@ -142,7 +142,9 @@ impl SketchEdit<'_> {
     /// Deletes entities, texts, constraints and dimensions. A deleted point
     /// takes the curves that use it; a deleted curve takes its points no
     /// other curve uses; constraints and dimensions on deleted entities go
-    /// too.
+    /// too. A pattern's copy deleted leaves its instance out of the
+    /// pattern, the rest of that instance plain sketch geometry
+    /// ([`SketchEdit::skip_deleted_copies`], mitcad#2007).
     pub fn remove(&mut self, items: &[Item]) -> Result<(), String> {
         let mut entities = BTreeSet::new();
         let mut texts = BTreeSet::new();
@@ -213,6 +215,9 @@ impl SketchEdit<'_> {
             self.free_offset(*k)?;
         }
         self.note_freed(&offsets);
+        // A pattern's copy deleted leaves its instance out of the pattern,
+        // which does not make it again (mitcad#2007).
+        self.skip_deleted_copies(&entities);
         self.drop_entities(&entities);
         self.def.texts.retain(|t| !texts.contains(&t.id));
         // Their text parameters' links go with them (mitcad#664).
@@ -1652,8 +1657,10 @@ impl SketchEdit<'_> {
     /// that held the cut-off end to a curve no longer touching it goes
     /// (mitcad#1220, see `tangent_at_join` and `drop_replaced_tangents`).
     pub fn trim(&mut self, id: EntityUid, at: P2) -> Result<(), String> {
-        // An offset's curve is first freed from its source (mitcad#1755).
+        // An offset's curve is first freed from its source (mitcad#1755),
+        // a pattern's from its pattern (mitcad#2007).
         self.free_offsets_of(&[id])?;
+        self.free_patterns_of(&[id]);
         self.shape_editable(id)?;
         let solved = self.solved()?;
         let (curve, cuts) = self.crossings(id, &solved)?;
@@ -1872,8 +1879,10 @@ impl SketchEdit<'_> {
     /// (see `points.rs`); returns that point. Elsewhere the end is a new
     /// point on the curve reached.
     pub fn extend(&mut self, id: EntityUid, at: P2) -> Result<Option<EntityUid>, String> {
-        // An offset's curve is first freed from its source (mitcad#1755).
+        // An offset's curve is first freed from its source (mitcad#1755),
+        // a pattern's from its pattern (mitcad#2007).
         self.free_offsets_of(&[id])?;
+        self.free_patterns_of(&[id]);
         self.shape_editable(id)?;
         let solved = self.solved()?;
         let curve = solved
@@ -2157,8 +2166,10 @@ impl SketchEdit<'_> {
         b: EntityUid,
         radius: &ValueInput,
     ) -> Result<EntityUid, String> {
-        // Offsets' curves are first freed from their sources (mitcad#1755).
+        // Offsets' curves are first freed from their sources (mitcad#1755),
+        // patterns' from their patterns (mitcad#2007).
         self.free_offsets_of(&[a, b])?;
+        self.free_patterns_of(&[a, b]);
         self.shape_editable(a)?;
         self.shape_editable(b)?;
         let r = self.fillet_radius(radius)?;
@@ -2214,6 +2225,8 @@ impl SketchEdit<'_> {
         // Offsets' curves are first freed from their sources (mitcad#1755).
         let rounded: Vec<EntityUid> = corners.iter().flat_map(|&(a, b, _)| [a, b]).collect();
         self.free_offsets_of(&rounded)?;
+        // Patterns' curves from their patterns (mitcad#2007).
+        self.free_patterns_of(&rounded);
         for &(a, b, _) in &corners {
             self.shape_editable(a)?;
             self.shape_editable(b)?;
@@ -2945,8 +2958,10 @@ impl SketchEdit<'_> {
         second: Option<&ValueInput>,
         angle: Option<&ValueInput>,
     ) -> Result<EntityUid, String> {
-        // Offsets' curves are first freed from their sources (mitcad#1755).
+        // Offsets' curves are first freed from their sources (mitcad#1755),
+        // patterns' from their patterns (mitcad#2007).
         self.free_offsets_of(&[a, b])?;
+        self.free_patterns_of(&[a, b]);
         self.shape_editable(a)?;
         self.shape_editable(b)?;
         let value = |v: &ValueInput, unit| self.value_of(v, unit);

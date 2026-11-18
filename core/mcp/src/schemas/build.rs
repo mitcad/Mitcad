@@ -192,7 +192,7 @@ pub(super) fn spec(name: &str) -> Option<Value> {
             "restrictions": [SOURCE_ONLY]
         }),
         "build_upgrade" => json!({
-            "description": format!("Places again by the current rule the slot connectors and fasteners the first placing rule placed. Result: upgraded, count. {REFERENCE}."),
+            "description": format!("Places again by the current rule the slot connectors and fasteners the first placing rule placed, and sets right the fasteners held by a mount frame the wrong way round. Result: upgraded, count. {REFERENCE}."),
             "properties": {},
             "required": [],
             "examples": [{"cmd": "build_upgrade"}]

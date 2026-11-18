@@ -141,6 +141,12 @@ pub struct ExportPlacement {
     /// it prints with by height, as `model_render`'s `print_colors` draws
     /// it, in place of the appearances.
     pub print_colors: bool,
+    /// 3MF with a slicer's settings (mitcad#2008): the print job's material
+    /// per body, a material id or None ("None (slicer's own)"); a body not
+    /// listed prints with the design's. Every body None and no printer or
+    /// process chosen is geometry-only delivery
+    /// ([`crate::print_files::Delivery`]).
+    pub print_materials: BTreeMap<BodyUid, Option<String>>,
 }
 
 /// A 3MF model before its slicer's settings (mitcad#1050,
@@ -207,6 +213,9 @@ pub struct Exported {
     /// 3MF with a slicer's settings (mitcad#1596): the filament changes
     /// and pauses at print heights written into the project.
     pub layer_events: Vec<crate::print_files::WrittenEvent>,
+    /// 3MF with a slicer's settings (mitcad#2008): geometry only or a
+    /// print project.
+    pub delivery: Option<crate::print_files::Delivery>,
 }
 
 /// A body's mesh in a 3MF file: its triangles and the volume they enclose
@@ -306,6 +315,16 @@ fn same_print(a: &crate::document::EffectivePrint, b: &crate::document::Effectiv
             .zip(&b.slicer)
             .all(|((da, ka), (db, kb))| da == db && plain(ka).eq(plain(kb)))
 }
+
+/// A slicer's side of a 3MF export: the slicer, the occurrence paths of a
+/// body's placements (in `placements` order) and the print job's material
+/// per body (mitcad#2008: a material id, or None for "None (slicer's
+/// own)"; a body not listed prints with the design's).
+pub(crate) type PrintSide<'a> = (
+    crate::print_keys::Dialect,
+    &'a dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
+    &'a BTreeMap<BodyUid, Option<String>>,
+);
 
 /// The unit of a 3MF file's model.
 fn three_mf(unit: LengthUnit) -> mitcad_3mf::Unit {
@@ -891,6 +910,7 @@ impl<K: Kernel> Document<K> {
                     (
                         d,
                         &paths as &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
+                        &placement.print_materials,
                     )
                 }),
                 pieces.as_mut(),
@@ -1241,10 +1261,7 @@ impl<K: Kernel> Document<K> {
         unit: LengthUnit,
         color: impl Fn(BodyUid) -> Option<[f64; 3]>,
         placements: impl Fn(BodyUid) -> Vec<Transform>,
-        print: Option<(
-            crate::print_keys::Dialect,
-            &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
-        )>,
+        print: Option<PrintSide<'_>>,
         pieces: Option<&mut Vec<bed::Piece>>,
         centre: bool,
     ) -> Result<Exported, ModelError> {
@@ -1253,7 +1270,7 @@ impl<K: Kernel> Document<K> {
             .and_then(|s| s.to_str())
             .unwrap_or("Mitcad")
             .to_owned();
-        let dialect = print.as_ref().map(|(d, _)| *d);
+        let dialect = print.as_ref().map(|(d, ..)| *d);
         let on_bed = pieces.is_some();
         let mut built = self.build_3mf(
             model_name,
@@ -1331,18 +1348,21 @@ impl<K: Kernel> Document<K> {
         unit: LengthUnit,
         color: impl Fn(BodyUid) -> Option<[f64; 3]>,
         placements: impl Fn(BodyUid) -> Vec<Transform>,
-        print: Option<(
-            crate::print_keys::Dialect,
-            &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
-        )>,
+        print: Option<PrintSide<'_>>,
         pieces: Option<&mut Vec<bed::Piece>>,
         plate: ThreeMfPlate<'_>,
     ) -> Result<Built3mf, ModelError> {
+        let job = print.as_ref().map(|(_, _, job)| *job);
         let settings_of = |body: BodyUid, path: Option<Vec<OccurrenceUid>>| {
             let target = crate::document::PrintTarget::Body(body, path);
-            match plate.plate {
+            let base = match plate.plate {
                 Some(on) => self.effective_print_on(&target, Some(on)),
                 None => self.effective_print(&target),
+            };
+            // The print job's material for the body (mitcad#2008).
+            match job.and_then(|job| job.get(&body)) {
+                Some(choice) => self.job_print(base, body, choice.as_deref()),
+                None => base,
             }
         };
         let mut exported = Exported::default();
@@ -1396,7 +1416,7 @@ impl<K: Kernel> Document<K> {
             // them are one part.
             let paths = print
                 .as_ref()
-                .map(|(_, paths_of)| paths_of(body.uid))
+                .map(|(_, paths_of, _)| paths_of(body.uid))
                 .unwrap_or_default();
             let mut groups: Vec<(Option<crate::document::EffectivePrint>, Vec<usize>)> = Vec::new();
             for (k, _) in placed.iter().enumerate() {
@@ -1776,6 +1796,7 @@ impl<K: Kernel> Document<K> {
                 &changes,
             );
             exported.layer_events = written.layer_events;
+            exported.delivery = Some(written.delivery);
             if let Some(application) = written.application {
                 model.application = application;
             }

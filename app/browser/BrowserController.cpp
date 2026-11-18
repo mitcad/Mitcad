@@ -820,6 +820,9 @@ void BrowserController::toggleVisibility(const BrowserNode& node) {
   if (toggleIsolated(node)) {
     return;
   }
+  if (showHiddenParents(node)) {
+    return;
+  }
   bool done = false;
   // The light bulbs of every mode: one undo step, outside a command's.
   QJsonArray commands;
@@ -1090,6 +1093,44 @@ void BrowserController::setAllSketches(const QString& occurrencePath, bool show)
   if (m_host.runVisibilityCommands(commands, show ? tr("Show All Sketches") : tr("Hide All Sketches"))) {
     qDebug().noquote() << QStringLiteral("All sketches %1: %2 (%3)").arg(path, verb).arg(changed);
   }
+}
+
+bool BrowserController::showHiddenParents(const BrowserNode& node) {
+  if (!node.hasEye || !node.visible || node.isolatedOut || node.hiddenParents.isEmpty()) {
+    return false;
+  }
+  QJsonArray commands;
+  QStringList names;
+  for (const QString& path : node.hiddenParents) {
+    commands.append(cmd("set_occurrence_visible",
+                        {{QStringLiteral("occurrence"), path}, {QStringLiteral("visible"), true}}));
+    // The occurrence's name: the last of the path's uids.
+    const QString uid = path.section(QLatin1Char('/'), -1);
+    QString name = uid;
+    std::function<bool(const QVector<DocumentSnapshot::Occurrence>&)> find =
+        [&](const QVector<DocumentSnapshot::Occurrence>& occurrences) {
+          for (const DocumentSnapshot::Occurrence& occurrence : occurrences) {
+            if (occurrence.path == path) {
+              name = occurrence.name;
+              return true;
+            }
+            if (find(occurrence.children)) {
+              return true;
+            }
+          }
+          return false;
+        };
+    find(m_snapshot.occurrences);
+    names << name;
+  }
+  // Refused (a read-only window): nothing else happens, its light bulb
+  // stays as it is.
+  if (!m_host.runVisibilityCommands(commands, tr("Show %1").arg(names.join(QStringLiteral(", "))))) {
+    return true;
+  }
+  qDebug().noquote() << QStringLiteral("Visibility %1: shown with its parents (%2)")
+                            .arg(node.path, node.hiddenParents.join(QStringLiteral(", ")));
+  return true;
 }
 
 bool BrowserController::toggleIsolated(const BrowserNode& node) {
@@ -1804,7 +1845,8 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
   const auto visibility = [&] {
     if (node.hasEye) {
       // As the eye shows it: a row Isolate leaves out is hidden (mitcad#1700).
-      const bool eyeOn = node.visible && !node.isolatedOut;
+      // Hidden with an occurrence above it too (mitcad#1995).
+      const bool eyeOn = node.visible && !node.isolatedOut && node.hiddenParents.isEmpty();
       menu.add(eyeOn ? QStringLiteral("eye-off") : QStringLiteral("eye"), eyeOn ? tr("Hide") : tr("Show"),
                [this, node] { toggleVisibility(node); });
     }
@@ -2088,6 +2130,11 @@ void BrowserController::browserMenu(const BrowserNode& node, const QPoint& at) {
     // The whole design turned by quarter turns (mitcad#502).
     if (root) {
       menu.add(QStringLiteral("orientation-cube"), tr("Reorient Design…"), [this] { openReorient(); });
+      // A comment for an AI agent on the whole design (mitcad#2010), also
+      // in an empty one.
+      menu.add(QStringLiteral("comment"), tr("Add Comment…"), [this] {
+        m_host.addCommentOn({{QStringLiteral("design"), true}}, tr("Whole design"));
+      });
     }
     saveAsMeshEntry();
     // A placed library part to its library design's own features

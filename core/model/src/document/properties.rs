@@ -17,13 +17,14 @@ use super::{DocState, Document, MaterialSource, ModelError, PartsListRow, invali
 use crate::ids::ComponentUid;
 use crate::kernel::Kernel;
 use crate::properties::{
-    BaseType, COMPUTED_SET, DisplayUnit, LIBRARY_SET, Property, PropertyFilter, PropertyOwner,
-    PropertyStore, PropertyType, PropertyValue, Source, check_key, check_set_name, format_value,
-    parse_value, same_name,
+    BOM_SET, BOM_STRUCTURE_KEY, BaseType, COMPUTED_SET, DisplayUnit, LIBRARY_SET, Property,
+    PropertyFilter, PropertyOwner, PropertyStore, PropertyType, PropertyValue, Source, check_key,
+    check_set_name, format_value, parse_value, same_name,
 };
 
-/// The keys the document works out (in [`COMPUTED_SET`]).
-const COMPUTED_KEYS: [&str; 5] = ["Volume", "Area", "Mass", "Length", "Material"];
+/// The keys the document works out (in [`COMPUTED_SET`]); `Kind` a
+/// component's form and origin (mitcad#1980).
+const COMPUTED_KEYS: [&str; 6] = ["Volume", "Area", "Mass", "Length", "Material", "Kind"];
 
 /// The computed `Material` of a body without a material anywhere
 /// (mitcad#1817): said so, never a default's name.
@@ -43,6 +44,9 @@ pub(crate) struct ShownProperty {
     pub overrides: bool,
     /// The value a library gives where a stored one overrides it.
     pub library: Option<PropertyValue>,
+    /// Where `library` comes from: a library, or worked out (a BOM
+    /// Structure the user chose over the one worked out, mitcad#1985).
+    pub library_source: Source,
 }
 
 /// A change of an own type: what is given changes.
@@ -250,6 +254,13 @@ impl<K: Kernel> Document<K> {
             _ => (set.trim().to_owned(), key.trim().to_owned()),
         };
         let (set, key) = (set.as_str(), key.as_str());
+        // BOM Structure by its own spelling (mitcad#1985).
+        let bom_structure = is_bom_structure(set, key);
+        let (set, key) = if bom_structure {
+            (BOM_SET, BOM_STRUCTURE_KEY)
+        } else {
+            (set, key)
+        };
         if source == Source::Computed {
             return Err(invalid("computed values are not stored"));
         }
@@ -291,6 +302,35 @@ impl<K: Kernel> Document<K> {
                 (None, Some(existing)) if same_name(&existing.ty, &ty) => existing.value.clone(),
                 _ => return Err(invalid(format!("{key} needs a value"))),
             },
+        };
+        // BOM Structure is one of its five (mitcad#1985), as the lists
+        // write it.
+        let value = if bom_structure {
+            let all = || {
+                super::BomStructure::ALL
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            match &value {
+                PropertyValue::Text(text) if base == BaseType::Text => {
+                    match super::BomStructure::parse(text) {
+                        Some(choice) => PropertyValue::Text(choice.as_str().to_owned()),
+                        None => {
+                            return Err(invalid(format!(
+                                "{BOM_STRUCTURE_KEY} is one of {}, not {text}",
+                                all()
+                            )));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(invalid(format!("{BOM_STRUCTURE_KEY} is one of {}", all())));
+                }
+            }
+        } else {
+            value
         };
         // A plain number's label: the one given, else the property's.
         let label = if base == BaseType::Number {
@@ -549,9 +589,10 @@ impl<K: Kernel> Document<K> {
 
     /// The values the document works out for an owner (never stored): a
     /// body's volume, area, mass and material, a component's volume and
-    /// mass (its own bodies) and a BUILD member's length, when `computed`;
-    /// a component's library data always (cheap). `row`: the component's
-    /// parts list row, when the caller has it.
+    /// mass (its own bodies), a BUILD member's length and its Kind, when
+    /// `computed`; a component's library data and its BOM Structure always
+    /// (cheap; mitcad#1985). `row`: the component's parts list row, when
+    /// the caller has it.
     fn derived_properties(
         &self,
         owner: PropertyOwner,
@@ -568,6 +609,7 @@ impl<K: Kernel> Document<K> {
                     inherited: false,
                     overrides: false,
                     library: None,
+                    library_source: Source::Library,
                 });
             };
         let number = PropertyValue::Number;
@@ -617,51 +659,87 @@ impl<K: Kernel> Document<K> {
             }
             PropertyOwner::Component(c) => {
                 self.component_library_values(c, row, &mut push);
-                if !computed {
-                    return out;
-                }
-                let mut volume = 0.0;
-                let mut kg = 0.0;
-                let mut measured = 0;
-                let mut without_material = 0;
-                for body in self.bodies() {
-                    if self.body_component(body.uid) != Some(c) {
-                        continue;
-                    }
-                    let Ok(mass) = self.kernel().mass_properties(body.shape) else {
-                        continue;
-                    };
-                    let (material, source) = self.body_material(body.uid, None);
-                    volume += mass.volume;
-                    if source == MaterialSource::Default {
-                        without_material += 1;
-                    } else {
-                        kg += mass.volume * material.density * 1e-6;
-                    }
-                    measured += 1;
-                }
-                if measured > 0 {
-                    let s = Source::Computed;
-                    push(COMPUTED_SET, "Volume", BaseType::Volume, number(volume), s);
-                    // No mass while a body has no material (mitcad#1817).
-                    if without_material == 0 {
-                        push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), s);
-                    }
-                }
-                if let Some(length) = self.part_info(c).and_then(|info| info.length) {
-                    let s = Source::Computed;
-                    push(
-                        COMPUTED_SET,
-                        "Length",
-                        BaseType::Length,
-                        number(length.1),
-                        s,
-                    );
+                if computed {
+                    self.component_computed_values(c, row, &mut push);
                 }
             }
             _ => {}
         }
+        // A component's BOM Structure (mitcad#1985): worked out, as a
+        // library's values are; the user's stored choice overrides it.
+        if let PropertyOwner::Component(c) = owner {
+            out.push(ShownProperty {
+                set: BOM_SET.to_owned(),
+                property: Property::new(
+                    BOM_STRUCTURE_KEY,
+                    BaseType::Text,
+                    PropertyValue::Text(self.bom_structure_default(c, row).as_str().to_owned()),
+                    Source::Computed,
+                ),
+                read_only: false,
+                inherited: false,
+                overrides: false,
+                library: None,
+                library_source: Source::Library,
+            });
+        }
         out
+    }
+
+    /// A component's computed values: its volume and mass (its own
+    /// bodies), a BUILD member's length and its Kind (mitcad#1980).
+    fn component_computed_values(
+        &self,
+        c: ComponentUid,
+        row: Option<&PartsListRow>,
+        push: &mut impl FnMut(&str, &str, BaseType, PropertyValue, Source),
+    ) {
+        let number = PropertyValue::Number;
+        let mut volume = 0.0;
+        let mut kg = 0.0;
+        let mut measured = 0;
+        let mut without_material = 0;
+        for body in self.bodies() {
+            if self.body_component(body.uid) != Some(c) {
+                continue;
+            }
+            let Ok(mass) = self.kernel().mass_properties(body.shape) else {
+                continue;
+            };
+            let (material, source) = self.body_material(body.uid, None);
+            volume += mass.volume;
+            if source == MaterialSource::Default {
+                without_material += 1;
+            } else {
+                kg += mass.volume * material.density * 1e-6;
+            }
+            measured += 1;
+        }
+        if measured > 0 {
+            let s = Source::Computed;
+            push(COMPUTED_SET, "Volume", BaseType::Volume, number(volume), s);
+            // No mass while a body has no material (mitcad#1817).
+            if without_material == 0 {
+                push(COMPUTED_SET, "Mass", BaseType::Mass, number(kg), s);
+            }
+        }
+        if let Some(length) = self.part_info(c).and_then(|info| info.length) {
+            let s = Source::Computed;
+            push(
+                COMPUTED_SET,
+                "Length",
+                BaseType::Length,
+                number(length.1),
+                s,
+            );
+        }
+        push(
+            COMPUTED_SET,
+            "Kind",
+            BaseType::Text,
+            PropertyValue::Text(self.component_kind(c, row).as_str().to_owned()),
+            Source::Computed,
+        );
     }
 
     /// A component's library data: a library or BUILD part's designation,
@@ -747,6 +825,7 @@ impl<K: Kernel> Document<K> {
                     inherited: false,
                     overrides: false,
                     library: None,
+                    library_source: Source::Library,
                 });
             }
         }
@@ -758,6 +837,7 @@ impl<K: Kernel> Document<K> {
                 Some(i) => {
                     if !shown[i].property.value.same(&derived.property.value) {
                         shown[i].library = Some(derived.property.value);
+                        shown[i].library_source = derived.property.source;
                     }
                 }
                 None => shown.push(derived),
@@ -853,10 +933,18 @@ impl<K: Kernel> Document<K> {
             value["source_value"] = json!(text(imported));
         } else if let Some(library) = &shown.library {
             value["source_value"] = json!(text(library));
-            value["source_of_value"] = json!(Source::Library.as_str());
+            value["source_of_value"] = json!(shown.library_source.as_str());
         }
         if let Some(own) = own.filter(|t| !t.values.is_empty()) {
             value["choices"] = json!(own.values.iter().map(text).collect::<Vec<_>>());
+        } else if is_bom_structure(&shown.set, &p.key) {
+            // BOM Structure is one of five (mitcad#1985).
+            value["choices"] = json!(
+                super::BomStructure::ALL
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+            );
         }
         // A print setting's plain name (mitcad#640); the key is its tooltip.
         if let Some(name) = super::print_key_name(&shown.set, &p.key) {
@@ -1101,6 +1189,11 @@ impl<K: Kernel> Document<K> {
         }
         out
     }
+}
+
+/// Whether a set and key name a component's BOM Structure (mitcad#1985).
+fn is_bom_structure(set: &str, key: &str) -> bool {
+    same_name(set, BOM_SET) && same_name(key, BOM_STRUCTURE_KEY)
 }
 
 /// A property's `Set/Key` or `Key` split, trimmed.

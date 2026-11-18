@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "bridge/profile.hpp"
+#include "bridge/sweeps.hpp"
 #include "mitcad/geometry/surfaces.hpp"
 #include "mitcad_bridge/kernel/surfaces.h"
 
@@ -66,10 +68,22 @@ rust::Vec<OpenBoundaryData> open_boundaries(const geometry::Shape& body) {
 }
 
 std::shared_ptr<geometry::Shape> patch_loop(rust::Str feature, const geometry::Shape& body,
-                                            const PatchLoopData& spec) {
+                                            const PatchLoopData& spec, rust::Slice<const SweepCurve> curves) {
   geometry::PatchLoop loop;
   for (const rust::String& edge : spec.edges) {
     loop.edges.emplace_back(edge);
+  }
+  // Free edges beside the named ones (mitcad#1955).
+  for (const PatchOpening& opening : spec.openings) {
+    geometry::OpeningEdges picked;
+    picked.index = opening.index;
+    for (const rust::String& face : opening.faces) {
+      picked.faces.emplace_back(face);
+    }
+    for (std::size_t i = 0; i + 2 < opening.at.size(); i += 3) {
+      picked.at.emplace_back(opening.at[i], opening.at[i + 1], opening.at[i + 2]);
+    }
+    loop.openings.push_back(std::move(picked));
   }
   loop.opening = spec.opening;
   loop.continuity = continuity(spec.continuity);
@@ -81,6 +95,10 @@ std::shared_ptr<geometry::Shape> patch_loop(rust::Str feature, const geometry::S
                                       continuity(spec.edge_continuity[i]));
   }
   loop.points = points(spec.points);
+  // Sketch curves in the loop beside the edges (mitcad#1972).
+  for (const SweepCurve& curve : curves) {
+    loop.curves.push_back(path_curve_of(curve));
+  }
   return geometry::patch_loop(std::string(feature), body, loop);
 }
 

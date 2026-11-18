@@ -56,6 +56,20 @@ kept OCCT from that blend:
   projects on the other within its range (on a line of three turns a
   projection landed a turn away, and the pair went undetected).
 
+The conditions (mitcad#1986) are geometric, not the case's: a guide or a
+B-spline surface that a screw motion maps onto itself (any helix, of any
+radius, pitch and number of turns, and the flanks swept along it, whatever
+their profile), a face at the spine's end whose normals along the edge lie
+nowhere within the angular tolerance of the face left (any end face, a
+plane or a cone, at any angle beyond that tolerance), and two stripes'
+blends that are one where one of them is a single piece run out to the
+faces at both its ends. Only the sizes come from the case: the screw
+continuation reaches a turn or the surface's own length at most, margins
+for an end face met within a turn.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_thread_crests.cpp
+(the case: a crest 0.8 wide rounded with 0.8, radius 28).
+
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 index b30d669b..3c9e18b0 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx

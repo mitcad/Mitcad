@@ -131,6 +131,13 @@ pub(crate) trait LibrariesCrateOps<K: Kernel> {
     fn parts_list_with(&self, keys: &[String]) -> Value;
     fn bom_list_with(&self, keys: &[String], group_identical: bool) -> Value;
 
+    /// The `parts_list` query's structured or parts-only view
+    /// (mitcad#1985): each row as the list's, with its `level`, `item`
+    /// (none for a Reference), `quantity` (in its parent, or in the whole
+    /// design; 0 for a Reference), `placed`, `bom_structure`, `mass` and
+    /// `volume` of one; and the `totals`.
+    fn bom_view_with(&self, keys: &[String], view: mitcad_model::BomView) -> Value;
+
     /// The `library_usage` query (mitcad#418, mitcad#518): the library parts
     /// the design uses, BUILD sources and inserted library components
     /// alike, one entry per library and component (whatever its version)
@@ -342,6 +349,11 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
                 if let Some(options) = super::component_options::options_json(self, row.component) {
                     value["options"] = options;
                 }
+                // Its form and origin (mitcad#1980) and its BOM Structure
+                // (mitcad#1985).
+                value["kind"] = json!(self.component_kind(row.component, Some(&row)).as_str());
+                value["bom_structure"] =
+                    json!(self.bom_structure(row.component, Some(&row)).as_str());
                 if !keys.is_empty() {
                     let mut properties = serde_json::Map::new();
                     for key in keys {
@@ -382,6 +394,18 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             value["quantity"] = json!(row.part.quantity);
             value["body"] = json!(row.body);
             value["group_names"] = json!(row.names);
+            // A row of one body says that body's kind; a row of bodies of
+            // no listed component its component's (mitcad#1980).
+            if let Some(body) = row.body {
+                value["kind"] = json!(self.body_kind(body).as_str());
+            }
+            if value["kind"].is_null() {
+                value["kind"] = json!(self.component_kind(row.part.component, None).as_str());
+            }
+            if value["bom_structure"].is_null() {
+                value["bom_structure"] =
+                    json!(self.bom_structure(row.part.component, None).as_str());
+            }
             // A Flex item's row says how much of what (mitcad#1713): its
             // routed length, and the type it was copied from.
             if let Some(flex) = self.flex_length_of_row(row.part.component, row.body) {
@@ -438,15 +462,68 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             rows.push(value);
         }
         // Purchased hardware has no shape and must not be geometry-grouped.
-        rows.extend(
-            legacy["rows"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|r| r["purchased"] == true)
-                .cloned(),
-        );
+        rows.extend(purchased_hardware(&legacy));
         json!({"rows": rows, "group_identical": group_identical})
+    }
+
+    fn bom_view_with(&self, keys: &[String], view: mitcad_model::BomView) -> Value {
+        let legacy = self.parts_list_with(keys);
+        let list = self.bom_view(view);
+        let mut rows = Vec::new();
+        for row in &list.rows {
+            let mut value = match row.body {
+                // A body of the root's own: its name.
+                Some(body) => {
+                    let name = self.body_name(body);
+                    let mut value = json!({"component": row.component, "name": name,
+                                           "designation": name, "body": body,
+                                           "kind": self.body_kind(body).as_str()});
+                    if !keys.is_empty() {
+                        let none: serde_json::Map<String, Value> =
+                            keys.iter().map(|k| (k.clone(), Value::Null)).collect();
+                        value["properties"] = Value::Object(none);
+                    }
+                    value
+                }
+                None => legacy["rows"]
+                    .as_array()
+                    .and_then(|rows| {
+                        rows.iter().find(|r| {
+                            r["component"] == json!(row.component) && r["purchased"] != true
+                        })
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| json!({"component": row.component})),
+            };
+            value["level"] = json!(row.level);
+            value["item"] = json!(row.item);
+            value["quantity"] = json!(row.quantity);
+            value["placed"] = json!(row.placed);
+            value["bom_structure"] = json!(row.structure.as_str());
+            value["mass"] = json!(row.mass);
+            value["volume"] = json!(row.volume);
+            rows.push(value);
+        }
+        let mut quantity: usize = list.rows.iter().map(|r| r.quantity).sum();
+        // The hardware to buy for printable bearings (mitcad#577): parts
+        // too, each a Purchased item.
+        if view == mitcad_model::BomView::Parts {
+            let mut number = list.rows.iter().filter(|r| r.item.is_some()).count();
+            for mut row in purchased_hardware(&legacy) {
+                number += 1;
+                row["level"] = json!(1);
+                row["item"] = json!(number.to_string());
+                row["placed"] = row["quantity"].clone();
+                quantity += row["quantity"].as_u64().unwrap_or(0) as usize;
+                rows.push(row);
+            }
+        }
+        let view = match view {
+            mitcad_model::BomView::Structured => "structured",
+            mitcad_model::BomView::Parts => "parts",
+        };
+        json!({"rows": rows, "view": view,
+               "totals": {"quantity": quantity, "mass": list.mass, "volume": list.volume}})
     }
 
     fn library_usage_json(&self) -> Value {
@@ -504,6 +581,76 @@ impl<K: Kernel> LibrariesCrateOps<K> for Document<K> {
             .collect();
         json!({ "parts": parts })
     }
+}
+
+/// The hardware to buy for printable bearings (mitcad#577) of a parts
+/// list: no component and no shape; a Library part, Purchased.
+fn purchased_hardware(legacy: &Value) -> Vec<Value> {
+    legacy["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["purchased"] == true)
+        .cloned()
+        .map(|mut row| {
+            if row["kind"].is_null() {
+                row["kind"] = json!(mitcad_model::ComponentKind::LibraryPart.as_str());
+            }
+            if row["bom_structure"].is_null() {
+                row["bom_structure"] = json!(mitcad_model::BomStructure::Purchased.as_str());
+            }
+            row
+        })
+        .collect()
+}
+
+/// The `parts_list` query's rows of the kinds (mitcad#1980) and BOM
+/// Structures (mitcad#1985) asked for: every one of either when its list
+/// is empty. A kind or a structure that is none is refused, in words.
+pub(super) fn filter_parts_list(
+    mut list: Value,
+    kinds: &[String],
+    structures: &[String],
+) -> Result<Value, ApiError> {
+    use mitcad_model::{BomStructure, ComponentKind};
+    let wanted: Vec<ComponentKind> = kinds
+        .iter()
+        .map(|text| {
+            ComponentKind::parse(text).ok_or_else(|| {
+                let all: Vec<&str> = ComponentKind::ALL.iter().map(|k| k.as_str()).collect();
+                ApiError(format!(
+                    "there is no kind {text}; the kinds are {}",
+                    all.join(", ")
+                ))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let structures: Vec<BomStructure> = structures
+        .iter()
+        .map(|text| {
+            BomStructure::parse(text).ok_or_else(|| {
+                let all: Vec<&str> = BomStructure::ALL.iter().map(|s| s.as_str()).collect();
+                ApiError(format!(
+                    "there is no BOM Structure {text}; the structures are {}",
+                    all.join(", ")
+                ))
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    if wanted.is_empty() && structures.is_empty() {
+        return Ok(list);
+    }
+    if let Some(rows) = list["rows"].as_array_mut() {
+        rows.retain(|row| {
+            let kind = row["kind"].as_str().and_then(ComponentKind::parse);
+            let structure = row["bom_structure"].as_str().and_then(BomStructure::parse);
+            (wanted.is_empty() || kind.is_some_and(|k| wanted.contains(&k)))
+                && (structures.is_empty() || structure.is_some_and(|s| structures.contains(&s)))
+        });
+    }
+    list["kinds"] = json!(wanted.iter().map(|k| k.as_str()).collect::<Vec<_>>());
+    list["bom_structures"] = json!(structures.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    Ok(list)
 }
 
 /// The `library_source` query (mitcad#1812): a library source's design as

@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: MIT
+# The BOM Structure and the Bill of Materials' views (mitcad#1985), on
+# bom-structure.json (Base a box; Frame a subassembly holding Rail twice):
+#   1. Structured: Base, Frame and its Rails below it, numbered 1, 2, 2.1;
+#      Parts only: Base and the two Rails.
+#   2. Frame Inseparable: the structured view still lists its Rails, the
+#      parts-only view Frame as one item.
+#   3. Frame Phantom: neither view lists Frame; its Rails move up a level.
+#   4. Frame Reference: listed without a number and with no quantity, its
+#      Rails not listed.
+# Run by tools/ui-bom-structure-test.sh (Linux) and
+# tools/ui-windows-bom-structure-test.ps1 (Windows).
+expect-ever 'View area'
+wait-idle
+
+# 1. Every component, then the two views.
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+expect-log '^Build parts list view: list$'
+expect-widget-property buildPartsList rowCount 3
+mark
+qt-choice buildPartsView 'Structured'
+expect-log '^Build parts list view: structured$'
+expect-log '^Build BOM item: 1 Base x 1 \(Normal\)$'
+expect-log '^Build BOM item: 2 Frame x 1 \(Normal\)$'
+expect-log '^Build BOM item:   2[.]1 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 3
+mark
+qt-choice buildPartsView 'Parts only'
+expect-log '^Build parts list view: parts$'
+expect-log '^Build BOM item: 1 Base x 1 \(Normal\)$'
+expect-log '^Build BOM item: 2 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 2
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+
+# 2. Frame Inseparable: one item among the parts, its Rails still below it.
+model-command '{"cmd":"set_property","owner":"C2","set":"Bill of Materials","key":"BOM Structure","value":"Inseparable"}'
+wait-idle
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+mark
+qt-choice buildPartsView 'Structured'
+expect-log '^Build BOM item: 2 Frame x 1 \(Inseparable\)$'
+expect-log '^Build BOM item:   2[.]1 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 3
+mark
+qt-choice buildPartsView 'Parts only'
+expect-log '^Build BOM item: 2 Frame x 1 \(Inseparable\)$'
+expect-widget-property buildPartsList rowCount 2
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+
+# 3. Frame Phantom: its Rails at its level in both views.
+model-command '{"cmd":"set_property","owner":"C2","set":"Bill of Materials","key":"BOM Structure","value":"Phantom"}'
+wait-idle
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+mark
+qt-choice buildPartsView 'Structured'
+expect-log '^Build BOM item: 1 Base x 1 \(Normal\)$'
+expect-log '^Build BOM item: 2 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 2
+mark
+qt-choice buildPartsView 'Parts only'
+expect-log '^Build BOM item: 2 Rail x 2 \(Normal\)$'
+expect-widget-property buildPartsList rowCount 2
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+
+# 4. Frame Reference: no number, no quantity.
+model-command '{"cmd":"set_property","owner":"C2","set":"Bill of Materials","key":"BOM Structure","value":"Reference"}'
+wait-idle
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+mark
+qt-choice buildPartsView 'Structured'
+expect-log '^Build BOM item: - Frame x 0 \(Reference\)$'
+expect-log '^Build BOM row: Ref x Frame$'
+expect-widget-property buildPartsList rowCount 2
+mark
+qt-choice buildPartsView 'Parts only'
+expect-log '^Build BOM item: - Frame x 0 \(Reference\)$'
+expect-widget-property buildPartsList rowCount 2
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+expect-never 'Parts list not read'

@@ -16,9 +16,37 @@ edges are kept, and the rest of the shape is unified as before. (In the safe
 input mode the chain's end vertices may already have been replaced by
 copies of themselves, as for a chain that merges: the same points and
 tolerances.)
+
+Failures (mitcad#1986): the handlers catch only the concatenations' own
+reports that two curves of the chain do not join: Geom2dConvert's (a
+Standard_Failure thrown as such, "Courbes non jointives", from its
+continuity check) for the p-curves, and GeomConvert's for the 3D curves
+(GeomLProp's continuity check throws the same Standard_Failure as such,
+ConcatC1 a Standard_ConstructionError for curves not C0). MergeSubSeq reports that
+failure as it reports a chain it cannot merge (false), so the chain stays
+as its edges; any other failure is rethrown and the unification fails as
+before.
+Test: geometry/tests/port/p0110-unify-chain-not-concatenated.cpp (ctest
+geometry.port.0110): a shell of two coplanar squares sharing an edge, the
+first one's bottom two B-spline pieces in line 2e-6 apart at a vertex of
+tolerance 1.5e-6 (the curves do not join): the unification merges the
+faces and the collinear sides and keeps the pieces as their edges, valid
+(stock: it throws); with the vertex's tolerance 1e-5, the pieces merged
+into one edge.
+diff --git a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
+index 49f685922..635f191a8 100644
 --- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
 +++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
-@@ -2386,7 +2386,17 @@
+@@ -16,6 +16,8 @@
+ #include <ShapeUpgrade_UnifySameDomain.hxx>
+ 
+ #include <BRep_Builder.hxx>
++#include <Standard_ConstructionError.hxx>
++#include <typeinfo>
+ #include <BRep_Tool.hxx>
+ #include <BRepLib.hxx>
+ #include <BRepTopAdaptor_TopolTool.hxx>
+@@ -2386,7 +2388,23 @@ bool ShapeUpgrade_UnifySameDomain::MergeSubSeq(
      B.Add(E, V[1]);
      B.UpdateVertex(V[0], 0., E, 0.);
      B.UpdateVertex(V[1], dist, E, 0.);
@@ -30,14 +58,20 @@ tolerances.)
 +    {
 +      UnionPCurves(theChain, E);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Geom2dConvert's report that two p-curves do not join, thrown as a
++      // Standard_Failure as such; any other failure is rethrown.)
++      if (typeid(anException) != typeid(Standard_Failure))
++      {
++        throw;
++      }
 +      return false;
 +    }
      OutEdge = E;
      return true;
    }
-@@ -2513,7 +2523,14 @@
+@@ -2513,7 +2531,20 @@ bool ShapeUpgrade_UnifySameDomain::MergeSubSeq(
        B.UpdateVertex(V[0], 0., E, 0.);
        B.UpdateVertex(V[1], lpar, E, 0.);
      }
@@ -46,14 +80,20 @@ tolerances.)
 +    {
 +      UnionPCurves(theChain, E);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (Geom2dConvert's report that two p-curves do not join, thrown as a
++      // Standard_Failure as such; any other failure is rethrown.)
++      if (typeid(anException) != typeid(Standard_Failure))
++      {
++        throw;
++      }
 +      return false;
 +    }
      OutEdge = E;
      return true;
    }
-@@ -2550,7 +2567,18 @@
+@@ -2550,7 +2581,27 @@ bool ShapeUpgrade_UnifySameDomain::MergeSubSeq(
      }
      if (NeedUnion)
      {
@@ -66,8 +106,17 @@ tolerances.)
 +      {
 +        OutEdge = GlueEdgesWith3DCurves(theChain, VF, VL);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (GeomConvert's reports that two curves do not join: GeomLProp's
++        // continuity check throws a Standard_Failure as such, ConcatC1 a
++        // Standard_ConstructionError for curves not C0; any other failure
++        // is rethrown.)
++        if (typeid(anException) != typeid(Standard_Failure)
++            && dynamic_cast<const Standard_ConstructionError*>(&anException) == nullptr)
++        {
++          throw;
++        }
 +        return false;
 +      }
        return true;

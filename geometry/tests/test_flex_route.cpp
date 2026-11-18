@@ -1383,6 +1383,53 @@ void test_half_turn_round_a_drum() {
   CHECK(farthest <= highest + std::hypot(10.0, 1.0) / 2 + 0.05);
 }
 
+// The drum's half turn with its ends moved a little (0.65.0: on arm64 the
+// last 0.4 mm of the route above was warned of as bending over its edge,
+// where the route curls onto the drum at its end: the spline's own
+// curvature at the end, the lopsided circle next to it and the end's own
+// frame each leaned that flat bend over the edge; on x86-64 so did three of
+// these): no bend warning reaches the route's ends.
+void test_half_turn_round_a_drum_ends() {
+  const TopoDS_Shape drum = BRepPrimAPI_MakeCylinder(gp_Ax2(gp_Pnt(40, -40, 0), gp_Dir(0, 0, 1)), 15, 40).Shape();
+  const TopoDS_Face side = cylinder_side(drum);
+  const FlexRouter router(std::vector<TopoDS_Shape>{drum});
+  FlexSection section;
+  section.kind = FlexSectionKind::Rectangular;
+  section.width = 10;
+  section.height = 1;
+  FlexLimits limits;
+  limits.bend_radius = 5;
+  limits.edge_bend = false;
+  const double turns[] = {-0.02, -0.005, 0.005, 0.02};
+  const double rises[] = {-0.3, 0.0, 0.3};
+  for (const double turn : turns) {
+    for (const double rise : rises) {
+      // (The last node turned round the drum by `turn` and raised by
+      // `rise`, the first lowered by as much.)
+      const gp_Pnt last(40 + 15 * std::cos(turn), -40 + 15 * std::sin(turn), 32 + rise);
+      const gp_Pnt first(40 - 15 * std::cos(turn), -40 - 15 * std::sin(turn), 8 - rise);
+      std::vector<FlexNode> nodes{on_face(first, side), on_face(gp_Pnt(40, -55, 20), side), on_face(last, side)};
+      nodes[1].twist = kPi;
+      const FlexRoute route = router.route(nodes, section, limits);
+      CHECK(route.node_at.size() == 3);
+      // (The turn's own warning stays.)
+      const FlexProblem* edgewise = problem_of(route, FlexProblemKind::EdgeBendTooTight);
+      CHECK(edgewise != nullptr);
+      if (edgewise != nullptr) {
+        for (const FlexProblem::Place& place : edgewise->places) {
+          if (place.from < 2 || place.to > route.length - 2) {
+            std::printf("half a turn round a drum, ends moved by %g rad and %g mm: over its edge at %.4f-%.4f "
+                        "of %.4f\n",
+                        turn, rise, place.from, place.to, route.length);
+          }
+          CHECK(place.from >= 2 && place.to <= route.length - 2);
+        }
+      }
+      CHECK(problem_of(route, FlexProblemKind::BendTooTight) == nullptr);
+    }
+  }
+}
+
 // A sample of a hand-made route: its point, way and `down` (square to it).
 FlexSample sample_at(const gp_Pnt& point, const gp_Vec& tangent, const gp_Vec& toward) {
   FlexSample sample;
@@ -1547,6 +1594,7 @@ int main() {
   test::guarded("the ui design", test::test_the_ui_design);
   test::guarded("turned over its edge", test::test_turned_over_its_edge);
   test::guarded("half a turn round a drum", test::test_half_turn_round_a_drum);
+  test::guarded("half a turn round a drum, its ends moved", test::test_half_turn_round_a_drum_ends);
   test::guarded("turned back", test::test_turned_back);
   test::guarded("doubled back", test::test_doubled_back);
   test::guarded("into a slot's mouth", test::test_into_a_slot_mouth);

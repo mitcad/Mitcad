@@ -712,6 +712,12 @@ DrawingWorkspace::DrawingWorkspace(OcctViewer* viewer, DocumentHost& host, std::
     // After the click's events: the dialog has an event loop of its own.
     QTimer::singleShot(0, this, [this, id] { editNoteText(id); });
   });
+  // A sheet drawn in a job (mitcad#1997): its note after 400 ms, as the
+  // progress dialog comes for a command's job.
+  m_drawNoteTimer = new QTimer(this);
+  m_drawNoteTimer->setSingleShot(true);
+  m_drawNoteTimer->setInterval(400);
+  connect(m_drawNoteTimer, &QTimer::timeout, this, [this] { m_sheetView->setBusyNote(tr("Drawing the views…")); });
   m_hoverTimer = new QTimer(this);
   m_hoverTimer->setSingleShot(true);
   m_hoverTimer->setInterval(60);
@@ -811,6 +817,11 @@ void DrawingWorkspace::closeDrawing() {
     finishTitleBlock(false);
   }
   m_drawing.clear();
+  m_drawnSheet.clear();
+  // A sheet drawn in a job is no longer wanted (mitcad#1997).
+  ++m_drawGeneration;
+  m_drawNoteTimer->stop();
+  m_sheetView->setBusyNote(QString());
   m_tool = nullptr;
   m_sheetView->setHint(QString());
   hide();
@@ -830,22 +841,109 @@ void DrawingWorkspace::refresh() {
   if (!title.isEmpty()) {
     query.insert(QStringLiteral("title"), title);
   }
+  // From the projection cache when it holds every view (mitcad#1997): a
+  // sheet whose views the kernel has to project is drawn in a job.
+  QJsonObject cached = query;
+  cached.insert(QStringLiteral("cached"), true);
   QJsonObject answer;
   try {
-    answer = m_host.model().queryObject(query);
+    answer = m_host.model().queryObject(cached);
   } catch (const std::exception& e) {
-    // A sheet that is gone (an undo): the first one; a drawing that is
-    // gone: back to the model.
-    if (m_sheet > 0) {
-      m_sheet = 0;
-      dropPicks();
-      refresh();
-      return;
-    }
-    qDebug().noquote() << QStringLiteral("Drawing %1 is gone: %2").arg(m_drawing, QString::fromUtf8(e.what()));
-    closeDrawing();
+    sheetGone(QString::fromUtf8(e.what()));
     return;
   }
+  // A sheet drawn in a job for an earlier refresh is not wanted now.
+  ++m_drawGeneration;
+  if (answer.value(QStringLiteral("uncached")).toBool()) {
+    // Another sheet than the one drawn: its paper and title meanwhile.
+    if (m_drawnSheet != QStringLiteral("%1/%2").arg(m_drawing).arg(m_sheet)) {
+      showSheet(answer);
+    }
+    drawInJob(query);
+    return;
+  }
+  m_drawNoteTimer->stop();
+  m_sheetView->setBusyNote(QString());
+  logProjections(answer);
+  showSheet(answer);
+}
+
+void DrawingWorkspace::sheetGone(const QString& why) {
+  // A sheet that is gone (an undo): the first one; a drawing that is
+  // gone: back to the model.
+  if (m_sheet > 0) {
+    m_sheet = 0;
+    dropPicks();
+    refresh();
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Drawing %1 is gone: %2").arg(m_drawing, why);
+  closeDrawing();
+}
+
+void DrawingWorkspace::drawInJob(const QJsonObject& query) {
+  m_drawQuery = query;
+  const int generation = m_drawGeneration;
+  // Once the window's own refresh is done: its reads would make the job
+  // give way at once.
+  QTimer::singleShot(0, this, [this, generation] { startDrawJob(generation); });
+}
+
+void DrawingWorkspace::startDrawJob(int generation) {
+  if (generation != m_drawGeneration || !isOpen()) {
+    return;
+  }
+  if (m_host.modelBusy()) {
+    m_host.whenIdle(this, [this, generation] { startDrawJob(generation); });
+    return;
+  }
+  const bool started = m_host.queryInJob(
+      QStringLiteral("drawing sheet"), m_drawQuery, this,
+      [this, generation](const QJsonObject& answer, bool cancelled, const QString& error) {
+        drawJobDone(generation, answer, cancelled, error);
+      });
+  if (!started) {
+    // A host without jobs: drawn here, as before.
+    QJsonObject answer;
+    try {
+      answer = m_host.model().queryObject(m_drawQuery);
+    } catch (const std::exception& e) {
+      sheetGone(QString::fromUtf8(e.what()));
+      return;
+    }
+    logProjections(answer);
+    showSheet(answer);
+    return;
+  }
+  m_drawClock.start();
+  if (!m_drawNoteTimer->isActive() && m_sheetView->busyNote().isEmpty()) {
+    m_drawNoteTimer->start();
+  }
+  qDebug().noquote() << QStringLiteral("Drawing sheet drawn in a job: %1 sheet %2").arg(m_drawing).arg(m_sheet + 1);
+}
+
+void DrawingWorkspace::drawJobDone(int generation, const QJsonObject& answer, bool cancelled, const QString& error) {
+  if (generation != m_drawGeneration || !isOpen()) {
+    return; // a newer refresh asked again
+  }
+  if (cancelled) {
+    // It gave way to the window's work: drawn when the model is free, the
+    // views projected so far kept in the cache.
+    qDebug().noquote() << QStringLiteral("Drawing sheet's job gave way after %1 ms").arg(m_drawClock.elapsed());
+    m_host.whenIdle(this, [this, generation] {
+      if (generation == m_drawGeneration && isOpen()) {
+        refresh();
+      }
+    });
+    return;
+  }
+  m_drawNoteTimer->stop();
+  m_sheetView->setBusyNote(QString());
+  if (!error.isEmpty()) {
+    sheetGone(error);
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Drawing sheet drawn in %1 ms in a job").arg(m_drawClock.elapsed());
   logProjections(answer);
   showSheet(answer);
 }
@@ -904,7 +1002,14 @@ void DrawingWorkspace::showSheet(const QJsonObject& answer) {
   fitBarRow();
   const QJsonObject sheet = sheets.at(m_sheet).toObject();
   m_sheetView->setSheet(sheet);
-  showCornerDots();
+  // A sheet not drawn yet (mitcad#1997, refresh) has no corners to show.
+  const bool drawn = !answer.value(QStringLiteral("uncached")).toBool();
+  m_drawnSheet = drawn ? QStringLiteral("%1/%2").arg(m_drawing).arg(m_sheet) : QString();
+  if (drawn) {
+    showCornerDots();
+  } else {
+    m_sheetView->setCornerDots(QVector<QPointF>(), 0.0);
+  }
   logTitleBlock(sheet);
   logLines(sheet);
   // The views the model could not draw, in the status bar when that
@@ -1345,7 +1450,47 @@ void DrawingWorkspace::editView(int view, const QString& field, const QString& v
     setStatus(tr("%1 is not a size.").arg(value), true);
     return;
   }
-  QTimer::singleShot(0, this, [this, command] { run(command); });
+  // A new scale (mitcad#1997): the old lines scaled meanwhile, until the
+  // model's new ones come; as they were when it refuses or is cancelled.
+  const bool scaling = field == QStringLiteral("scale") && showScaling(view, value);
+  QTimer::singleShot(0, this, [this, command, scaling] {
+    if (!run(command) && scaling) {
+      m_sheetView->clearUpdating();
+    }
+  });
+}
+
+bool DrawingWorkspace::showScaling(int view, const QString& value) {
+  const SheetView* shown = m_sheetView->view(view);
+  if (shown == nullptr) {
+    return false;
+  }
+  const double now = shown->json.value(QStringLiteral("scale")).toDouble();
+  // The new scale where the panel knows it: a ratio, or its parent's (the
+  // panel's automatic scale); Fit the Sheet is the model's to choose.
+  std::optional<double> next;
+  if (value == QStringLiteral("auto")) {
+    next = scaleRatio(shown->json.value(QStringLiteral("automatic_scale")).toString());
+  } else if (value != QStringLiteral("fit")) {
+    next = scaleRatio(value);
+  }
+  const double factor = next && now > 0.0 ? *next / now : 1.0;
+  // The views whose scale follows it (its projected views, sections and
+  // details without a scale of their own) change with it.
+  QList<int> views{view};
+  bool grew = true;
+  while (grew) {
+    grew = false;
+    for (const SheetView& v : m_sheetView->views()) {
+      if (!views.contains(v.id) && views.contains(v.parent) &&
+          !v.json.value(QStringLiteral("own_scale")).toBool()) {
+        views.append(v.id);
+        grew = true;
+      }
+    }
+  }
+  m_sheetView->showUpdating(views, factor);
+  return true;
 }
 
 void DrawingWorkspace::watchScale(QComboBox* combo, const std::function<void(const QString&)>& chosen) {

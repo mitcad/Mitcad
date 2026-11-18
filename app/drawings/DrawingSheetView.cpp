@@ -51,10 +51,24 @@ constexpr double kRightClickPixels = 4.0;
 // How opaque the hover's and the picks' marks are (of 255): the line they
 // mark shows under them (mitcad#1618).
 constexpr int kMarkAlpha = 160;
+// The lines of a view whose new scale is worked out (mitcad#1997): lighter
+// than the sheet's, so that they read as the old ones, in the hidden edges'
+// gray on the white paper.
+const QColor kUpdatingInk = themeColor(ColorRole::HiddenEdge, false);
 
 QPointF pointOf(const QJsonValue& value) {
   const QJsonArray a = value.toArray();
   return {a.at(0).toDouble(), a.at(1).toDouble()};
+}
+
+// A pill of words over the sheet (the tool's hint, the job's note, the
+// hover words): white on a dark, translucent backing, as over the 3D view.
+void drawPill(QPainter& painter, const QRectF& pill, const QString& text) {
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor(0, 0, 0, 160));
+  painter.drawRoundedRect(pill, pill.height() / 2.0, pill.height() / 2.0);
+  painter.setPen(Qt::white);
+  painter.drawText(pill, Qt::AlignCenter, text);
 }
 
 QPolygonF polygonOf(const QJsonValue& value) {
@@ -199,6 +213,8 @@ void DrawingSheetView::setTitleBlockEditor(TitleBlockEditor* editor) {
 }
 
 void DrawingSheetView::setSheet(const QJsonObject& sheet) {
+  // The views' new lines are here (mitcad#1997).
+  clearUpdating();
   const double w = sheet.value(QStringLiteral("width")).toDouble(297.0);
   const double h = sheet.value(QStringLiteral("height")).toDouble(210.0);
   const bool resized = w != m_width || h != m_height;
@@ -662,6 +678,42 @@ void DrawingSheetView::setHoverWords(const QString& words) {
   update();
 }
 
+void DrawingSheetView::showUpdating(const QList<int>& viewIds, double factor) {
+  const double k = std::isfinite(factor) && factor > 0.0 ? factor : 1.0;
+  QStringList ids;
+  for (const int id : viewIds) {
+    if (view(id) != nullptr) {
+      m_updating.insert(id, k);
+      ids << QString::number(id);
+    }
+  }
+  if (ids.isEmpty()) {
+    return;
+  }
+  qDebug().noquote() << QStringLiteral("Drawing views updating: %1 by %2")
+                            .arg(ids.join(QStringLiteral(", ")))
+                            .arg(k, 0, 'g', 6);
+  sheetMoved();
+}
+
+void DrawingSheetView::clearUpdating() {
+  if (m_updating.isEmpty()) {
+    return;
+  }
+  m_updating.clear();
+  qDebug().noquote() << QStringLiteral("Drawing views updating: none");
+  sheetMoved();
+}
+
+void DrawingSheetView::setBusyNote(const QString& text) {
+  if (text == m_busyNote) {
+    return;
+  }
+  m_busyNote = text;
+  qDebug().noquote() << QStringLiteral("Drawing note: %1").arg(text.isEmpty() ? QStringLiteral("none") : text);
+  update();
+}
+
 void DrawingSheetView::setPicksWhilePlacing(bool on) { m_picksWhilePlacing = on; }
 
 void DrawingSheetView::setPointSnap(std::function<std::optional<QPointF>(int view, const QPointF& at)> snap) {
@@ -1107,6 +1159,26 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
     painter.drawText(box.normalized().adjusted(4.0, 4.0, -4.0, -4.0), Qt::AlignCenter | Qt::TextWordWrap,
                      tr("View %1: %2").arg(v.id).arg(v.error));
   }
+  // Views whose new scale the model works out (mitcad#1997): a dashed box
+  // where their old lines are shown scaled, and what is happening.
+  for (auto it = m_updating.cbegin(); it != m_updating.cend(); ++it) {
+    const SheetView* v = view(it.key());
+    if (v == nullptr || (v->box.width() <= 0.0 && v->box.height() <= 0.0)) {
+      continue;
+    }
+    const QPointF at = pointOf(v->json.value(QStringLiteral("place")));
+    const double k = it.value();
+    const QRectF scaled =
+        QRectF(at + (v->box.topLeft() - at) * k, at + (v->box.bottomRight() - at) * k).normalized();
+    const QRectF box =
+        QRectF(toWidget(scaled.bottomLeft()), toWidget(scaled.topRight())).normalized().adjusted(-4.0, -4.0, 4.0, 4.0);
+    QPen pen(kHovered, 1.5, Qt::DashLine);
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(box);
+    painter.drawText(box.adjusted(4.0, 4.0, -4.0, -4.0), Qt::AlignHCenter | Qt::AlignTop, tr("Updating…"));
+  }
   for (const SheetView& v : std::as_const(m_views)) {
     if (isSelectedView(v.id)) {
       outline(v, kSelected, Qt::SolidLine, {});
@@ -1229,11 +1301,16 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
     const int w = metrics.horizontalAdvance(m_hint) + 24;
     const int h = metrics.height() + 10;
     const QRectF pill((width() - w) / 2.0, 8.0, w, h);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, 160));
-    painter.drawRoundedRect(pill, h / 2.0, h / 2.0);
-    painter.setPen(Qt::white);
-    painter.drawText(pill, Qt::AlignCenter, m_hint);
+    drawPill(painter, pill, m_hint);
+  }
+  // The model draws the sheet in a job (mitcad#1997): said under the hint.
+  if (!m_busyNote.isEmpty()) {
+    const QFontMetrics metrics(font());
+    const int w = metrics.horizontalAdvance(m_busyNote) + 24;
+    const int h = metrics.height() + 10;
+    const double top = m_hint.isEmpty() ? 8.0 : 8.0 + h + 6.0;
+    const QRectF pill((width() - w) / 2.0, top, w, h);
+    drawPill(painter, pill, m_busyNote);
   }
   // What a click would pick under the pointer, in words (mitcad#1691), at
   // the foot of the sheet: the status of the pointer, never kept in the
@@ -1243,11 +1320,7 @@ void DrawingSheetView::paintEvent(QPaintEvent* /*event*/) {
     const int w = metrics.horizontalAdvance(m_hoverWords) + 24;
     const int h = metrics.height() + 10;
     const QRectF pill((width() - w) / 2.0, height() - h - 8.0, w, h);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(0, 0, 0, 160));
-    painter.drawRoundedRect(pill, h / 2.0, h / 2.0);
-    painter.setPen(Qt::white);
-    painter.drawText(pill, Qt::AlignCenter, m_hoverWords);
+    drawPill(painter, pill, m_hoverWords);
   }
 }
 
@@ -1517,11 +1590,30 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
   painter.save();
   painter.translate(m_origin);
   painter.scale(m_zoom, -m_zoom);
+  // A view whose new scale the model works out (mitcad#1997): its group's
+  // lines scaled about its place, lighter.
+  struct Scaled {
+    QPointF place;
+    double factor = 1.0;
+  };
+  QHash<QString, Scaled> scaled;
+  for (auto it = m_updating.cbegin(); it != m_updating.cend(); ++it) {
+    if (const SheetView* v = view(it.key())) {
+      const QString group = v->json.value(QStringLiteral("group")).toString();
+      if (!group.isEmpty()) {
+        scaled.insert(group, Scaled{pointOf(v->json.value(QStringLiteral("place"))), it.value()});
+      }
+    }
+  }
+  bool dim = false;
   const auto withPen = [&](const QString& name) {
     QPen pen = penOf(m_pens, name);
     // At least a pixel wide on the screen.
     if (pen.widthF() * m_zoom < 1.0) {
       pen.setWidthF(1.0 / m_zoom);
+    }
+    if (dim) {
+      pen.setColor(kUpdatingInk);
     }
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
@@ -1532,6 +1624,7 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
     double angle;
     QString anchor;
     QString text;
+    QColor color;
   };
   QVector<Label> labels;
   // The title block editor's block is painted over the sheet instead of the
@@ -1562,6 +1655,16 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
   for (const QJsonValue& groupValue : m_groups) {
     if (!shown(groupValue)) {
       continue;
+    }
+    const auto found = scaled.constFind(groupValue.toObject().value(QStringLiteral("id")).toString());
+    dim = found != scaled.cend();
+    const QPointF place = dim ? found->place : QPointF();
+    const double factor = dim ? found->factor : 1.0;
+    if (dim) {
+      painter.save();
+      painter.translate(place);
+      painter.scale(factor, factor);
+      painter.translate(-place);
     }
     for (const QJsonValue& itemValue : groupValue.toObject().value(QStringLiteral("items")).toArray()) {
       const QJsonObject item = itemValue.toObject();
@@ -1594,24 +1697,31 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
         }
       } else if (item.contains(QStringLiteral("fill"))) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(Qt::black);
+        painter.setBrush(dim ? kUpdatingInk : QColor(Qt::black));
         painter.drawPolygon(polygonOf(item.value(QStringLiteral("fill"))));
       } else if (item.contains(QStringLiteral("shade"))) {
-        const int level = std::clamp(static_cast<int>(std::lround(item.value(QStringLiteral("grey")).toDouble() * 255.0)), 0, 255);
+        int level = std::clamp(static_cast<int>(std::lround(item.value(QStringLiteral("grey")).toDouble() * 255.0)), 0, 255);
+        if (dim) {
+          level = 255 - (255 - level) / 3;
+        }
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(level, level, level));
         painter.drawPolygon(polygonOf(item.value(QStringLiteral("shade"))));
       } else if (item.contains(QStringLiteral("text"))) {
-        labels.append({pointOf(item.value(QStringLiteral("at"))), item.value(QStringLiteral("height")).toDouble(),
+        // Written in the widget's coordinates below: scaled here.
+        const QPointF at = pointOf(item.value(QStringLiteral("at")));
+        labels.append({place + (at - place) * factor, item.value(QStringLiteral("height")).toDouble() * factor,
                        item.value(QStringLiteral("angle")).toDouble(), item.value(QStringLiteral("anchor")).toString(),
-                       item.value(QStringLiteral("text")).toString()});
+                       item.value(QStringLiteral("text")).toString(), dim ? kUpdatingInk : QColor(Qt::black)});
       }
+    }
+    if (dim) {
+      painter.restore();
     }
   }
   painter.restore();
   // Texts upright in the widget's own coordinates, at their size on the
   // paper.
-  painter.setPen(Qt::black);
   for (const Label& label : std::as_const(labels)) {
     const double pixels = label.height / kCapHeight * m_zoom;
     if (pixels < 2.0) {
@@ -1629,6 +1739,7 @@ void DrawingSheetView::paintItems(QPainter& painter) const {
       x = -advance;
     }
     painter.save();
+    painter.setPen(label.color);
     painter.translate(toWidget(label.at));
     painter.rotate(-label.angle * 180.0 / kPi);
     painter.drawText(QPointF(x, 0.0), label.text);

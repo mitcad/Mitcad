@@ -37,9 +37,11 @@ the spine are made as before; a failure within the spine fails the stripe
 as before.
 
 Upstream: new.
+diff --git a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
+index bf10104be..5d80857e0 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/BRepBlend/BRepBlend_Walking.cxx
-@@ -259,6 +259,55 @@
+@@ -259,6 +259,55 @@ void BRepBlend_Walking::Perform(Blend_Function&    Func,
    {
      sol = ParDep;
    }
@@ -95,9 +97,11 @@ Upstream: new.
  
  #ifdef OCCT_DEBUG
    sectioncalculee = 0;
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index 73d072e8a..1f2118ee9 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -772,27 +772,66 @@
+@@ -772,27 +772,66 @@ void ChFi3d_Builder::CallPerformSurf(occ::handle<ChFiDS_Stripe>&
    }
    else
    {
@@ -185,18 +189,10 @@ Upstream: new.
    }
  
    // Case of error
-@@ -4979,6 +5018,25 @@
-         done   = true;
-         Inside = false;
-         if (forward)
-+        {
-+          intl = 1;
-+        }
-+        else
-+        {
-+          intf = 1;
-+        }
-+      }
+@@ -4998,6 +5037,25 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+           intf = 1;
+         }
+       }
 +      else if (!Spine->IsPeriodic() && !Simul
 +               && (forward ? std::min(First, Last) >= Spine->LastParameter(Spine->NbEdges()) - tolesp
 +                           : std::max(First, Last) <= Spine->FirstParameter(1) + tolesp))
@@ -208,6 +204,14 @@ Upstream: new.
 +        done   = true;
 +        Inside = false;
 +        if (forward)
-         {
-           intl = 1;
-         }
++        {
++          intl = 1;
++        }
++        else
++        {
++          intf = 1;
++        }
++      }
+       else
+       { // Otherwise invalidation of the stripe.
+         Spine->SetErrorStatus(ChFiDS_WalkingFailure);

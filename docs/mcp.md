@@ -962,10 +962,10 @@ is at its place and its animation has ended. Thus the next
 
 With `comment` instead of `items` (mitcad#1119), `ui_select` selects
 that comment's target and reveals it the same way: a feature, a body, a
-face, an edge, a vertex or a sketch entity. A comment on a free point or
-a parameter, an orphaned comment and a target that is no longer in the
-design select nothing; the view then moves to the comment's `place`
-(none for a parameter). The result's `comment` holds its `id`, `label`,
+face, an edge, a vertex or a sketch entity. A comment on a free point, a
+parameter or the whole design, an orphaned comment and a target that is
+no longer in the design select nothing; the view then moves to the
+comment's `place` (none for a parameter or the whole design). The result's `comment` holds its `id`, `label`,
 `status`, `orphaned`, `place` and `selected` (whether its target was
 selected). Give `items` or `comment`, not both.
 
@@ -1068,8 +1068,8 @@ renders it.
 panel or plane pick is open: `framed` is `comment` and the result's
 `comment` is as `ui_select`'s. A target without a shape of its own (a
 free point, a feature without bodies, an orphaned comment) is centred at
-its `place` at the current zoom. A comment on a parameter has no place
-and is refused. `ui_camera` with `comment` waits for the model as
+its `place` at the current zoom. A comment on a parameter or on the
+whole design (mitcad#2010) has no place and is refused. `ui_camera` with `comment` waits for the model as
 queries do (`busy`, `retry_after_ms`).
 
 `ui_command` covers these UI-only flows:
@@ -1168,7 +1168,8 @@ its picture.
 ### Comments for agents
 
 The user pins **comments** to features, faces, edges, bodies, sketch
-entities, parameters and points of the design, such as "make this hole
+entities, parameters and points of the design, or to the whole design
+(`{"design": true}`, also in an empty one), such as "make this hole
 an M6 thread" (mitcad#1119; the commands and the `comments` query are in
 [commands.md](../core/model-api/src/commands.md), section *Comments*).
 They stay in the design between messages and sessions. The server's
@@ -1209,6 +1210,17 @@ change. Both are then one undo step.
   `applied: false`; in an array it names the `entry`, and nothing of the
   array runs. The headless server has no such preference and always
   refuses. Reopening and the other comment commands are allowed.
+
+**An external agent's loop** (mitcad#2010). Any MCP client can use the
+comments as its conversation with the user, without an adapter of its
+own: subscribe to `mitcad://comments`; on each update, read the resource
+and take the open comments; where something is unclear, ask back with
+`reply_comment` (the comment stays open, and the Comments panel shows it
+as **Open, waiting for your answer** for the user); wait for the user's
+answer, a newer reply whose `author` is `user`; then make the change and
+put `address_comment` with its `resolution` in the same `model_command`
+array. The user writes design-wide requests on the whole design (Add
+Comment's **Whole Design**), also before there is any geometry.
 
 The chat panel sends the open comments with a message when its
 **Comments** toggle is on ([AI chat](ai-chat.md)).

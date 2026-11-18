@@ -1,0 +1,246 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the corner where a knife edge runs on along its line into an
+edge whose faces meet at an angle is refused in words (mitcad#1988).
+
+A bite cut part of the way along a wall (a block with a cylinder of the
+block's half width cut from below into its front, tangent to the side
+wall): along the line where the wall meets the bite's cylinder
+tangentially (a knife edge, the wedge between them of 0 degrees) and,
+past the bite's end plane, the front face square, the two edges are one
+tangent chain. The ball of a rounding lies two radii into the wedge along
+the knife edge (sqrt(260 r) from the front for the bite of 65) and in the
+corner along the square edge: it jumps at their common vertex. OCCT ends
+the contours there, each a stripe of its own, and the vertex, with four
+edges and two stripes, went to PerformMoreThreeCorner, whose plate gave a
+valid body of the wrong shape (a surface far from the edges, more volume
+than the block). The body asked for has the end plane grown under the
+knife's tip up to the square edge's rounding and a new edge along the wall
+between the two contacts, which no corner of the fillet builds.
+
+- ChFi3d_Builder::RefuseKnifeEndsOnLine, from PerformFilletOnVertex for
+  two stripes at a vertex of more than three edges, before
+  PerformMoreThreeCorner: where each stripe has one end there, their edges
+  go on along one line (within the angular tolerance), one is a knife edge
+  and the other not, and they have one face in common, it throws
+  Standard_Failure "a knife edge running on along its line into an edge
+  whose faces meet at an angle: the ball jumps at the vertex between
+  them". The corner fails at that vertex as any corner does (the
+  vertex is faulty, FailedCornerMessage says why): the failure is
+  reported, never a body built from it. Elsewhere it returns, nothing
+  changed.
+- ChFi3d_IsKnifeEdge (ChFi3d_Builder_0): the faces' normals, sampled along
+  the edge with the faces' orientations, all within a thousandth of a
+  radian of opposite.
+- No catch is added.
+
+Each such edge alone still rounds: the knife edge's stripe ends on the
+end plane, which grows over the tip's section (1770's start). MitCad rounds
+the knife edges first and the other edges on that result
+(knife_line_apart in geometry/src/dressup.cpp).
+
+Test: geometry/tests/test_fillet_knife_chain.cpp: the block with the bite,
+the knife edge and the square edge on its line in one fillet with 1 and 3:
+not done, the corner failed at the vertex on the bite's end plane with the
+message above (before the patch: done, a valid body 6611 mm3 larger than
+the expected one at 1); the knife edge alone valid with the exact volume;
+MitCad's fillet of the chain valid with the exact volume.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+index adfe7f25..16578e74 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -9679,6 +9679,88 @@ static void ChFi3d_SeamRunOnAtPointEnd(TopOpeBRepDS_DataStructure&
+   }
+ }
+ 
++//=======================================================================
++// function : RefuseKnifeEndsOnLine
++// purpose  : See the header (mitcad#1988).
++//=======================================================================
++
++void ChFi3d_Builder::RefuseKnifeEndsOnLine(const int Index) const
++{
++  const NCollection_List<occ::handle<ChFiDS_Stripe>>& aStripes = myVDataMap(Index);
++  if (aStripes.Extent() != 2 || aStripes.First() == aStripes.Last())
++  {
++    return;
++  }
++  const TopoDS_Vertex&       aVtx = myVDataMap.FindKey(Index);
++  occ::handle<ChFiDS_Stripe> aStr[2] = {aStripes.First(), aStripes.Last()};
++  TopoDS_Edge                anEdge[2];
++  gp_Vec                     anAway[2];
++  for (int k = 0; k < 2; ++k)
++  {
++    const occ::handle<ChFiDS_Spine>& aSp = aStr[k]->Spine();
++    if (aSp.IsNull() || aSp->IsPeriodic() || aSp->FirstVertex().IsSame(aSp->LastVertex()))
++    {
++      return;
++    }
++    int aSens = 0;
++    ChFi3d_IndexOfSurfData(aVtx, aStr[k], aSens);
++    const bool aFirst = (aSens == 1);
++    if (!(aFirst ? aSp->FirstVertex() : aSp->LastVertex()).IsSame(aVtx))
++    {
++      return;
++    }
++    anEdge[k] = aFirst ? aSp->Edges(1) : aSp->Edges(aSp->NbEdges());
++    // The edge's tangent at the vertex, away from it.
++    BRepAdaptor_Curve aC(anEdge[k]);
++    const bool        anAtFirst = TopExp::FirstVertex(anEdge[k]).IsSame(aVtx);
++    if (!anAtFirst && !TopExp::LastVertex(anEdge[k]).IsSame(aVtx))
++    {
++      return;
++    }
++    gp_Pnt aP;
++    aC.D1(anAtFirst ? aC.FirstParameter() : aC.LastParameter(), aP, anAway[k]);
++    if (anAway[k].Magnitude() <= gp::Resolution())
++    {
++      return;
++    }
++    if (!anAtFirst)
++    {
++      anAway[k].Reverse();
++    }
++  }
++  // On one line: the one goes on where the other ends.
++  if (anAway[0].Angle(anAway[1].Reversed()) > angular)
++  {
++    return;
++  }
++  // One knife edge.
++  if (ChFi3d_IsKnifeEdge(anEdge[0], myEFMap) == ChFi3d_IsKnifeEdge(anEdge[1], myEFMap))
++  {
++    return;
++  }
++  // One face in common.
++  TopoDS_Face aF[2][2];
++  ChFi3d_conexfaces(anEdge[0], aF[0][0], aF[0][1], myEFMap);
++  ChFi3d_conexfaces(anEdge[1], aF[1][0], aF[1][1], myEFMap);
++  int aCommon = 0;
++  for (int a = 0; a < 2; ++a)
++  {
++    for (int b = 0; b < 2; ++b)
++    {
++      if (!aF[0][a].IsNull() && aF[0][a].IsSame(aF[1][b]))
++      {
++        ++aCommon;
++      }
++    }
++  }
++  if (aCommon != 1)
++  {
++    return;
++  }
++  throw Standard_Failure("a knife edge running on along its line into an edge whose faces meet at an "
++                         "angle: the ball jumps at the vertex between them");
++}
++
+ //=================================================================================================
+ 
+ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -9905,6 +9987,7 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+           ChFi3d_InitChron(cl_performmore3corner);
+ #endif
+           myCorner = Corner_More;
++          RefuseKnifeEndsOnLine(Index);
+           PerformMoreThreeCorner(Index, i);
+ #ifdef OCCT_DEBUG // perf
+           ChFi3d_ResultChron(cl_performmore3corner, t_performmore3corner);
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+index dbeb8b96..ce250a63 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -1029,6 +1029,15 @@ private:
+ 
+   Standard_EXPORT void PerformIntersectionAtEnd(const int Index);
+ 
++  //! Two stripes ending at vertex Index on one line from either side, one
++  //! along a knife edge (its faces meeting tangentially with opposite
++  //! normals) and the other along an edge whose faces meet at an angle,
++  //! with one face in common (a bite cut part of the way along a wall): the
++  //! ball jumps there, from two radii into the wedge to the corner, the
++  //! blends do not meet, and no corner joins them. Throws Standard_Failure
++  //! saying so; returns, doing nothing, elsewhere (mitcad#1988).
++  Standard_EXPORT void RefuseKnifeEndsOnLine(const int Index) const;
++
+   //! Two fillets ending alone at the two vertices of a sharp edge whose
+   //! contacts on it overlap: their blends are mitred (the end at the later
+   //! vertex makes both). True when the end at vertex Index is made so.
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+index b1466187..94a8c0a6 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+@@ -9607,3 +9607,56 @@ NCollection_List<ChFi3d_PivotEnd>& ChFi3d_PivotEnds()
+   static thread_local NCollection_List<ChFi3d_PivotEnd> theEnds;
+   return theEnds;
+ }
++
++//=======================================================================
++// function : ChFi3d_IsKnifeEdge
++// purpose  : Whether the two faces of the edge meet tangentially all along
++//            it with opposite normals (mitcad#1988).
++//=======================================================================
++
++bool ChFi3d_IsKnifeEdge(const TopoDS_Edge& E, const ChFiDS_Map& EFMap)
++{
++  TopoDS_Face F1, F2;
++  ChFi3d_conexfaces(E, F1, F2, EFMap);
++  if (F1.IsNull() || F2.IsNull() || F1.IsSame(F2) || BRep_Tool::Degenerated(E))
++  {
++    return false;
++  }
++  double                    aFirst = 0., aLast = 0.;
++  occ::handle<Geom2d_Curve> aC1 = BRep_Tool::CurveOnSurface(E, F1, aFirst, aLast);
++  occ::handle<Geom2d_Curve> aC2 = BRep_Tool::CurveOnSurface(E, F2, aFirst, aLast);
++  if (aC1.IsNull() || aC2.IsNull())
++  {
++    return false;
++  }
++  BRepAdaptor_Surface aS1(F1, false), aS2(F2, false);
++  const int           aNb = 5;
++  for (int i = 0; i < aNb; ++i)
++  {
++    const double aT  = aFirst + (aLast - aFirst) * (i + 0.5) / aNb;
++    gp_Pnt2d     aP1 = aC1->Value(aT), aP2 = aC2->Value(aT);
++    gp_Pnt       aP;
++    gp_Vec       aDU, aDV;
++    aS1.D1(aP1.X(), aP1.Y(), aP, aDU, aDV);
++    gp_Vec aN1 = aDU.Crossed(aDV);
++    aS2.D1(aP2.X(), aP2.Y(), aP, aDU, aDV);
++    gp_Vec aN2 = aDU.Crossed(aDV);
++    if (aN1.SquareMagnitude() < 1.e-24 || aN2.SquareMagnitude() < 1.e-24)
++    {
++      return false;
++    }
++    if (F1.Orientation() == TopAbs_REVERSED)
++    {
++      aN1.Reverse();
++    }
++    if (F2.Orientation() == TopAbs_REVERSED)
++    {
++      aN2.Reverse();
++    }
++    if (aN1.Angle(aN2) <= M_PI - 1.e-3)
++    {
++      return false;
++    }
++  }
++  return true;
++}
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+index e0f6af2c..c20ffc83 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
+@@ -722,4 +722,10 @@ void ChFi3d_UnfoldGuide(const occ::handle<ChFiDS_ElSpine>& HES,
+                         const TopOpeBRepDS_DataStructure&  DStr,
+                         const double                       Tol);
+ 
++//! Whether the two faces of the edge meet tangentially all along it with
++//! opposite normals, at 0 degrees, the material between them a wedge that
++//! thins to nothing (a knife edge): the normals sampled along it all within
++//! a thousandth of a radian of opposite (mitcad#1988).
++bool ChFi3d_IsKnifeEdge(const TopoDS_Edge& E, const ChFiDS_Map& EFMap);
++
+ #endif

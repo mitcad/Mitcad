@@ -6,8 +6,9 @@
 # tools/ui-scripts/patch-opening.mitcad-ui on the design that mitcad-cli
 # makes (tools/ui-scripts/patch-opening.json: a box whose top face was
 # unstitched and deleted): the opening's free edges are offered as edges,
-# a click on one takes the whole opening, and OK with Stitch makes the box
-# a closed solid again.
+# with Whole Opening on a click on one takes the whole opening; with it off
+# (mitcad#1955) the four edges picked one by one close the loop, and OK
+# with Stitch makes the box a closed solid again.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools\ui-windows-patch-opening-test.ps1 -App build\dev\mitcad.exe -Cli build\dev\tools\cli\mitcad-cli.exe [-Out dir] [-QtBin dir]
 param(
@@ -32,8 +33,9 @@ $exitCode = $script:UiProcess.ExitCode
 if ($null -ne $exitCode -and "$exitCode" -ne '' -and $exitCode -ne 0) {
   Ui-Fail "Patch opening driver failed (exit code $exitCode)"
 }
-Ui-ExpectLog 'Patch Profiles or Edges: 1 edge' 'a click on a free edge takes the whole opening'
-Ui-ExpectLog 'Added patch of 1 items, stitched' 'OK patches the opening and stitches it on'
+Ui-ExpectLog 'Patch Profiles or Edges: 1 edge [edge {"faces":' 'with Whole Opening on a click takes the whole opening'
+Ui-ExpectLog 'Patch: Whole Opening = off' 'Whole Opening turned off'
+Ui-ExpectLog 'Added patch of 4 items, stitched' 'four single free edges patched and stitched on'
 Ui-ExpectLog 'TestDriver: done' 'the box is a closed solid again'
 Ui-StopApp
 Write-Host 'PASS: Patch picks an opening by its free edge and closes it'

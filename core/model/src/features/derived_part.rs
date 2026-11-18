@@ -432,7 +432,8 @@ pub fn evaluate_source<K: Kernel>(
 }
 
 /// A derived part's mount frame in a recompute's results (for joints and
-/// the document's queries).
+/// the document's queries), or the middle of one of its sides between its
+/// slots (mitcad#2002, `build/side_middle.rs`).
 pub(crate) fn mount_frame<S>(
     history: &[FeatureResult<S>],
     feature: FeatureUid,
@@ -450,8 +451,7 @@ pub(crate) fn mount_frame<S>(
         .output
         .as_ref()
         .and_then(|o| o.mounts.as_ref())
-        .and_then(|m| m.get(name))
-        .copied()
+        .and_then(|m| crate::build::frame_or_side_middle(m, name))
         .ok_or_else(|| format!("{label} has no frame {name}"))
 }
 

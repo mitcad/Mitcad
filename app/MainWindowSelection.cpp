@@ -46,6 +46,13 @@ void MainWindow::setUpSelectionScope() {
         m_viewer, &OcctViewer::hovered, this,
         [this](const SelectionItem& item) {
           if (activeSelectionScope() == nullptr) {
+            // With no command: what the idle selection's click would take
+            // (mitcad#1955: a surface body's free edge, not the face beside
+            // it).
+            if (m_mode == Mode::Idle) {
+              qDebug().noquote() << QStringLiteral("Idle hover: %1")
+                                        .arg(item.isValid() ? item.logDescription() : QStringLiteral("nothing"));
+            }
             return;
           }
           qDebug().noquote() << QStringLiteral("Sketch hover: %1")

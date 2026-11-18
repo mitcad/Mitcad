@@ -98,7 +98,9 @@ fn slide_param<K: Kernel>(doc: &Document<K>, component: ComponentUid) -> Option<
 
 /// The profiles standing on the slot `slot` of the derived part `part` at
 /// `path` (their joints slide on it), but `except`; and none whose slide
-/// uses `except`'s, which would make a cycle.
+/// uses `except`'s, which would make a cycle. On a side's middle between
+/// its slots also those on the side's slots, and on a slot those centred
+/// on its side (mitcad#2002): they are in each other's way.
 pub(crate) fn standing_on<K: Kernel>(
     doc: &Document<K>,
     path: &[OccurrenceUid],
@@ -122,7 +124,7 @@ pub(crate) fn standing_on<K: Kernel>(
             continue;
         };
         let on_slot = match &j.b.geometry {
-            GeomRef::Mount { feature, name } => *feature == part && name == slot,
+            GeomRef::Mount { feature, name } => *feature == part && crate::same_lane(name, slot),
             _ => false,
         };
         if j.kind != JointKind::Slider || j.b.occurrence.0.as_slice() != path || !on_slot {

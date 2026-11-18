@@ -1,0 +1,30 @@
+{
+  "format": "solidcraft/58",
+  "name": "Format 58 newer",
+  "units": "mm",
+  "params": [
+    {"name": "side", "expr": "20 mm", "unit": "mm"},
+    {"name": "spin", "expr": {"turns": 2}, "unit": "deg"}
+  ],
+  "features": [
+    {
+      "id": 1, "name": "Block", "type": "box", "body_names": ["Block"],
+      "param_names": ["d1", "d2", "d3"],
+      "corner": [0, 0, 0], "length": "side", "width": "side", "height": "10",
+      "operation": "new_body"
+    },
+    {
+      "id": 2, "name": "Lattice", "type": "gyroid_lattice",
+      "param_names": ["d4"],
+      "body": "Block", "cell": "2 mm"
+    },
+    {
+      "id": 3, "name": "Lid", "type": "box", "body_names": ["Lid"],
+      "param_names": ["d5", "d6", "d7"],
+      "corner": [30, 0, 0], "length": "10", "width": "10", "height": "2",
+      "operation": "new_body"
+    }
+  ],
+  "lattice_library": {"cells": ["gyroid"]},
+  "next_id": 4
+}

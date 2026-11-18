@@ -2008,10 +2008,33 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
                     .unwrap_or_default()
             })
             .collect();
+        // The sketch's own redundant constraints that still take freedom
+        // away (mitcad#1992): information that says so, not a warning that
+        // they follow from the others; their ids stay in `redundant`.
+        let partly: Vec<(ConstraintUid, usize)> = solved
+            .as_deref()
+            .map(|solved| {
+                partly_redundant(
+                    def,
+                    solved,
+                    &mut |id| {
+                        params
+                            .value(id)
+                            .ok_or_else(|| format!("parameter {} does not exist", params.name(id)))
+                    },
+                    &|id| params.name(id),
+                )
+            })
+            .unwrap_or_default();
+        let mut warned = status.clone();
+        warned.redundant.retain(|item| match item {
+            SolverItem::Constraint(k) => !partly.iter().any(|(p, _)| p == k),
+            SolverItem::Fixed(_) => true,
+        });
         // The solve's redundant constraints as warnings, one per offset,
         // pattern or the sketch's own, each with the entities its
         // constraints name (mitcad#1171); their ids stay in `redundant`.
-        let redundant = redundant_groups(&status, Some(def));
+        let redundant = redundant_groups(&warned, Some(def));
         for (message, entities) in &redundant {
             warnings.push(message.clone());
             warning_entities.push(entities.clone());
@@ -2093,7 +2116,18 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
         // (conflicting, not converged) an error, redundant constraints a
         // warning, unmet inactive ones information; its warnings are added
         // as warnings with the query's other results.
-        let notices = solve_notices(result["error"].as_str(), &status, &redundant);
+        // Those that still take freedom away (mitcad#1992): how many
+        // degrees of freedom each, by its id, for agents and the
+        // application's marks.
+        if !partly.is_empty() {
+            let taken: serde_json::Map<String, Value> = partly
+                .iter()
+                .map(|(k, n)| (k.to_string(), json!(n)))
+                .collect();
+            result["partly_redundant"] = Value::Object(taken);
+        }
+        let partly_words = partly_in_words(def, &partly);
+        let notices = solve_notices(result["error"].as_str(), &status, &redundant, &partly_words);
         if !notices.is_empty() {
             result["notices"] = notice::to_json(&notices);
         }
@@ -2105,11 +2139,15 @@ impl<K: Kernel> SketchApi<K> for Document<K> {
 /// solve's error (conflicting constraints, a solve that did not converge),
 /// redundant constraints as warnings, one per group of
 /// [`redundant_groups`] (mitcad#1171), and the inactive constraints the
-/// geometry does not meet as information.
+/// geometry does not meet as information. `partly` are the redundant
+/// constraints that still take freedom away, each in words with its id
+/// ([`partly_in_words`], mitcad#1992): information about that constraint
+/// (its `target`), which the application paints on hover.
 pub(crate) fn solve_notices(
     error: Option<&str>,
     status: &SketchStatus,
     redundant: &[(String, Vec<String>)],
+    partly: &[(String, ConstraintUid)],
 ) -> Vec<Notice> {
     let mut notices = Vec::new();
     if let Some(error) = error {
@@ -2117,6 +2155,9 @@ pub(crate) fn solve_notices(
     }
     for (message, _) in redundant {
         notices.push(Notice::warning(message.as_str()));
+    }
+    for (message, k) in partly {
+        notices.push(Notice::info(message.as_str()).with_target(k));
     }
     // A line distance between lines that are not parallel (mitcad#1774).
     if let Some(warning) = status.not_parallel_warning() {
@@ -2253,6 +2294,90 @@ pub(crate) fn redundant_groups(
                 entities,
             )
         })
+        .collect()
+}
+
+/// The most of the sketch's own redundant constraints and dimensions that
+/// [`partly_redundant`] tries without (one solve each).
+const MAX_PARTLY_TRIED: usize = 8;
+
+/// The constraints and dimensions an offset or a pattern of `def` holds
+/// (its own bindings), which are not the sketch's own.
+fn held_by_offsets_and_patterns(def: &SketchDef) -> BTreeSet<ConstraintUid> {
+    use mitcad_model::sketch::offset::constraints_of;
+    let mut held = BTreeSet::new();
+    for o in &def.offsets {
+        held.extend(constraints_of(
+            o,
+            &def.entities,
+            &def.constraints,
+            &def.dimensions,
+        ));
+    }
+    held.extend(def.patterns.iter().map(|p| p.id));
+    held
+}
+
+/// The sketch's own redundant constraints and dimensions (of no offset or
+/// pattern) that still take degrees of freedom away in `solved`, with how
+/// many each (mitcad#1992, `SketchDef::freedom_taken`): the newest of a
+/// dependent set that the others imply only in part, such as a Symmetry of
+/// an arc's ends about an axis through its centre. None tried when there
+/// are more than [`MAX_PARTLY_TRIED`] of them.
+fn partly_redundant(
+    def: &SketchDef,
+    solved: &mitcad_model::sketch::solve::Solved,
+    value: &mut dyn FnMut(mitcad_model::parameters::ParamId) -> Result<f64, String>,
+    name: &dyn Fn(mitcad_model::parameters::ParamId) -> String,
+) -> Vec<(ConstraintUid, usize)> {
+    let held = held_by_offsets_and_patterns(def);
+    let own: Vec<ConstraintUid> = solved
+        .status
+        .redundant
+        .iter()
+        .filter_map(|item| match item {
+            SolverItem::Constraint(k) if !held.contains(k) => Some(*k),
+            _ => None,
+        })
+        .collect();
+    if own.is_empty() || own.len() > MAX_PARTLY_TRIED {
+        return Vec::new();
+    }
+    def.freedom_taken(solved, &own, value, name)
+}
+
+/// [`partly_redundant`]'s constraints in words ([`conflict::partly`]:
+/// "the Symmetry between two points about an axis partly repeats the
+/// others; it still removes one degree of freedom"), each with its id.
+///
+/// [`conflict::partly`]: mitcad_model::sketch::conflict::partly
+fn partly_in_words(
+    def: &SketchDef,
+    partly: &[(ConstraintUid, usize)],
+) -> Vec<(String, ConstraintUid)> {
+    use mitcad_model::sketch::conflict;
+    use mitcad_model::sketch::solve::DimensionInput;
+    if partly.is_empty() {
+        return Vec::new();
+    }
+    let dimensions: Vec<DimensionInput<'_>> = def
+        .dimensions
+        .iter()
+        .map(|d| DimensionInput {
+            id: d.id,
+            kind: &d.kind,
+            value: None,
+        })
+        .collect();
+    let ctx = conflict::Context {
+        entities: &def.entities,
+        constraints: &def.constraints,
+        dimensions: &dimensions,
+        bindings: &[],
+    };
+    partly
+        .iter()
+        .filter_map(|(k, taken)| Some((conflict::partly(&ctx, *k, *taken)?, *k)))
         .collect()
 }
 
@@ -4307,26 +4432,42 @@ mod notice_tests {
             ..SketchStatus::default()
         };
         let redundant = redundant_groups(&status, None);
-        let notices = solve_notices(Some("the sketch cannot be solved"), &status, &redundant);
+        // A redundant constraint that still takes freedom away
+        // (mitcad#1992): information about it.
+        let partly = vec![(
+            "the Symmetry between two points about an axis partly repeats the others; it \
+             still removes one degree of freedom"
+                .to_owned(),
+            ConstraintUid(9),
+        )];
+        let notices = solve_notices(
+            Some("the sketch cannot be solved"),
+            &status,
+            &redundant,
+            &partly,
+        );
         let levels: Vec<_> = notices.iter().map(|n| n.level).collect();
         assert_eq!(
             levels,
             [
                 notice::NoticeLevel::Error,
                 notice::NoticeLevel::Warning,
+                notice::NoticeLevel::Info,
                 notice::NoticeLevel::Info
             ]
         );
+        assert_eq!(notices[2].message, partly[0].0, "{notices:?}");
+        assert_eq!(notices[2].target.as_deref(), Some("k9"), "{notices:?}");
         assert_eq!(
             notices[1].message, "Redundant: 1 constraint follows from the others",
             "{notices:?}"
         );
         // Counted, without ids (mitcad#1612).
         assert_eq!(
-            notices[2].message, "An inactive constraint the geometry does not meet",
+            notices[3].message, "An inactive constraint the geometry does not meet",
             "{notices:?}"
         );
-        assert!(solve_notices(None, &SketchStatus::default(), &[]).is_empty());
+        assert!(solve_notices(None, &SketchStatus::default(), &[], &[]).is_empty());
     }
 
     /// The redundant constraints by where they come from (mitcad#1171): an

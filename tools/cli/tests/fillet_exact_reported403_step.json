@@ -1,0 +1,6 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT. GitHub #403's fourth design (mitcad#1954; opened with --open, never committed; tools/cli/fillet-exact-reported-test.cmake): GitHub #353's stepped block (10 wide; the lower half 5 deep and 5 high, the upper half 5 deep and 10 high), Fillet1 (F12) of radius 5 on every edge of both side faces but their bottom and back edges, the front's top edge and the step's top edge. The corners at both ends of the front's top edge and of the step's top edge meet in their middles. Built before 0.1 % smaller with its warning and slivers; now exactly as the block's core swept by the ball: the core is the bent line in the middle of the width along the bottom from below the front's top edge to the back and up the back to the step's height (its corner inside the step mitred, as the kernel's roundings meet there at smaller radii), cut by the bottom and the back: a quarter ball at each end and half a cylinder along each leg, their common part once, (625 pi - 500) / 3. No warning or information, no face under 0.01 mm2."},
+  {"expect": {"feature": "Fillet1", "status": "ok"}},
+  {"expect": {"query": {"query": "feature", "uid": "F12"}, "result": {"status": "ok", "level": null}}},
+  {"expect": {"body": "Body1", "volume": 487.8318028, "min_face_area": 0.01}}
+]

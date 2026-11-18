@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "NoticePlaces.hpp"
 
+#include <cmath>
+
 #include <QJsonValue>
 
 namespace mitcad {
@@ -41,6 +43,21 @@ QString placesText(const QJsonArray& places) {
                    .arg(at.at(0).toDouble(), 0, 'f', 3)
                    .arg(at.at(1).toDouble(), 0, 'f', 3)
                    .arg(at.at(2).toDouble(), 0, 'f', 3);
+      continue;
+    }
+    if (kind == QStringLiteral("segment")) {
+      // Two points (mitcad#1979: a Measure row's distance), never "-0.000".
+      const auto xyz = [](const QJsonValue& value) {
+        const QJsonArray at = value.toArray();
+        QStringList numbers;
+        for (int i = 0; i < 3; ++i) {
+          const double coordinate = at.at(i).toDouble();
+          numbers << QString::number(std::abs(coordinate) < 5e-4 ? 0.0 : coordinate, 'f', 3);
+        }
+        return numbers.join(QLatin1Char(','));
+      };
+      parts << QStringLiteral("segment %1 to %2")
+                   .arg(xyz(place.value(QStringLiteral("from"))), xyz(place.value(QStringLiteral("to"))));
       continue;
     }
     if (kind == QStringLiteral("occurrence")) {

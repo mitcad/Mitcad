@@ -14,8 +14,11 @@
 
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -43,6 +46,7 @@
 #include <NCollection_Array1.hxx>
 #include <NCollection_HArray1.hxx>
 #include <NCollection_List.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
@@ -50,6 +54,7 @@
 #include <TopoDS_Shell.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt2d.hxx>
 #include <gp_Vec.hxx>
 #include <gp_Vec2d.hxx>
@@ -430,6 +435,95 @@ double face_area(const TopoDS_Shape& face) {
   return props.Mass();
 }
 
+// Whether the face is bounded by its surface's parameter range only (one
+// wire, the whole range's area): what lies outside the trims of another
+// face would come back when its range is widened.
+bool untrimmed(const TopoDS_Face& face) {
+  double u1 = 0, u2 = 0, v1 = 0, v2 = 0;
+  BRepTools::UVBounds(face, u1, u2, v1, v2);
+  TopLoc_Location location;
+  const occ::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+  if (surface.IsNull()) {
+    return false;
+  }
+  int wires = 0;
+  for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next()) {
+    ++wires;
+  }
+  const BRepBuilderAPI_MakeFace whole(surface, u1, u2, v1, v2, kTolerance);
+  return wires == 1 && whole.IsDone() &&
+         std::abs(face_area(whole.Face()) - face_area(face)) <= 1.0e-6 * std::max(1.0, face_area(face));
+}
+
+// Whether the face lies in a plane.
+bool planar(const TopoDS_Face& face) {
+  return BRepAdaptor_Surface(face, false).GetType() == GeomAbs_Plane;
+}
+
+// A planar face trimmed inside its plane (mitcad#1955, GitHub
+// mitcad/Mitcad#407: a wall cut at a slant): the plane continued past each
+// straight edge by `distance`, square to the edge and away from the face,
+// joined to the face as one face. Every mode continues a plane alike.
+TopoDS_Face extended_planar_face(const TopoDS_Face& face, const std::vector<TopoDS_Edge>& edges, double distance) {
+  const BRepAdaptor_Surface surface(face, true);
+  const gp_Pln plane = surface.Plane();
+  gp_Dir normal = plane.Axis().Direction();
+  if (face.Orientation() == TopAbs_REVERSED) {
+    normal.Reverse();
+  }
+  // The strips on a plane facing as the face does.
+  const gp_Pln facing(plane.Location(), normal);
+  // The fuse puts p-curves on the strips' surfaces onto the edges it shares
+  // with them, and the unify rebuilds what it merges: a copy of the face,
+  // never the input's own (MITCAD_CHECK_INPUTS). The input face is only
+  // read, for the directions across its edges.
+  TopoDS_Shape joined = BRepBuilderAPI_Copy(face, true, false).Shape();
+  for (const TopoDS_Edge& edge : edges) {
+    const BRepAdaptor_Curve curve(edge);
+    if (curve.GetType() != GeomAbs_Line) {
+      throw std::invalid_argument("unsupported: extend of a curved edge of a face trimmed inside its plane");
+    }
+    const double first = curve.FirstParameter();
+    const double last = curve.LastParameter();
+    const gp_Pnt a = curve.Value(first);
+    const gp_Pnt b = curve.Value(last);
+    const gp_Vec out = gp_Vec(detail::across_edge(edge, face, (first + last) / 2)) * distance;
+    BRepBuilderAPI_MakePolygon outline(a, b, b.Translated(out), a.Translated(out), true);
+    if (!outline.IsDone()) {
+      throw std::runtime_error("extend: the face's extension past an edge could not be built");
+    }
+    const BRepBuilderAPI_MakeFace strip(facing, outline.Wire(), true);
+    if (!strip.IsDone()) {
+      throw std::runtime_error("extend: the face's extension past an edge could not be built");
+    }
+    BRepAlgoAPI_Fuse fuse(joined, strip.Face());
+    if (!fuse.IsDone() || fuse.HasErrors()) {
+      throw std::runtime_error("extend: the extension could not be joined to the face");
+    }
+    joined = fuse.Shape();
+  }
+  // The face and its strips, all in one plane, as one face.
+  ShapeUpgrade_UnifySameDomain unify(joined, true, true, false);
+  unify.Build();
+  TopoDS_Face result;
+  int count = 0;
+  for (TopExp_Explorer f(unify.Shape(), TopAbs_FACE); f.More(); f.Next()) {
+    result = TopoDS::Face(f.Current());
+    ++count;
+  }
+  if (count != 1) {
+    throw std::runtime_error("extend: the face and its extension did not join into one face");
+  }
+  gp_Dir made = BRepAdaptor_Surface(result, true).Plane().Axis().Direction();
+  if (result.Orientation() == TopAbs_REVERSED) {
+    made.Reverse();
+  }
+  if (made.Dot(normal) < 0.0) {
+    result.Reverse();
+  }
+  return result;
+}
+
 // The face extended past the sides by `distance` along its surface.
 TopoDS_Face extended_face(const TopoDS_Face& face, const std::array<bool, 4>& sides, double distance,
                           ExtendMode mode) {
@@ -442,13 +536,7 @@ TopoDS_Face extended_face(const TopoDS_Face& face, const std::array<bool, 4>& si
   }
   // Only a face bounded by its parameter range: what lies outside its
   // trims would come back.
-  int wires = 0;
-  for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next()) {
-    ++wires;
-  }
-  const BRepBuilderAPI_MakeFace whole(surface, u1, u2, v1, v2, kTolerance);
-  if (wires != 1 || !whole.IsDone() ||
-      std::abs(face_area(whole.Face()) - face_area(face)) > 1.0e-6 * std::max(1.0, face_area(face))) {
+  if (!untrimmed(face)) {
     throw std::invalid_argument("unsupported: extend of a face that is trimmed inside its surface's "
                                 "parameter range");
   }
@@ -731,12 +819,20 @@ ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges
   return detail::run("extend", [&] {
     const detail::EdgeFaces edge_faces(body);
     std::map<int, std::array<bool, 4>> sides; // face -> sides to extend
+    // Planar faces trimmed inside their planes -> their edges to extend
+    // past (mitcad#1955).
+    std::map<int, std::vector<TopoDS_Edge>> planes;
     for (const int e : picked_edges(body, edges, openings)) {
       const std::vector<int> faces = edge_faces.at(e);
       if (faces.size() != 1 || BRep_Tool::IsClosed(body.edge(e), body.face(faces.front()))) {
         const std::string why = " is not on the surface's open boundary";
         throw std::invalid_argument(
             edge_error(body.edge_name(e), "extend: an edge" + why, "extend: edge " + body.edge_name(e) + why));
+      }
+      const TopoDS_Face& face = body.face(faces.front());
+      if (planar(face) && !untrimmed(face)) {
+        planes[faces.front()].push_back(body.edge(e));
+        continue;
       }
       const int side = side_of(body.edge(e), body.face(faces.front()));
       if (side < 0) {
@@ -750,8 +846,11 @@ ShapePtr extend_surface(const Shape& body, const std::vector<std::string>& edges
     std::vector<Shape::NamedFace> named;
     for (int f = 0; f < body.face_count(); ++f) {
       const auto found = sides.find(f);
+      const auto plane = planes.find(f);
       const TopoDS_Shape face =
-          found == sides.end() ? TopoDS_Shape(body.face(f)) : TopoDS_Shape(extended_face(body.face(f), found->second, distance, mode));
+          plane != planes.end() ? TopoDS_Shape(extended_planar_face(body.face(f), plane->second, distance))
+          : found == sides.end() ? TopoDS_Shape(body.face(f))
+                                 : TopoDS_Shape(extended_face(body.face(f), found->second, distance, mode));
       parts.push_back(face);
       named.push_back({face, body.face_names(f)});
     }

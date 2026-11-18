@@ -187,6 +187,12 @@ public:
   // logged again or the ones logged last stand (no active pick input, or
   // picking suspended by a job).
   bool refreshLoggedPickPlaces();
+  // For UI tests (MITCAD_LOG_PICKS): where a click with no command picks
+  // each face, edge and vertex the selection filters take, logged as a
+  // command's input logs them (mitcad#1955: a surface body's free edges);
+  // a later click-pick refreshes them. False while they cannot be read yet,
+  // or outside the idle selection.
+  bool logIdlePickPlaces();
   // The window's own menu of its panels, which a right-click on a dock's
   // title, the Docked toolbar or the space between them opens (Qt's): the
   // docks' entries only, never the ribbon's toolbar (mitcad#1451), logged
@@ -453,6 +459,8 @@ public:
   void openDrawing(const QString& uid) override;
   void createDrawing(const QString& component) override;
   bool isDrawingOpen() const override { return drawingOpen(); }
+  // A drawing's sheet drawn in a job (mitcad#1997, DocumentSession::queryAsync).
+  bool queryInJob(const QString& label, const QJsonObject& query, QObject* context, QueryDone done) override;
   QJsonArray selectedModelBodies() const override;
   // Light bulbs in every mode (mitcad#295; MainWindowVisibility.cpp).
   bool runVisibilityCommands(const QJsonArray& commands, const QString& label) override;
@@ -689,6 +697,11 @@ private:
   // (mitcad#1536): the reply's notes shown as a hint, also when its command
   // finishes, and logged.
   void noteKeptParameters(const QJsonObject& result);
+  // Hidden occurrences a command showed so that what it added can be seen
+  // (mitcad#1995, the reply's `shown_parents`): said in words as a hint,
+  // also when its command finishes, and logged. `command`: the model
+  // command's name (a body or a component was added).
+  void noteShownParents(const QString& command, const QJsonObject& result);
   int undoDepth() const;
 
   void recompute();
@@ -1594,6 +1607,9 @@ private:
   QString m_webMoveComponent;
   QString m_webMoveOccurrence;
   QString m_webMoveName;
+  // The hidden parents its insert showed, said again when Move starts on it
+  // (mitcad#1995).
+  QString m_webMoveNote;
   QPointer<QDialog> m_componentBrowser;
   // The web browser component (CEF and the module, BrowserComponent.hpp):
   // the installed one's window, the first download (asked once, with its
@@ -2031,6 +2047,7 @@ private:
   QString& m_lastModelError = m_documentSession->state().lastModelError; // with its tail, for the MCP (mitcad#1897)
   bool& m_lastCancelled = m_documentSession->state().lastCancelled;
   QString m_placementNote; // the last command's placement warning (mitcad#292)
+  QString m_shownParentsNote; // the last hidden parents a command showed (mitcad#1995)
   QStackedWidget* m_commandPages = nullptr;
   QPointer<QWidget> m_panelScroll; // the running command's panel page
   // A command set aside while a sketch it uses is edited (mitcad#1648,
@@ -2075,6 +2092,15 @@ private:
   // the places of the feature its message is about.
   void installNoticeHover();
   void updateStatusNoticeHover();
+  // Sketch curves in the Browser (mitcad#1978; MainWindowBrowserCurves.cpp):
+  // the sketches' curve rows while the command's active input takes sketch
+  // curves (`filter`, its kinds now), none otherwise; the pointer over a
+  // row paints the curve. Each sketch's rows read once per document state.
+  void installBrowserCurves();
+  void updateBrowserSketchCurves(SelectFilter filter);
+  void previewBrowserCurve(const BrowserNode& node);
+  QHash<QString, QVector<BrowserSketchCurve>> m_browserCurveCache;
+  bool m_browserCurvesWait = false;
   Selection m_autoselectPreview; // hover only; never part of the actual selection
   SelectionCreatePanel* m_selectionCreate = nullptr; // the card's Create row (mitcad#619)
   QString m_loggedSelectionCreate = QStringLiteral("none"); // its log line last logged (UI tests)

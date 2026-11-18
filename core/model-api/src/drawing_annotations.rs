@@ -458,6 +458,9 @@ pub(super) struct ViewAt<'a> {
     /// pick of a line or a circle they draw is found again by
     /// (mitcad#1693).
     drawn_by: Vec<ViewAnnotation>,
+    /// Its visible lines by where they lie, made when first asked
+    /// ([`NearLines`], mitcad#1997).
+    visible_lines: std::cell::OnceCell<NearLines>,
 }
 
 impl ViewAt<'_> {
@@ -536,11 +539,12 @@ impl ViewAt<'_> {
     /// view draws as visible.
     fn on_visible_within(&self, p: P2, near: f64) -> bool {
         let projection = &self.placed.projection;
-        let on_edge = projection
-            .edges
-            .iter()
-            .filter(|e| e.visible)
-            .any(|e| curve_distance(&e.curve, p) <= near);
+        let edges = &projection.edges;
+        let on_edge = self
+            .visible_lines
+            .get_or_init(|| NearLines::new(edges))
+            .near(p, near)
+            .any(|i| curve_distance(&edges[i].curve, p) <= near);
         on_edge
             || projection.cuts.iter().flatten().any(|lp| {
                 (0..lp.len())
@@ -564,6 +568,163 @@ impl ViewAt<'_> {
             .count();
         !points.is_empty() && 2 * on >= points.len()
     }
+}
+
+/// A view's visible lines by where they lie (mitcad#1997): whether a point
+/// lies near a visible line asked thousands of times over a view of
+/// thousands of lines (its automatic centre marks, each circle's points)
+/// took seconds when every line was measured each time. The lines whose
+/// boxes come near the point are those measured, so a point is near the
+/// same lines as before. A grid over the lines' boxes; few lines, or a
+/// line across many cells, are measured always.
+pub(super) struct NearLines {
+    /// The visible lines measured whatever the point.
+    always: Vec<usize>,
+    /// The grid: its lower left corner, its cells' size and count, and the
+    /// lines whose boxes touch each cell (row after row).
+    origin: P2,
+    cell: f64,
+    columns: usize,
+    rows: usize,
+    cells: Vec<Vec<usize>>,
+    /// Every visible line, for a point near most of the grid.
+    visible: Vec<usize>,
+}
+
+/// Below this many visible lines a view measures each.
+const NEAR_LINES_GRID: usize = 64;
+/// A line whose box takes more cells than this is measured always.
+const NEAR_LINES_SPREAD: usize = 64;
+
+impl NearLines {
+    pub(super) fn new(edges: &[mitcad_model::drawing::ViewEdge]) -> Self {
+        let visible: Vec<usize> = (0..edges.len()).filter(|i| edges[*i].visible).collect();
+        let mut out = NearLines {
+            always: Vec::new(),
+            origin: [0.0, 0.0],
+            cell: 0.0,
+            columns: 0,
+            rows: 0,
+            cells: Vec::new(),
+            visible,
+        };
+        if out.visible.len() < NEAR_LINES_GRID {
+            out.always = out.visible.clone();
+            return out;
+        }
+        let boxes: Vec<Option<(P2, P2)>> = out
+            .visible
+            .iter()
+            .map(|i| curve_box(&edges[*i].curve))
+            .collect();
+        let mut low = [f64::INFINITY; 2];
+        let mut high = [f64::NEG_INFINITY; 2];
+        for (lo, hi) in boxes.iter().flatten() {
+            for k in 0..2 {
+                low[k] = low[k].min(lo[k]);
+                high[k] = high[k].max(hi[k]);
+            }
+        }
+        let size = (high[0] - low[0]).max(high[1] - low[1]);
+        if !size.is_finite() || size <= 0.0 {
+            out.always = out.visible.clone();
+            return out;
+        }
+        // About as many cells as lines, at most 1024 along a side.
+        let side = (out.visible.len() as f64).sqrt().ceil().min(1024.0);
+        out.cell = size / side;
+        out.origin = low;
+        out.columns = (((high[0] - low[0]) / out.cell).floor() as usize + 1).min(1025);
+        out.rows = (((high[1] - low[1]) / out.cell).floor() as usize + 1).min(1025);
+        out.cells = vec![Vec::new(); out.columns * out.rows];
+        for (k, b) in boxes.iter().enumerate() {
+            let i = out.visible[k];
+            let Some((lo, hi)) = b else {
+                out.always.push(i);
+                continue;
+            };
+            let (c0, r0) = out.cell_of(*lo);
+            let (c1, r1) = out.cell_of(*hi);
+            if (c1 - c0 + 1) * (r1 - r0 + 1) > NEAR_LINES_SPREAD {
+                out.always.push(i);
+                continue;
+            }
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    out.cells[r * out.columns + c].push(i);
+                }
+            }
+        }
+        out
+    }
+
+    /// The cell a point lies in, the grid's nearest for one outside it.
+    fn cell_of(&self, p: P2) -> (usize, usize) {
+        let at = |v: f64, from: f64, count: usize| {
+            let k = ((v - from) / self.cell).floor();
+            if k.is_nan() || k < 0.0 {
+                0
+            } else {
+                (k as usize).min(count - 1)
+            }
+        };
+        (
+            at(p[0], self.origin[0], self.columns),
+            at(p[1], self.origin[1], self.rows),
+        )
+    }
+
+    /// The visible lines that may lie within `near` of `p`: every one that
+    /// does, some that do not (a line may come twice).
+    pub(super) fn near(&self, p: P2, near: f64) -> Box<dyn Iterator<Item = usize> + '_> {
+        if self.cells.is_empty() {
+            return Box::new(self.always.iter().copied());
+        }
+        // A little more than `near` all round: rounding never drops a line.
+        let reach = near + 1e-9 * (1.0 + p[0].abs().max(p[1].abs()) + near.abs());
+        if !(reach.is_finite() && p[0].is_finite() && p[1].is_finite()) {
+            return Box::new(self.visible.iter().copied());
+        }
+        let (c0, r0) = self.cell_of([p[0] - reach, p[1] - reach]);
+        let (c1, r1) = self.cell_of([p[0] + reach, p[1] + reach]);
+        if (c1 - c0 + 1) * (r1 - r0 + 1) * 2 > self.cells.len() {
+            return Box::new(self.visible.iter().copied());
+        }
+        let around = (r0..=r1).flat_map(move |r| {
+            (c0..=c1).flat_map(move |c| self.cells[r * self.columns + c].iter().copied())
+        });
+        Box::new(self.always.iter().copied().chain(around))
+    }
+}
+
+/// The box a projected curve lies in; none when it is not finite. An arc's
+/// is its whole circle's.
+fn curve_box(curve: &ViewCurve) -> Option<(P2, P2)> {
+    let (lo, hi) = match curve {
+        ViewCurve::Line(a, b) => (
+            [a[0].min(b[0]), a[1].min(b[1])],
+            [a[0].max(b[0]), a[1].max(b[1])],
+        ),
+        ViewCurve::Polyline(points) | ViewCurve::Spline(ViewSpline { points, .. }) => {
+            let mut lo = [f64::INFINITY; 2];
+            let mut hi = [f64::NEG_INFINITY; 2];
+            for p in points {
+                for k in 0..2 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            (lo, hi)
+        }
+        ViewCurve::Arc { center, radius, .. } => {
+            let r = radius.abs();
+            (
+                [center[0] - r, center[1] - r],
+                [center[0] + r, center[1] + r],
+            )
+        }
+    };
+    (lo.iter().chain(&hi).all(|v| v.is_finite())).then_some((lo, hi))
 }
 
 /// How far a point is from a projected curve.
@@ -2010,6 +2171,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                 Subject::Occurrence { occurrence } => occurrence.0.len(),
                 _ => 0,
             },
+            visible_lines: std::cell::OnceCell::new(),
         })
     }
 
@@ -2974,16 +3136,22 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                 own.chain(others)
                                     .filter_map(|(_, l)| l.as_ref().ok())
                                     .find_map(|l| {
-                                        let key = row_of(
-                                            self.assembly(),
-                                            pick.body,
-                                            pick.path(),
-                                            l.levels,
-                                            l.depth,
-                                        )?;
-                                        l.item(key, pick.path())
+                                        let (key, placement) =
+                                            l.row_of(self.assembly(), pick.body, pick.path())?;
+                                        l.item(key, &placement)
                                     })
                             });
+                            // A Reference's balloon: listed, without a
+                            // number (mitcad#1985).
+                            let reference = number.is_none()
+                                && annotation.picks.first().is_some_and(|pick| {
+                                    parts_lists.iter().filter_map(|(_, l)| l.as_ref().ok()).any(
+                                        |l| {
+                                            l.row_of(self.assembly(), pick.body, pick.path())
+                                                .is_some_and(|(key, _)| l.references.contains(&key))
+                                        },
+                                    )
+                                });
                             match number {
                                 Some(n) => self.lay_out_annotation(
                                     annotation,
@@ -3003,7 +3171,7 @@ impl<K: Kernel> DrawingAnnotationsOps<K> for Document<K> {
                                         Some("?"),
                                         defaults,
                                     )
-                                    .and_then(|_| Err(self.unlisted(annotation))),
+                                    .and_then(|_| Err(self.unlisted(annotation, reference))),
                             }
                         }
                         _ => self.lay_out_annotation(
@@ -3736,7 +3904,7 @@ trait DrawingAnnotationsLocal<K: Kernel> {
 
     /// Why a balloon has no number: no parts list on its sheet lists what
     /// it picks.
-    fn unlisted(&self, annotation: &ViewAnnotation) -> String;
+    fn unlisted(&self, annotation: &ViewAnnotation, reference: bool) -> String;
 
     /// A view's automatic centre marks: on each circle it sees end on that
     /// turns half way round at least (concentric ones once, the largest;
@@ -4937,14 +5105,26 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         let depth = view.subject_depth;
         let candidates = self.candidates(view);
         let map = &view.placed.map;
+        // The BOM Structures act on the rows; a Reference gets no balloon
+        // (mitcad#1985).
+        let structures = self.bom_structures();
+        let row_key = |body: BodyUid, path: &[OccurrenceUid]| {
+            row_of(assembly, &structures, body, path, levels, depth).map(|(key, _)| key)
+        };
         let mut done: Vec<RowKey> = Vec::new();
         // Each row's pick with its arrow's point on the sheet.
         let mut found: Vec<(ViewPick, P2, P2)> = Vec::new();
         for s in &self.bodies_seen(view) {
-            let Some(key) = row_of(assembly, s.body, &s.path, levels, depth) else {
+            let Some(key) = row_key(s.body, &s.path) else {
                 continue;
             };
             if done.contains(&key) {
+                continue;
+            }
+            if let RowKey::Component(component) = key
+                && structures.get(&component) == Some(&mitcad_model::BomStructure::Reference)
+            {
+                done.push(key);
                 continue;
             }
             // A line of the row's bodies, a visible one if there is one.
@@ -4953,7 +5133,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                     let point = c.found.seen.point();
                     c.pick.point.is_none()
                         && matches!(c.found.seen, Seen::Line(..))
-                        && row_of(assembly, c.pick.body, c.pick.path(), levels, depth) == Some(key)
+                        && row_key(c.pick.body, c.pick.path()) == Some(key)
                         && view.sees(point)
                         && (!visible || view.on_visible(point))
                 })
@@ -5340,7 +5520,7 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
         ))
     }
 
-    fn unlisted(&self, annotation: &ViewAnnotation) -> String {
+    fn unlisted(&self, annotation: &ViewAnnotation, reference: bool) -> String {
         let what = annotation.picks.first().map_or_else(String::new, |pick| {
             match pick
                 .path()
@@ -5351,6 +5531,9 @@ impl<K: Kernel> DrawingAnnotationsLocal<K> for Document<K> {
                 None => self.body_name(pick.body),
             }
         });
+        if reference {
+            return format!("{what} is a reference: its parts list gives it no number");
+        }
         format!("no parts list on the sheet lists {what}")
     }
 
@@ -6122,4 +6305,81 @@ fn retrieved_key(i: usize, dim: &SketchDimension) -> (usize, [i64; 3]) {
         SketchDimension::Radial { center, .. } => *center,
     };
     (i, p.map(|v| (v * 1e6).round() as i64))
+}
+
+#[cfg(test)]
+mod near_lines_tests {
+    use super::{NearLines, curve_distance};
+    use mitcad_model::drawing::{ViewCurve, ViewEdge, ViewEdgeKind};
+
+    fn edge(curve: ViewCurve, visible: bool) -> ViewEdge {
+        ViewEdge {
+            visible,
+            kind: ViewEdgeKind::Sharp,
+            curve,
+            source: None,
+        }
+    }
+
+    /// A point is near the same visible lines with the grid as when each
+    /// line is measured (mitcad#1997): short and long lines, arcs,
+    /// polylines and hidden lines, points on, beside and far off them.
+    #[test]
+    fn the_grid_finds_what_measuring_every_line_finds() {
+        let mut edges = Vec::new();
+        let mut seed = 12345u64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 11) as f64) / ((1u64 << 53) as f64)
+        };
+        for k in 0..400 {
+            let a = [next() * 300.0 - 50.0, next() * 200.0];
+            let short = [a[0] + next() * 4.0 - 2.0, a[1] + next() * 4.0 - 2.0];
+            let curve = match k % 5 {
+                0 => ViewCurve::Line(a, [next() * 300.0, next() * 200.0]),
+                1 | 2 => ViewCurve::Line(a, short),
+                3 => ViewCurve::Arc {
+                    center: a,
+                    radius: next() * 6.0,
+                    start: next() * 3.0,
+                    end: 3.0 + next() * 3.0,
+                },
+                _ => ViewCurve::Polyline(vec![a, short, [short[0] + 1.0, short[1] - 0.5]]),
+            };
+            edges.push(edge(curve, k % 7 != 0));
+        }
+        let lines = NearLines::new(&edges);
+        assert!(!lines.cells.is_empty(), "a view of 400 lines has a grid");
+        let mut near_some = 0;
+        for _ in 0..3000 {
+            let p = [next() * 320.0 - 60.0, next() * 220.0 - 10.0];
+            for near in [0.0, 0.05, 0.5, 3.0, 40.0] {
+                let every = edges
+                    .iter()
+                    .filter(|e| e.visible)
+                    .any(|e| curve_distance(&e.curve, p) <= near);
+                let grid = lines
+                    .near(p, near)
+                    .any(|i| curve_distance(&edges[i].curve, p) <= near);
+                assert_eq!(grid, every, "point {p:?} within {near}");
+                near_some += usize::from(every);
+            }
+        }
+        assert!(near_some > 1000, "the points come near lines often enough");
+        // On a line's end and on a hidden line only.
+        for e in &edges {
+            if let ViewCurve::Line(a, _) = e.curve {
+                let every = edges
+                    .iter()
+                    .filter(|e| e.visible)
+                    .any(|e| curve_distance(&e.curve, a) <= 0.0);
+                let grid = lines
+                    .near(a, 0.0)
+                    .any(|i| curve_distance(&edges[i].curve, a) <= 0.0);
+                assert_eq!(grid, every);
+            }
+        }
+    }
 }

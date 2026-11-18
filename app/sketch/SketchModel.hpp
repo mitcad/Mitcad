@@ -256,6 +256,10 @@ public:
   // redundant constraints.
   QJsonArray notices;
   QStringList redundant;
+  // The redundant constraints that still take freedom away, with how many
+  // degrees of freedom each (the `sketch` query's `partly_redundant`,
+  // mitcad#1992): marked as information, not as following from the others.
+  QHash<QString, int> partlyRedundant;
   // The line distances between lines that are not parallel (the `sketch`
   // query's `not_parallel`, mitcad#1774): drawn as in conflict.
   QStringList notParallel;

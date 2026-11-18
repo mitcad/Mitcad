@@ -1,0 +1,260 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: the start of a rounding along a knife edge, where two faces meet
+tangentially, at 0 degrees, the material between them a wedge that thins
+to nothing (mitcad#1984).
+
+A ball of the radius touches both faces only where the wedge is two radii
+thick, away from the edge. The walked fillet's first section was solved
+from the edge's point on both faces, where the ball's equations have no
+solution near (the centres a ball touching each face would have lie on
+opposite sides of the edge): no start, for two cylinders tangent to each
+other at any radius (a plane and a cylinder with parallel axes are
+computed analytically, ChFiKPart, which finds the ball).
+
+- ChFi3d_KnifeStart, from StartSol for a constant rounding at each point it
+  tries on the spine, before PerformFirstSection: where the two surfaces'
+  centre sides (their normals with the signs Choix gives them, as
+  BlendFunc_ConstRad::Set has them) are opposite within a thousandth of a
+  radian at the edge's point, it steps from there along face 1 into the
+  face, square to the edge in the section plane, keeping the centre of a
+  ball touching face 1 and its foot on surface 2, until the centre's
+  distance from surface 2 on that surface's centre side is the radius; the
+  points there are the solver's start. The walk, the ends and the topology
+  are OCCT's as for any rounding.
+- ChFi3d::ConcaveSide, where the faces turn back on each other at the
+  edge (the branch a knife edge takes): the side of the section (Choix's
+  parity, from the normals' cross product along the edge) is taken with
+  the normals turned towards the centre, as in the other branch; with one
+  face's normal turned and not the other's, the section went the other way
+  round the ball, and the fillet gave the tip and the whole ball's section
+  as the body (two cylinders whose seams lie on the edge, as a sketch's
+  circles have them).
+- Where face 1 or 2 ends before the ball fits (the radius larger than the
+  wedge allows), or the faces do not meet as a knife, the start is the
+  edge's point as before.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
+index ee4e1452..00e3373c 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
+@@ -507,6 +507,18 @@ int ChFi3d::ConcaveSide(const BRepAdaptor_Surface& S1,
+       {
+         Or2 = TopAbs_REVERSED;
+       }
++      // The normals towards the centre, as above, for the side of the
++      // section below (a knife edge, mitcad#1984: with one face's normal
++      // turned and not the other's, the section went the other way round
++      // the ball).
++      if (Or1 == TopAbs_REVERSED)
++      {
++        ns1.Reverse();
++      }
++      if (Or2 == TopAbs_REVERSED)
++      {
++        ns2.Reverse();
++      }
+     }
+   }
+ 
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+index bfe2a260..a37e5e26 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
+@@ -1063,6 +1063,166 @@ void ChFi3d_Builder::ConexFaces(const occ::handle<ChFiDS_Spine>&  Spine,
+   ChFi3d_LoadScrewContinued(Sb2, tolapp3d);
+ }
+ 
++//=======================================================================
++// function : ChFi3d_KnifeStart
++// purpose  : The start of a constant rounding of radius R along a knife
++//            edge: the two faces meet at the edge tangentially, at 0
++//            degrees, the material between them a wedge that thins to
++//            nothing (the ball's centre lies along opposite normals of
++//            the two surfaces there). A ball touches both faces only where
++//            the wedge is 2 R thick, away from the edge, beyond the reach
++//            of the walk's solver from the edge's point. From UV1 and UV2
++//            (the edge's point on each surface) it steps along face 1 into
++//            the face, in the section plane of normal T, keeping the
++//            centre of a ball touching face 1 and taking its distance from
++//            surface 2 on surface 2's centre side, until that distance is
++//            R; the points there are the start for the walk's solver
++//            (SolDep). Choix tells the sides of the centre, as
++//            BlendFunc_ConstRad::Set has them. Returns false, SolDep as it
++//            was, where the faces do not meet as a knife or face 1 or 2
++//            ends before the ball fits (the radius larger than the wedge
++//            allows).
++//=======================================================================
++
++static bool ChFi3d_KnifeStart(const occ::handle<BRepAdaptor_Surface>&      S1,
++                              const occ::handle<BRepAdaptor_Surface>&      S2,
++                              const occ::handle<BRepTopAdaptor_TopolTool>& I1,
++                              const occ::handle<BRepTopAdaptor_TopolTool>& I2,
++                              const gp_Pnt2d&                              UV1,
++                              const gp_Pnt2d&                              UV2,
++                              const gp_Vec&                                T,
++                              const double                                 R,
++                              const int                                    Choix,
++                              math_Vector&                                 SolDep)
++{
++  if (S1.IsNull() || S2.IsNull() || R <= Precision::Confusion()
++      || T.Magnitude() <= gp::Resolution())
++  {
++    return false;
++  }
++  // The centre lies at P + k R N, N the surface's unit normal.
++  const double k1 = (Choix == 1 || Choix == 2 || Choix == 7 || Choix == 8) ? 1. : -1.;
++  const double k2 = (Choix >= 1 && Choix <= 4) ? 1. : -1.;
++  const gp_Dir aT(T);
++  const auto   centreSide =
++    [](const BRepAdaptor_Surface& S, const gp_Pnt2d& UV, const double k, gp_Pnt& P, gp_Vec& DU, gp_Vec& DV) {
++      S.D1(UV.X(), UV.Y(), P, DU, DV);
++      gp_Vec N = DU.Crossed(DV);
++      if (N.Magnitude() <= gp::Resolution())
++      {
++        return gp_Vec();
++      }
++      return N.Normalized() * k;
++    };
++  gp_Pnt P1, P2;
++  gp_Vec DU1, DV1, DU2, DV2;
++  gp_Vec C1 = centreSide(*S1, UV1, k1, P1, DU1, DV1);
++  gp_Vec C2 = centreSide(*S2, UV2, k2, P2, DU2, DV2);
++  // A knife: the centre's sides opposite (within a thousandth of a radian).
++  if (C1.Magnitude() <= gp::Resolution() || C2.Magnitude() <= gp::Resolution()
++      || C1.Dot(C2) > -std::cos(1.e-3))
++  {
++    return false;
++  }
++  // Into face 1, square to the edge in the section plane: the side a small
++  // step classifies inside the face.
++  gp_Vec D = gp_Vec(aT).Crossed(C1);
++  if (D.Magnitude() <= gp::Resolution())
++  {
++    return false;
++  }
++  D.Normalize();
++  const double tolUV = std::max(S1->UResolution(Precision::Confusion()), S1->VResolution(Precision::Confusion()));
++  {
++    double du, dv;
++    ChFi3d_Coefficient(D * (1.e-3 * R), DU1, DV1, du, dv);
++    if (I1->Classify(gp_Pnt2d(UV1.X() + du, UV1.Y() + dv), tolUV, false) != TopAbs_IN)
++    {
++      D.Reverse();
++      ChFi3d_Coefficient(D * (1.e-3 * R), DU1, DV1, du, dv);
++      if (I1->Classify(gp_Pnt2d(UV1.X() + du, UV1.Y() + dv), tolUV, false) != TopAbs_IN)
++      {
++        return false;
++      }
++    }
++  }
++  Extrema_GenLocateExtPS aFoot(*S2);
++  gp_Pnt2d               uv1 = UV1, uv2 = UV2;
++  // The signed distance of the centre from surface 2, on its centre side,
++  // less R: about -2 R at the edge, 0 where the ball touches both.
++  double gPrev = -2. * R;
++  double h     = R / 8.;
++  for (int i = 0; i < 400; i++)
++  {
++    double du, dv;
++    ChFi3d_Coefficient(D * h, DU1, DV1, du, dv);
++    const gp_Pnt2d uv1Next(uv1.X() + du, uv1.Y() + dv);
++    if (I1->Classify(uv1Next, tolUV, false) == TopAbs_OUT)
++    {
++      return false;
++    }
++    gp_Pnt P1Next;
++    gp_Vec DU1Next, DV1Next;
++    const gp_Vec C1Next = centreSide(*S1, uv1Next, k1, P1Next, DU1Next, DV1Next);
++    if (C1Next.Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    const gp_Pnt centre = P1Next.Translated(C1Next * R);
++    aFoot.Perform(centre, uv2.X(), uv2.Y());
++    if (!aFoot.IsDone())
++    {
++      return false;
++    }
++    double u2, v2;
++    aFoot.Point().Parameter(u2, v2);
++    const gp_Pnt2d uv2Next(u2, v2);
++    gp_Pnt         Q2;
++    gp_Vec         DUq, DVq;
++    const gp_Vec   C2Next = centreSide(*S2, uv2Next, k2, Q2, DUq, DVq);
++    if (C2Next.Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    const double g = gp_Vec(Q2, centre).Dot(C2Next) - R;
++    if (g >= 0.)
++    {
++      // Between the last two steps, where g passes 0.
++      const double t = (gPrev < 0. && g > gPrev) ? -gPrev / (g - gPrev) : 1.;
++      const gp_Pnt2d s1(uv1.X() + t * (uv1Next.X() - uv1.X()), uv1.Y() + t * (uv1Next.Y() - uv1.Y()));
++      const gp_Pnt2d s2(uv2.X() + t * (uv2Next.X() - uv2.X()), uv2.Y() + t * (uv2Next.Y() - uv2.Y()));
++      if (I2->Classify(s2, tolUV, false) == TopAbs_OUT)
++      {
++        return false;
++      }
++      SolDep(1) = s1.X();
++      SolDep(2) = s1.Y();
++      SolDep(3) = s2.X();
++      SolDep(4) = s2.Y();
++      return true;
++    }
++    // Into the face, square to the edge, at the new point.
++    gp_Vec DNext = gp_Vec(aT).Crossed(C1Next);
++    if (DNext.Magnitude() <= gp::Resolution())
++    {
++      return false;
++    }
++    DNext.Normalize();
++    if (DNext.Dot(D) < 0.)
++    {
++      DNext.Reverse();
++    }
++    D     = DNext;
++    uv1   = uv1Next;
++    uv2   = uv2Next;
++    DU1   = DU1Next;
++    DV1   = DV1Next;
++    gPrev = g;
++    h     = std::min(1.25 * h, 2. * R);
++  }
++  return false;
++}
++
+ //=======================================================================
+ // function : StartSol
+ // purpose  : Calculates a starting solution :
+@@ -1181,7 +1341,27 @@ void ChFi3d_Builder::StartSol(const occ::handle<ChFiDS_Stripe>&      Stripe,
+     const BRepAdaptor_Curve& Ced = Spine->CurrentElementarySpine(iedge);
+     gp_Pnt                   pnt = Ced.Value(woned);
+ 
+-    if (Projection(PExt, pnt, els, w, tolapp3d)
++    const bool projected = Projection(PExt, pnt, els, w, tolapp3d);
++    // Along a knife edge the ball lies away from the edge: the solver
++    // starts from where it touches both faces (ChFi3d_KnifeStart).
++    const occ::handle<ChFiDS_FilSpine> aKnifeSpine = occ::down_cast<ChFiDS_FilSpine>(Spine);
++    if (projected && !aKnifeSpine.IsNull() && aKnifeSpine->IsConstant(iedge))
++    {
++      gp_Pnt aGuidePnt;
++      gp_Vec aGuideTan;
++      HGuide->D1(w, aGuidePnt, aGuideTan);
++      ChFi3d_KnifeStart(HS1,
++                        HS2,
++                        I1,
++                        I2,
++                        P1,
++                        P2,
++                        aGuideTan,
++                        aKnifeSpine->Radius(iedge),
++                        Choix,
++                        SolDep);
++    }
++    if (projected
+         && PerformFirstSection(Spine, HGuide, Choix, HS1, HS2, I1, I2, w, SolDep, Pos1, Pos2))
+     {
+       P1.SetCoord(SolDep(1), SolDep(2));

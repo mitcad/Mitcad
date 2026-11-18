@@ -22,15 +22,16 @@ use crate::document::PrintFrom;
 use crate::print_keys::{self, Dialect, Kind, PrintSet};
 
 pub(super) const PROJECT_FILE: &str = "Metadata/project_settings.config";
-const MODEL_SETTINGS: &str = "Metadata/model_settings.config";
+pub(super) const MODEL_SETTINGS: &str = "Metadata/model_settings.config";
 const LAYER_RANGES: &str = "Metadata/layer_config_ranges.xml";
 
 /// The namespace of the family's metadata names.
-const NAMESPACE: (&str, &str) = ("BambuStudio", "http://schemas.bambulab.com/package/2021");
+pub(super) const NAMESPACE: (&str, &str) =
+    ("BambuStudio", "http://schemas.bambulab.com/package/2021");
 
 /// The version an export names: one the family's loaders take as a
 /// project of theirs (see the key map's documentation).
-const VERSION: &str = "02.00.00.00";
+pub(super) const VERSION: &str = "02.00.00.00";
 
 /// Which member of the family wrote a project, by its `Application`
 /// metadata; `given` when it does not say.
@@ -113,18 +114,7 @@ pub(super) fn read_project(
     // The printer's whole block, written back to this slicer only: its
     // keys of the map's printer layer and the kept ones of the printer,
     // with the preset it inherits from and the keys it says differ.
-    let printer_keys = source::layer_keys(dialect, PrintSet::Printer);
-    let mapped = source::mapped_keys(dialect);
-    let mut raw: BTreeMap<String, Value> = map
-        .iter()
-        .filter(|(key, _)| {
-            printer_keys.contains(key.as_str())
-                || (!mapped.contains(key.as_str())
-                    && !source::BOOKKEEPING.contains(&key.as_str())
-                    && source::leftover_set(key) == PrintSet::Printer)
-        })
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
+    let mut raw = printer_block(&map, dialect, false);
     for (field, key) in [
         ("inherits_group", "@inherits"),
         ("different_settings_to_system", "@different"),
@@ -205,6 +195,30 @@ pub(super) fn read_project(
     Ok(out)
 }
 
+/// A printer's block as the file gives it, written back to this slicer
+/// only: its keys of the map's printer layer and the kept ones of the
+/// printer (`preset`: a printer preset's, whose every kept key is the
+/// printer's; else those the layer of their name says), never bookkeeping.
+/// The lists keep their shape (mitcad#2008: an entry per extruder or per
+/// nozzle variant), which the map's one value of a key does not.
+fn printer_block(
+    map: &Map<String, Value>,
+    dialect: Dialect,
+    preset: bool,
+) -> BTreeMap<String, Value> {
+    let printer_keys = source::layer_keys(dialect, PrintSet::Printer);
+    let mapped = source::mapped_keys(dialect);
+    map.iter()
+        .filter(|(key, _)| {
+            printer_keys.contains(key.as_str())
+                || (!mapped.contains(key.as_str())
+                    && !source::is_bookkeeping(key)
+                    && (preset || source::leftover_set(key) == PrintSet::Printer))
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// The layer a preset is of: its `type`, else the id key it has.
 fn preset_layer(map: &Map<String, Value>) -> Option<PrintSet> {
     match map.get("type").and_then(Value::as_str) {
@@ -253,7 +267,18 @@ fn read_preset_into(
             name.as_deref().unwrap_or("the preset")
         ));
     }
+    // Templates it includes that were not filled in (mitcad#2008): the
+    // values they give are not read, which the import says.
+    let templates = source::include_names(map.get("include"));
+    if !templates.is_empty() {
+        out.report.left_out.push(format!(
+            "the values {} takes from its templates {} (not found: only its own are in the file)",
+            name.as_deref().unwrap_or("the preset"),
+            templates.join(", ")
+        ));
+    }
     let notes = out.report.filaments.len();
+    let printers = out.printers.len();
     read_flat(
         dialect,
         &JsonSource(&*map),
@@ -262,6 +287,16 @@ fn read_preset_into(
         (name.clone(), name),
         out,
     );
+    // A printer keeps its block (mitcad#2008): its lists per extruder and
+    // per nozzle variant as the preset gives them.
+    if set == PrintSet::Printer
+        && let Some(printer) = out.printers.get_mut(printers)
+    {
+        let raw = printer_block(map, dialect, true);
+        if !raw.is_empty() {
+            printer.raw.insert(dialect.id().to_owned(), raw);
+        }
+    }
     // A base not filled in (mitcad#1053): the chain stops there.
     for note in &mut out.report.filaments[notes..] {
         note.missing.clone_from(&inherits);
@@ -320,13 +355,38 @@ pub(super) fn read_bundle(
 }
 
 /// A value of a list key: as many entries as the printer's own block has
-/// (several extruders), else one.
-fn list_of(existing: Option<&Value>, text: String) -> Value {
-    let count = match existing {
-        Some(Value::Array(items)) if items.len() > 1 => items.len(),
-        _ => 1,
+/// (several extruders, or nozzle variants), else one. The map keeps one
+/// value of the key, its first entry's (mitcad#2008): a block whose
+/// entries differ keeps them while that value is unchanged, and one
+/// changed in MitCad is written for every entry, which `warnings` says.
+fn list_of(key: &str, existing: Option<&Value>, text: String, warnings: &mut Vec<String>) -> Value {
+    let Some(Value::Array(items)) = existing.filter(|v| v.as_array().is_some_and(|a| a.len() > 1))
+    else {
+        return Value::Array(vec![json!(text)]);
     };
-    Value::Array(vec![json!(text); count])
+    let texts: Vec<Option<String>> = items.iter().map(source::json_text).collect();
+    let same = |a: &str, b: &str| {
+        a.trim() == b.trim()
+            || matches!(
+                (print_keys::parse_number(a), print_keys::parse_number(b)),
+                (Ok(x), Ok(y)) if (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1.0)
+            )
+    };
+    let differ = texts.iter().any(|t| {
+        t.as_deref()
+            .is_none_or(|t| !texts[0].as_deref().is_some_and(|f| same(f, t)))
+    });
+    if differ {
+        if texts[0].as_deref().is_some_and(|first| same(first, &text)) {
+            return Value::Array(items.clone());
+        }
+        warnings.push(format!(
+            "{key}: the printer keeps a different value for each of its {} extruders or nozzle \
+             variants, and the design changed it: written as {text} for every one",
+            items.len()
+        ));
+    }
+    Value::Array(vec![json!(text); items.len()])
 }
 
 /// The plate temperatures a slot falls back to when only the bed
@@ -773,7 +833,7 @@ pub(super) fn export(
             };
             for (key, text) in dialect_texts(dialect, def, value, &shared.values, &mut warnings) {
                 let value = if dk.list && key == dk.key {
-                    list_of(config.get(key), text)
+                    list_of(key, config.get(key), text, &mut warnings)
                 } else if def.kind == Kind::Points {
                     Value::Array(text.split(',').map(|p| json!(p)).collect())
                 } else {
@@ -933,43 +993,27 @@ pub(super) fn export(
         Value::Array(different),
     );
     // The slicer's own keys: the profiles' and levels' as they are, the
-    // materials' per slot.
-    let mut per_slot: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
-    for slot in 0..slots {
-        let settings = shared.slot_settings[slot];
-        let Some(keys) = settings.slicer.get(dialect.id()) else {
-            continue;
-        };
+    // materials' per slot (mitcad#2008: in the project's form, an entry
+    // each).
+    let mut dropped: BTreeSet<String> = BTreeSet::new();
+    if let Some(keys) = shared
+        .slot_settings
+        .first()
+        .and_then(|s| s.slicer.get(dialect.id()))
+    {
         for (key, (text, from)) in keys {
-            if matches!(from, PrintFrom::Material(_)) {
-                per_slot
-                    .entry(key.clone())
-                    .or_insert_with(|| vec![None; slots])[slot] = Some(text.clone());
-            } else if slot == 0 && !config.contains_key(key) {
+            if !matches!(from, PrintFrom::Material(_)) && !config.contains_key(key) {
                 config.insert(key.clone(), kept_value(text));
             }
         }
     }
-    for (key, entries) in per_slot {
-        if config.contains_key(&key) || !entries.iter().all(Option::is_some) {
-            continue;
-        }
-        let mut list = Vec::new();
-        for text in entries.into_iter().flatten() {
-            match kept_value(&text) {
-                Value::Array(items) if items.len() == 1 => list.extend(items),
-                Value::Array(_) => {
-                    list.clear();
-                    break;
-                }
-                other => list.push(other),
-            }
-        }
-        if list.len() == slots {
-            per_slot_keys.insert(key.clone());
-            config.insert(key, Value::Array(list));
-        }
-    }
+    material_keys(
+        &mut config,
+        shared,
+        &mut per_slot_keys,
+        &mut dropped,
+        &mut warnings,
+    );
     // Every other list across filaments (kept from the project the
     // settings came from, of its number of filaments) at one entry per
     // written filament.
@@ -977,6 +1021,8 @@ pub(super) fn export(
     fit_to_filaments(&mut config, &per_slot_keys, dialect, &sources, count);
     // The slicers count the filaments by their diameters (mitcad#1596).
     filament_count_written(&mut config, slots);
+    // The printer's extruders and nozzle variants (mitcad#2008).
+    extruder_structure(&mut config, &mut warnings);
     // The design's purge volumes (mitcad#705).
     write_purge(&mut config, &shared.purge);
     // The build's objects, each with its parts.
@@ -997,6 +1043,8 @@ pub(super) fn export(
     }
     // Relative extrusion resets E at each layer (mitcad#1596).
     reset_e_each_layer(&mut config);
+    // Only settings, each of the type the loader reads (mitcad#2008).
+    project_types(&mut config, &mut dropped, &mut warnings);
     let mut project =
         serde_json::to_string_pretty(&Value::Object(config)).expect("settings serialize");
     project.push('\n');
@@ -1069,6 +1117,383 @@ pub(super) fn export(
     warnings.dedup();
     out.warnings = warnings;
     out
+}
+
+/// At most this many keys are named in one warning; the rest are counted.
+const NAMED_KEYS: usize = 8;
+
+/// Keys for a warning: the first [`NAMED_KEYS`], then how many more.
+fn key_list<'a>(keys: impl IntoIterator<Item = &'a String>) -> String {
+    let keys: Vec<&String> = keys.into_iter().collect();
+    let mut text = keys
+        .iter()
+        .take(NAMED_KEYS)
+        .map(|k| k.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if keys.len() > NAMED_KEYS {
+        let _ = write!(text, " and {} more", keys.len() - NAMED_KEYS);
+    }
+    text
+}
+
+/// A filament preset's nozzle variants of its lists (Bambu Studio's
+/// `filament_extruder_variant`: an entry per variant the preset has values
+/// for, each list of a variant's setting an entry per variant too).
+const FILAMENT_VARIANTS: &str = "filament_extruder_variant";
+
+/// The nozzle variant the printer prints with, as the filament presets
+/// name it (`Direct Drive Standard`): its first extruder's type and its
+/// nozzle's volume type; None when the printer does not say.
+fn printer_variant(config: &Map<String, Value>) -> Option<String> {
+    let first = |key: &str| match config.get(key)? {
+        Value::Array(items) => items.first().and_then(source::json_text),
+        other => source::json_text(other),
+    };
+    let extruder = first("extruder_type")?;
+    let volume = first("nozzle_volume_type").or_else(|| first("default_nozzle_volume_type"))?;
+    Some(format!("{} {}", extruder.trim(), volume.trim()))
+}
+
+/// The materials' kept keys of the slicer (mitcad#2008), each a list of an
+/// entry per slot (`per_slot_keys` gets the keys written): under the
+/// project's name of a preset key (a preset's `filament_id` as
+/// `filament_ids`); never a preset's bookkeeping (`dropped` gets it) or
+/// the printers and processes it is for. A key that only some slots' materials keep is
+/// left to the slicer for all (a project's list has an entry for every
+/// filament), and a slot's list of several values (the preset's values per
+/// nozzle variant) gives the entry of the printer's variant, else its
+/// first; both are warnings, never a silent loss.
+fn material_keys(
+    config: &mut Map<String, Value>,
+    shared: &Shared<'_>,
+    per_slot_keys: &mut BTreeSet<String>,
+    dropped: &mut BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let dialect = shared.dialect;
+    let slots = shared.slot_settings.len().max(1);
+    let mut per_slot: BTreeMap<String, Vec<Option<String>>> = BTreeMap::new();
+    for (slot, settings) in shared.slot_settings.iter().enumerate() {
+        let Some(keys) = settings.slicer.get(dialect.id()) else {
+            continue;
+        };
+        for (key, (text, from)) in keys {
+            if !matches!(from, PrintFrom::Material(_))
+                || source::PRESET_APPLICABILITY.contains(&key.as_str())
+            {
+                continue;
+            }
+            if source::PRESET_METADATA.contains(&key.as_str()) {
+                dropped.insert(key.clone());
+                continue;
+            }
+            let project = source::project_key(key);
+            let entry = per_slot
+                .entry(project.to_owned())
+                .or_insert_with(|| vec![None; slots]);
+            // The project's own form over a preset's.
+            if project == key || entry[slot].is_none() {
+                entry[slot] = Some(text.clone());
+            }
+        }
+    }
+    // Each slot's place among its preset's nozzle variants: the printer's.
+    let variant = printer_variant(config);
+    let variants: Vec<Option<(usize, Option<usize>)>> = (0..slots)
+        .map(|slot| {
+            let text = per_slot.get(FILAMENT_VARIANTS)?.get(slot)?.as_deref()?;
+            let Value::Array(items) = kept_value(text) else {
+                return None;
+            };
+            let names: Vec<String> = items.iter().filter_map(source::json_text).collect();
+            let pick = variant
+                .as_deref()
+                .and_then(|v| names.iter().position(|n| n.trim() == v));
+            Some((names.len(), pick))
+        })
+        .collect();
+    let mut partial: Vec<String> = Vec::new();
+    let mut reduced: Vec<String> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
+    for (key, entries) in per_slot {
+        if config.contains_key(&key) {
+            continue; // the map's, written per slot already
+        }
+        if !entries.iter().all(Option::is_some) {
+            partial.push(key);
+            continue;
+        }
+        let mut list = Vec::with_capacity(slots);
+        let mut lossy = false;
+        for (slot, text) in entries.into_iter().flatten().enumerate() {
+            let items = match kept_value(&text) {
+                Value::Array(items) => items,
+                other => vec![other],
+            };
+            let texts: Option<Vec<String>> = items.iter().map(source::json_text).collect();
+            let Some(texts) = texts.filter(|t| !t.is_empty()) else {
+                break;
+            };
+            let entry = if texts.iter().all(|t| *t == texts[0]) {
+                0
+            } else {
+                lossy = true;
+                match variants[slot] {
+                    Some((count, Some(pick))) if count == texts.len() => pick,
+                    _ => 0,
+                }
+            };
+            list.push(Value::String(texts[entry].clone()));
+        }
+        if list.len() != slots {
+            unreadable.push(key);
+            continue;
+        }
+        if lossy {
+            reduced.push(key.clone());
+        }
+        per_slot_keys.insert(key.clone());
+        config.insert(key, Value::Array(list));
+    }
+    if !partial.is_empty() {
+        warnings.push(format!(
+            "{}: kept by the materials of only some filament slots; the project has one list \
+             for every filament, so the slicer's own presets give them for all",
+            key_list(&partial)
+        ));
+    }
+    if !reduced.is_empty() {
+        warnings.push(format!(
+            "{}: a material keeps a value for each nozzle variant, and the project one per \
+             filament: written as the value of {}",
+            key_list(&reduced),
+            match &variant {
+                Some(v) => format!("the printer's variant ({v}), else the first"),
+                None => "the first variant".to_owned(),
+            }
+        ));
+    }
+    if !unreadable.is_empty() {
+        warnings.push(format!(
+            "{}: a material keeps a value the project cannot carry (an empty list or one of \
+             lists): left out",
+            key_list(&unreadable)
+        ));
+    }
+}
+
+/// Lists with an entry per physical extruder of the printer.
+const EXTRUDER_SIZED: &[&str] = &[
+    "nozzle_diameter",
+    "extruder_type",
+    "extruder_printable_area",
+    "extruder_printable_height",
+    "default_nozzle_volume_type",
+    "nozzle_volume_type",
+    "physical_extruder_map",
+    "extruder_variant_list",
+];
+
+/// Lists with an entry per nozzle variant of the printer (a nozzle and
+/// its volume on an extruder): `printer_extruder_id` names each one's
+/// extruder (from 1).
+const VARIANT_SIZED: &[&str] = &[
+    "printer_extruder_id",
+    "printer_extruder_variant",
+    "nozzle_volume",
+    "nozzle_flush_dataset",
+];
+
+/// The printer's extruders, nozzle variants and the filaments' extruders
+/// as distinct lists (mitcad#2008), checked against each other. A design
+/// keeps one nozzle diameter: a printer whose other lists per extruder
+/// agree on more extruders gets it for each, which a warning says; a
+/// printer without its nozzles' volume types gets its defaults. Lists per
+/// extruder or per variant of different lengths, a variant or a filament
+/// of an extruder the printer does not have: a warning that names them,
+/// never a silent fix.
+fn extruder_structure(config: &mut Map<String, Value>, warnings: &mut Vec<String>) {
+    let len = |config: &Map<String, Value>, key: &str| match config.get(key) {
+        Some(Value::Array(items)) => Some(items.len()),
+        _ => None,
+    };
+    if !config.contains_key("nozzle_volume_type")
+        && let Some(defaults @ Value::Array(_)) = config.get("default_nozzle_volume_type")
+    {
+        let defaults = defaults.clone();
+        config.insert("nozzle_volume_type".to_owned(), defaults);
+    }
+    let others: BTreeSet<usize> = EXTRUDER_SIZED
+        .iter()
+        .filter(|k| **k != "nozzle_diameter")
+        .filter_map(|k| len(config, k))
+        .collect();
+    if let (Some(1), [extruders]) = (
+        len(config, "nozzle_diameter"),
+        others.iter().copied().collect::<Vec<_>>().as_slice(),
+    ) && *extruders > 1
+        && let Some(Value::Array(items)) = config.get("nozzle_diameter")
+    {
+        let nozzle = items[0].clone();
+        warnings.push(format!(
+            "nozzle_diameter: the printer has {extruders} extruders and the design one nozzle \
+             diameter, written for each of them"
+        ));
+        config.insert(
+            "nozzle_diameter".to_owned(),
+            Value::Array(vec![nozzle; *extruders]),
+        );
+    }
+    let sizes: Vec<(&str, usize)> = EXTRUDER_SIZED
+        .iter()
+        .filter_map(|k| Some((*k, len(config, k)?)))
+        .collect();
+    let extruders = sizes.iter().map(|(_, n)| *n).max();
+    if sizes.iter().any(|(_, n)| Some(*n) != extruders) {
+        warnings.push(format!(
+            "the printer's lists per extruder have different lengths ({}): the slicer may \
+             misread its extruders; import the printer from the slicer again",
+            sizes
+                .iter()
+                .map(|(k, n)| format!("{k} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let numbers = |config: &Map<String, Value>, key: &str| -> Option<Vec<Option<usize>>> {
+        match config.get(key)? {
+            Value::Array(items) => Some(
+                items
+                    .iter()
+                    .map(|v| source::json_text(v)?.trim().parse::<usize>().ok())
+                    .collect(),
+            ),
+            _ => None,
+        }
+    };
+    let beyond = |ids: &[Option<usize>]| {
+        extruders.is_some_and(|n| ids.iter().any(|id| id.is_none_or(|i| i == 0 || i > n)))
+    };
+    if let Some(ids) = numbers(config, "printer_extruder_id") {
+        let variants: Vec<(&str, usize)> = VARIANT_SIZED
+            .iter()
+            .filter_map(|k| Some((*k, len(config, k)?)))
+            .collect();
+        if variants.iter().any(|(_, n)| *n != ids.len()) {
+            warnings.push(format!(
+                "the printer's lists per nozzle variant have different lengths ({}): the slicer \
+                 may misread its nozzles",
+                variants
+                    .iter()
+                    .map(|(k, n)| format!("{k} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if beyond(&ids) {
+            warnings.push(
+                "printer_extruder_id: a nozzle variant is of an extruder the printer does not \
+                 have"
+                    .to_owned(),
+            );
+        }
+    }
+    if let Some(map) = numbers(config, "filament_map")
+        && beyond(&map)
+    {
+        warnings.push(
+            "filament_map: a filament is assigned to an extruder the printer does not have"
+                .to_owned(),
+        );
+    }
+}
+
+/// Lists of a project however the design kept them: a text is one entry.
+const PROJECT_LISTS: &[&str] = &[
+    "filament_settings_id",
+    "filament_ids",
+    "inherits_group",
+    "different_settings_to_system",
+];
+
+/// Makes the project's settings of the types the family's loader reads
+/// (mitcad#2008): every value a text or a list of texts (numbers and
+/// yes/no as their text), the project's lists ([`PROJECT_LISTS`]) lists,
+/// and none of a preset's bookkeeping ([`source::PRESET_METADATA`]: the
+/// loader reads each as one text, and an array there stops its load of
+/// the whole project), which a design imported before may keep; a
+/// preset's key with a project form of its own written in that form. What
+/// is left out is a warning.
+fn project_types(
+    config: &mut Map<String, Value>,
+    dropped: &mut BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let keys: Vec<String> = config.keys().cloned().collect();
+    let mut invalid: Vec<String> = Vec::new();
+    for key in keys {
+        if source::PRESET_METADATA.contains(&key.as_str()) {
+            config.remove(&key);
+            dropped.insert(key);
+            continue;
+        }
+        let project = source::project_key(&key);
+        if project != key {
+            let value = config.remove(&key).expect("a key of the config");
+            if !config.contains_key(project) {
+                config.insert(project.to_owned(), value);
+            }
+            continue;
+        }
+        let Some(value) = config.get_mut(&key) else {
+            continue;
+        };
+        let fixed = match value {
+            Value::String(_) => Some(None),
+            Value::Number(_) | Value::Bool(_) => source::json_text(value).map(|t| Some(json!(t))),
+            Value::Array(items) => items
+                .iter()
+                .map(|item| source::json_text(item).map(Value::String))
+                .collect::<Option<Vec<Value>>>()
+                .map(|items| Some(Value::Array(items))),
+            Value::Null | Value::Object(_) => None,
+        };
+        match fixed {
+            Some(Some(text)) => *value = text,
+            Some(None) => {}
+            None => {
+                config.remove(&key);
+                invalid.push(key);
+            }
+        }
+    }
+    for key in PROJECT_LISTS {
+        if let Some(text @ Value::String(_)) = config.get(*key) {
+            let list = Value::Array(vec![text.clone()]);
+            config.insert((*key).to_owned(), list);
+        }
+    }
+    if !invalid.is_empty() {
+        warnings.push(format!(
+            "{}: not a text or a list of texts, which the slicer reads: left out",
+            key_list(&invalid)
+        ));
+    }
+    if !dropped.is_empty() {
+        let mut text = format!(
+            "{}: the slicer preset's own bookkeeping, not a setting of a project: left out",
+            key_list(dropped.iter())
+        );
+        if dropped.contains("include") {
+            text.push_str(
+                "; the design was imported before the preset's templates (include) were read, \
+                 so its machine G-code and other template values may be its base preset's: \
+                 import the preset from the slicer again",
+            );
+        }
+        warnings.push(text);
+    }
 }
 
 /// A print plate in `model_settings.config` (mitcad#1050), as the family

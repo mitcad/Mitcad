@@ -212,6 +212,8 @@ impl<K: Kernel> Document<K> {
         let mut out = base.clone();
         out.material = material.id.clone();
         out.material_name = material.name.clone();
+        // A filament changed to is chosen (mitcad#2008).
+        out.material_chosen = true;
         out.appearance = look.map(str::to_owned);
         out.variant = variant;
         out.filament = self.filament_values(material, index, look);

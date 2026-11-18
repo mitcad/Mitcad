@@ -501,6 +501,50 @@ pub fn origin_frame(r: &mut impl Resolver, geometry: &GeomRef) -> Result<Transfo
     }
 }
 
+/// The direction of a planar face's longest straight boundary edge
+/// (mitcad#2000), on the face's plane, in its component's coordinates:
+/// what a part placed on the face lines its sides up with. The face's
+/// boundary as [`Kernel::face_boundary`] gives it, else its curves as
+/// [`Kernel::curves_of`] does; of edges equally long the first. None for
+/// other geometry, a face that is not planar or one without a straight
+/// edge.
+#[doc(hidden)]
+pub fn face_edge_axis(r: &mut impl Resolver, geometry: &GeomRef) -> Option<Vec3> {
+    let GeomRef::Face { body, face } = geometry else {
+        return None;
+    };
+    let shape = r.shape(*body).ok()?;
+    let face = crate::features::renamed::face_for(r, &shape, face).ok()?;
+    let kernel = r.kernel();
+    let crate::datum::SurfaceGeometry::Plane { normal, .. } =
+        kernel.face_geometry(&shape, &face).ok()?
+    else {
+        return None;
+    };
+    let normal = unit(normal)?;
+    let curves: Vec<crate::kernel::Curve3> = match kernel.face_boundary(&shape, &face) {
+        Ok(boundary) if !boundary.is_empty() => boundary.into_iter().map(|(_, c)| c).collect(),
+        _ => kernel
+            .curves_of(&shape, &crate::topo::TopoName::Face(face.clone()))
+            .ok()?,
+    };
+    let mut longest: Option<(f64, Vec3)> = None;
+    for curve in &curves {
+        let crate::kernel::Curve3::Line { start, end } = curve else {
+            continue;
+        };
+        let run: Vec3 = std::array::from_fn(|i| end[i] - start[i]);
+        // On the face's plane: the run less its part along the normal.
+        let along = dot(run, normal);
+        let flat: Vec3 = std::array::from_fn(|i| run[i] - normal[i] * along);
+        let length = dot(flat, flat).sqrt();
+        if length > 1e-9 && longest.is_none_or(|(most, _)| length > most + 1e-9) {
+            longest = Some((length, flat));
+        }
+    }
+    longest.and_then(|(_, run)| unit(run))
+}
+
 // Occurrence paths.
 
 /// The component an occurrence path from `component` ends in: the last

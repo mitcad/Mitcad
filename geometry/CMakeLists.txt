@@ -393,6 +393,16 @@ target_sources(mitcad_geometry PRIVATE
 target_sources(mitcad_geometry PRIVATE
   src/press_pull.cpp
   include/mitcad/geometry/press_pull.hpp)
+# Fillets whose rounded corners meet, built as the body's core swept by the
+# ball (mitcad#1954).
+target_sources(mitcad_geometry PRIVATE
+  src/cored_dressup.cpp
+  src/cored_dressup.hpp)
+# Boxes over the trimmed faces, not their surfaces' parameter rectangles
+# (mitcad#2020): bounding_box, the faces' boxes, drawing views' boxes.
+target_sources(mitcad_geometry PRIVATE
+  src/trimmed_box.cpp
+  include/mitcad/geometry/trimmed_box.hpp)
 target_include_directories(mitcad_geometry PUBLIC include)
 # Volumes and areas come from the analysis library's integrals, so that
 # every reported volume agrees (query.cpp, brep_import.cpp).
@@ -1299,7 +1309,9 @@ if(BUILD_TESTING)
   add_executable(test_flex_route tests/test_flex_route.cpp)
   target_link_libraries(test_flex_route PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.flex_route COMMAND test_flex_route)
-  set_tests_properties(geometry.flex_route PROPERTIES TIMEOUT 300)
+  # Its cases run 4-5 minutes under a release's load (238.5 s in 0.65.0,
+  # past 300 s in 0.66.0-rc1 with the added cases).
+  set_tests_properties(geometry.flex_route PROPERTIES TIMEOUT 900)
   # Flex drape (mitcad#1713): a hose draped over a cylinder from its pinned
   # ends, a wire hanging straight from one end, a pinned middle point that
   # stays, a stiff hose hanging wider than a limp wire, and the nodes of
@@ -1410,4 +1422,73 @@ if(BUILD_TESTING)
   add_executable(test_fillet_tangent_ride tests/test_fillet_tangent_ride.cpp)
   target_link_libraries(test_fillet_tangent_ride PRIVATE mitcad_geometry mitcad_warnings)
   add_test(NAME geometry.fillet_tangent_ride COMMAND test_fillet_tangent_ride)
+  # A drafted block's rim rounded with a ball larger than the roundings of
+  # its corners, the ball's centre beyond their axes: walked with its
+  # sections in the guide's normal plane, with OCCT alone (port patch 1760,
+  # mitcad#1977).
+  add_executable(test_fillet_ball_beyond_support tests/test_fillet_ball_beyond_support.cpp)
+  target_link_libraries(test_fillet_ball_beyond_support PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_ball_beyond_support COMMAND test_fillet_ball_beyond_support)
+  # A block's foot and sloping top rounded beside a front face lower than
+  # the two roundings together: their contacts cross before ends joined by
+  # the front face's edge; reported as overlapping and built one after the
+  # other, alone and against a wall whose foot is rounded too (port patch
+  # 1780, mitcad#1987).
+  add_executable(test_fillet_linked_ends tests/test_fillet_linked_ends.cpp)
+  target_link_libraries(test_fillet_linked_ends PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_linked_ends COMMAND test_fillet_linked_ends)
+endif()
+
+if(BUILD_TESTING)
+  # A fillet on a knife edge, two faces meeting tangentially at 0 degrees:
+  # the ball placed where the wedge is two radii thick, the tip beyond its
+  # contacts taken away, with OCCT alone, on synthetic prisms (port patch
+  # 1770, mitcad#1984).
+  add_executable(test_fillet_knife_edge tests/test_fillet_knife_edge.cpp)
+  target_link_libraries(test_fillet_knife_edge PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_knife_edge COMMAND test_fillet_knife_edge)
+endif()
+
+if(BUILD_TESTING)
+  # A knife edge running on into an ordinary edge on the same line (a bite
+  # cut part of the way along a wall): OCCT's fillet refuses the corner
+  # where the ball jumps (port patch 1790), MitCad's rounds the knife edge
+  # first and the other edge on its result (mitcad#1988).
+  add_executable(test_fillet_knife_chain tests/test_fillet_knife_chain.cpp)
+  target_link_libraries(test_fillet_knife_chain PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_knife_chain COMMAND test_fillet_knife_chain)
+endif()
+
+if(BUILD_TESTING)
+  # Regression tests of the OCCT port's patches (mitcad#1986): one file per
+  # patch in tests/port, p<number>-<topic>.cpp, registering its tests under
+  # the patch's number (port_test.hpp), one ctest geometry.port.<number> per
+  # file. A new patch test adds its file and edits no list here.
+  file(GLOB MITCAD_PORT_PATCH_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/port/p*.cpp)
+  add_executable(test_port_patches tests/port/main.cpp tests/port/port_test.hpp ${MITCAD_PORT_PATCH_TESTS})
+  target_link_libraries(test_port_patches PRIVATE mitcad_geometry mitcad_warnings)
+  foreach(test_file IN LISTS MITCAD_PORT_PATCH_TESTS)
+    get_filename_component(test_stem ${test_file} NAME_WE)
+    string(SUBSTRING ${test_stem} 1 4 test_part)
+    add_test(NAME geometry.port.${test_part} COMMAND test_port_patches --part ${test_part})
+    set_tests_properties(geometry.port.${test_part} PROPERTIES TIMEOUT 300)
+  endforeach()
+endif()
+
+if(BUILD_TESTING)
+  # A rib's sloped edge rounded 1 degree from a bent guide's end, with
+  # OCCT's fillet alone, on a case of MITCAD_GEOMETRY_CASES: the corner's
+  # set-back walks over the rim's end vertex (port patch 1801), a walk
+  # starting on its face's edge ends there (1802) (mitcad#2018).
+  add_executable(test_fillet_corner_walk_over_vertex tests/test_fillet_corner_walk_over_vertex.cpp)
+  target_link_libraries(test_fillet_corner_walk_over_vertex PRIVATE mitcad_geometry mitcad_warnings)
+  add_test(NAME geometry.fillet_corner_walk_over_vertex COMMAND test_fillet_corner_walk_over_vertex)
+
+  # Boxes over the trimmed faces, not their surfaces' parameter rectangles:
+  # synthetic faces of known extent, and a rounded bend's corner plate on a
+  # case of MITCAD_GEOMETRY_CASES against a fine triangulation (mitcad#2020).
+  add_executable(test_trimmed_box tests/test_trimmed_box.cpp)
+  target_link_libraries(test_trimmed_box PRIVATE mitcad_geometry TKMesh mitcad_warnings)
+  add_test(NAME geometry.trimmed_box COMMAND test_trimmed_box)
+  set_tests_properties(geometry.trimmed_box PROPERTIES TIMEOUT 300)
 endif()

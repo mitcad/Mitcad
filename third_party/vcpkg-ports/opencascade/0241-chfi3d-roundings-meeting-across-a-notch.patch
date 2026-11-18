@@ -44,14 +44,31 @@ whose two ends met there gave self-intersecting wires.
   contact and goes with both faces.
 
 Upstream: new; ends that do not meet these conditions keep OCCT's corners.
+
+Failures (mitcad#1986): the map between the two faces' parameters is set
+only for unit columns square to each other within 1e-4 (an isometry), so
+its determinant is 1 or -1 and gp_Trsf2d::SetValues, which refuses only a
+null determinant, cannot fail there: its handler is removed (the
+condition checked before it is the exact one). The pieces over the notch
+fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the blend cannot be carried over
+the notch so: the stripes are restored and end at the notch as before.
+Any other failure (a broken invariant, a signal) is rethrown.
+Test: geometry/tests/port/p0241-roundings-meeting-across-a-notch.cpp (ctest
+geometry.port.0241): the rim of a half-round bay of radius 10 in a plate (a
+concave wall) broken at its deepest point by a notch 0.1 deep and 0.34
+wide, both arcs rounded with 0.3: built, valid, one torus face across the
+notch, the volume of the whole rim rounded and the notch cut after; a
+notch 1 deep as stock (two torus faces, the same volume). The disc's
+convex rim: test_fillet_results.cpp.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 64a188b..e0bdf74 100644
+index 3a56eb4c..7202921e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -1155,6 +1155,11 @@ void ChFi3d_Builder::Compute()
+@@ -1163,6 +1163,11 @@ void ChFi3d_Builder::Compute()
    ChFi3d_InitChron(cl_perffilletonvertex);
  #endif
-
+ 
 +  if (done)
 +  {
 +    // Blends of two ends meeting over a notch of their face's rim.
@@ -61,13 +78,13 @@ index 64a188b..e0bdf74 100644
    if (done)
    {
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-index de9e3a1..7960340 100644
+index cb1e9500..d24f54ff 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.hxx
-@@ -569,6 +569,17 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
+@@ -588,6 +588,17 @@ void ChFi3d_ContactsAlongFaceEdges(TopOpeBRepDS_DataStructure&       DStr,
                                     const ChFiDS_Map&                 EFMap,
                                     const double                      Tol3d);
-
+ 
 +//! Two ends of analytic blends whose contacts on one face lie on one line
 +//! and whose other contacts end on edges of two faces of one surface,
 +//! separated by a notch in its rim: one end's blend runs on over the notch,
@@ -83,10 +100,10 @@ index de9e3a1..7960340 100644
  //! surface where it lies wholly outside the face's parametric bounds and so
  //! comes wholly inside them (a piece of a blend along a closed spine whose
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 5bb8f08..00105a7 100644
+index a4142455..4e9e3082 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-@@ -5283,6 +5283,16 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
+@@ -5299,6 +5299,16 @@ static occ::handle<ChFiDS_SurfData> ChFi3d_KPartCutPiece(TopOpeBRepDS_DataStruct
            {
              onN = exN.Current().IsSame(exE.Current());
            }
@@ -103,7 +120,7 @@ index 5bb8f08..00105a7 100644
            // (Nor an edge the cut crosses from one face beyond to the next:
            // it is cut where the blend crosses it.)
            if (CutEdges != nullptr)
-@@ -5921,7 +5931,9 @@ static void ChFi3d_ProlongEdgeBeyondVertex(TopOpeBRepDS_DataStructure& DStr,
+@@ -5955,7 +5965,9 @@ static void ChFi3d_ProlongEdgeBeyondVertex(TopOpeBRepDS_DataStructure& DStr,
  //            section, e.g. a plane square to a straight spine) gives no
  //            piece: the pieces on either side share only a part of that
  //            section, the rest of it being that face's edge with the blend
@@ -112,9 +129,9 @@ index 5bb8f08..00105a7 100644
 +//            stands for a missing Prev or Next: the end section of another
 +//            stripe's blend on the same surface.
  //=======================================================================
-
+ 
  static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&                         DStr,
-@@ -5936,8 +5948,14 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -5970,8 +5982,14 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
                                      const double                                        Wa,
                                      const double                                        Wb,
                                      const double                                        tol3d,
@@ -130,7 +147,7 @@ index 5bb8f08..00105a7 100644
    Pieces.Clear();
    const int                        n   = Faces.Length();
    const int                        opp = 3 - ons;
-@@ -6004,17 +6022,26 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6038,17 +6056,26 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
    const auto uvAt = [&](const int i) {
      if (i == 0)
      {
@@ -158,7 +175,7 @@ index 5bb8f08..00105a7 100644
    {
      return false;
    }
-@@ -6036,6 +6063,9 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6070,6 +6097,9 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
        continue;
      }
      ChFi3d_KPartCutEnd aStart, anEnd;
@@ -168,7 +185,7 @@ index 5bb8f08..00105a7 100644
      if (k > 1 && !crossingEnd(k - 1, Bk, aStart))
      {
        return false;
-@@ -6056,8 +6086,8 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
+@@ -6090,8 +6120,8 @@ static bool ChFi3d_KPartChainPieces(TopOpeBRepDS_DataStructure&
                                                                  k == 1 ? Prev : aNone,
                                                                  k == n ? Next : aNone,
                                                                  tol3d,
@@ -179,7 +196,7 @@ index 5bb8f08..00105a7 100644
                                                                  &aCutEdges);
      if (G.IsNull())
      {
-@@ -9204,3 +9234,711 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -9286,3 +9316,710 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
      ChFi3d_MakeExtremities(Stripe, DStr, myEFMap, tolapp3d, tol2d);
    }
  }
@@ -256,15 +273,9 @@ index 5bb8f08..00105a7 100644
 +  const gp_XY ca = axisAligned ? gp_XY(a1, a2) : a, cb = axisAligned ? gp_XY(b1, b2) : b;
 +  const gp_XY t =
 +    uv2.XY() - gp_XY(ca.X() * uv1.X() + cb.X() * uv1.Y(), ca.Y() * uv1.X() + cb.Y() * uv1.Y());
-+  try
-+  {
-+    OCC_CATCH_SIGNALS
-+    T.SetValues(ca.X(), cb.X(), t.X(), ca.Y(), cb.Y(), t.Y());
-+  }
-+  catch (Standard_Failure const&)
-+  {
-+    return false;
-+  }
++  // (Unit columns square to each other: the determinant is 1 or -1 within
++  // 1e-4, never the null one SetValues refuses.)
++  T.SetValues(ca.X(), cb.X(), t.X(), ca.Y(), cb.Y(), t.Y());
 +  // (A point farther off: the map holds there too.)
 +  for (const gp_Pnt2d& p : {gp_Pnt2d(uv1.X() + 0.3, uv1.Y() + 0.2), gp_Pnt2d(uv1.X() - 0.2, uv1.Y() - 0.3)})
 +  {
@@ -713,8 +724,13 @@ index 5bb8f08..00105a7 100644
 +                }
 +              }
 +            }
-+            catch (Standard_Failure const&)
++            catch (Standard_Failure const& anException)
 +            {
++              // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++              if (!ChFi3d_IsComputationFailure(anException))
++              {
++                throw;
++              }
 +              aPieces.Clear();
 +            }
 +            if (aPieces.IsEmpty())

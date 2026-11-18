@@ -8,12 +8,17 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRep_Builder.hxx>
+#include <TopoDS_Shell.hxx>
+#include <gp_Pnt.hxx>
 #include <BRepGProp.hxx>
 #include <Bnd_Box.hxx>
 #include <GProp_GProps.hxx>
@@ -284,6 +289,97 @@ void test_surfaces_are_extended() {
   CHECK_NEAR_TOL(area(*one), 300.0 + 40.0, 1e-5);
   CHECK(throws_with([&] { g::extend_surface(*box(), top_edges(), {}, 2.0, g::ExtendMode::Natural); },
                     "solid"));
+}
+
+// A surface body of one planar face, a trapezoid cut at a slant inside its
+// plane (y = 0): 40 long at z = 0, 35 at z = 10 (mitcad#1955, GitHub
+// mitcad/Mitcad#407: a wall whose corner a cut took away).
+g::ShapePtr trapezoid() {
+  BRepBuilderAPI_MakePolygon outline(gp_Pnt(0, 0, 0), gp_Pnt(40, 0, 0), gp_Pnt(35, 0, 10), gp_Pnt(0, 0, 10), true);
+  const TopoDS_Face face = BRepBuilderAPI_MakeFace(outline.Wire(), true).Face();
+  BRep_Builder builder;
+  TopoDS_Shell shell;
+  builder.MakeShell(shell);
+  builder.Add(shell, face);
+  return std::make_shared<g::Shape>(shell, std::vector<g::Shape::NamedFace>{{face, {"F2:side(c1)"}}});
+}
+
+void test_a_trimmed_plane_is_extended_past_one_edge() {
+  // mitcad#1955: a single free edge of a face trimmed inside its plane,
+  // picked by a point on it, extends; the face stays one face.
+  const g::ShapePtr sheet = trapezoid();
+  CHECK_NEAR_TOL(area(*sheet), 375.0, 1e-6);
+  const g::ShapePtr lower =
+      g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(20, 0, 0)}}}, 2.0, g::ExtendMode::Natural);
+  CHECK(lower->face_count() == 1);
+  CHECK(named(*lower, "F2:side(c1)") == 1);
+  CHECK_NEAR_TOL(area(*lower), 375.0 + 80.0, 1e-6);
+  CHECK_NEAR_TOL(z_range(*lower).first, -2.0, 1e-6);
+  // The slanted edge, square to itself (any mode continues a plane).
+  const g::ShapePtr slanted =
+      g::extend_surface(*sheet, {}, {{0, {}, {gp_Pnt(37.5, 0, 5)}}}, 2.0, g::ExtendMode::Tangent);
+  CHECK(slanted->face_count() == 1);
+  CHECK_NEAR_TOL(area(*slanted), 375.0 + 2.0 * std::sqrt(125.0), 1e-6);
+  // The input is left as it was.
+  CHECK_NEAR_TOL(area(*sheet), 375.0, 1e-6);
+}
+
+// The name of the walls' edge between the two faces.
+std::string edge_between(const g::Shape& shape, const std::string& a, const std::string& b) {
+  for (int i = 0; i < shape.edge_count(); ++i) {
+    const std::string name = shape.edge_name(i);
+    if (name.find(a) != std::string::npos && name.find(b) != std::string::npos) {
+      return name;
+    }
+  }
+  return std::string();
+}
+
+void test_a_patch_closes_a_loop_of_free_and_named_edges() {
+  // mitcad#1955: single free edges (the top and bottom edge of wall c1,
+  // each picked by a point of its opening) and named edges (the wall's
+  // corners) in one loop.
+  const g::ShapePtr sheet = walls();
+  const int top = top_opening(*sheet);
+  CHECK(top >= 0 && g::open_boundaries(*sheet).size() == 2);
+  const int bottom = 1 - top;
+  g::PatchLoop loop;
+  loop.edges = {edge_between(*sheet, "F2:side(c4)", "F2:side(c1)"),
+                edge_between(*sheet, "F2:side(c1)", "F2:side(c2)")};
+  CHECK(!loop.edges[0].empty() && !loop.edges[1].empty());
+  loop.openings = {{top, {}, {gp_Pnt(10, 0, 5)}}, {bottom, {}, {gp_Pnt(10, 0, 0)}}};
+  const g::ShapePtr patch = g::patch_loop("F3", *sheet, loop);
+  CHECK(named(*patch, "F3:patch") == 1);
+  CHECK_NEAR_TOL(area(*patch), 20.0 * 5.0, 1e-6);
+  // The free edges alone do not close up.
+  loop.edges.clear();
+  CHECK(throws_with([&] { g::patch_loop("F3", *sheet, loop); }, "close"));
+}
+
+void test_a_patch_closes_free_edges_with_a_sketch_line() {
+  // mitcad#1972 (GitHub mitcad/Mitcad#407): two single free edges of the
+  // top opening (walls c1 and c2) and a sketch line across the opening
+  // close a triangle of it.
+  const g::ShapePtr sheet = walls();
+  const int top = top_opening(*sheet);
+  CHECK(top >= 0);
+  g::PatchLoop loop;
+  loop.openings = {{top, {}, {gp_Pnt(10, 0, 5), gp_Pnt(20, 5, 5)}}};
+  loop.curves = {line("c9", gp_Pnt(20, 10, 5), gp_Pnt(0, 0, 5))};
+  const g::ShapePtr patch = g::patch_loop("F3", *sheet, loop);
+  CHECK(named(*patch, "F3:patch") == 1);
+  CHECK_NEAR_TOL(area(*patch), 20.0 * 10.0 / 2.0, 1e-6);
+  CHECK_NEAR_TOL(z_range(*patch).first, 5.0, 1e-6);
+  // A line whose ends lie a few micrometres off the edges' ends still
+  // meets them.
+  loop.curves = {line("c9", gp_Pnt(20, 10.004, 5), gp_Pnt(0.003, 0, 5))};
+  CHECK_NEAR_TOL(area(*g::patch_loop("F3", *sheet, loop)), 100.0, 0.1);
+  // One that stops short of an edge's end does not close the loop.
+  loop.curves = {line("c9", gp_Pnt(20, 10, 5), gp_Pnt(1, 0, 5))};
+  CHECK(throws_with([&] { g::patch_loop("F3", *sheet, loop); }, "close"));
+  // Nor do two curves across the same span.
+  loop.curves = {line("c9", gp_Pnt(20, 10, 5), gp_Pnt(0, 0, 5)), line("c10", gp_Pnt(0, 0, 5), gp_Pnt(20, 10, 5))};
+  CHECK(throws_with([&] { g::patch_loop("F3", *sheet, loop); }, "loop"));
 }
 
 // --- Trim, Untrim, Unstitch and Reverse Normal
@@ -569,6 +665,11 @@ int main() {
   test::guarded("test_networks_are_spanned", test::test_networks_are_spanned);
   test::guarded("test_faces_are_matched", test::test_faces_are_matched);
   test::guarded("test_faces_are_faired", test::test_faces_are_faired);
+  test::guarded("test_a_trimmed_plane_is_extended_past_one_edge", test::test_a_trimmed_plane_is_extended_past_one_edge);
+  test::guarded("test_a_patch_closes_a_loop_of_free_and_named_edges",
+                test::test_a_patch_closes_a_loop_of_free_and_named_edges);
+  test::guarded("test_a_patch_closes_free_edges_with_a_sketch_line",
+                test::test_a_patch_closes_free_edges_with_a_sketch_line);
   for (const std::string& change : mitcad::geometry::input_changes()) {
     std::fprintf(stderr, "an input changed: %s\n", change.c_str());
     ++test::failures;

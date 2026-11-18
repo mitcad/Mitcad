@@ -44,11 +44,27 @@ only).
 - IntersUpdateOnSame: no prolonged edge, no tangent-face retry.
 
 Upstream: new.
+
+Failures (mitcad#1986): the walk on along the edge's line past its ends
+fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the ball cannot be rolled so: the
+stripe's own state is restored and its ends are left to OCCT's corners as
+before, which its caller is told. Any other failure (a broken invariant, a
+signal) is rethrown.
+Test: geometry/tests/test_fillet_corners.cpp (the ear on a boss);
+geometry/tests/port/p0342-rolled-on-past-its-edge.cpp (ctest
+geometry.port.0342): a second geometry, a rectangular ear on a flat wall
+(not a boss), its top a strip narrower than the radius between the wall
+and a chamfer on its outer edge, the top's edge with the wall rounded:
+built, valid, the blend cut by the ear's sides; a radius the strip holds
+as stock. The port test's case is complete with 0431 (the OnSame end of a
+blend rolling on an edge that ends with it): it fails without 0342 and
+still with 0342 alone, and passes from 0431 on.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index a08b99a..ab702eb 100644
+index 29d4a2082..471aab460 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-@@ -2780,7 +2780,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
+@@ -2908,7 +2908,12 @@ void ChFi3d_Builder::PerformFilletOnVertex(const int Index)
  #ifdef OCCT_DEBUG // perf
            ChFi3d_InitChron(cl_performatend);
  #endif
@@ -63,10 +79,10 @@ index a08b99a..ab702eb 100644
            ChFi3d_ResultChron(cl_performatend, t_performatend);
  #endif
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 30fb9df..d14a8ea 100644
+index 78fcaedbd..9e4beb41e 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-@@ -1001,6 +1001,17 @@ private:
+@@ -1079,6 +1079,17 @@ private:
    //! that it reaches those points at both ends (the corners cut it there).
    Standard_EXPORT bool RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>& Stripe);
  
@@ -85,7 +101,7 @@ index 30fb9df..d14a8ea 100644
                                    const int                         IEdge,
                                    occ::handle<BRepAdaptor_Surface>& HS1,
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index 7fd8688..7c0b472 100644
+index fa3dc0743..b9b6a9442 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -63,6 +63,12 @@
@@ -101,7 +117,7 @@ index 7fd8688..7c0b472 100644
  #include <GeomFill_ConstrainedFilling.hxx>
  #include <IntCurveSurface_HInter.hxx>
  #include <Adaptor3d_CurveOnSurface.hxx>
-@@ -8398,6 +8404,415 @@ bool ChFi3d_Builder::RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>&
+@@ -8486,6 +8492,420 @@ bool ChFi3d_Builder::RolledEndToEndAcrossSeam(const occ::handle<ChFiDS_Stripe>&
    return true;
  }
  
@@ -440,8 +456,13 @@ index 7fd8688..7c0b472 100644
 +                  tolesp, First, Last, true, true, true, false, false, false, Soldep);
 +    }
 +  }
-+  catch (Standard_Failure const&)
++  catch (Standard_Failure const& anException)
 +  {
++    // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++    if (!ChFi3d_IsComputationFailure(anException))
++    {
++      throw;
++    }
 +    walked = false;
 +  }
 +  done = doneSave;
@@ -517,7 +538,7 @@ index 7fd8688..7c0b472 100644
  // Whether two surfaces of analytic blends are one surface with one
  // parametrization (copies, as the pieces of one blend have).
  static bool ChFi3d_SameAnalyticSurface(const occ::handle<Geom_Surface>& S1, const occ::handle<Geom_Surface>& S2)
-@@ -9788,6 +10203,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
+@@ -9881,6 +10301,7 @@ void ChFi3d_Builder::PerformSetOfSurf(occ::handle<ChFiDS_Stripe>& Stripe, const
        RolledCutToEnd(Stripe, false);
      }
      RolledEndToEndAcrossSeam(Stripe);
@@ -526,10 +547,10 @@ index 7fd8688..7c0b472 100644
      ChFi3d_ExtensionOnNeighbourSurface(DStr, Stripe, tolapp3d);
      ChFi3d_MakeExtremities(Stripe, DStr, myEFMap, tolapp3d, tol2d);
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-index ae47f35..63fbe1d 100644
+index 94bf7eb4a..8dc4f9f72 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
-@@ -358,7 +358,7 @@ static bool IntersUpdateOnSame(occ::handle<GeomAdaptor_Surface>& HGs,
+@@ -359,7 +359,7 @@ static bool IntersUpdateOnSame(occ::handle<GeomAdaptor_Surface>& HGs,
      return true;
    }
  
@@ -538,7 +559,7 @@ index ae47f35..63fbe1d 100644
    {
      return false;
    }
-@@ -1513,6 +1513,291 @@ static bool ChFi3d_RolledEndOnItsFace(const TopOpeBRepDS_DataStructure&   DStr,
+@@ -1514,6 +1514,291 @@ static bool ChFi3d_RolledEndOnItsFace(const TopOpeBRepDS_DataStructure&   DStr,
    return IRolled != 0;
  }
  
@@ -830,7 +851,7 @@ index ae47f35..63fbe1d 100644
  //=================================================================================================
  
  void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSame)
-@@ -1642,6 +1927,32 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1643,6 +1928,32 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
    double      wRolled = 0.;
    const bool  isRolledEnd =
      onsame && ChFi3d_RolledEndOnItsFace(DStr, Fd, isfirst, Vtx, IRolled, ErRolled, wRolled);
@@ -863,7 +884,7 @@ index ae47f35..63fbe1d 100644
    if (onsame)
    {
      if (isRolledEnd)
-@@ -1653,6 +1964,16 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1654,6 +1965,16 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        Fop     = TopoDS::Face(DStr.Shape(Fd->Index(IFopArc)));
        Fv      = Fad;
      }
@@ -880,7 +901,7 @@ index ae47f35..63fbe1d 100644
      else if (!CV1.IsOnArc() && !CV2.IsOnArc())
      {
        throw Standard_ConstructionError("Corner OnSame : no point on arc");
-@@ -1697,7 +2018,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1698,7 +2019,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        IFadArc = 2;
      }
      NCollection_List<TopoDS_Shape>::Iterator It;
@@ -889,7 +910,7 @@ index ae47f35..63fbe1d 100644
      {
        IFopArc = 3 - IFadArc;
        // (A blend rolling on an obstacle edge up to a vertex of it: the face at
-@@ -1779,6 +2100,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1780,6 +2101,17 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
              continue;
            }
          }
@@ -907,7 +928,7 @@ index ae47f35..63fbe1d 100644
          for (ex.Init(Fv, TopAbs_EDGE); ex.More(); ex.Next())
          {
            if (It.Value().IsSame(ex.Current()))
-@@ -1790,7 +2122,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1791,7 +2123,7 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
          }
        }
      }
@@ -916,7 +937,7 @@ index ae47f35..63fbe1d 100644
      {
        PerformIntersectionAtEnd(Index);
        return;
-@@ -1893,6 +2225,19 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -1894,6 +2226,19 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        CPadArc.SetPoint(aP);
        CPadArc.SetArc(aTolP, ErRolled, wRolled, aTr);
      }
@@ -936,7 +957,7 @@ index ae47f35..63fbe1d 100644
      else
      {
        occ::handle<BRepAdaptor_Curve2d> pced = new BRepAdaptor_Curve2d();
-@@ -2572,6 +2917,47 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
+@@ -2577,6 +2922,47 @@ void ChFi3d_Builder::PerformOneCorner(const int Index, const bool thePrepareOnSa
        ChFi3d_FilVertexInDS(OVtx, IArcspine, IVtx, parVtx);
      DStr.ChangeShapeInterferences(IArcspine).Append(interfv);
  

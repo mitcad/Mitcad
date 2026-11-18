@@ -1,0 +1,63 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets and chamfers: the end of an analytic blend's contact on an arc is
+put at a vertex of that arc only where it lies within that vertex's own
+tolerance, not within the wider tolerance of the arc's other vertex
+(mitcad#1926).
+
+A pit's bottom loop chamfered with 0.5 on a body whose earlier rounding
+left a corner patch with vertices of a tolerance of about 0.5 (a round of
+1 along the pit's 45 degree face and its wall, ending in that patch above
+the bottom): the chamfer's piece along the 45 degree face ends at the
+bottom's vertex, its contact on that face at 0.5 from the vertex, on the
+straight edge between the face and the round of 1, whose other end is a
+vertex of the patch. Patch 0692 snapped that contact to the edge's vertex
+at the bottom, 0.5 away, because it compared the distance with the larger
+tolerance of the edge's two vertices. The next piece then started at a
+vertex, took the round of 1 beyond it for an obstacle and asked for a
+chamfer rolling on an edge, which chamfers do not have ("PerformSurf Not
+Implemented"); the chamfer failed. The same chamfer built on the body the
+file stored, whose vertices there are tight.
+
+- FillSD, a contact end found on an arc: SnapToVertex compares the end's
+  distance from each of the arc's vertices with that vertex's own
+  tolerance (OwnTolerance). The snap of a contact hatched on its face's
+  boundary (HatchOnBoundary) keeps its own tolerance.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+index f97d2eb2..d5144d30 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_SpKP.cxx
+@@ -977,7 +977,8 @@ static void SnapToVertex(TopOpeBRepDS_DataStructure&   DStr,
+                          const int                     ons,
+                          const double                  pitol,
+                          const double                  Tol,
+-                         const bool                    OnBoundary = false)
++                         const bool                    OnBoundary = false,
++                         const bool                    OwnTolerance = false)
+ {
+   ChFiDS_CommonPoint& Pons = CD->ChangeVertex(isFirst, ons);
+   if (!Pons.IsOnArc() || Pons.IsVertex())
+@@ -990,7 +991,11 @@ static void SnapToVertex(TopOpeBRepDS_DataStructure&   DStr,
+   TopExp::Vertices(E, V1, V2);
+   for (const TopoDS_Vertex& V : {V1, V2})
+   {
+-    if (V.IsNull() || BRep_Tool::Pnt(V).Distance(Pons.Point()) > Tol)
++    // (OwnTolerance: each vertex within its own tolerance only. An arc whose
++    // other vertex has a wide tolerance, a corner patch's, does not draw
++    // a contact to this vertex from as far away.)
++    if (V.IsNull()
++        || BRep_Tool::Pnt(V).Distance(Pons.Point()) > (OwnTolerance ? BRep_Tool::Tolerance(V) : Tol))
+     {
+       continue;
+     }
+@@ -1278,7 +1283,7 @@ static void FillSD(TopOpeBRepDS_DataStructure&                               DSt
+     }
+     if (aTolV > 0.)
+     {
+-      SnapToVertex(DStr, CD, isFirst, ons, pitol, aTolV);
++      SnapToVertex(DStr, CD, isFirst, ons, pitol, aTolV, false, true);
+     }
+   }
+ }

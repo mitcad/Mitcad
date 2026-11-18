@@ -2,7 +2,7 @@ Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
 SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
 
 Mitcad patch (mitcad#343): faces taken for tangent along an edge whose
-curves on them lie apart by up to ten times its tolerance.
+curves on them lie apart by up to seven times its tolerance.
 
 ChFi3d::IsTangentFaces compares the two faces along the edge with
 LocalAnalysis_SurfaceContinuity, the points of the edge's curves on the two
@@ -19,26 +19,40 @@ the thread's chamfer cone then stopped its contour at the vertices of those
 edges (FaceTangency) and was three roundings meeting end to end, which
 walked past their common vertices over each other; and the walk of one
 rounding across such an edge stopped there (IsG1 in SearchFace). The
-positions are now compared within ten times the edge's tolerance (at least
-0.001 as before; the normals within a tenth of a radian as before).
+positions are now compared within seven times the edge's tolerance (at
+least 0.001 as before; the normals within a tenth of a radian as before).
+
+The limit, derived (mitcad#1986; it was ten times): each curve on a face
+lay at most 4.8 micrometres off the edge's own curve, on edges of 1.4
+micrometres' tolerance or more, so at most 4.8 / 1.4 = 3.43 tolerances off,
+and the two curves at most 6.86 tolerances apart; seven covers that with
+the 2 % left by rounding up. Faces whose curves lie farther apart than
+that are not taken for tangent: their stored edges are worse than any
+measured.
+Test: geometry/tests/port/p0801-tangent-faces-edge-tolerance.cpp (ctest
+geometry.port.0801): two coplanar faces whose curves of one edge lie 6.5
+tolerances apart are tangent (stock: no, 1.5 tolerances), 7.5 tolerances
+apart they are not; within 1.4 tolerances and the 0.001 floor as before.
 
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
-index e76af29..ee4e145 100644
+index e76af293..7b21f1ee 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d.cxx
-@@ -167,7 +167,14 @@ bool ChFi3d::IsTangentFaces(const TopoDS_Edge&  theEdge,
+@@ -167,7 +167,16 @@ bool ChFi3d::IsTangentFaces(const TopoDS_Edge&  theEdge,
      return true;
    }
  
 -  double TolC0 = std::max(0.001, 1.5 * BRep_Tool::Tolerance(theEdge));
 +  // The edge's curves on its two faces each lie within its tolerance of
-+  // its own curve, so up to twice that apart; on the edges of stored bodies
++  // its own curve, so up to twice that apart. On the edges of stored bodies
 +  // approximated by B-splines (a thread's helices of several turns,
-+  // tolerances of a few micrometres) they lie up to three times as far
-+  // apart. Tangent faces were taken for faces meeting at an angle there:
-+  // the positions are compared within ten times the edge's tolerance (the
-+  // normals within a tenth of a radian as before).
-+  double TolC0 = std::max(0.001, 10. * BRep_Tool::Tolerance(theEdge));
++  // tolerances of 1.4 to 3.7 micrometres) a curve on a face lay up to 4.8
++  // micrometres off the edge's own: 4.8 / 1.4 = 3.43 tolerances at most,
++  // so the two curves up to 6.86 tolerances apart. Tangent faces were
++  // taken for faces meeting at an angle there: the positions are compared
++  // within seven times the edge's tolerance (the normals within a tenth of
++  // a radian as before).
++  double TolC0 = std::max(0.001, 7. * BRep_Tool::Tolerance(theEdge));
  
    double aFirst;
    double aLast;

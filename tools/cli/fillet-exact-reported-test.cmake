@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: MIT
 cmake_minimum_required(VERSION 3.24)
 # A rounding as large as the side faces beside its edges (GitHub #353,
-# mitcad#1819) on the reporter's designs (never committed): their archives
-# in `github-353/` and `github-375/` under MITCAD_MITCAD_REPORTED, found by their
+# mitcad#1819), or whose rounded corners meet (GitHub #403, mitcad#1954), on
+# the reporter's designs (never committed): their archives in `github-353/`,
+# `github-375/` and `github-403/` under MITCAD_MITCAD_REPORTED, found by their
 # content ids (the first 8 hex digits of the SHA-256), each design in its
 # archive by its own, unpacked into WORK. Each is opened by mitcad-cli run
 # with its script (fillet_exact_reported*.json):
 # the design's rounding is built at its size, with no warning or
-# information. Skipped when the folder or every archive is not there.
+# information, or refused in words where the script says so. Skipped when
+# the folder or every archive is not there.
 #
 # cmake -DCLI=<mitcad-cli> -DSCRIPTS=<tools/cli/tests> -DWORK=<folder> -P fillet-exact-reported-test.cmake
 
@@ -24,7 +26,11 @@ set(cases
   "github-353:b7522a40:39960088:fillet_exact_reported2.json" # eight edges
   "github-353:39896406:d2414f5a:fillet_exact_reported3.json" # a cube, 4.999
   "github-353:39896406:d2414f5a:fillet_exact_reported3_half.json" # the cube at 5
-  "github-375:92354767:38e97e9a:fillet_exact_reported375.json") # then a chamfer
+  "github-375:92354767:38e97e9a:fillet_exact_reported375.json" # then a chamfer
+  "github-375:db2f0aa4:81de8088:fillet_exact_reported375b.json" # the inner corner, a chamfer
+  "github-403:253bc9b5:7f5fa5c4:fillet_exact_reported403_ball.json" # a cube at 5
+  "github-403:d4663f27:c72ac063:fillet_exact_reported403_step.json" # corners meet
+  "github-403:dfdf80d2:ebdd0f2c:fillet_exact_reported403_inner.json") # and the inner corner
 
 set(reported "$ENV{MITCAD_MITCAD_REPORTED}")
 if(reported STREQUAL "" OR NOT IS_DIRECTORY "${reported}")

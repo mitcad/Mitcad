@@ -106,3 +106,12 @@ mod sketch_expression_points_1912_tests;
 // The sketch Rectangular Pattern's second direction at any angle, a
 // honeycomb of hexagons (mitcad#1969).
 mod sketch_pattern_direction2_1969_tests;
+// A constraint the others imply only in part is information, not a
+// redundancy warning (mitcad#1992).
+mod sketch_partly_redundant_1992_tests;
+// Tangent between a line and an arc whose start a midpoint, a shared end
+// or a coincident holds on the line (mitcad#2006).
+mod sketch_tangent_midpoint_2006_tests;
+// A sketch pattern's deleted copy left out, and the pattern freed by Trim,
+// Extend, Sketch Fillet, Chamfer or Free Pattern (mitcad#2007).
+mod sketch_pattern_free_2007_tests;

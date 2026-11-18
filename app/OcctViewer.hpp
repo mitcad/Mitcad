@@ -689,9 +689,10 @@ public:
   // (setActivePickPriority), so a face of another component in front of an
   // origin plane is picked; otherwise the order by depth stays.
   void setPlanesByDepth(bool on) { m_planesByDepth = on; }
-  // While an input takes openings (InputDef::takesOpenings, mitcad#1927:
-  // Patch's edges): a surface body's free edge, which has no name, is
-  // picked as the opening it lies on (openingEdgeItem), ahead of the face
+  // With no command (mitcad#1955) and while an input takes openings
+  // (InputDef::takesOpenings, mitcad#1927: Patch's edges): a surface body's
+  // free edge, which has no name, is picked as a single free edge, by the
+  // opening it lies on and its middle (freeEdgeItem), ahead of the face
   // beside it as any edge; elsewhere it cannot be picked.
   void setOpeningEdges(bool on) { m_openingEdges = on; }
   // While an input puts sketches behind the bodies (InputDef::sketchesBehind,
@@ -884,8 +885,18 @@ public:
   void setHighlights(const std::vector<HighlightDisplay>& highlights);
   // Whether setHighlights still has highlights to draw.
   bool highlightsPending() const;
-  // Semi-transparent preview of the active command; null clears it.
+  // Semi-transparent preview of the active command; null clears it, and
+  // either clears the guide beside it (setPreviewGuide).
   void setPreview(const TopoDS_Shape& shape, PreviewStyle style = PreviewStyle::Add);
+  // A second preview beside setPreview's (mitcad#1979): Measure's pick axes
+  // and axis distance, dashed and thinner in the dimension colour, in the
+  // top layer (hidden by the bodies in front of it, as a preview is) and so
+  // under a MeasurementWire's main distance and its end marks, which stay
+  // whole where the two lie on one line. Never picked; null clears it.
+  // Logged for the UI tests: "Preview measurement guide: <line type>,
+  // displayed wireframe <0|1>, top layer <0|1>; lines: from x,y,z to x,y,z;
+  // …" (straight edges, each with its ends; other edges counted).
+  void setPreviewGuide(const TopoDS_Shape& shape);
   // A provisional drag presentation (mitcad#636, framework/DragProxy.hpp):
   // the mesh at each placement, see-through amber with dashed edges and
   // not pickable, standing in for the command preview's tool, which is
@@ -1035,6 +1046,8 @@ public:
   // area centre at x,y" ("on the view's middle", "on the sketch's face"),
   // in window coordinates.
   void lookAtSketchPlane(bool saveCamera = true, const TopoDS_Shape& face = TopoDS_Shape());
+  // Puts the saved view back in the view's aspect now, with the height it
+  // showed (mitcad#1996: the window may have been resized in the sketch).
   void restoreCamera();
   // Drops the view lookAtSketchPlane saved: the camera stays where it is,
   // an animation ended at its end (mitcad#1592: a 3D sketch, also one
@@ -1603,6 +1616,12 @@ private:
   // edges and corners can be clicked, once the camera rests.
   void cameraMoved();
   void logCamera();
+  // For UI tests (mitcad#1996): the camera restoreCamera put back, its
+  // aspect against the view's size in device pixels and a circle at its
+  // target as drawn ("View: camera restored, aspect a for a view of WxH
+  // px (the view's aspect), a circle drawn X x Y px (round)"; "another
+  // aspect" and "squashed" otherwise).
+  void logRestoredCamera() const;
   void logOrientationCube();
   // The cube's own perspective (mitcad#774) seen from where the camera
   // looks from now: its presentation and picking made again when the
@@ -1837,6 +1856,7 @@ private:
   std::map<const AIS_InteractiveObject*, PickInfo> m_pickInfo;
   occ::handle<AIS_Shape> m_preview;
   int m_previewMode = 1; // AIS_Shaded, or AIS_WireFrame for errors/measurement guides
+  occ::handle<AIS_Shape> m_previewGuide; // setPreviewGuide's (mitcad#1979), wireframe
   // setProvisional's (mitcad#636), and the frames drawn.
   occ::handle<AIS_InteractiveObject> m_provisional;
   quint64 m_framesDrawn = 0;

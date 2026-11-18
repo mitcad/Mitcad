@@ -939,6 +939,7 @@ MainWindow::MainWindow(bool demo, QWidget* parent, bool nativeUi)
   // The status line's message paints its feature's notice places while
   // the pointer is over it (mitcad#1327).
   installNoticeHover();
+  installBrowserCurves(); // mitcad#1978
   installMacToolButtonStyle(this);
   if (!m_nativeUi && chromeStyle() == ChromeStyle::Docked) {
     statusBar()->insertPermanentWidget(0, m_controller->failures());
@@ -2737,6 +2738,7 @@ void MainWindow::startFeatureCommand(const CommandDef& def, const QString& editU
     delete session;
     m_sketch->setPaused(false);
     m_mode = m_commandInSketch ? Mode::Sketch : Mode::Idle;
+    updateBrowserSketchCurves(SelectFilter()); // mitcad#1978
     endCommandScope();
     showError(error);
     CommandSketches ended = std::exchange(m_commandSketches, CommandSketches());
@@ -3000,6 +3002,7 @@ void MainWindow::onCommandFinished(bool committed) {
   m_mode = m_commandInSketch && m_sketch->isActive() ? Mode::Sketch : Mode::Idle;
   m_commandInSketch = false;
   m_sketch->setPaused(false);
+  updateBrowserSketchCurves(SelectFilter()); // its curve rows go (mitcad#1978)
   // The sketch's selection filter as it was before (mitcad#217).
   endCommandScope();
   m_commandPages->setCurrentWidget(m_mode == Mode::Sketch ? m_palettePage : m_idlePage);
@@ -3259,6 +3262,7 @@ bool MainWindow::runCommand(const QJsonObject& cmd, QJsonObject* result) {
   }
   notePlacement(answer);
   noteKeptParameters(answer); // own parameters kept as user parameters (mitcad#1536)
+  noteShownParents(name, answer); // hidden parents shown with what it added (mitcad#1995)
   if (result != nullptr) {
     *result = answer;
   }
@@ -3308,6 +3312,45 @@ void MainWindow::noteKeptParameters(const QJsonObject& result) {
   m_placementNote = m_placementNote.isEmpty() ? note : QStringLiteral("%1 %2").arg(m_placementNote, note);
   showHint(m_placementNote);
   qInfo().noquote() << QStringLiteral("Feature notice: %1").arg(note);
+}
+
+void MainWindow::noteShownParents(const QString& command, const QJsonObject& result) {
+  const QJsonArray shown = result.value(QStringLiteral("shown_parents")).toArray();
+  if (shown.isEmpty()) {
+    return;
+  }
+  QStringList names;
+  QStringList paths;
+  for (const QJsonValue& value : shown) {
+    const QJsonObject parent = value.toObject();
+    names << parent.value(QStringLiteral("name")).toString();
+    paths << parent.value(QStringLiteral("path")).toString();
+  }
+  // In words (mitcad#1995): which occurrences were hidden, and why they
+  // are shown now. A feature adds a body; the others a component.
+  const bool body = command == QStringLiteral("add_feature") ||
+                    (command == QStringLiteral("import_file") && !result.contains(QStringLiteral("component")));
+  const QString list = names.join(QStringLiteral(", "));
+  QString note;
+  if (names.size() == 1) {
+    note = body ? tr("%1 was hidden; shown so the new body can be seen.").arg(list)
+                : tr("%1 was hidden; shown so the new component can be seen.").arg(list);
+  } else {
+    note = body ? tr("%1 were hidden; shown so the new body can be seen.").arg(list)
+                : tr("%1 were hidden; shown so the new component can be seen.").arg(list);
+  }
+  m_shownParentsNote = note;
+  if (m_mode == Mode::Command) {
+    // Shown now, and again when the command's panel closes
+    // (onCommandFinished).
+    m_placementNote = m_placementNote.isEmpty() ? note : QStringLiteral("%1 %2").arg(m_placementNote, note);
+    showHint(m_placementNote);
+  } else {
+    showStatus(note, NoticeLevel::Information);
+  }
+  // "Hidden parents shown: Fairlead:1 (by create_component)", for the UI
+  // tests.
+  qInfo().noquote() << QStringLiteral("Hidden parents shown: %1 (by %2)").arg(paths.join(QStringLiteral(", ")), command);
 }
 
 bool MainWindow::runCommands(const QJsonArray& commands, const QString& label) {
@@ -3896,10 +3939,33 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
       TopoDS_Compound compound;
       BRep_Builder builder;
       builder.MakeCompound(compound);
+      const auto under = [&item](const QString& path) {
+        return path == item.occurrence || path.startsWith(item.occurrence + QLatin1Char('/'));
+      };
+      bool any = false;
       for (const BodyDisplay& body : modelBodies()) {
-        const QString path = QString::fromStdString(body.occurrence);
-        if (path == item.occurrence || path.startsWith(item.occurrence + QLatin1Char('/'))) {
+        if (under(QString::fromStdString(body.occurrence))) {
           builder.Add(compound, body.shape->occt().Moved(body.placement));
+          any = true;
+        }
+      }
+      // None shown, hidden with a parent (mitcad#1995): its hidden bodies
+      // where they are placed, so that Move finds what it moves and turns
+      // it about its middle.
+      if (!any) {
+        const QJsonArray placed =
+            query({{QStringLiteral("query"), QStringLiteral("instances")}, {QStringLiteral("hidden"), true}}).toArray();
+        for (const QJsonValue& value : placed) {
+          const QJsonObject instance = value.toObject();
+          if (!under(pathOf(instance.value(QStringLiteral("path"))))) {
+            continue;
+          }
+          const auto shape = idleDocument().body_shape(utf8(instance.value(QStringLiteral("body")).toString()));
+          if (!shape) {
+            continue;
+          }
+          const QJsonArray rows = instance.value(QStringLiteral("transform")).toArray();
+          builder.Add(compound, isIdentity(rows) ? shape->occt() : shape->occt().Moved(TopLoc_Location(trsfOf(rows))));
         }
       }
       return compound;
@@ -3923,8 +3989,16 @@ TopoDS_Shape MainWindow::itemShape(const SelectionItem& item) const {
         return TopoDS_Shape();
       }
       const std::string name = utf8(item.name);
-      // An opening picked by a free edge: its whole loop (mitcad#1927).
-      const std::vector<int> found = isOpeningEdge(item)              ? openingEdges(*shape, openingOf(item))
+      // An opening picked by a free edge: its whole loop (mitcad#1927); a
+      // single free edge: the opening's edge nearest its point (mitcad#1955).
+      std::vector<int> single;
+      if (const auto at = freeEdgePoint(item)) {
+        if (const auto edge = freeEdgeAt(*shape, openingOf(item), *at)) {
+          single.push_back(*edge);
+        }
+      }
+      const std::vector<int> found = isFreeEdge(item)                 ? single
+                                     : isOpeningEdge(item)            ? openingEdges(*shape, openingOf(item))
                                      : item.kind == SelectKind::Face ? shape->find_faces(name)
                                      : item.kind == SelectKind::Edge ? shape->find_edges(name)
                                                                      : shape->find_vertices(name);
@@ -4071,6 +4145,7 @@ void MainWindow::refreshScene() {
   m_idleMeasurements.clear();
   // And a feature's inputs, kept by its last build (mitcad#957).
   m_featureInputLines.clear();
+  m_browserCurveCache.clear(); // the sketches' curve rows (mitcad#1978)
   ScopedTiming total("refresh");
   ScopedTiming snapshot("refresh snapshot");
   try {
@@ -5292,6 +5367,17 @@ bool MainWindow::refreshLoggedPickPlaces() {
   return !m_pickPlacesDeferred;
 }
 
+bool MainWindow::logIdlePickPlaces() {
+  if (m_viewer == nullptr || m_mode != Mode::Idle || !qEnvironmentVariableIsSet("MITCAD_LOG_PICKS")) {
+    return false;
+  }
+  m_viewer->settleCamera();
+  // Kept as the active places: a click-pick refreshes them (a command
+  // started later sets its input's).
+  m_pickPlacesFilter = idleFilter() & (SelectKind::Face | SelectKind::Edge | SelectKind::Vertex);
+  return logPickPlaces(m_pickPlacesFilter);
+}
+
 void MainWindow::inputActivated(SelectFilter filter) {
   // Filament Change's To Object looks active while it takes the picks, not
   // after a panel row took them (mitcad#1800).
@@ -5338,6 +5424,8 @@ void MainWindow::inputActivated(SelectFilter filter) {
                                 .arg(point.y());
     }
   }
+  // The sketches' curves as Browser rows while it takes them (mitcad#1978).
+  updateBrowserSketchCurves(filter);
 }
 
 bool MainWindow::setParameterValue(const QString& name, double value) {
@@ -6042,6 +6130,7 @@ void MainWindow::updateIdleView() {
     return;
   }
   m_viewer->setHoverColor(kHoverColor);
+  m_viewer->setOpeningEdges(false); // the idle selection's only (below)
   if (m_mode == Mode::PickPlane) {
     // Faces and planes the design policy leaves out (mitcad#220) are not
     // picked or highlighted, whatever else the pick would allow.
@@ -6108,12 +6197,17 @@ void MainWindow::updateIdleView() {
   } else if (m_mode == Mode::Sketch) {
     applySketchScope(drawing);
   } else {
-    if (m_flexEdit != nullptr && m_flexEdit->picking()) {
+    const bool flexPick = m_flexEdit != nullptr && m_flexEdit->picking();
+    if (flexPick) {
       // A Flex node pulled: what it can be put on, whatever the idle filter takes (mitcad#1713).
       m_viewer->setPickFilter(m_flexEdit->pickFilter());
     } else {
       m_viewer->setPickFilter(idleFilter());
     }
+    // A surface body's free edge is picked as an edge of its own with no
+    // command (mitcad#1955): a surfacing command started then takes it.
+    // Not for a Flex node or an annotation, which take named edges only.
+    m_viewer->setOpeningEdges(m_mode == Mode::Idle && !flexPick && !m_annotationPick);
     applyAnnotationPickFilter(); // an annotation's pick waited for
   }
   QElapsedTimer idleClock; // the Selection timing line's parts (mitcad#981)
@@ -6422,7 +6516,10 @@ void MainWindow::updateIdleCard() {
         label[0] = label[0].toUpper();
       }
       QString measurements;
-      if (item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Body) {
+      // A free edge (mitcad#1955) has no name the measure query takes: it is
+      // named without measurements.
+      if ((item.kind == SelectKind::Face || item.kind == SelectKind::Edge || item.kind == SelectKind::Body) &&
+          !isOpeningEdge(item)) {
         // With its occurrence (mitcad#646): a component placed more than
         // once is measured in the occurrence picked.
         QJsonObject reference = item.reference().toObject();
@@ -6708,8 +6805,11 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const SelectionIt
           // A QR code has a panel of its own (mitcad#473).
           add(m_registry->action(text->code ? QStringLiteral("sketch.edit_code") : QStringLiteral("sketch.edit_text")));
         }
-        if (model.patternOf(id) != nullptr) {
+        if (const sketch::PatternData* pattern = model.patternOf(id); pattern != nullptr) {
           add(m_registry->action(QStringLiteral("sketch.edit_pattern")));
+          // Its originals and copies as plain sketch geometry (mitcad#2007).
+          addCall(QStringLiteral("circular-pattern"), tr("Free Pattern"),
+                  [this, patternId = pattern->id] { m_sketch->freePattern(patternId); });
         }
         if (model.offsetOf(id) != nullptr) {
           add(m_registry->action(QStringLiteral("sketch.edit_offset")));

@@ -436,3 +436,7 @@ pub use mitcad_model_base::developed;
 pub mod assembly_path;
 #[cfg(test)]
 mod assembly_path_tests;
+// A component's Kind, and the Sheet Metal list (mitcad#1980).
+pub use document::{ComponentKind, SheetMetalRow};
+// A component's BOM Structure and the Bill of Materials' views (mitcad#1985).
+pub use document::{BomStructure, BomView, BomViewList, BomViewRow};

@@ -88,6 +88,8 @@ pub mod joints {
         ActiveJoint, JointsState, MotionSpec, alignment, apply_override, find_path_from, frame,
         frame_parts, limit_values, origin_frame, path_component, referenced_occurrences,
     };
+    // A planar face's longest straight edge (mitcad#2000).
+    pub use crate::joints::face_edge_axis;
 }
 
 /// Links to other components' geometry.

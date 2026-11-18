@@ -1504,6 +1504,36 @@ pub fn dressup_edge_set(c: &Candidate) -> Option<(Value, BTreeSet<String>)> {
     out
 }
 
+/// The note of an item whose definitions gave no state (`last_error`, the
+/// last one's error): where the first decoded definition failed
+/// (`failure`) and the guesses after it only missed the state, or where it
+/// built a result whose own change is not the file's (`deviation`, why it
+/// was not taken), that is the item's cause, before what the other
+/// definitions said.
+pub fn decoded_cause(
+    last_error: String,
+    failure: Option<String>,
+    deviation: Option<String>,
+) -> String {
+    if halts(&last_error) {
+        return last_error;
+    }
+    match (failure, deviation) {
+        (Some(decoded), _) if symptom(&last_error) && !symptom(&decoded) => {
+            format!("{decoded}; the other definitions: {last_error}")
+        }
+        // (A decoded definition that built a result whose own change is
+        // not the file's, whatever the definitions after it said: Fillet1
+        // of mitcad#1926 built in 14 s, 8 % off the file's change, and the
+        // note said only that the item's time ran out on the guesses after
+        // it.)
+        (_, Some(deviated)) if !last_error.starts_with(&deviated) => {
+            format!("{deviated}; the other definitions: {last_error}")
+        }
+        _ => last_error,
+    }
+}
+
 /// The edges of a decoded fillet or chamfer (`decoded`) that candidate `c`
 /// leaves out, where it takes only some of them with the same rounding
 /// (mitcad#379: a rounding the kernel fails on some edges or corners,
@@ -4418,6 +4448,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                 // Why the first of the decoded definitions failed, if it did:
                 // the note's cause when the guesses after it only missed.
                 let mut decoded_failure: Option<String> = None;
+                // Why the first decoded definition that built a result off
+                // the file's was not taken (mitcad#1926).
+                let mut decoded_deviation: Option<String> = None;
                 // The edges of a decoded rounding the kernel failed on: a
                 // definition that builds on some of them is a deviating
                 // result without the others (mitcad#379).
@@ -4685,6 +4718,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                                         // mitcad#379.)
                                         let left = edges_left_out(decoded_edges.as_ref(), c);
                                         self.record_deviation(c, inner, left);
+                                        if !c.guess && decoded_deviation.is_none() {
+                                            decoded_deviation = Some(last_error.clone());
+                                        }
                                         self.undo_to(inner);
                                         continue;
                                     }
@@ -4890,14 +4926,9 @@ impl<'a, K: ImportKernel> Importer<'a, K> {
                 // A decoded definition that failed is the item's cause where
                 // the definitions guessed after it only missed the state
                 // (the census counted a cut the kernel built invalid as one
-                // "not in the file's history", mitcad#325).
-                if let Some(decoded) = decoded_failure
-                    && !halts(&last_error)
-                    && symptom(&last_error)
-                    && !symptom(&decoded)
-                {
-                    last_error = format!("{decoded}; the other definitions: {last_error}");
-                }
+                // "not in the file's history", mitcad#325); so is one that
+                // built a result off the file's (mitcad#1926).
+                last_error = decoded_cause(last_error, decoded_failure, decoded_deviation);
                 // Which definition the time went to.
                 if !halts(&last_error)
                     && let Some((_, note)) = turns.note(&candidates)

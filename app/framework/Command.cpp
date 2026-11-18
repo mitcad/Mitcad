@@ -129,6 +129,10 @@ bool InputDef::accepts(const SelectionItem& item) const {
          (!test || test(item));
 }
 
+bool InputDef::takesWholeOpenings(const CommandState& state) const {
+  return takesOpenings && (wholeOpeningCheck.isEmpty() || state.checked(wholeOpeningCheck));
+}
+
 SelectFilter InputDef::filterIn(const CommandState& state) const {
   return filterNow ? (filterNow(state) & filter) : filter;
 }

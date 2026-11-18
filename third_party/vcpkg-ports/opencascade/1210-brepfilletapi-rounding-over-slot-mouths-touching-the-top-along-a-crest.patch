@@ -56,6 +56,23 @@ prolonged blend) it lies on; the body's faces with no image removed
 shape, parameters and StopChainsAtTurns setting (InitialShape, Params,
 StopsChainsAtTurns, ChainTurnThrough). Every other fillet is as before.
 
+The condition (mitcad#1986) is geometric, not the case's: FindSlotMouth
+asks for the configuration above only (four edges, two rounded ones
+tangent at the vertex with one radius on a plane T, a cylinder C smaller
+than the ball tangent to T along a line through the vertex), whatever the
+walls A and B are (the case's cylinder pieces, or planes), the rounded
+edges' curves (arcs or lines), the fins' number and their thickness. The
+construction's sizes are multiples of the ball's and C's radii (the slab
+four balls along C's axis each way, three below the crest and one above;
+the prolonged blends two half widths across and six away from the top,
+eight half widths kept): margins that hold the blend's end and its
+prolonged piece, not values read off the case; they are not derived
+further. The search's containers are OCCT's (NCollection_DynamicArray and
+NCollection_List).
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet. Existing: geometry/tests/test_fillet_slot_mouths.cpp
+(the case's body).
+
 On the stored design's body before the item: valid, 304 faces, the faces
 of each body on the other's within 2 micrometres (OCCT's walked blend
 against the file's along the arcs), the boolean differences of the two
@@ -154,7 +171,7 @@ index 98e87a3d..61f2eed8 100644
  #endif // _BRepFilletAPI_MakeFillet_HeaderFile
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
 new file mode 100644
-index 00000000..3cf41aca
+index 00000000..f49b7c2c
 --- /dev/null
 +++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet_SlotMouths.cxx
 @@ -0,0 +1,811 @@
@@ -188,6 +205,7 @@ index 00000000..3cf41aca
 +#include <Geom_RectangularTrimmedSurface.hxx>
 +#include <Geom_Surface.hxx>
 +#include <NCollection_DataMap.hxx>
++#include <NCollection_DynamicArray.hxx>
 +#include <NCollection_IndexedDataMap.hxx>
 +#include <NCollection_IndexedMap.hxx>
 +#include <NCollection_List.hxx>
@@ -205,7 +223,6 @@ index 00000000..3cf41aca
 +
 +#include <algorithm>
 +#include <cmath>
-+#include <vector>
 +
 +namespace
 +{
@@ -268,12 +285,12 @@ index 00000000..3cf41aca
 +  {
 +    return false;
 +  }
-+  std::vector<TopoDS_Edge> aRounded, aSharp;
++  NCollection_DynamicArray<TopoDS_Edge> aRounded(4), aSharp(4);
 +  for (int i = 1; i <= aEdges.Extent(); i++)
 +  {
-+    (theRadius.IsBound(aEdges(i)) ? aRounded : aSharp).push_back(TopoDS::Edge(aEdges(i)));
++    (theRadius.IsBound(aEdges(i)) ? aRounded : aSharp).Append(TopoDS::Edge(aEdges(i)));
 +  }
-+  if (aRounded.size() != 2 || aSharp.size() != 2)
++  if (aRounded.Length() != 2 || aSharp.Length() != 2)
 +  {
 +    return false;
 +  }
@@ -466,29 +483,29 @@ index 00000000..3cf41aca
 +    OCC_CATCH_SIGNALS
 +    // The contours' edges and their radii (constant ones only).
 +    NCollection_DataMap<TopoDS_Shape, double, TopTools_ShapeMapHasher> aRadius;
-+    std::vector<std::vector<TopoDS_Edge>>                              aContours;
-+    std::vector<double>                                                aContourRadius;
++    NCollection_DynamicArray<NCollection_List<TopoDS_Edge>>            aContours;
++    NCollection_DynamicArray<double>                                   aContourRadius;
 +    for (int ic = 1; ic <= NbContours(); ic++)
 +    {
 +      if (!IsConstant(ic))
 +      {
 +        return false;
 +      }
-+      const double             aR = Radius(ic);
-+      std::vector<TopoDS_Edge> aEdges;
++      const double                  aR = Radius(ic);
++      NCollection_List<TopoDS_Edge> aEdges;
 +      for (int ie = 1; ie <= NbEdges(ic); ie++)
 +      {
-+        aEdges.push_back(Edge(ic, ie));
++        aEdges.Append(Edge(ic, ie));
 +        aRadius.Bind(Edge(ic, ie), aR);
 +      }
-+      aContours.push_back(aEdges);
-+      aContourRadius.push_back(aR);
++      aContours.Append(aEdges);
++      aContourRadius.Append(aR);
 +    }
 +    // Every faulty vertex a slot's mouth.
 +    AncestorMap aVE, aEF;
 +    TopExp::MapShapesAndUniqueAncestors(aBody, TopAbs_VERTEX, TopAbs_EDGE, aVE);
 +    TopExp::MapShapesAndUniqueAncestors(aBody, TopAbs_EDGE, TopAbs_FACE, aEF);
-+    std::vector<SlotMouth> aMouths;
++    NCollection_DynamicArray<SlotMouth> aMouths;
 +    for (int iv = 1; iv <= myBuilder.NbFaultyVertices(); iv++)
 +    {
 +      SlotMouth aM;
@@ -496,18 +513,18 @@ index 00000000..3cf41aca
 +      {
 +        return false;
 +      }
-+      aMouths.push_back(aM);
++      aMouths.Append(aM);
 +    }
 +    // 1. The body less a slab through each mouth, the slot's width, from
 +    // the rounding's reach inside to as far outside, from three radii below
 +    // the crest to one above.
-+    NCollection_List<TopoDS_Shape> aBoxes;
-+    std::vector<TopoDS_Shape>      aBoxOf;
++    NCollection_List<TopoDS_Shape>         aBoxes;
++    NCollection_DynamicArray<TopoDS_Shape> aBoxOf;
 +    for (const SlotMouth& aM : aMouths)
 +    {
 +      const double aL = 4. * aM.Radius;
-+      aBoxOf.push_back(MouthBox(aM, -aL, aL, -aM.Rho, aM.Rho, aM.Rho - 3. * aM.Radius, aM.Rho + aM.Radius));
-+      aBoxes.Append(aBoxOf.back());
++      aBoxOf.Append(MouthBox(aM, -aL, aL, -aM.Rho, aM.Rho, aM.Rho - 3. * aM.Radius, aM.Rho + aM.Radius));
++      aBoxes.Append(aBoxOf.Last());
 +    }
 +    BRepAlgoAPI_Cut aCut;
 +    {
@@ -550,7 +567,7 @@ index 00000000..3cf41aca
 +    }
 +    // The images' origins (a rounded edge of the body for each).
 +    NCollection_DataMap<TopoDS_Shape, TopoDS_Shape, TopTools_ShapeMapHasher> aOrigin;
-+    for (std::size_t ic = 0; ic < aContours.size(); ic++)
++    for (int ic = 0; ic < aContours.Length(); ic++)
 +    {
 +      for (const TopoDS_Edge& aE : aContours[ic])
 +      {
@@ -601,11 +618,11 @@ index 00000000..3cf41aca
 +    NCollection_List<TopoDS_Shape> aPieces;
 +    // What lies past the blends in the slabs (two per mouth), and the
 +    // fins' tops under their cylinders, prolonged along them (one per mouth).
-+    NCollection_List<TopoDS_Shape> aPasts;
-+    std::vector<TopoDS_Shape>      aEndOf;
++    NCollection_List<TopoDS_Shape>         aPasts;
++    NCollection_DynamicArray<TopoDS_Shape> aEndOf;
 +    // Surfaces of prolonged blends and their edges of the body.
 +    NCollection_DataMap<occ::handle<Standard_Transient>, TopoDS_Shape> aToolOrigin;
-+    for (std::size_t im = 0; im < aMouths.size(); im++)
++    for (int im = 0; im < aMouths.Length(); im++)
 +    {
 +      const SlotMouth& aM  = aMouths[im];
 +      const gp_Dir     aY  = aM.Up.Crossed(aM.Axis);
@@ -788,7 +805,7 @@ index 00000000..3cf41aca
 +      {
 +        return false;
 +      }
-+      aEndOf.push_back(aEndOp.Shape());
++      aEndOf.Append(aEndOp.Shape());
 +    }
 +    // The body in the slabs, less what lies past the blends, and with the
 +    // fins' tops under their cylinders.
@@ -815,7 +832,7 @@ index 00000000..3cf41aca
 +    NCollection_List<TopoDS_Shape> aPastLess;
 +    {
 +      NCollection_List<TopoDS_Shape>::Iterator aItP(aPasts);
-+      for (std::size_t aK = 0; aItP.More(); aItP.Next(), aK++)
++      for (int aK = 0; aItP.More(); aItP.Next(), aK++)
 +      {
 +        BRepAlgoAPI_Cut aPastOp(aItP.Value(), aEndOf[aK / 2]);
 +        if (!aPastOp.IsDone() || aPastOp.HasErrors())

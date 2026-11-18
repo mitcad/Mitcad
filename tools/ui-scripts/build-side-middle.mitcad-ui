@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+# A profile centred across a side with two slots (mitcad#2002), on
+# build-side-middle.json with the profile library the runner makes (one
+# 20x40 profile, two slots on each long side): Upright (F1) standing 500
+# long at the origin, its x+ side at x = 10 from y = -20 to 20, its slots
+# at y = -10 and 10. Seen from the right (+X).
+#   1. Profile, 300 long; a click on the upright's x+ side near its centre
+#      line (y = 1.5): the preview stands centred on the side (Inspect
+#      "across middle", the marker "centered on the side"); placed, its
+#      body (F2.b0) reaches across the side from y = -20 to 20, flush with
+#      the upright's faces.
+#   2. A click near the lower slot (y = -13), further along: on that slot
+#      (Inspect "across slot", the marker "on a slot"); placed, its body
+#      (F4.b0) reaches from y = -30 to 10.
+# Run by tools/ui-build-side-middle-test.sh (Linux),
+# tools/ui-windows-build-side-middle-test.ps1 (Windows) and
+# tools/ui-macos-build-side-middle-test.sh (macOS).
+expect-ever 'View area'
+wait-idle
+window-resize 1400 990
+wait-idle
+command view.right
+wait-idle
+command view.fit
+wait-idle
+
+# 1. Near the side's centre line: centred across the side.
+mark
+command build.profile
+wait-log '^Command Profile started' 30
+wait-idle
+type-in '^Panel Profile input length at ' '300'
+wait-idle
+mark
+click-view-point 10,1.5,150
+wait-log '^Inspect Profile: place side, length 300[.]00 mm .*; across middle' 30
+wait-log '^Preview marker Profile > (.*, )?centered on the side world ' 20
+wait-idle
+mark
+key Return
+wait-log '^Placed ' 60
+wait-idle 30
+capture-model-number ymin '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.1
+expect-near ${ymin} -20
+capture-model-number ymax '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.1
+expect-near ${ymax} 20
+capture-model-number xmin '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.min.0
+expect-near ${xmin} 10
+capture-model-number xmax '{"query": "properties", "bodies": ["F2.b0"]}' total.bbox.max.0
+expect-near ${xmax} 310
+
+# 2. Near the lower slot, further along: on that slot.
+mark
+click-view-point 10,-13,350
+wait-log '^Inspect Profile: place side, length 300[.]00 mm .*; across slot' 30
+wait-log '^Preview marker Profile > (.*, )?on a slot world ' 20
+wait-idle
+mark
+key Return
+wait-log '^Placed ' 60
+wait-idle 30
+capture-model-number ymin '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.min.1
+expect-near ${ymin} -30
+capture-model-number ymax '{"query": "properties", "bodies": ["F4.b0"]}' total.bbox.max.1
+expect-near ${ymax} 10
+expect-never 'TestDriver: FAIL'

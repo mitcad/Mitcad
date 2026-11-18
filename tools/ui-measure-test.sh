@@ -74,7 +74,7 @@ expect_layout() {
   ui_sync
   local pick result history close width
   pick=$(logged_y "Panel Measure input b")
-  result=$(logged_y "Panel Measure result Distance")
+  result=$(logged_y "Panel Measure result Minimum distance")
   history=$(logged_y "Measure history")
   close=$(logged_y "Panel Measure Close")
   [ -n "$pick" ] && [ -n "$result" ] && [ -n "$history" ] && [ -n "$close" ] ||
@@ -123,7 +123,7 @@ ui_expect_new "distance 40, angle 0 deg, axis distance 50, axis lines 2" \
   "the surfaces 40 apart, the axes parallel and 50 apart, both drawn"
 
 echo "--- The panel's layout (mitcad#1010)"
-ui_expect_new "Panel Measure result values: Distance = 40 mm, Δx = 24 mm, Δy = 32 mm, Δz = 0 mm, Angle = 0°, Axis distance = 50 mm" \
+ui_expect_new "Panel Measure result values: Minimum distance = 40 mm, Δx = 24 mm, Δy = 32 mm, Δz = 0 mm, Angle = 0°, Axis distance = 50 mm" \
   "the pair's values first, the distance first, Δx, Δy and Δz under it"
 ui_expect_new "Panel Measure result Selection 1: cylindrical face: Diameter = 10 mm, Radius = 5 mm, Area = 628.319 mm²" \
   "then the first pick's group, titled by its kind"
@@ -137,7 +137,7 @@ expect_layout
 # Δx, Δy and Δz as rows of their own right under the distance, in sight
 # without hovering (mitcad#1167): from (3, 4) on Body1's face to (27, 36)
 # on Body2's.
-distance=$(logged_y "Panel Measure result Distance")
+distance=$(logged_y "Panel Measure result Minimum distance")
 dx=$(logged_y "Panel Measure result Δx")
 dy=$(logged_y "Panel Measure result Δy")
 dz=$(logged_y "Panel Measure result Δz")
@@ -145,14 +145,14 @@ angle=$(logged_y "Panel Measure result Angle")
 [ -n "$dx" ] && [ -n "$dy" ] && [ -n "$dz" ] && [ -n "$angle" ] ||
   ui_fail "Δx, Δy, Δz or Angle is not laid out: Δx $dx, Δy $dy, Δz $dz, Angle $angle"
 [ "$distance" -lt "$dx" ] && [ "$dx" -lt "$dy" ] && [ "$dy" -lt "$dz" ] && [ "$dz" -lt "$angle" ] ||
-  ui_fail "not under the distance: Distance $distance, Δx $dx, Δy $dy, Δz $dz, Angle $angle"
+  ui_fail "not under the distance: Minimum distance $distance, Δx $dx, Δy $dy, Δz $dz, Angle $angle"
 echo "ok   Δx, Δy and Δz shown as rows under the distance, above the angle"
 [ -n "$SHOT" ] && ui_capture "$SHOT"
 ui_mark
-ui_step "right-click the distance"         ui_click_logged "Panel Measure result Distance" 3
+ui_step "right-click the distance"         ui_click_logged "Panel Measure result Minimum distance" 3
 ui_expect_new "Context menu: Copy" "its context menu"
 ui_step "Copy"                             ui_menu_choose "Copy"
-ui_expect_new "Panel Measure result copied Distance: 40 mm" "its number and unit copied"
+ui_expect_new "Panel Measure result copied Minimum distance: 40 mm" "its number and unit copied"
 ui_mark
 ui_step "Close"                            ui_click_logged "Panel Measure Close"
 ui_expect_new "Panel Measure Close clicked" "Close clicked"
@@ -186,14 +186,14 @@ ui_mark
 ui_step "measure (I)"                      ui_key i
 ui_expect_new "Measure history: 3 rows" "three rows"
 ui_expect_new "Measure history row 3: Edge of Body1" "the rims' row first"
-ui_expect_new "Edge of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Distance 40 mm, Angle 0" \
+ui_expect_new "Edge of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Minimum distance 40 mm, Angle 0" \
   "with their values"
 ui_expect_new ", Axis distance 50 mm, Center distance 50 mm" "and their axes' and centres' distances"
 ui_expect_new "Measure history row 2: Face of Body1" "the round face against the top"
-ui_expect_new "Face of Body3: Radius 5 mm, Diameter 10 mm, Distance" "with its distance"
+ui_expect_new "Face of Body3: Radius 5 mm, Diameter 10 mm, Minimum distance" "with its distance"
 ui_expect_new ", Angle 90" "and its angle"
 ui_expect_new "Measure history row 1: Face of Body1" "the parallel faces last"
-ui_expect_new "Face of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Distance 40 mm, Angle 0" \
+ui_expect_new "Face of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Minimum distance 40 mm, Angle 0" \
   "with their values"
 grep "Measure history row 1: " "$UI_LOG" | tail -1 | grep -q ", Axis distance 50 mm" ||
   ui_fail "row 1 has no axis distance"
@@ -268,7 +268,7 @@ ui_expect_new "Measure history: 0 rows" "a design opened: no rows"
 ui_step "pick Body1's round face"          ui_click_pick "face F2.b0/F2:side(c1)"
 ui_step "pick Body2's round face"          ui_click_pick "face F4.b0/F4:side(c1)"
 ui_expect_new "axis distance 50, axis lines 2" "measured"
-ui_expect_new "Panel Measure result Distance at" "the result laid out"
+ui_expect_new "Panel Measure result Minimum distance at" "the result laid out"
 expect_layout
 ui_step "close (Enter)"                    ui_key Return
 ui_expect_new "Closed Measure" "measure closed"

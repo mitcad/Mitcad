@@ -6,16 +6,19 @@
 // wider and taller than wide and in both projections. Setting the height
 // as the scale, as setCamera did before, showed a view taller than wide
 // zoomed out by 1/aspect. The focal length (mitcad#1717): its field of
-// view, set with the same height at the target.
+// view, set with the same height at the target. The view before a sketch
+// put back in the view's aspect after a resize in it (mitcad#1996).
 #include "UnitTests.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <utility>
 
 #include <Graphic3d_Camera.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Vec.hxx>
 #include <gp_XYZ.hxx>
 
 #include "view/CameraHeight.hpp"
@@ -157,12 +160,66 @@ void focalLengthTests() {
   }
 }
 
+bool close(double a, double b) { return std::abs(a - b) <= 1e-6 * std::max(std::abs(a), std::abs(b)); }
+
+// A circle at the camera's target as drawn in a view of `width` x
+// `height` pixels: its extent across and up the view.
+std::pair<double, double> drawnCircle(const Graphic3d_Camera& camera, double width, double height) {
+  const double radius = 0.125 * camera.ViewDimensions().Y();
+  const gp_Dir up = camera.Up();
+  const gp_Dir right = camera.Direction().Crossed(up);
+  const gp_Pnt centre = camera.Project(camera.Center());
+  const gp_Pnt across = camera.Project(camera.Center().Translated(gp_Vec(right) * radius));
+  const gp_Pnt upward = camera.Project(camera.Center().Translated(gp_Vec(up) * radius));
+  return {std::abs(across.X() - centre.X()) * width, std::abs(upward.Y() - centre.Y()) * height};
+}
+
+// The view before a sketch put back after the window was resized in it
+// (mitcad#1996): the view's aspect now, the height the saved view showed,
+// a circle drawn round. A copy alone kept the old aspect and squashed it.
+void restoreTests() {
+  for (const bool perspective : {false, true}) {
+    for (const double savedAspect : {1.6, 0.6}) {
+      for (const double viewAspect : {1.0, 2.2, 0.5}) {
+        occ::handle<Graphic3d_Camera> saved = viewCamera(savedAspect, perspective);
+        saved->SetScale(80.0);
+        const double height = saved->ViewDimensions().Y();
+        // The view as the sketch left it: resized and looking elsewhere.
+        occ::handle<Graphic3d_Camera> view = viewCamera(viewAspect, perspective);
+        view->SetEyeAndCenter(gp_Pnt(0.0, 0.0, 500.0), gp_Pnt(0.0, 0.0, 0.0));
+        view->SetUp(gp_Dir(0.0, 1.0, 0.0));
+        view->OrthogonalizeUp();
+        view->SetScale(15.0);
+        mitcad::copyCameraKeepingAspect(*view, saved);
+        CHECK(view->Aspect() == viewAspect);
+        CHECK(nearly(view->ViewDimensions().Y(), height));
+        CHECK(view->Direction().IsEqual(saved->Direction(), 1e-12));
+        CHECK(view->Center().Distance(saved->Center()) <= 1e-9 * saved->Distance());
+        const auto [across, upward] = drawnCircle(*view, 600.0 * viewAspect, 600.0);
+        CHECK(across > 1.0 && close(across, upward));
+        // A plain copy, as before: squashed unless the aspects agree.
+        occ::handle<Graphic3d_Camera> copied = viewCamera(viewAspect, perspective);
+        copied->Copy(saved);
+        const auto [oldAcross, oldUpward] = drawnCircle(*copied, 600.0 * viewAspect, 600.0);
+        CHECK(close(oldAcross / oldUpward, viewAspect / savedAspect));
+      }
+    }
+  }
+  // The same aspect: the saved camera exactly as it was.
+  occ::handle<Graphic3d_Camera> wide = viewCamera(1.6, false);
+  wide->SetScale(80.0);
+  occ::handle<Graphic3d_Camera> same = viewCamera(1.6, false);
+  mitcad::copyCameraKeepingAspect(*same, wide);
+  CHECK(same->Scale() == wide->Scale() && same->Aspect() == wide->Aspect());
+}
+
 } // namespace
 
 int cameraHeightTests() {
   scaleTests();
   cameraTests();
   focalLengthTests();
+  restoreTests();
   return failures;
 }
 MITCAD_UNIT_TEST(cameraHeightTests);

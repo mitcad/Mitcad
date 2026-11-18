@@ -60,7 +60,7 @@ fn author() -> Value {
 fn comment_target() -> Value {
     json!({
         "type": "object",
-        "description": "What the comment is pinned to: {\"feature\"}, {\"body\"} with face, edge or vertex, {\"sketch\"} with curve, point, constraint or dimension, {\"parameter\"}, or {\"at\": [x, y, z]} (mm in its component's coordinates) with component; occurrence places a body or a point's component",
+        "description": "What the comment is pinned to: {\"feature\"}, {\"body\"} with face, edge or vertex, {\"sketch\"} with curve, point, constraint or dimension, {\"parameter\"}, {\"at\": [x, y, z]} (mm in its component's coordinates) with component, or {\"design\": true} (the whole design, also an empty one); occurrence places a body or a point's component",
         "properties": {
             "feature": {"type": "string", "description": "A feature (F3)"},
             "body": {"type": "string", "description": "A body (F2.b0)"},
@@ -75,7 +75,8 @@ fn comment_target() -> Value {
             "parameter": {"type": "string", "description": "A parameter, by its name"},
             "at": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "number"}, "description": "A free point, mm"},
             "component": {"type": ["string", "null"], "description": "The component a free point is in; left out, \"\" or null: the root"},
-            "occurrence": {"type": "string", "description": "The occurrence that places the body or the point's component (O1/O4); \"\" the root's"}
+            "occurrence": {"type": "string", "description": "The occurrence that places the body or the point's component (O1/O4); \"\" the root's"},
+            "design": {"type": "boolean", "const": true, "description": "The whole design, alone: no place, never orphaned"}
         },
         "additionalProperties": false
     })

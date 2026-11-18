@@ -28,6 +28,7 @@ use mitcad_model::joints::Motion;
 use mitcad_model::{
     ComponentUid, ContactSet, FeatureDef, FeatureUid, Kernel, MotionStudy, StudyKey, Transform,
 };
+use mitcad_solidcraft::inputs::Kind;
 use serde_json::{Value, json};
 
 use super::Importer;
@@ -736,7 +737,32 @@ fn origin<K: Kernel>(
     notes: &mut Vec<String>,
 ) -> Result<Value, String> {
     let occurrence = o.get("occurrence").and_then(Value::as_u64).unwrap_or(0);
-    let (path, component) = occurrence_path(im, occurrence)?;
+    let (mut path, mut component) = occurrence_path(im, occurrence)?;
+    // The occurrences below it, one per level, down to the part the snap
+    // is on (format 52): a copy of a sub-assembly placed more than once.
+    for id in o
+        .get("inside")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+    {
+        let inner = im
+            .design
+            .occurrences
+            .iter()
+            .find(|x| x.id == id)
+            .ok_or_else(|| format!("no occurrence {id}"))?;
+        let uid = im
+            .occurrences
+            .get(&id)
+            .ok_or_else(|| format!("occurrence {} did not come in", inner.name))?;
+        if !path.is_empty() {
+            path.push('/');
+        }
+        path.push_str(&uid.to_string());
+        component = im.component_of(inner.component);
+    }
     let snap = &o["snap"];
     let vec3 = |v: &Value| -> Option<[f64; 3]> {
         let a = v.as_array()?;
@@ -836,6 +862,87 @@ fn origin<K: Kernel>(
                 out["frame_override"] = json!({"z_axis": z});
             } else if snap["axis"].get("along").is_some() {
                 notes.push("an origin's z along its edge is MitCad's edge frame".to_owned());
+            }
+        }
+        // On a plane (format 52): the root's origin planes or an explicit
+        // plane, z along its normal, the origin at the pick on it.
+        "plane" => {
+            let plane: mitcad_solidcraft::kinds::PlaneRef =
+                serde_json::from_value(snap["plane"].clone())
+                    .map_err(|e| format!("a joint origin's plane: {e}"))?;
+            let (o, x, y) = match &plane {
+                mitcad_solidcraft::kinds::PlaneRef::Origin { name } => {
+                    let frame = super::planes::origin_frame(name)
+                        .ok_or_else(|| format!("no origin plane {name}"))?
+                        .1;
+                    (frame.o, frame.x, frame.y)
+                }
+                mitcad_solidcraft::kinds::PlaneRef::Custom { plane } => {
+                    (plane.origin, plane.x_dir, plane.y_dir)
+                }
+                _ => {
+                    return Err(
+                        "a joint origin on a plane other than an origin or explicit plane"
+                            .to_owned(),
+                    );
+                }
+            };
+            let z = mitcad_import_base::geom::cross(x, y);
+            let origin = match vec3(&snap["pick"]) {
+                Some(p) => sub(p, scale(z, dot(sub(p, o), z))),
+                None => o,
+            };
+            out["geometry"] = json!({"point": origin});
+            out["frame_override"] = json!({"z_axis": z, "x_axis": vec3(&snap["x"]).unwrap_or(x)});
+        }
+        // On an axis (format 52): a world axis or a fixed line, z along it,
+        // the origin at the pick on it.
+        "axis" => {
+            let axis = &snap["axis"];
+            let (o, d) = match axis.get("type").and_then(Value::as_str) {
+                Some("world") => {
+                    let d = match axis["axis"]
+                        .as_str()
+                        .unwrap_or("Z")
+                        .to_ascii_uppercase()
+                        .as_str()
+                    {
+                        "X" => [1.0, 0.0, 0.0],
+                        "Y" => [0.0, 1.0, 0.0],
+                        _ => [0.0, 0.0, 1.0],
+                    };
+                    ([0.0; 3], d)
+                }
+                Some("line") => {
+                    let line: mitcad_solidcraft::kinds::AxisRef =
+                        serde_json::from_value(axis.clone())
+                            .map_err(|e| format!("a joint origin's axis: {e}"))?;
+                    let mitcad_solidcraft::kinds::AxisRef::Line { origin, dir } = line else {
+                        unreachable!("a line")
+                    };
+                    let o = [
+                        im.params.value(im.doc, origin[0].as_str(), Kind::Length)?,
+                        im.params.value(im.doc, origin[1].as_str(), Kind::Length)?,
+                        im.params.value(im.doc, origin[2].as_str(), Kind::Length)?,
+                    ];
+                    (o, dir)
+                }
+                _ => {
+                    return Err(
+                        "a joint origin on an axis other than a world axis or a fixed line"
+                            .to_owned(),
+                    );
+                }
+            };
+            let d = mitcad_import_base::geom::unit(d).ok_or("an axis without a direction")?;
+            let origin = match vec3(&snap["pick"]) {
+                Some(p) => mitcad_import_base::geom::add(o, scale(d, dot(sub(p, o), d))),
+                None => o,
+            };
+            out["geometry"] = json!({"point": origin});
+            out["frame_override"] = json!({"z_axis": d});
+            if let Some(x) = vec3(&snap["x"]) {
+                out["frame_override"]["x_axis"] = json!(x);
             }
         }
         other => return Err(format!("a joint origin of the kind `{other}`")),

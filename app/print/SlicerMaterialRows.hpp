@@ -83,4 +83,11 @@ QString filamentRowText(const FilamentGroup& group, int groups);
 // Body2"; for the bodies without one what the slicer gets meanwhile.
 QString filamentRowTooltip(const FilamentGroup& group);
 
+// Send to Slicer's list of the print job's bodies (mitcad#2008): a row per
+// body (a group of one), its field the material it is sent with ("Shop PLA
+// for Bench X, 0.4 mm nozzle" with its variant), or "None (slicer's own)"
+// for a body sent without one; the tooltip says what None means.
+QString bodyRowText(const FilamentGroup& group);
+QString bodyRowTooltip(const FilamentGroup& group);
+
 } // namespace mitcad

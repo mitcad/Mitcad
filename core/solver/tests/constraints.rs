@@ -895,6 +895,61 @@ fn tangent_arcs_at_shared_end() {
     assert!(an.redundant.is_empty() && an.conflicts.is_empty(), "{an:?}");
 }
 
+/// An arc starting at a horizontal line's midpoint, made tangent to it
+/// (mitcad#2006): the tangency is at the midpoint (the radius there square
+/// to the line), not the centre's distance from the line, which the
+/// midpoint implies there and which the analysis reported redundant.
+#[test]
+fn tangent_line_arc_at_the_line_s_midpoint() {
+    let mut s = System::new();
+    let p0 = s.add_point(-20.0, 0.0);
+    let p1 = s.add_point(20.0, 0.0);
+    let l = s.add_line(p0, p1).unwrap();
+    s.add_constraint(Horizontal(l)).unwrap();
+    let c = s.add_point(2.0, 8.0);
+    let st = s.add_point(0.0, 0.3);
+    let r = dist([2.0, 8.0], [0.0, 0.3]);
+    let en = s.add_point(2.0 + r, 8.0);
+    let arc = s.add_arc(c, st, en).unwrap();
+    s.add_constraint(Midpoint(st, l)).unwrap();
+    s.add_constraint(Tangent(l, arc)).unwrap();
+    solve_ok(&mut s);
+    let (a, b, m, o) = (pt(&s, p0), pt(&s, p1), pt(&s, st), pt(&s, c));
+    assert_near(m[0], (a[0] + b[0]) / 2.0, "start at the midpoint (x)");
+    assert_near(m[1], (a[1] + b[1]) / 2.0, "start at the midpoint (y)");
+    assert_near(a[1], b[1], "line level");
+    assert_near(o[0], m[0], "centre straight above the start");
+    let an = s.analyze();
+    assert!(an.redundant.is_empty() && an.conflicts.is_empty(), "{an:?}");
+}
+
+/// The same with the arc's start at the end of a second line collinear
+/// with the first (mitcad#2006): the end lies on the first line, so the
+/// tangency is there.
+#[test]
+fn tangent_line_arc_at_a_collinear_line_s_end() {
+    let mut s = System::new();
+    let a0 = s.add_point(0.0, 0.0);
+    let a1 = s.add_point(10.0, 0.0);
+    let l1 = s.add_line(a0, a1).unwrap();
+    s.add_constraint(FixEntity(l1)).unwrap();
+    let st = s.add_point(20.0, 0.5);
+    let b1 = s.add_point(30.0, 0.0);
+    let l2 = s.add_line(st, b1).unwrap();
+    s.add_constraint(Collinear(l1, l2)).unwrap();
+    let c = s.add_point(21.0, 6.0);
+    let r = dist([21.0, 6.0], [20.0, 0.5]);
+    let en = s.add_point(21.0 + r, 6.0);
+    let arc = s.add_arc(c, st, en).unwrap();
+    s.add_constraint(Tangent(l1, arc)).unwrap();
+    solve_ok(&mut s);
+    let (m, o) = (pt(&s, st), pt(&s, c));
+    assert_near(m[1], 0.0, "start on the first line");
+    assert_near(o[0], m[0], "centre straight above the start");
+    let an = s.analyze();
+    assert!(an.redundant.is_empty() && an.conflicts.is_empty(), "{an:?}");
+}
+
 #[test]
 fn tangent_line_spline_end_and_interior() {
     let mut s = System::new();

@@ -1,0 +1,22 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "Synthetic plate for Measure's guides (mitcad#1979): 65 x 30 x 10 mm (F2, x -15 to 50, y -15 to 15) with two parallel 8.5 mm holes through (F4) at (0, 0) and (35, 0). Faces: top F2:end(R), holes F4:side(c1) and F4:side(c3); R is the rectangle's region. The first hole's top edge against the second hole's wall: the minimum 26.5 mm from (4.25, 0, 10) to (30.75, 0, 10) lies on the axis distance 35 mm from (0, 0, 10) to (35, 0, 10)."},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_rectangle", "sketch": "F1", "corner": [-15, -15], "width": 65, "height": 30},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F1", "region": "r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]}"}],
+    "extent": {"type": "distance", "distance": 10}, "operation": "new_body"}},
+  {"cmd": "sketch.create"},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [0, 0], "diameter": 8.5},
+  {"cmd": "sketch.add_circle", "sketch": "F3", "center": [35, 0], "diameter": 8.5},
+  {"expect": {"sketch": "F3", "regions": ["r{c1}", "r{c3}"]}},
+  {"cmd": "add_feature", "def": {"type": "extrude",
+    "profiles": [{"sketch": "F3", "region": "r{c1}"}, {"sketch": "F3", "region": "r{c3}"}],
+    "extent": {"type": "through_all"}, "operation": "cut"}},
+  {"expect": {"bodies": 1, "body": "Body1", "has_face": "F4:side(c3)"}},
+  {"expect": {"query": {"query": "measure",
+    "a": {"body": "F2.b0", "edge": "E{F2:end(r{c1[c4,c2],c2[c1,c3],c3[c2,c4],c4[c3,c1]})|F4:side(c1)}"},
+    "b": {"body": "F2.b0", "face": "F4:side(c3)"}},
+    "result": {"between": {"main": "distance", "distance": 26.5, "axis_distance": 35,
+      "axis_points": [[0, 0, 10], [35, 0, 10]]}}, "tolerance": 1e-5}}
+]

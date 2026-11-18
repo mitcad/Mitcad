@@ -37,8 +37,16 @@ failed or still crossed.
   and that failed or whose contacts still cross, is computed again on the
   faces of its edges (its overlap and ride entries removed) for the cut
   above; if its contacts then do not cross twice, it fails as before.
+
+Failures (mitcad#1986): a stripe computed again to trim it at the crossings
+fails with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016): it is marked failed (its spine's
+status an error) and the trim is not made, which fails the fillet as
+before. Any other failure (a broken invariant, a signal) is rethrown.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
-index 68ca4c06..a08b99a1 100644
+index 4702ab59..4ab2512c 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
 @@ -71,6 +71,17 @@
@@ -206,7 +214,7 @@ index 68ca4c06..a08b99a1 100644
  NCollection_List<occ::handle<ChFiDS_Stripe>> ChFi3d_Builder::OverlappingStripes()
  {
    NCollection_List<occ::handle<ChFiDS_Stripe>> again;
-@@ -812,6 +963,513 @@ static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, co
+@@ -820,6 +971,513 @@ static void redirectPoint(TopOpeBRepDS_DataStructure& DStr, const int theOld, co
    }
  }
  
@@ -720,7 +728,7 @@ index 68ca4c06..a08b99a1 100644
  void ChFi3d_Builder::ApplyRides()
  {
    TopOpeBRepDS_DataStructure&                            DStr = myDS->ChangeDS();
-@@ -1087,6 +1745,23 @@ void ChFi3d_Builder::Compute()
+@@ -1095,6 +1753,23 @@ void ChFi3d_Builder::Compute()
    if (done)
    {
      const NCollection_List<occ::handle<ChFiDS_Stripe>> again = OverlappingStripes();
@@ -744,7 +752,7 @@ index 68ca4c06..a08b99a1 100644
      for (NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator it(again); it.More(); it.Next())
      {
        occ::handle<ChFiDS_Stripe> st = it.Value();
-@@ -1161,6 +1836,81 @@ void ChFi3d_Builder::Compute()
+@@ -1169,6 +1844,86 @@ void ChFi3d_Builder::Compute()
        }
        done = badstripes.IsEmpty();
      }
@@ -780,8 +788,13 @@ index 68ca4c06..a08b99a1 100644
 +          occ::handle<ChFiDS_Stripe> aStripe = S;
 +          PerformSetOfSurf(aStripe);
 +        }
-+        catch (Standard_Failure const&)
++        catch (Standard_Failure const& anException)
 +        {
++          // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++          if (!ChFi3d_IsComputationFailure(anException))
++          {
++            throw;
++          }
 +          aComputed = false;
 +          if (S->Spine()->ErrorStatus() == ChFiDS_Ok)
 +          {
@@ -826,7 +839,7 @@ index 68ca4c06..a08b99a1 100644
    }
    if (done)
    {
-@@ -1304,6 +2054,69 @@ void ChFi3d_Builder::Compute()
+@@ -1346,6 +2101,69 @@ void ChFi3d_Builder::Compute()
      int i1;
      // Stripes that roll on another's contact line meet its blend there.
      ApplyRides();
@@ -896,7 +909,7 @@ index 68ca4c06..a08b99a1 100644
      for (itel.Initialize(myListStripe), i1 = 0; itel.More(); itel.Next(), i1++)
      {
        const occ::handle<ChFiDS_Stripe>& st = itel.Value();
-@@ -1323,7 +2136,7 @@ void ChFi3d_Builder::Compute()
+@@ -1365,7 +2183,7 @@ void ChFi3d_Builder::Compute()
            continue;
          }
          occ::handle<ChFiDS_Stripe> aCheckStripe = itel1.Value();
@@ -905,7 +918,7 @@ index 68ca4c06..a08b99a1 100644
          {
            continue;
          }
-@@ -1362,6 +2175,17 @@ void ChFi3d_Builder::Compute()
+@@ -1404,6 +2222,17 @@ void ChFi3d_Builder::Compute()
      ChFi3d_InitChron(cl_reconstruction);
  #endif
  

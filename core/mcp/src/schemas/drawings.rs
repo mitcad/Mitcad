@@ -235,13 +235,18 @@ fn break_input() -> Value {
 fn part_bodies(description: &str) -> Value {
     json!({
         "type": "array",
-        "description": format!("{description}: each a body's uid or name, or {{\"body\", \"occurrence\"}} with the occurrence path that places it"),
+        "description": format!("{description}: each a body's uid or name, or {{\"body\", \"occurrence\", \"count\"}} with the occurrence path that places it and how many of it (the command's count when left out)"),
         "items": {"type": ["string", "object"]}
     })
 }
 
 fn count() -> Value {
     json!({"type": "integer", "minimum": 1, "maximum": 1000, "description": "How many of each"})
+}
+
+/// A cut sheet's parts as their bodies' Flat Patterns (mitcad#1980).
+fn flat() -> Value {
+    json!({"type": "boolean", "default": false, "description": "Each body's Flat Pattern as its part (its developed blank, outline and bend lines) instead of a face's outline; a sheet-metal body only, and no face"})
 }
 
 /// A drawing command's schema (fields without `cmd`).
@@ -591,7 +596,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "width": number("The material's width, mm (default 600)"),
                 "height": number("The material's height, mm (default 300)"),
                 "bodies": part_bodies("The bodies it starts with as parts"),
-                "count": count()
+                "count": count(),
+                "flat": flat()
             },
             "required": [],
             "examples": [
@@ -617,7 +623,8 @@ fn cut_sheets(name: &str) -> Option<Value> {
                 "bodies": part_bodies("The bodies"),
                 "face": id("The planar face they are seen along, by its topological name (one body only); the largest when left out"),
                 "count": count(),
-                "at": p2("Where the first one's middle goes; a free place when left out")
+                "at": p2("Where the first one's middle goes; a free place when left out"),
+                "flat": flat()
             },
             "required": ["drawing", "bodies"],
             "examples": [{"cmd": "add_cut_sheet_parts", "drawing": "D1", "bodies": ["Side"], "count": 2}]

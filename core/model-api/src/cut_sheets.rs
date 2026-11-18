@@ -19,6 +19,12 @@
 //! The result is kept in the document's drawing cache by the body's shape
 //! version, its placement and the face chosen.
 //!
+//! A Flat Pattern part (`"flat": true`, mitcad#1980) is a sheet-metal
+//! body's developed blank instead: its outline from the body's own Flat
+//! Pattern settings and side (`Document::developed_flat_pattern`) as cut
+//! edges, and its bend lines; a body whose pattern cannot be developed
+//! gives a warning, as a missing part does.
+//!
 //! `export_face_dxf` (mitcad#1049, the Make tab's Export Face as DXF)
 //! writes one body's outline as a part would have it, seen along a planar
 //! face, without a cut sheet.
@@ -42,7 +48,7 @@ use mitcad_model::kernel::Kernel;
 use mitcad_model::topo::FaceName;
 use mitcad_model_build::prelude::*;
 use mitcad_model_drawing::bspline::Spline2;
-use mitcad_model_drawing::cut_sheet::{self, OutlineLoop, PartView, Piece, PlacedPart};
+use mitcad_model_drawing::cut_sheet::{self, BendLine, OutlineLoop, PartView, Piece, PlacedPart};
 use mitcad_model_drawing::cut_sheet_def::{
     self as def, CutPart, CutSheet, DEFAULT_HEIGHT, DEFAULT_WIDTH, MAX_COUNT,
 };
@@ -60,7 +66,8 @@ const GAP: f64 = 5.0;
 const BROKEN_BOX: f64 = 30.0;
 
 /// A body a part is made of: its uid or name, or with the occurrence that
-/// places it (a path from the drawing's component).
+/// places it (a path from the drawing's component) and how many of it
+/// (the command's `count` when left out; mitcad#1980).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub(super) enum PartBody {
@@ -69,6 +76,8 @@ pub(super) enum PartBody {
         body: String,
         #[serde(default)]
         occurrence: Option<OccurrencePath>,
+        #[serde(default)]
+        count: Option<u32>,
     },
 }
 
@@ -90,6 +99,9 @@ pub(super) struct AddCutSheetCommand {
     bodies: Vec<PartBody>,
     #[serde(default)]
     count: Option<u32>,
+    /// The bodies' Flat Patterns (mitcad#1980).
+    #[serde(default)]
+    flat: bool,
 }
 
 /// `edit_cut_sheet`: its name and its material's size.
@@ -120,6 +132,9 @@ pub(super) struct AddPartsCommand {
     /// left out.
     #[serde(default)]
     at: Option<P2>,
+    /// The bodies' Flat Patterns (mitcad#1980).
+    #[serde(default)]
+    flat: bool,
 }
 
 /// `edit_cut_sheet_part`: what is given changes.
@@ -224,6 +239,8 @@ struct PartState {
     view: Result<Arc<PartView>, String>,
     /// On the sheet; empty when it is not worked out.
     loops: Vec<OutlineLoop>,
+    /// A Flat Pattern's bend lines on the sheet (mitcad#1980).
+    bends: Vec<BendLine>,
     /// Its body (or the occurrence placing it) is gone.
     missing: bool,
     off_sheet: bool,
@@ -392,7 +409,7 @@ trait CutSheetsLocal<K: Kernel> {
     fn lay_out(&self, drawing: &Drawing) -> Layout;
 
     /// New parts of bodies, `count` of each, placed at `at` (the first)
-    /// or in free places.
+    /// or in free places; with `flat` their Flat Patterns (mitcad#1980).
     fn new_parts(
         &self,
         drawing: &Drawing,
@@ -400,7 +417,12 @@ trait CutSheetsLocal<K: Kernel> {
         face: Option<&FaceName>,
         count: Option<u32>,
         at: Option<P2>,
+        flat: bool,
     ) -> Result<Vec<CutPart>, ApiError>;
+
+    /// A Flat Pattern part worked out (mitcad#1980): the body's developed
+    /// blank and its bend lines.
+    fn flat_part_view(&self, part: &CutPart) -> Result<Arc<PartView>, String>;
 
     /// A cut sheet by its id or name, and its own part.
     fn find_cut_sheet(&self, text: &str) -> Result<(Drawing, CutSheet), ApiError>;
@@ -412,6 +434,9 @@ trait CutSheetsLocal<K: Kernel> {
 
 impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
     fn part_view(&self, component: ComponentUid, part: &CutPart) -> Result<Arc<PartView>, String> {
+        if part.flat {
+            return self.flat_part_view(part);
+        }
         let subject = Subject::Bodies {
             bodies: vec![SubjectBody {
                 body: part.body,
@@ -540,7 +565,65 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 .map(|(name, area, _)| (name.to_string(), *area))
                 .collect(),
             outline,
+            bends: Vec::new(),
         });
+        self.drawing_cache().keep_part_view(key, Arc::clone(&view));
+        Ok(view)
+    }
+
+    fn flat_part_view(&self, part: &CutPart) -> Result<Arc<PartView>, String> {
+        if self.body_shape(part.body).is_none() {
+            return Err(format!("the body {} is gone", part.body));
+        }
+        // Kept by the body's shape and its Flat Pattern's settings.
+        let version = self.body_version(part.body).unwrap_or(0);
+        let mut fp = Fingerprint::new("cut-sheet-flat-part-v1");
+        fp.str(&part.body.to_string()).u128(version);
+        let settings = self
+            .flat_pattern_defs()
+            .get(&part.body)
+            .map(|def| json!(def).to_string())
+            .unwrap_or_default();
+        fp.str(&settings);
+        let key = fp.finish();
+        if let Some(view) = self.drawing_cache().part_view(key) {
+            return Ok(view);
+        }
+        let outcome = self
+            .developed_flat_pattern(part.body)
+            .map_err(|e| mitcad_model::notice::user_message(&e.to_string()))?;
+        let pattern = match &*outcome {
+            Ok(pattern) => pattern,
+            Err(failure) => return Err(failure.diagnostics.join("; ")),
+        };
+        let loops =
+            mitcad_model::sheet::flat_dxf::outline_loops(&pattern.regions).map_err(|e| {
+                format!(
+                    "the Flat Pattern of {} cannot be drawn: {}",
+                    self.body_name(part.body),
+                    mitcad_model::notice::user_message(&e)
+                )
+            })?;
+        let bends: Vec<BendLine> = pattern
+            .bends
+            .iter()
+            .flat_map(|bend| {
+                let up = bend.direction == "up";
+                bend.centerlines.iter().map(move |line| BendLine {
+                    start: line.start,
+                    end: line.end,
+                    up,
+                })
+            })
+            .collect();
+        let view = cut_sheet::flat_part_view(&loops, bends);
+        if view.outline.loops.is_empty() {
+            return Err(format!(
+                "the Flat Pattern of {} has no outline",
+                self.body_name(part.body)
+            ));
+        }
+        let view = Arc::new(view);
         self.drawing_cache().keep_part_view(key, Arc::clone(&view));
         Ok(view)
     }
@@ -555,6 +638,10 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 let view = self.part_view(drawing.component, part);
                 let loops = match &view {
                     Ok(view) => cut_sheet::placed(&view.outline, part.place, part.rotation),
+                    Err(_) => Vec::new(),
+                };
+                let bends = match &view {
+                    Ok(view) => cut_sheet::placed_bends(view, part.place, part.rotation),
                     Err(_) => Vec::new(),
                 };
                 let missing = match &view {
@@ -572,6 +659,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                     name,
                     view,
                     loops,
+                    bends,
                     missing,
                     off_sheet,
                     overlaps: Vec::new(),
@@ -620,16 +708,26 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
         face: Option<&FaceName>,
         count: Option<u32>,
         at: Option<P2>,
+        flat: bool,
     ) -> Result<Vec<CutPart>, ApiError> {
-        let count = count.unwrap_or(1);
-        if count == 0 || count > MAX_COUNT {
-            return Err(ApiError(format!(
-                "a part is added 1 to {MAX_COUNT} times, not {count}"
-            )));
-        }
+        let check = |count: u32| {
+            if count == 0 || count > MAX_COUNT {
+                Err(ApiError(format!(
+                    "a part is added 1 to {MAX_COUNT} times, not {count}"
+                )))
+            } else {
+                Ok(count)
+            }
+        };
+        let count = check(count.unwrap_or(1))?;
         if face.is_some() && bodies.len() != 1 {
             return Err(ApiError(
                 "a face is chosen for one body at a time".to_owned(),
+            ));
+        }
+        if face.is_some() && flat {
+            return Err(ApiError(
+                "a Flat Pattern part lies flat: it takes no face".to_owned(),
             ));
         }
         let empty = CutSheet::default();
@@ -638,9 +736,17 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
         let mut next_id = cut.next_part_id();
         let mut out: Vec<CutPart> = Vec::new();
         for input in bodies {
-            let (text, occurrence) = match input {
-                PartBody::Named(text) => (text, None),
-                PartBody::Placed { body, occurrence } => (body, occurrence.clone()),
+            let (text, occurrence, own_count) = match input {
+                PartBody::Named(text) => (text, None, None),
+                PartBody::Placed {
+                    body,
+                    occurrence,
+                    count,
+                } => (body, occurrence.clone(), *count),
+            };
+            let count = match own_count {
+                Some(own) => check(own)?,
+                None => count,
             };
             let body = self.body_by_uid_or_name(text)?;
             let mut part = CutPart {
@@ -650,6 +756,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
                 face: face.cloned(),
                 place: [0.0, 0.0],
                 rotation: 0.0,
+                flat,
             };
             let view = self.part_view(drawing.component, &part).map_err(ApiError)?;
             let (lo, hi) = view
@@ -683,6 +790,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             face: Some(command.face.clone()),
             place: [0.0, 0.0],
             rotation: 0.0,
+            flat: false,
         };
         let view = self
             .part_view(ComponentUid::ROOT, &part)
@@ -696,6 +804,7 @@ impl<K: Kernel> CutSheetsLocal<K> for Document<K> {
             id: 1,
             name: name.clone(),
             loops: cut_sheet::placed(&view.outline, [size[0] / 2.0, size[1] / 2.0], 0.0),
+            bends: Vec::new(),
         };
         let path = &command.path;
         let unit = super::exchange::dxf_unit(self, command.units.as_deref())?;
@@ -761,7 +870,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                         parts: Vec::new(),
                     }),
                 };
-                let parts = self.new_parts(&drawing, &c.bodies, None, c.count, None)?;
+                let parts = self.new_parts(&drawing, &c.bodies, None, c.count, None, c.flat)?;
                 let ids: Vec<u32> = parts.iter().map(|p| p.id).collect();
                 if let Some(cut) = &mut drawing.cut_sheet {
                     cut.parts = parts;
@@ -800,7 +909,8 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 if c.bodies.is_empty() {
                     return Err(ApiError("add_cut_sheet_parts needs bodies".to_owned()));
                 }
-                let parts = self.new_parts(&old, &c.bodies, c.face.as_ref(), c.count, c.at)?;
+                let parts =
+                    self.new_parts(&old, &c.bodies, c.face.as_ref(), c.count, c.at, c.flat)?;
                 let ids: Vec<u32> = parts.iter().map(|p| p.id).collect();
                 let label = match ids.as_slice() {
                     [one] => format!("Add part {one} to {}", old.name),
@@ -870,6 +980,12 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
         let moved = edit.place.is_some() || edit.shift.is_some();
         let turned = edit.rotation.is_some() || edit.turn.is_some();
         let refaced = edit.face.is_some();
+        if edit.face.is_some() && part.flat {
+            return Err(ApiError(format!(
+                "part {id} of {} is a Flat Pattern: it takes no face",
+                old.name
+            )));
+        }
         if let Some(face) = edit.face {
             part.face = face;
             let checked = part.clone();
@@ -943,6 +1059,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 id: s.part.id,
                 name: s.name.clone(),
                 loops: s.loops.clone(),
+                bends: s.bends.clone(),
             })
             .collect();
         if parts.is_empty() {
@@ -964,6 +1081,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             .map(|p| p.loops.iter().filter(|l| l.outer).count())
             .sum();
         let loops: usize = parts.iter().map(|p| p.loops.len()).sum();
+        let bends: usize = parts.iter().map(|p| p.bends.len()).sum();
         Ok(json!({
             "path": path,
             "format": format,
@@ -972,6 +1090,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
             "parts": parts.len(),
             "outer": outer,
             "inner": loops - outer,
+            "bends": bends,
             "labels": labels,
             "sheets": 1,
             "width": cut.width,
@@ -1056,6 +1175,7 @@ impl<K: Kernel> CutSheetsOps<K> for Document<K> {
                 id: s.part.id,
                 name: s.name.clone(),
                 loops: s.loops.clone(),
+                bends: s.bends.clone(),
             })
             .collect();
         let sheet_name = drawing
@@ -1116,6 +1236,7 @@ fn part_json(s: &PartState, geometry: bool) -> Value {
         "body_name": s.name,
         "occurrence": s.part.occurrence,
         "own_face": s.part.face.is_some(),
+        "flat": s.part.flat,
         "place": s.part.place,
         "rotation": s.part.rotation,
         "box": [lo, hi],
@@ -1145,8 +1266,16 @@ fn part_json(s: &PartState, geometry: bool) -> Value {
                     .map(|spline| spline_json(&spline)["spline"].clone())
                     .collect::<Vec<_>>()
             );
+            value["bends"] = json!(s.bends.len());
             if geometry {
                 value["loops"] = loops_json(&s.loops);
+                // A Flat Pattern's bend lines on the sheet (mitcad#1980).
+                value["bend_lines"] = json!(
+                    s.bends
+                        .iter()
+                        .map(|b| json!({"line": [b.start, b.end], "up": b.up}))
+                        .collect::<Vec<_>>()
+                );
             }
         }
         Err(e) => {

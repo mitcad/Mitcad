@@ -195,6 +195,12 @@ mod assembly_path;
 // Silhouettes of curved faces and extreme points picked on drawings' views
 // (mitcad#1909).
 mod drawing_silhouettes;
+// What a print job sends to a slicer: geometry only or a print project
+// (mitcad#2008).
+mod print_job;
+// New content in sight: a command that adds to a component only hidden
+// occurrences place shows them in its own undo step (mitcad#1995).
+mod hidden_parents;
 // Section Analysis worked out without the document, off the UI thread
 // (mitcad#438).
 pub use analysis::{PreparedClips, PreparedQuery};
@@ -976,6 +982,19 @@ named_enum! {
             properties: Vec<String>,
             #[serde(default)]
             group_identical: bool,
+            /// Only the rows of these kinds; every kind when empty
+            /// (mitcad#1980).
+            #[serde(default)]
+            kind: Vec<String>,
+            /// Only the rows of these BOM Structures; every one when empty
+            /// (mitcad#1985).
+            #[serde(default)]
+            bom_structure: Vec<String>,
+            /// `list` (default: every component), `structured` (as the
+            /// assembly nests them) or `parts` (the parts only), the two
+            /// views applying the BOM Structures (mitcad#1985).
+            #[serde(default)]
+            view: Option<String>,
         },
         // A row of assembly constraints before it is added: its references' kinds,
         // the types they fit and what they measure (mitcad#148).
@@ -1328,6 +1347,12 @@ named_enum! {
         // A body slid or turned into place and where it first runs into
         // others (mitcad#1737, `assembly_path.rs`).
         "assembly_path" => AssemblyPath(Box<assembly_path::AssemblyPathQuery>),
+        // The Sheet Metal list: each sheet-metal body with its developed
+        // blank (mitcad#1980, `document/bom_kind.rs`).
+        "sheet_metal_list" => SheetMetalList,
+        // What a print job sends to a slicer, before Send: geometry only or
+        // a print project (mitcad#2008, `print_job.rs`).
+        "print_job" => PrintJob(print_job::PrintJobQuery),
     }
 }
 
@@ -1797,7 +1822,27 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
             Query::PartsList {
                 properties,
                 group_identical,
-            } => self.bom_list_with(&properties, group_identical),
+                kind,
+                bom_structure,
+                view,
+            } => libraries::filter_parts_list(
+                match view.as_deref().map(str::trim) {
+                    None | Some("") | Some("list") => {
+                        self.bom_list_with(&properties, group_identical)
+                    }
+                    Some("structured") => {
+                        self.bom_view_with(&properties, mitcad_model::BomView::Structured)
+                    }
+                    Some("parts") => self.bom_view_with(&properties, mitcad_model::BomView::Parts),
+                    Some(other) => {
+                        return Err(ApiError(format!(
+                            "there is no view {other}; the views are list, structured and parts"
+                        )));
+                    }
+                },
+                &kind,
+                &bom_structure,
+            )?,
             // Assembly constraints (mitcad#148).
             Query::ConstraintRow(query) => self.constraint_row_json(&query)?,
             // Move Features into a Component (mitcad#171).
@@ -2057,6 +2102,10 @@ impl<K: Kernel> DocumentApi<K> for Document<K> {
                 .map_err(ApiError)?,
             // A body slid or turned into place (mitcad#1737).
             Query::AssemblyPath(query) => assembly_path::query(self, &query)?,
+            // The Sheet Metal list (mitcad#1980).
+            Query::SheetMetalList => self.sheet_metal_list_json(),
+            // What a print job sends (mitcad#2008).
+            Query::PrintJob(query) => print_job::query(self, &query)?,
         };
         // A result with `warnings` lists them as `notices` too (mitcad#1040).
         notice::add_notices(&mut result);
@@ -2188,7 +2237,13 @@ impl<K: Kernel> DocumentLocal<K> for Document<K> {
         let warned = WarningsBefore::of(self);
         let cmd = value.get("cmd").and_then(Value::as_str);
         let (adds, edits) = (cmd == Some("add_feature"), cmd == Some("edit_feature"));
+        // What it adds, kept in sight (mitcad#1995).
+        let content =
+            hidden_parents::adds_content(cmd).then(|| hidden_parents::ContentBefore::of(self));
         let mut result = action(self, value)?;
+        if let Some(content) = &content {
+            hidden_parents::show_new_content(self, &mut result, content)?;
+        }
         add_new_warnings(
             self,
             &mut result,

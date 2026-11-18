@@ -32,3 +32,6 @@ mod gltf_tests;
 mod serp_tests;
 // A sketch's points in its DXF (mitcad#1963).
 mod sketch_dxf_points_1963_tests;
+// The reporter's arc whose Symmetry partly repeats the others: information,
+// not a redundancy warning (mitcad#1992).
+mod sketch_partly_redundant_reported_1992_tests;

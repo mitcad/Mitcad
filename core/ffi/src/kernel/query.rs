@@ -57,5 +57,8 @@ pub mod ffi {
         /// (mitcad#714); `empty` for one without geometry.
         fn face_bounding_boxes(shape: &Shape, faces: &[u32]) -> Result<Vec<BoundingBox>>;
         fn edge_bounding_boxes(shape: &Shape, edges: &[u32]) -> Result<Vec<BoundingBox>>;
+        /// `bounding_box` of each shape, measured beside each other
+        /// (mitcad#1997).
+        fn bounding_boxes(shapes: &ShapeList) -> Result<Vec<BoundingBox>>;
     }
 }

@@ -264,7 +264,12 @@ impl<K: Kernel> RetiltCrateOps<K> for Document<K> {
         };
         let target = self
             .target(&j.b.occurrence.0)
-            .filter(|t| j.kind == JointKind::Slider && t.info.frame_kind(slot) == "slot")
+            // On a slot, or centred on a side between its slots
+            // (mitcad#2002).
+            .filter(|t| {
+                j.kind == JointKind::Slider
+                    && matches!(t.info.frame_kind(slot).as_str(), "slot" | "side")
+            })
             .ok_or_else(not_on_side)?;
         if own_name != "end_a" && own_name != "end_b" {
             return Err(not_on_side());

@@ -522,6 +522,9 @@ const StepSpec kSpecs[] = {
     {"expect-view-point", 4, 4, kIdle},
     {"click-view-point", 1, 3, kInputOfMain},
     {"drag-view-point", 3, 5, kInputOfMain},
+    // Where a click with no command picks each face, edge and vertex, as
+    // "Pick places:" (mitcad#1955: a surface body's free edges).
+    {"idle-pick-places", 0, 0, kIdle},
 };
 
 // The colour that covers most of a visible widget's area as its window
@@ -3109,6 +3112,13 @@ void TestDriver::run(const Step& step) {
       m_waitDetail = QStringLiteral("actual selection: %1 items, %2 profiles").arg(selected.size()).arg(count);
       return selected.size() == total && count == profiles;
     }, 6, QStringLiteral("expected %1 selected items, including %2 profiles").arg(total).arg(profiles));
+  } else if (name == QLatin1String("idle-pick-places")) {
+    // The idle selection's places, for hover-logged and click-pick with no
+    // command (mitcad#1955); logged again by each click-pick.
+    whenReady([this] {
+      auto* window = qobject_cast<MainWindow*>(m_main.data());
+      return window != nullptr && !window->modelBusy() && window->logIdlePickPlaces();
+    }, 6, QStringLiteral("no pick places logged with no command"));
   } else if (name == QLatin1String("expect-view-buttons")) {
     const QHash<QString, Aspect_VKeyMouse> buttons = {
       {QStringLiteral("none"), Aspect_VKeyMouse_NONE},

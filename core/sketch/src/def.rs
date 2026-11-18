@@ -24,7 +24,7 @@ use crate::parameters::ParamId;
 use crate::pattern::{self, Binding, SketchPattern};
 use crate::placement::SketchPlacement;
 use crate::profile::{ProfileRegion, SketchFrame};
-use crate::regions::{Layout, Region, RegionCurve, best_match, regions_and_layout};
+use crate::regions::{Layout, Region, RegionCurve, best_match, best_matches, regions_and_layout};
 use crate::solve::{
     DimensionInput, Extra, Goal, SketchStatus, SolveError, Solved, drag_extra, solve_extra,
 };
@@ -578,7 +578,8 @@ impl SketchOutput {
     /// key traces on the changed curves (see [`Layout::pieces`]: the region
     /// renamed, or its pieces when the change split it), the one with the
     /// most curves in common first; else, when the key traces no outline,
-    /// the region with the most curves in common. None when no region
+    /// the region with the most curves in common, with every other region
+    /// as like the key ([`best_matches`], mitcad#1993). None when no region
     /// shares a curve with it.
     pub fn found(&self, key: &RegionKey) -> Option<FoundRegions<'_>> {
         if let Some(region) = self.region_info.iter().find(|r| &r.profile.key == key) {
@@ -625,9 +626,15 @@ impl SketchOutput {
             .into_iter()
             .filter_map(|i| self.region_info.get(i))
             .collect();
-        let main = best_match(pieces.iter().copied(), key)
-            .or_else(|| pieces.first().copied())
-            .or_else(|| best_match(&self.region_info, key))?;
+        // A key that traces no outline finds every region as like it as the
+        // best: an old region between curves that now bound regions apart
+        // lies in each (mitcad#1993).
+        let pieces = if pieces.is_empty() {
+            best_matches(&self.region_info, key)
+        } else {
+            pieces
+        };
+        let main = best_match(pieces.iter().copied(), key).or_else(|| pieces.first().copied())?;
         let mut regions = vec![main];
         regions.extend(pieces.into_iter().filter(|r| !std::ptr::eq(*r, main)));
         Some(FoundRegions {
@@ -859,6 +866,48 @@ impl SketchDef {
         name: &dyn Fn(ParamId) -> String,
     ) -> Result<Solved, SolveError> {
         self.solve_goals(value, name, &[])
+    }
+
+    /// The degrees of freedom each of `items` (redundant constraints or
+    /// dimensions of this definition) still takes away from `solved`, its
+    /// solution (mitcad#1992): the degrees of freedom of the sketch without
+    /// it, solved from `solved`'s positions, less those of `solved`. Only
+    /// those that take some away, in the order of `items`. A constraint the
+    /// others imply in part (a Symmetry of an arc's ends about an axis
+    /// through its centre: the ends equally far from the centre and mirrored
+    /// across the axis are also level, so one of its two equations follows
+    /// from the arc's own, while the other still holds them) is redundant to
+    /// the solver, which reports the newest of a dependent set, although it
+    /// changed the sketch; one the others imply in full takes nothing away
+    /// and is not listed. An item that is not in the definition, or without
+    /// which the sketch does not solve, is left out.
+    pub fn freedom_taken(
+        &self,
+        solved: &Solved,
+        items: &[ConstraintUid],
+        value: &mut dyn FnMut(ParamId) -> Result<f64, String>,
+        name: &dyn Fn(ParamId) -> String,
+    ) -> Vec<(ConstraintUid, usize)> {
+        let mut at = self.clone();
+        solved.store(&mut at.entities);
+        let mut out = Vec::new();
+        for k in items {
+            let mut without = at.clone();
+            let count = without.constraints.len() + without.dimensions.len();
+            without.constraints.retain(|c| c.id != *k);
+            without.dimensions.retain(|d| d.id != *k);
+            if without.constraints.len() + without.dimensions.len() == count {
+                continue;
+            }
+            let Ok(free) = without.solve_with(value, name) else {
+                continue;
+            };
+            let taken = free.status.dof.saturating_sub(solved.status.dof);
+            if taken > 0 {
+                out.push((*k, taken));
+            }
+        }
+        out
     }
 
     /// [`SketchDef::solve_with`], then pulls the goals as far as the

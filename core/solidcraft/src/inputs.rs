@@ -234,6 +234,8 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
                     w.expr("/hole/cb_diameter", "Counterbore diameter", Length);
                     w.expr("/hole/cb_depth", "Counterbore depth", Length);
                     w.expr("/hole/tip_angle", "Tip angle", Angle);
+                    // Its printing bridge layers (format 51).
+                    w.expr("/hole/bridge", "Bridge layer", Length);
                 }
                 Some("countersink") => {
                     w.expr("/hole/cs_diameter", "Countersink diameter", Length);
@@ -304,7 +306,11 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
                 .pointer("/profile/profile")
                 .and_then(Value::as_object)
             {
-                let mut names: Vec<&String> = dims.keys().filter(|k| *k != "kind").collect();
+                // `size` names a standard size (format 56), not a dimension.
+                let mut names: Vec<&String> = dims
+                    .keys()
+                    .filter(|k| !matches!(k.as_str(), "kind" | "size"))
+                    .collect();
                 names.sort();
                 for name in names {
                     w.expr(&format!("/profile/profile/{name}"), "Dimension", Length);
@@ -332,6 +338,12 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             for k in 0..w.count("/edges") {
                 w.expr(&format!("/edges/{k}/angle"), "Edge angle", Angle);
                 w.expr(&format!("/edges/{k}/height"), "Edge height", Length);
+                // The edge's stretches (format 52).
+                for s in 0..w.count(&format!("/edges/{k}/segments")) {
+                    let at = format!("/edges/{k}/segments/{s}");
+                    w.expr(&format!("{at}/angle"), "Segment angle", Angle);
+                    w.expr(&format!("{at}/height"), "Segment height", Length);
+                }
             }
             w.expr("/corner_relief", "Corner relief", Length);
         }
@@ -411,6 +423,27 @@ pub fn inputs(feature: &Value) -> Vec<Input> {
             w.expr("/angle", "Angle", Angle);
         }
         "repair" => w.expr("/gap", "Gap", Length),
+        // End caps of frame members (format 52): each end's plane, then
+        // the cap's own inputs.
+        "frame_end_cap" => {
+            for k in 0..w.count("/ends") {
+                w.plane(&format!("/ends/{k}/plane"));
+            }
+            w.expr("/thickness", "Thickness", Length);
+            w.expr("/offset", "Inset", Length);
+            w.expr("/ratio", "Inset Ratio", Unitless);
+            w.expr("/chamfer", "Corner Chamfer", Length);
+        }
+        // A cell grid (formats 56 and 57), its anchor a placement.
+        "cell_grid" => {
+            w.expr("/sides", "Sides", Unitless);
+            w.expr("/size", "Cell size", Length);
+            w.expr("/web", "Web", Length);
+            w.expr("/angle", "Angle", Angle);
+            w.expr("/snap_inset", "SnapInset", Unitless);
+            w.expr("/margin", "Margin", Length);
+            w.expr("/depth", "Depth", Length);
+        }
         _ => {}
     }
     w.out
@@ -573,6 +606,80 @@ mod tests {
                 "to_plane": {"type": "offset", "distance": "d", "base": {"type": "origin", "name": "XY"}},
                 "angle": "a"})),
             ["Offset", "Angle"]
+        );
+    }
+
+    /// The inputs formats 51 to 57 add, in the golden record's order of
+    /// SolidCraft 0.43.0 (mitcad#1994).
+    #[test]
+    fn formats_51_to_57_inputs_follow_the_feature_walk() {
+        let o = [0, 0, 0];
+        // A counterbore's bridge layers after its tip angle (format 51).
+        assert_eq!(
+            labels(
+                json!({"type": "hole", "position": o, "direction": [0, 0, 1], "diameter": "d",
+                "hole": {"type": "counterbore", "cb_diameter": "c", "cb_depth": "f", "bridge": "b"}})
+            ),
+            [
+                "Diameter",
+                "Counterbore diameter",
+                "Counterbore depth",
+                "Bridge layer"
+            ]
+        );
+        // An edge's stretches after its own angle and height (format 52).
+        assert_eq!(
+            labels(json!({"type": "sheet_flange", "height": "h",
+                "edges": [{"point": o, "angle": "e", "segments": [
+                    {"from": 0.0, "to": 0.5, "height": "s"}, {"from": 0.5, "to": 1.0, "angle": "t"}]}]})),
+            ["Height", "Edge angle", "Segment height", "Segment angle"]
+        );
+        // An end cap: its end's plane, then its own (golden record).
+        let plane = json!({"type": "at_angle", "angle": "cap1.angle", "axis_origin": o, "axis_dir": [1, 0, 0],
+            "base": {"type": "offset", "distance": "cap1.offset", "base": {"type": "origin", "name": "XY"}}});
+        let walked = inputs(&json!({"type": "frame_end_cap",
+            "ends": [{"plane": plane, "member": {"feature": 7, "line": "l1"}}],
+            "thickness": "cap.thickness", "ratio": "cap.ratio", "chamfer": "cap.chamfer", "direction": "inward"}));
+        let exprs: Vec<&str> = walked.iter().map(|i| i.expr.as_str()).collect();
+        assert_eq!(
+            exprs,
+            [
+                "cap1.angle",
+                "cap1.offset",
+                "cap.thickness",
+                "cap.ratio",
+                "cap.chamfer"
+            ]
+        );
+        // A cell grid (golden record): its anchor is a placement.
+        assert_eq!(
+            labels(
+                json!({"type": "cell_grid", "sketch": 1, "profiles": {"type": "indices", "indices": [0]},
+                "sides": "n", "size": "s", "web": "w", "angle": "a", "margin": "m",
+                "anchor": ["x", "y", "z"], "depth": "d"})
+            ),
+            ["Sides", "Cell size", "Web", "Angle", "Margin", "Depth"]
+        );
+        // A frame member's standard size is no dimension (format 56): its
+        // dimensions come from SolidCraft's table of sizes, which this
+        // reader does not have (a frame member is a placeholder). A move's
+        // origin and a revolve axis's origin are placements.
+        assert_eq!(
+            labels(json!({"type": "frame_member", "path_sketch": 1,
+                "profile": {"source": "library", "profile": {"kind": "channel", "size": "RSC 203x89"}}})),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            labels(
+                json!({"type": "move", "bodies": ["B"], "translate": ["x", 0, 0],
+                "origin": ["a", "b", 0], "rotate_axis": [0, 0, 1], "angle": "t"})
+            ),
+            ["X distance", "Y distance", "Z distance", "Angle"]
+        );
+        assert_eq!(
+            labels(json!({"type": "revolve", "sketch": 1,
+                "axis": {"type": "line", "origin": ["w / 2", 0, "g"], "dir": [0, 0, 1]}, "angle": "a"})),
+            ["Angle"]
         );
     }
 }

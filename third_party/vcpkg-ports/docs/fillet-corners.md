@@ -73,7 +73,9 @@ vertex, and the corner failed or built a cap of micrometres whose wire
 intersects itself. Where both contact points of the end lie within a
 hundredth of the radius of the vertex, both faces hold it and their normals
 there are less than 0.002 rad from parallel, the walked contact curves' ends
-(in 3d and on the faces) are moved to the vertex within their tolerance, and
+(in 3d and on the faces) are moved to the vertex, their tolerance raised by
+the distance their end moved (a B-spline whose end pole moves by d moves by
+at most d; mitcad#1986, it was 1.01 times the larger end's distance), and
 the stripe ends in a point there with a degenerated edge
 (`ChFi3d_ShrinkVanishingEnd` in `PerformFilletOnVertex`), as where the walk
 reaches the vertex exactly.

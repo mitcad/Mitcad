@@ -37,8 +37,20 @@ self-intersecting wires).
   notch.
 
 Upstream: new; without the call nothing changes.
+
+Failures (mitcad#1986): the search for the edge beyond the notch fails
+with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) only where that edge's faces cannot be
+evaluated there: no edge is added and the contour ends at the notch as
+before. Any other failure (a broken invariant, a signal) is rethrown.
+Test: geometry/tests/port/p0260-contour-carried-across-a-notch.cpp (ctest
+geometry.port.0260): a D of radius 20 whose rim is broken by a tapered
+notch 0.25 deep and 0.57 wide, one arc given and rounded with 0.5: one
+contour carried, built, valid, the volume of both arcs given and of the
+whole rim rounded with the notch cut after; a notch 2 wide (wider than the
+ball): nothing carried, one contour.
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
-index b1af6fe..9963c77 100644
+index b1af6fe6..9963c775 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.cxx
 @@ -65,6 +65,13 @@ void BRepFilletAPI_MakeFillet::StopChainsAtTurns(
@@ -56,7 +68,7 @@ index b1af6fe..9963c77 100644
  {
    myBuilder.Add(E);
 diff --git a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
-index ed1c29b..2412599 100644
+index ed1c29b6..24125991 100644
 --- a/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/BRepFilletAPI/BRepFilletAPI_MakeFillet.hxx
 @@ -99,6 +99,18 @@ public:
@@ -79,7 +91,7 @@ index ed1c29b..2412599 100644
    //! contour of tangent edges).
    //! The Radius must be set after.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
-index 5dabf2f..a0a90b8 100644
+index 5dabf2f5..1b3575aa 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
 @@ -65,7 +65,17 @@
@@ -100,7 +112,7 @@ index 5dabf2f..a0a90b8 100644
  #include <BRep_Tool.hxx>
  #include <TopExp.hxx>
  #include <TopExp_Explorer.hxx>
-@@ -410,6 +420,304 @@ void ChFi3d_FilBuilder::Add(const double Radius, const TopoDS_Edge& E)
+@@ -410,6 +420,309 @@ void ChFi3d_FilBuilder::Add(const double Radius, const TopoDS_Edge& E)
    }
  }
  
@@ -362,8 +374,13 @@ index 5dabf2f..a0a90b8 100644
 +                         iEnd == 0 ? Spine->FirstVertex() : Spine->LastVertex(),
 +                         R);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        aBeyond.Nullify();
 +      }
 +      if (aBeyond.IsNull() || Contains(aBeyond) != 0)
@@ -406,7 +423,7 @@ index 5dabf2f..a0a90b8 100644
  
  void ChFi3d_FilBuilder::SetRadius(const occ::handle<Law_Function>& C, const int IC, const int IinC)
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
-index d2074ae..d19dce7 100644
+index d2074ae9..d19dce74 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.hxx
 @@ -68,6 +68,19 @@ public:

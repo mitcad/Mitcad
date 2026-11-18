@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: MIT
+# The Bill of Materials' Kind and the Sheet Metal list (mitcad#1980), with
+# the BOM Structure (mitcad#1985), on bom-kinds.json (Bracket and Plate,
+# placed twice, of sheet metal, Block a plain solid that the user buys):
+#   1. Kind and BOM Structure as property columns: each component's kind
+#      and structure, the user's Purchased over Block's Normal.
+#   2. The filters: Kind Sheet metal lists Bracket and Plate; BOM Structure
+#      Purchased lists Block alone.
+#   3. The Sheet Metal tab: each sheet part's quantity, thickness, material
+#      and developed blank (40 x 20 and 30 x 10 mm, no bends); Copy as CSV
+#      and Save as PDF… as the other tabs.
+#   4. Add All to Cut Sheet: a new cut sheet with the three Flat Patterns
+#      (Bracket once, Plate twice), in one undo step.
+# Run by tools/ui-bom-kinds-test.sh (Linux) and
+# tools/ui-windows-bom-kinds-test.ps1 (Windows), which give the folder for
+# the files in MITCAD_TEST_WORK.
+expect-ever 'View area'
+wait-idle
+# The user buys Block (a stored BOM Structure over the worked-out Normal).
+model-command '{"cmd":"set_property","owner":"C3","set":"Bill of Materials","key":"BOM Structure","value":"Purchased"}'
+wait-idle
+
+# 1. Kind and BOM Structure as columns.
+command build.parts_list
+focus-dialog '^Bill of Materials$'
+expect-log '^Build parts list filter: kind all, structure all$'
+focus-widget buildPartsColumns
+key Ctrl+a
+type 'Kind, BOM Structure'
+mark
+key Tab
+expect-log '^Build parts list columns: Kind, BOM Structure$'
+expect-log '^Build parts list row: Bracket: Sheet metal \| Normal$'
+expect-log '^Build parts list row: Plate: Sheet metal \| Normal$'
+expect-log '^Build parts list row: Block: Solid \| Purchased$'
+expect-widget-property buildPartsList rowCount 3
+
+# 2. The filters.
+mark
+qt-choice buildPartsKind 'Sheet metal'
+expect-log '^Build parts list filter: kind Sheet metal, structure all$'
+expect-widget-property buildPartsList rowCount 2
+expect-log '^Build BOM row: 1 x Bracket$'
+expect-log '^Build BOM row: 2 x Plate$'
+mark
+qt-choice buildPartsKind 'All kinds'
+expect-log '^Build parts list filter: kind all, structure all$'
+mark
+qt-choice buildPartsStructure 'Purchased'
+expect-log '^Build parts list filter: kind all, structure Purchased$'
+expect-widget-property buildPartsList rowCount 1
+expect-log '^Build BOM row: 1 x Block$'
+mark
+qt-choice buildPartsStructure 'All structures'
+expect-log '^Build parts list filter: kind all, structure all$'
+expect-widget-property buildPartsList rowCount 3
+
+# 3. The Sheet Metal tab, after the Bill of Materials. Its rows are logged
+# when the window loads (the last load: All structures, since the mark
+# above), not when the tab is shown.
+focus-widget buildPartsColumns
+key Ctrl+Tab
+expect-log '^Build lists tab: Sheet Metal$'
+expect-widget-property buildSheetMetalList rowCount 2
+expect-log '^Sheet metal row: 1 x Bracket / .+: 1[.]00 mm No material, 40[.]0 x 20[.]0 mm, 800[.]0 mm2, 0 bend\(s\)$'
+expect-log '^Sheet metal row: 2 x Plate / .+: 1[.]00 mm No material, 30[.]0 x 10[.]0 mm, 300[.]0 mm2, 0 bend\(s\)$'
+expect-log '^Sheet metal list: 2 row\(s\)$'
+mark
+button '.*' listCopyCsv
+expect-log '^Build list copied as CSV: 3 line\(s\)$'
+expect-clipboard '\AQuantity,Component,Body,Thickness \(mm\),Material,Flat Width \(mm\),Flat Height \(mm\),Area \(mm²\),Bends,Flat Pattern\r\n'
+expect-clipboard '(?m)^2,Plate,[^,]+,1[.]00,No material,30[.]0,10[.]0,300[.]0,0,\r$'
+button '.*' listSavePdf
+focus-dialog '^Save Sheet Metal List as PDF$'
+focus-widget fileNameEdit
+key Ctrl+a
+type "${MITCAD_TEST_WORK}/sheet-metal.pdf"
+key Return
+expect-dialog-gone '^Save Sheet Metal List as PDF$'
+focus-dialog '^Bill of Materials$'
+expect-log '^Build list PDF written: .*sheet-metal[.]pdf \([0-9]+ bytes; Sheet Metal of '
+
+# 4. The Flat Patterns onto a new cut sheet.
+expect-widget-property sheetMetalCutSheet currentText 'New Cut Sheet'
+mark
+button '.*' sheetMetalAddToCutSheet
+expect-log '^Sheet metal parts added to CutSheet1: 3 part\(s\), 0 warning\(s\)$'
+expect-widget-property sheetMetalCutSheet currentText CutSheet1
+expect-widget-property sheetMetalNote text '3 Flat Patterns added to CutSheet1'
+key Escape
+expect-dialog-gone '^Bill of Materials$'
+focus-main
+expect-never 'Sheet metal (parts not added|list not read)|Parts list not read|Build list PDF not written'

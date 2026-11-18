@@ -901,6 +901,23 @@ What is not sent within %n seconds is sent the next time the project opens.</num
     </message>
 </context>
 <context>
+    <name>mitcad::build::BuildListsDialog</name>
+    <message numerus="yes">
+        <source>%n Flat Pattern(s) added to %1</source>
+        <translation>
+            <numerusform>%n Flat Pattern added to %1</numerusform>
+            <numerusform>%n Flat Patterns added to %1</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n Flat Pattern(s) added to %1, with warnings</source>
+        <translation>
+            <numerusform>%n Flat Pattern added to %1, with warnings</numerusform>
+            <numerusform>%n Flat Patterns added to %1, with warnings</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
     <name>mitcad::drawings::DrawingWorkspace</name>
     <message numerus="yes">
         <source>Exported %1 (%n component(s)%2).</source>
@@ -979,6 +996,16 @@ What is not sent within %n seconds is sent the next time the project opens.</num
         <translation>
             <numerusform>; %n left out for naming geometry that was not copied</numerusform>
             <numerusform>; %n left out for naming geometry that was not copied</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>mitcad::sketch::SketchItemList</name>
+    <message numerus="yes">
+        <source>Partly repeats the other constraints and dimensions; it still removes %n degree(s) of freedom</source>
+        <translation>
+            <numerusform>Partly repeats the other constraints and dimensions; it still removes %n degree of freedom</numerusform>
+            <numerusform>Partly repeats the other constraints and dimensions; it still removes %n degrees of freedom</numerusform>
         </translation>
     </message>
 </context>

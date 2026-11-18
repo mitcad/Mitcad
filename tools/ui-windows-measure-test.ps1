@@ -79,7 +79,7 @@ function Menu-Choose([string]$Entry) {
 function Expect-Layout {
   Ui-Sync
   $pick = (Ui-LoggedAt 'Panel Measure input b')[1]
-  $result = (Ui-LoggedAt 'Panel Measure result Distance')[1]
+  $result = (Ui-LoggedAt 'Panel Measure result Minimum distance')[1]
   $history = (Ui-LoggedAt 'Measure history')[1]
   $close = (Ui-LoggedAt 'Panel Measure Close')[1]
   if (-not ($pick -lt $result -and $result -lt $history)) {
@@ -126,7 +126,7 @@ Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1
 Ui-ExpectNew 'axis (30, 40, 10) along (0, 0, ' 'the second axis'
 Ui-ExpectNew 'distance 40, angle 0 deg, axis distance 50, axis lines 2' 'the surfaces 40 apart, the axes parallel and 50 apart'
 $delta = [char]0x0394
-Ui-ExpectNew "Panel Measure result values: Distance = 40 mm, ${delta}x = 24 mm, ${delta}y = 32 mm, ${delta}z = 0 mm, Angle = 0" 'the pair''s values first, the distance first, its deltas under it'
+Ui-ExpectNew "Panel Measure result values: Minimum distance = 40 mm, ${delta}x = 24 mm, ${delta}y = 32 mm, ${delta}z = 0 mm, Angle = 0" 'the pair''s values first, the distance first, its deltas under it'
 Ui-ExpectNew 'Panel Measure result Selection 1: cylindrical face: Diameter = 10 mm, Radius = 5 mm, Area = 628.319 mm' 'then the first pick''s group, titled by its kind'
 Ui-ExpectNew ', Axis through = (0, 0, 10), Axis direction = (0, 0, ' 'its axis as two rows'
 Ui-ExpectNew 'Panel Measure result Selection 2: cylindrical face: Diameter = 10 mm' 'and the second pick''s'
@@ -138,20 +138,20 @@ Expect-Layout
 # Delta x, y and z as rows of their own right under the distance, in sight
 # without hovering (mitcad#1167): from (3, 4) on Body1's face to (27, 36)
 # on Body2's.
-$distance = (Ui-LoggedAt 'Panel Measure result Distance')[1]
+$distance = (Ui-LoggedAt 'Panel Measure result Minimum distance')[1]
 $dx = (Ui-LoggedAt "Panel Measure result ${delta}x")[1]
 $dy = (Ui-LoggedAt "Panel Measure result ${delta}y")[1]
 $dz = (Ui-LoggedAt "Panel Measure result ${delta}z")[1]
 $angle = (Ui-LoggedAt 'Panel Measure result Angle')[1]
 if (-not ($distance -lt $dx -and $dx -lt $dy -and $dy -lt $dz -and $dz -lt $angle)) {
-  Ui-Fail "not under the distance: Distance $distance, dx $dx, dy $dy, dz $dz, Angle $angle"
+  Ui-Fail "not under the distance: Minimum distance $distance, dx $dx, dy $dy, dz $dz, Angle $angle"
 }
 Write-Host 'ok   delta x, y and z shown as rows under the distance, above the angle'
 Ui-Mark
-Ui-Step 'right-click the distance'         { Ui-ClickLogged 'Panel Measure result Distance' 3 }
+Ui-Step 'right-click the distance'         { Ui-ClickLogged 'Panel Measure result Minimum distance' 3 }
 Ui-ExpectNew 'Context menu: Copy' 'its context menu'
 Menu-Choose 'Copy'
-Ui-ExpectNew 'Panel Measure result copied Distance: 40 mm' 'its number and unit copied'
+Ui-ExpectNew 'Panel Measure result copied Minimum distance: 40 mm' 'its number and unit copied'
 Ui-Mark
 Ui-Step 'Close'                            { Ui-ClickLogged 'Panel Measure Close' }
 Ui-ExpectNew 'Panel Measure Close clicked' 'Close clicked'
@@ -186,9 +186,9 @@ Ui-ExpectNew 'Measure history: 3 rows' 'three rows'
 Ui-ExpectNew 'Measure history row 3: Edge of Body1' 'the rims'' row first'
 Ui-ExpectNew ', Axis distance 50 mm, Center distance 50 mm' 'with their axes'' and centres'' distances'
 Ui-ExpectNew 'Measure history row 2: Face of Body1' 'the round face against the top'
-Ui-ExpectNew 'Face of Body3: Radius 5 mm, Diameter 10 mm, Distance' 'with its distance'
+Ui-ExpectNew 'Face of Body3: Radius 5 mm, Diameter 10 mm, Minimum distance' 'with its distance'
 Ui-ExpectNew 'Measure history row 1: Face of Body1' 'the parallel faces last'
-Ui-ExpectNew 'Face of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Distance 40 mm, Angle 0' 'with their values'
+Ui-ExpectNew 'Face of Body2: Radius 5 mm, Diameter 10 mm, Radius 5 mm, Diameter 10 mm, Minimum distance 40 mm, Angle 0' 'with their values'
 Ui-ExpectNew 'Measure history row 1 out of sight' 'the history folded as the panel opens'
 Ui-ExpectNew 'Measure history at' 'its header laid out'
 Ui-Mark
@@ -262,7 +262,7 @@ Ui-ExpectNew 'Measure history: 0 rows' 'a design opened: no rows'
 Ui-Step 'pick Body1''s round face'         { Ui-ClickPick 'face F2.b0/F2:side(c1)' }
 Ui-Step 'pick Body2''s round face'         { Ui-ClickPick 'face F4.b0/F4:side(c1)' }
 Ui-ExpectNew 'axis distance 50, axis lines 2' 'measured'
-Ui-ExpectNew 'Panel Measure result Distance at' 'the result laid out'
+Ui-ExpectNew 'Panel Measure result Minimum distance at' 'the result laid out'
 Expect-Layout
 Ui-Step 'close (Enter)'                    { Ui-Key 'Return' }
 Ui-ExpectNew 'Closed Measure' 'measure closed'

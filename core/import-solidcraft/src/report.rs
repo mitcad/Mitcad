@@ -133,6 +133,52 @@ pub struct CheckReport {
     pub failures: Vec<String>,
 }
 
+/// A design a newer build of SolidCraft saved (mitcad#1994): read as far
+/// as this import reads it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct NewerReport {
+    /// The file's format and the newest this import reads.
+    pub format: u32,
+    pub reads_up_to: u32,
+    /// The changes the file lists that this import does not know.
+    pub unknown_changes: Vec<String>,
+    /// What of it this import left out, in words.
+    pub left_out: Vec<String>,
+    /// The warning the import gives.
+    pub warning: String,
+}
+
+impl NewerReport {
+    pub fn new(newer: &mitcad_solidcraft::format::Newer, left_out: Vec<String>) -> Self {
+        let saved = if newer.format > newer.reads_up_to {
+            format!(
+                "Saved by a newer SolidCraft (format {}; this import reads SolidCraft designs up to format {})",
+                newer.format, newer.reads_up_to
+            )
+        } else {
+            let changes: Vec<String> = newer
+                .unknown_changes
+                .iter()
+                .map(|c| format!("`{c}`"))
+                .collect();
+            format!(
+                "Saved by a newer SolidCraft (format {} with changes this import does not know: {})",
+                newer.format,
+                changes.join(", ")
+            )
+        };
+        Self {
+            format: newer.format,
+            reads_up_to: newer.reads_up_to,
+            unknown_changes: newer.unknown_changes.clone(),
+            left_out,
+            warning: format!(
+                "{saved}: what this import reads came in, features it cannot read are placeholders with the reason, and what it does not know is left out. Features may build differently from the newer SolidCraft, which can give a known option a new meaning."
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct SolidcraftReport {
     pub file: String,
@@ -140,6 +186,9 @@ pub struct SolidcraftReport {
     /// The format the file was saved in, and the upgrade steps that ran.
     pub format: u32,
     pub upgrades: Vec<String>,
+    /// Set when a newer SolidCraft saved the design (mitcad#1994).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newer: Option<NewerReport>,
     pub container: bool,
     pub units: String,
     pub features: Vec<FeatureReport>,
@@ -202,6 +251,12 @@ impl SolidcraftReport {
     /// A readable report.
     pub fn text(&self) -> String {
         let mut out = format!("{}\n", self.summary());
+        if let Some(newer) = &self.newer {
+            out += &format!("warning: {}\n", newer.warning);
+            for what in &newer.left_out {
+                out += &format!("  left out: {what}\n");
+            }
+        }
         if !self.upgrades.is_empty() {
             out += &format!("upgraded: {}\n", self.upgrades.join(", "));
         }
@@ -338,7 +393,7 @@ impl SolidcraftReport {
     /// left out or could not build, the worst first.
     pub fn notices(&self) -> Vec<Notice> {
         let features = |n| notice::count(n, "feature", "features");
-        notice::outcome_notices(self.counts(), Outcome::level, |o, n| match o {
+        let mut notices = notice::outcome_notices(self.counts(), Outcome::level, |o, n| match o {
             Outcome::Partial => format!("{} imported partly", features(n)),
             Outcome::Unmapped => format!(
                 "{} without a counterpart, kept as placeholders",
@@ -346,7 +401,16 @@ impl SolidcraftReport {
             ),
             Outcome::Failed => format!("{} failed, kept as placeholders", features(n)),
             Outcome::Parametric | Outcome::Skipped => format!("{} imported", features(n)),
-        })
+        });
+        // A newer SolidCraft's design (mitcad#1994): the first warning.
+        if let Some(newer) = &self.newer {
+            let at = notices
+                .iter()
+                .position(|n| n.level != NoticeLevel::Error)
+                .unwrap_or(notices.len());
+            notices.insert(at, Notice::warning(newer.warning.clone()));
+        }
+        notices
     }
 }
 

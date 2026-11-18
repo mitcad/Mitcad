@@ -292,6 +292,36 @@ impl<K: Kernel> Document<K> {
         })
     }
 
+    /// The developed blank of a sheet-metal body as the Sheet Metal list
+    /// and cut sheets take it (mitcad#1980): its Flat Pattern with its own
+    /// settings and side, or a new item's settings when it has none. A
+    /// body that is no sheet, or a pattern that is not valid, is the error,
+    /// in words (the ids in its detail, as `export_flat_pattern_dxf`'s).
+    pub fn developed_flat_pattern(
+        &self,
+        body: BodyUid,
+    ) -> Result<FlatOutcome<K::Shape>, ModelError> {
+        let outcome = if self.state.flat_patterns.contains_key(&body) {
+            self.flat_pattern(body)
+        } else {
+            let def = self.flat_settings(body)?;
+            Arc::new(flat::evaluate(
+                &self.kernel,
+                self.last_result(),
+                body,
+                &def,
+                &FeatureWords {
+                    name: &|feature| self.flat_feature_name(feature),
+                    edges: &|feature| self.flat_feature_edges(feature),
+                },
+            ))
+        };
+        match &*outcome {
+            Ok(_) => Ok(outcome),
+            Err(failure) => Err(self.flat_refusal(body, failure)),
+        }
+    }
+
     /// Writes the Flat Pattern of a sheet-metal body to a DXF file
     /// (mitcad#210): the cut contours and bend lines of its evaluated outline
     /// with the item's settings (or a new item's, when the body has none),

@@ -1,0 +1,509 @@
+Mitcad's patch to OCCT 8.0.1, under OCCT's licence:
+SPDX-License-Identifier: LGPL-2.1-only WITH OCCT-exception-1.0
+
+Fillets: a corner of PerformMoreThreeCorner whose set-back along a sharp
+edge passes the edge's other vertex walks over that vertex onto the edge
+that goes on along it, where the face on the other side goes on
+tangentially across the third edge there (mitcad#2018).
+
+A bent guide (a round tube with a flat top, swept through a quarter turn,
+a straight pad at each end) with ribs on the flat, the rib nearest each end
+standing 1 degree from the bend's end: the rounding of a rib's sloped edge
+ends at the flat's rim, where the rib's sloped side goes on tangentially
+into the tube, and PerformMoreThreeCorner fills the corner there with a
+plate whose points on the sharp edges are set back by the largest distance
+of the stripe's ends from the vertex, 0.508. Along the rim (the edge
+between the flat and the tube) that is past the rim's other end where the
+pad begins, at a bend radius below about 31 (the rim 1 degree long, 0.49 at
+a radius of 30): the plate's point lay off the edge, and the fillet gave an
+invalid shape (from 27 to 30.5) or a body left open (26 and less). At that
+end vertex the rim goes on tangentially along the pad (the flat is one face
+over both), and the tube goes on tangentially across the bend's end edge
+into the pad's cylinder.
+
+- WalkOverVertex: whether a sharp edge E between faces Fa and Fb ends at a
+  vertex V2 with three edges: E, an edge E2 of Fa that goes on along E (at
+  an angle of pi), and an edge Eg between Fb and a face Fc of E2 across
+  which Fb goes on tangentially.
+- PerformMoreThreeCorner, after its parse, where no two stripes are next
+  to each other (the set-back then is the largest distance of the stripes'
+  ends from the vertex) and the corner has no free border, seam or two
+  tangent stripes: a sharp edge between two sharp edges, shorter than the
+  set-back, that WalkOverVertex accepts, with E2 longer than the rest of
+  the set-back, is replaced in the corner's edges by Eg and E2 (Eg on the
+  side of Fb, Fc between them). Their near vertex is V2: their parameters
+  at the vertex, their directions, the orientation of the curves along
+  them and the battens' end constraints are taken there instead of at the
+  corner's vertex; E2's point is the rest of the set-back along it from V2.
+- The plate's border on the side of Fb crosses Eg between the nearest
+  points of Eg to the border's two ends (the point of the edge beyond and
+  the point on E2), weighted by their distances; where that lies within ten
+  times the approximation tolerance (1e-4) of V2, at that tolerance from
+  V2: a border through V2 itself runs along E, which the builder then
+  keeps in the face beyond as a dangling edge.
+- Elsewhere nothing changes. No catch is added.
+
+Test: geometry.fillet_corner_walk_over_vertex
+(geometry/tests/test_fillet_corner_walk_over_vertex.cpp) with the case
+fillet-corner-walk-over-vertex of MITCAD_GEOMETRY_CASES, and
+cli.fcstd_bend_reported (tools/cli/fcstd-bend-reported-test.cmake), the
+reported bent guide with its bend radius set to 20, 24, 25, 30 and 32.
+
+diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+index b97f104c..7e752f18 100644
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_CnCrn.cxx
+@@ -89,6 +89,7 @@
+ #include <math_Matrix.hxx>
+ #include <PLib.hxx>
+ #include <Precision.hxx>
++#include <GCPnts_AbscissaPoint.hxx>
+ #include <Standard_ConstructionError.hxx>
+ #include <Standard_OutOfRange.hxx>
+ #include <NCollection_HArray1.hxx>
+@@ -257,6 +258,104 @@ static bool ParameterOnSharpEdge(const ChFiDS_CommonPoint& CP, const TopoDS_Edge
+   return true;
+ }
+ 
++//=======================================================================
++// function : WalkOverVertex
++// purpose  : A sharp edge E of a corner at V1, between the faces Fa and
++//            Fb, whose other vertex V2 the corner's set-back passes: at V2
++//            E goes on tangentially into the edge E2 of Fa, and Fb goes on
++//            tangentially across the edge Eg into the face Fc of E2 (the
++//            three edges at V2). Then the set-back walks over V2: the
++//            plate's point lies on E2, and its border on the side of Fb
++//            crosses Eg into Fc.
++//=======================================================================
++
++static bool WalkOverVertex(const TopoDS_Vertex& V1,
++                           const TopoDS_Edge&   E,
++                           const TopoDS_Face&   Fa,
++                           const TopoDS_Face&   Fb,
++                           const ChFiDS_Map&    VEMap,
++                           const ChFiDS_Map&    EFMap,
++                           TopoDS_Vertex&       V2,
++                           TopoDS_Edge&         E2,
++                           TopoDS_Edge&         Eg,
++                           TopoDS_Face&         Fc)
++{
++  if (BRep_Tool::Degenerated(E) || Fa.IsSame(Fb))
++  {
++    return false;
++  }
++  const TopoDS_Vertex Vf = TopExp::FirstVertex(E), Vl = TopExp::LastVertex(E);
++  if (Vf.IsNull() || Vl.IsNull() || Vf.IsSame(Vl))
++  {
++    return false;
++  }
++  V2 = Vf.IsSame(V1) ? Vl : Vf;
++  if (!VEMap.Contains(V2))
++  {
++    return false;
++  }
++  // The edges at V2 besides E: exactly two.
++  NCollection_List<TopoDS_Shape> anOthers;
++  for (NCollection_List<TopoDS_Shape>::Iterator it(VEMap(V2)); it.More(); it.Next())
++  {
++    const TopoDS_Edge& anE = TopoDS::Edge(it.Value());
++    if (anE.IsSame(E) || BRep_Tool::Degenerated(anE))
++    {
++      continue;
++    }
++    bool aKnown = false;
++    for (NCollection_List<TopoDS_Shape>::Iterator itO(anOthers); itO.More() && !aKnown; itO.Next())
++    {
++      aKnown = itO.Value().IsSame(anE);
++    }
++    if (!aKnown)
++    {
++      anOthers.Append(anE);
++    }
++  }
++  if (anOthers.Extent() != 2)
++  {
++    return false;
++  }
++  E2.Nullify();
++  Eg.Nullify();
++  for (NCollection_List<TopoDS_Shape>::Iterator it(anOthers); it.More(); it.Next())
++  {
++    const TopoDS_Edge& anE = TopoDS::Edge(it.Value());
++    if (!EFMap.Contains(anE) || EFMap(anE).Extent() != 2)
++    {
++      return false;
++    }
++    const TopoDS_Face& aF1 = TopoDS::Face(EFMap(anE).First());
++    const TopoDS_Face& aF2 = TopoDS::Face(EFMap(anE).Last());
++    if (aF1.IsSame(Fa) || aF2.IsSame(Fa))
++    {
++      E2 = anE;
++      Fc = aF1.IsSame(Fa) ? aF2 : aF1;
++    }
++    else if (aF1.IsSame(Fb) || aF2.IsSame(Fb))
++    {
++      Eg = anE;
++    }
++  }
++  if (E2.IsNull() || Eg.IsNull() || Fc.IsSame(Fb) || Fc.IsSame(Fa))
++  {
++    return false;
++  }
++  // Eg lies between Fb and Fc, tangentially; E2 goes on along E.
++  const TopoDS_Face& aG1 = TopoDS::Face(EFMap(Eg).First());
++  const TopoDS_Face& aG2 = TopoDS::Face(EFMap(Eg).Last());
++  if (!((aG1.IsSame(Fb) && aG2.IsSame(Fc)) || (aG1.IsSame(Fc) && aG2.IsSame(Fb))))
++  {
++    return false;
++  }
++  if (!ChFi3d::IsTangentFaces(Eg, Fb, Fc))
++  {
++    return false;
++  }
++  return std::abs(std::abs(ChFi3d_AngleEdge(V2, E, E2)) - M_PI) < 0.01;
++}
++
+ static void RemoveSD(occ::handle<ChFiDS_Stripe>& Stripe, const int num1, const int num2)
+ {
+   NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& Seq =
+@@ -1976,6 +2075,197 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+     }
+   }
+ 
++  // (A sharp edge shorter than the corner's set-back: the set-back walks
++  // over its other vertex onto the edge that goes on along it, and the
++  // plate's border on the other side crosses the tangent edge there,
++  // WalkOverVertex. The corner's edges then hold that tangent edge and the
++  // edge walked onto in its place; their near vertex is the other vertex
++  // and the set-back along the edge walked onto is less the edge's length.)
++  NCollection_Array1<TopoDS_Vertex> Vnear(0, size);
++  NCollection_Array1<double>        walkoff(0, size);
++  Vnear.Init(V1);
++  walkoff.Init(0.);
++  int walkcross = -1, walkonto = -1;
++  if (!deuxconges && !isOnSameDiff && !bordlibre && !couture && nconges >= 1 && nedge >= 3)
++  {
++    // The set-back: the largest distance of the stripes' ends from V1, where
++    // no two stripes are next to each other (no intersection between them).
++    bool   alone = true;
++    double dmax  = 0.;
++    const gp_Pnt aTop = BRep_Tool::Pnt(V1);
++    for (ic = 0; ic < nedge && alone; ic++)
++    {
++      Indices(nedge, ic, icplus, icmoins);
++      if (sharp.Value(ic))
++      {
++        continue;
++      }
++      if (!sharp.Value(icplus) || !sharp.Value(icmoins) || CD.Value(ic).IsNull())
++      {
++        alone = false;
++        break;
++      }
++      const occ::handle<ChFiDS_SurfData>& aSD =
++        CD.Value(ic)->SetOfSurfData()->Value(Index.Value(ic));
++      const bool isf = sens.Value(ic) == 1;
++      dmax = std::max(dmax, aSD->Vertex(isf, 1).Point().Distance(aTop));
++      dmax = std::max(dmax, aSD->Vertex(isf, 2).Point().Distance(aTop));
++    }
++    for (ic = 0; ic < nedge && alone && walkcross < 0; ic++)
++    {
++      Indices(nedge, ic, icplus, icmoins);
++      if (!sharp.Value(ic) || !sharp.Value(icplus) || !sharp.Value(icmoins) || regul.Value(ic)
++          || tangentregul.Value(ic) || samedge.Value(ic))
++      {
++        continue;
++      }
++      const TopoDS_Edge& E = TopoDS::Edge(Evive.Value(ic));
++      if (BRep_Tool::Degenerated(E))
++      {
++        continue;
++      }
++      BRepAdaptor_Curve aCE(E);
++      const double      aLenE = GCPnts_AbscissaPoint::Length(aCE);
++      if (!(dmax > aLenE + Precision::Confusion()))
++      {
++        continue;
++      }
++      for (int side = 0; side < 2 && walkcross < 0; side++)
++      {
++        // side 0: Fa toward the next edge; side 1: toward the previous one.
++        const int     inext = side == 0 ? icplus : icmoins;
++        const int     iprev = side == 0 ? icmoins : icplus;
++        TopoDS_Face   Fa = TopoDS::Face(Fvive.Value(ic, inext));
++        TopoDS_Face   Fb = TopoDS::Face(Fvive.Value(ic, iprev));
++        TopoDS_Vertex aV2;
++        TopoDS_Edge   aE2, aEg;
++        TopoDS_Face   aFc;
++        if (!WalkOverVertex(V1, E, Fa, Fb, myVEMap, myEFMap, aV2, aE2, aEg, aFc))
++        {
++          continue;
++        }
++        BRepAdaptor_Curve aCE2(aE2);
++        if (!(dmax - aLenE < GCPnts_AbscissaPoint::Length(aCE2) - Precision::Confusion()))
++        {
++          continue;
++        }
++        // The corner's edges with the tangent edge put in beside the edge
++        // walked onto: on the side of Fb.
++        const int n = nedge;
++        const int aNewNb = n + 1;
++        // old index -> new index
++        auto aMap = [&](const int k) { return k <= ic ? k : k + 1; };
++        NCollection_Array1<occ::handle<ChFiDS_Stripe>> oCD(0, n - 1);
++        NCollection_Array1<int>                        ojf(0, n - 1), oIndex(0, n - 1), osens(0, n - 1);
++        NCollection_Array1<TopoDS_Shape>               oEvive(0, n - 1), oFplus(0, n - 1);
++        NCollection_Array1<int>                        onumplus(0, n - 1);
++        NCollection_Array1<bool>                       osharp(0, n - 1), oregul(0, n - 1),
++          otreg(0, n - 1), osamedge(0, n - 1), olibre(0, n - 1);
++        NCollection_Array1<double>                     opp(0, n - 1), opm(0, n - 1);
++        NCollection_Array1<int>                        oip(0, n - 1), oim(0, n - 1);
++        for (int k = 0; k < n; k++)
++        {
++          int kp, km;
++          Indices(n, k, kp, km);
++          oCD(k)      = CD.Value(k);
++          ojf(k)      = jf.Value(k);
++          oIndex(k)   = Index.Value(k);
++          osens(k)    = sens.Value(k);
++          oEvive(k)   = Evive.Value(k);
++          oFplus(k)   = Fvive.Value(k, kp);
++          onumplus(k) = numfa.Value(k, kp);
++          osharp(k)   = sharp.Value(k);
++          oregul(k)   = regul.Value(k);
++          otreg(k)    = tangentregul.Value(k);
++          osamedge(k) = samedge.Value(k);
++          olibre(k)   = libre.Value(k);
++          opp(k)      = p.Value(k, kp);
++          opm(k)      = p.Value(k, km);
++          oip(k)      = i.Value(k, kp);
++          oim(k)      = i.Value(k, km);
++        }
++        nedge = aNewNb;
++        // the edges at the new places: ic and ic + 1 are the two new ones
++        const int aFirst = ic, aSecond = ic + 1;
++        const int aCross = side == 0 ? aFirst : aSecond;
++        const int aOnto  = side == 0 ? aSecond : aFirst;
++        for (int k = 0; k < n; k++)
++        {
++          if (k == ic)
++          {
++            continue;
++          }
++          const int nk = aMap(k);
++          CD.SetValue(nk, oCD(k));
++          jf.SetValue(nk, ojf(k));
++          Index.SetValue(nk, oIndex(k));
++          sens.SetValue(nk, osens(k));
++          Evive.SetValue(nk, oEvive(k));
++          sharp.SetValue(nk, osharp(k));
++          regul.SetValue(nk, oregul(k));
++          tangentregul.SetValue(nk, otreg(k));
++          samedge.SetValue(nk, osamedge(k));
++          libre.SetValue(nk, olibre(k));
++        }
++        for (int k = 0; k < n; k++)
++        {
++          int kp, km;
++          Indices(n, k, kp, km);
++          int nk  = aMap(k), nkp = aMap(kp);
++          if (k == ic)
++          {
++            nk = aSecond;
++          }
++          if (kp == ic)
++          {
++            nkp = aFirst;
++          }
++          Fvive.SetValue(nk, nkp, oFplus(k));
++          Fvive.SetValue(nkp, nk, oFplus(k));
++          numfa.SetValue(nk, nkp, onumplus(k));
++          numfa.SetValue(nkp, nk, onumplus(k));
++          if (k != ic)
++          {
++            p.SetValue(aMap(k), nkp, opp(k));
++            i.SetValue(aMap(k), nkp, oip(k));
++          }
++          if (kp != ic)
++          {
++            int nkpm, nkpp;
++            Indices(nedge, aMap(kp), nkpp, nkpm);
++            p.SetValue(aMap(kp), nkpm, opm(kp));
++            i.SetValue(aMap(kp), nkpm, oim(kp));
++          }
++        }
++        // between the two new edges: Fc
++        Fvive.SetValue(aFirst, aSecond, aFc);
++        Fvive.SetValue(aSecond, aFirst, aFc);
++        numfa.SetValue(aFirst, aSecond, DStr.AddShape(aFc));
++        numfa.SetValue(aSecond, aFirst, numfa.Value(aFirst, aSecond));
++        const TopoDS_Edge* aNew[2] = {&aEg, &aE2};
++        const int          aAt[2]  = {aCross, aOnto};
++        for (int j = 0; j < 2; j++)
++        {
++          const int k = aAt[j];
++          CD.SetValue(k, cdbid);
++          jf.SetValue(k, 0);
++          Index.SetValue(k, 0);
++          Evive.SetValue(k, *aNew[j]);
++          sens.SetValue(k, TopExp::FirstVertex(*aNew[j]).IsSame(aV2) ? 1 : -1);
++          sharp.SetValue(k, true);
++          regul.SetValue(k, false);
++          tangentregul.SetValue(k, false);
++          samedge.SetValue(k, false);
++          libre.SetValue(k, false);
++          Vnear.SetValue(k, aV2);
++        }
++        walkoff.SetValue(aOnto, aLenE);
++        walkcross = aCross;
++        walkonto  = aOnto;
++      }
++    }
++  }
++
+   // determine the minimum recoil distance that can't be exceeded
+   bool          distmini = false;
+   gp_Pnt        som      = BRep_Tool::Pnt(V1), pic;
+@@ -2195,7 +2485,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         {
+           if (!samedge.Value(ic))
+           {
+-            para = BRep_Tool::Parameter(V1, TopoDS::Edge(Evive.Value(ic)));
++            para = BRep_Tool::Parameter(Vnear.Value(ic), TopoDS::Edge(Evive.Value(ic)));
+             p.SetValue(ic, icplus, para);
+             i.SetValue(ic, icplus, 1);
+           }
+@@ -2219,7 +2509,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+         {
+           if (!samedge.Value(icplus))
+           {
+-            para = BRep_Tool::Parameter(V1, TopoDS::Edge(Evive.Value(icplus)));
++            para = BRep_Tool::Parameter(Vnear.Value(icplus), TopoDS::Edge(Evive.Value(icplus)));
+             p.SetValue(icplus, ic, para);
+             i.SetValue(icplus, ic, 1);
+           }
+@@ -2307,7 +2597,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           {
+             ec = 0.0;
+           }
+-          if (TopExp::FirstVertex(TopoDS::Edge(Evive.Value(ic))).IsSame(V1))
++          if (TopExp::FirstVertex(TopoDS::Edge(Evive.Value(ic))).IsSame(Vnear.Value(ic)))
+           {
+             para = p.Value(ic, icmoins) + ec;
+             p.SetValue(ic, icmoins, para);
+@@ -2317,6 +2607,21 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             para = p.Value(ic, icmoins) - ec;
+             p.SetValue(ic, icmoins, para);
+           }
++          if (ic == walkonto)
++          {
++            // (Walked over the near vertex: the rest of the set-back, along
++            // the edge walked onto from that vertex.)
++            const TopoDS_Edge& anEo = TopoDS::Edge(Evive.Value(ic));
++            const bool         isF  = TopExp::FirstVertex(anEo).IsSame(Vnear.Value(ic));
++            const double       aS   = distance - walkoff.Value(ic);
++            GCPnts_AbscissaPoint anAbs(C,
++                                       isF ? aS : -aS,
++                                       BRep_Tool::Parameter(Vnear.Value(ic), anEo));
++            if (anAbs.IsDone())
++            {
++              p.SetValue(ic, icmoins, anAbs.Parameter());
++            }
++          }
+           // it is necessary to be on to remain on the edge
+           p.SetValue(ic, icplus, p.Value(ic, icmoins));
+         }
+@@ -2561,6 +2866,66 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+     }
+   }
+ 
++  // (Walked over a vertex: the plate's border on the side of the tangent
++  // edge crosses it where the border's ends lead, the point of the edge
++  // beyond and the one on the edge walked onto: between their nearest
++  // points on the tangent edge, by their distances from it. Where that
++  // lies within ten times the approximation tolerance of the vertex walked
++  // over, the border running along the edges there, the crossing is taken
++  // at that tolerance from the vertex: a border through the vertex itself
++  // lies on the edge walked over, which the builder then keeps in the face
++  // beyond as an edge of nothing.)
++  if (walkcross >= 0)
++  {
++    int kp, km;
++    Indices(nedge, walkcross, kp, km);
++    const int           kother = kp == walkonto ? km : kp;
++    const TopoDS_Edge&  Eother = TopoDS::Edge(Evive.Value(kother));
++    const TopoDS_Edge&  Eonto  = TopoDS::Edge(Evive.Value(walkonto));
++    const TopoDS_Edge&  Ecross = TopoDS::Edge(Evive.Value(walkcross));
++    const TopoDS_Vertex aVw    = Vnear.Value(walkcross);
++    const gp_Pnt        aP1    = BRepAdaptor_Curve(Eother).Value(p.Value(kother, walkcross));
++    const gp_Pnt        aP2    = BRepAdaptor_Curve(Eonto).Value(p.Value(walkonto, walkcross));
++    BRepAdaptor_Curve   aCg(Ecross);
++    const double        aUf = aCg.FirstParameter(), aUl = aCg.LastParameter();
++    // The nearest point of the edge (its ends too) and its distance.
++    auto aNearest = [&](const gp_Pnt& theP, double& theD) {
++      double aU = aUf;
++      theD      = theP.Distance(aCg.Value(aUf));
++      if (theP.Distance(aCg.Value(aUl)) < theD)
++      {
++        aU   = aUl;
++        theD = theP.Distance(aCg.Value(aUl));
++      }
++      Extrema_ExtPC anExt(theP, aCg);
++      for (int k = 1; anExt.IsDone() && k <= anExt.NbExt(); k++)
++      {
++        if (anExt.IsMin(k) && std::sqrt(anExt.SquareDistance(k)) < theD)
++        {
++          theD = std::sqrt(anExt.SquareDistance(k));
++          aU   = anExt.Point(k).Parameter();
++        }
++      }
++      return aU;
++    };
++    double       aD1 = 0., aD2 = 0.;
++    const double aU1 = aNearest(aP1, aD1);
++    const double aU2 = aNearest(aP2, aD2);
++    double       aU  = aD1 + aD2 > 0. ? aU1 + (aU2 - aU1) * aD1 / (aD1 + aD2) : (aU1 + aU2) / 2.;
++    const double aUw = BRep_Tool::Parameter(aVw, Ecross);
++    if (GCPnts_AbscissaPoint::Length(aCg, std::min(aU, aUw), std::max(aU, aUw)) < 10. * tolapp)
++    {
++      const bool           isF = std::abs(aUw - aUf) < std::abs(aUw - aUl);
++      GCPnts_AbscissaPoint anAbs(aCg, isF ? tolapp : -tolapp, aUw);
++      if (anAbs.IsDone())
++      {
++        aU = anAbs.Parameter();
++      }
++    }
++    p.SetValue(walkcross, kp, aU);
++    p.SetValue(walkcross, km, aU);
++  }
++
+   // if ic is a regular edge, one finds edge indfin which is not
+   // a regular edge, and construtc a curve 3d
+   // between edges (or stripes ) icmoins and indfin.
+@@ -3310,7 +3675,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             bool inverseic, inverseicplus;
+             if (sharp.Value(ic))
+             {
+-              inverseic = TopExp::FirstVertex(TopoDS::Edge(Evive.Value(ic))).IsSame(V1);
++              inverseic = TopExp::FirstVertex(TopoDS::Edge(Evive.Value(ic))).IsSame(Vnear.Value(ic));
+             }
+             else
+             {
+@@ -3318,7 +3683,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+             }
+             if (sharp.Value(icplus))
+             {
+-              inverseicplus = TopExp::FirstVertex(TopoDS::Edge(Evive.Value(icplus))).IsSame(V1);
++              inverseicplus = TopExp::FirstVertex(TopoDS::Edge(Evive.Value(icplus))).IsSame(Vnear.Value(icplus));
+             }
+             else
+             {
+@@ -3465,7 +3830,7 @@ void ChFi3d_Builder::PerformMoreThreeCorner(const int Jndex, const int nconges)
+           }
+           else
+           {
+-            OrientationAreteViveConsecutive(Fvive.Value(ic, icplus), Evive.Value(ic), V1, orinterf);
++            OrientationAreteViveConsecutive(Fvive.Value(ic, icplus), Evive.Value(ic), Vnear.Value(ic), orinterf);
+           }
+           Interfc =
+             ChFi3d_FilCurveInDS(indcurve3d.Value(n3d), numfa.Value(ic, icplus), pcurve, orinterf);

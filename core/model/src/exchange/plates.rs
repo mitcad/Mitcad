@@ -462,6 +462,7 @@ impl<K: Kernel> Document<K> {
         unit: LengthUnit,
         colors: &BTreeMap<BodyUid, [f64; 3]>,
         dialect: Option<Dialect>,
+        job: &BTreeMap<BodyUid, Option<String>>,
         rules: &BedRules<'_>,
         shift: [f64; 2],
     ) -> Result<(Built3mf, OnBed), ModelError> {
@@ -497,6 +498,7 @@ impl<K: Kernel> Document<K> {
                 (
                     d,
                     &paths as &dyn Fn(BodyUid) -> Vec<Option<Vec<OccurrenceUid>>>,
+                    job,
                 )
             }),
             Some(&mut pieces),
@@ -620,6 +622,7 @@ impl<K: Kernel> Document<K> {
                             options.unit,
                             colors,
                             dialect,
+                            &placement.print_materials,
                             &rules,
                             origin(i),
                         )?;
@@ -735,6 +738,7 @@ impl<K: Kernel> Document<K> {
                         options.unit,
                         colors,
                         dialect,
+                        &placement.print_materials,
                         &rules,
                         [0.0, 0.0],
                     )?;
@@ -843,6 +847,7 @@ impl<K: Kernel> Document<K> {
                 LengthUnit::Millimeter,
                 &BTreeMap::new(),
                 None,
+                &BTreeMap::new(),
                 &rules,
                 shift,
             )?;
@@ -897,4 +902,6 @@ fn merge(into: &mut Exported, from: Exported) {
     into.printed.extend(from.printed);
     into.parts.extend(from.parts);
     into.layer_events.extend(from.layer_events);
+    // A project when any file is one (mitcad#2008).
+    into.delivery = into.delivery.max(from.delivery);
 }

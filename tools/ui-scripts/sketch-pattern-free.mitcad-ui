@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MIT
+# Deleting, trimming and freeing sketch patterns (mitcad#2007, GitHub
+# mitcad/Mitcad#432) on sketch-pattern-free.json's Sketch1 (two framing
+# points at (-40, -30) and (40, 30); a line from (-30, -20) to (-20, -20) in
+# a rectangular pattern of 4 along x, 15 mm apart; a line from (25, 15) to
+# (30, 15) in a circular pattern of 4 about (20, 15); a line from (5, -25)
+# to (5, -15) across the second copy of the first line):
+#   1. The first copy deleted stays deleted: Edit Pattern on the original
+#      previews the two copies left, without the deleted one, and OK keeps
+#      the pattern of 4.
+#   2. Trim on the second copy beyond the line across it cuts the copy
+#      there, and the status line says in words that the pattern's copies
+#      are now plain sketch geometry.
+#   3. The circular pattern's original: Free Pattern in its context menu
+#      frees the pattern, which the menu then no longer offers.
+# The wrapper replaces ENTER_SKETCH with the frontend's ordinary timeline
+# activation. The clicks stay within x -30..30 mm, y -25..25 mm: the free
+# part of the view after the fit also in session 0's 1024x768 window on
+# Windows. Run by tools/ui-sketch-pattern-free-test.sh (Linux),
+# tools/ui-windows-sketch-pattern-free-test.ps1 (Windows) and
+# tools/ui-macos-sketch-pattern-free-test.sh (macOS).
+wait-idle
+ENTER_SKETCH
+expect-log '^Editing sketch F1 \(Sketch1\)'
+key F6
+wait-idle
+
+# 1. The first copy deleted; the pattern does not make it again.
+mark
+sketch-click -10 -20
+expect-selection 1 0
+mark
+command sketch.delete
+wait-log '^Deleted c[0-9]+$'
+wait-idle
+mark
+sketch-click -25 -20
+expect-selection 1 0
+mark
+command sketch.edit_pattern
+wait-log '^Command Edit Pattern started'
+wait-log '^Preview Edit Pattern copies: p[0-9]+ \([^)]*\)(, p[0-9]+ \([^)]*\)){3}$'
+expect-log '^Preview Edit Pattern copies: .*\(0\.000, -20\.000\)'
+expect-log '^Preview Edit Pattern copies: .*\(25\.000, -20\.000\)'
+expect-no-log '^Preview Edit Pattern copies: .*\(-15\.000, -20\.000\)'
+wait-idle
+mark
+button '^OK$'
+wait-log '^Edited pattern k[0-9]+: 4 in all$'
+wait-idle
+
+# 2. Trim clicked on the second copy beyond the line across it: the piece
+# from the crossing to the end goes, and the pattern is freed.
+mark
+command sketch.trim
+wait-log '^Sketch tool Trim$'
+mark
+sketch-click 8 -20
+wait-log '^Trimmed c[0-9]+ at '
+wait-log '^Sketch notice: Trim: the pattern.s copies are now plain sketch geometry\.$'
+expect-no-log 'Trim: .*(refused|cannot)'
+screenshot '${MITCAD_TEST_WORK}/sketch-pattern-free-trim.png'
+key Escape
+wait-idle
+
+# 3. Free Pattern from the circular pattern's original's context menu.
+mark
+sketch-click 27.5 15
+expect-selection 1 0
+mark
+sketch-click 27.5 15 right
+wait-log '^Context menu: '
+expect-log '^Context menu: .*Edit Pattern [|] Free Pattern'
+popup 'Free Pattern'
+wait-log '^Freed pattern k[0-9]+$'
+wait-log '^Sketch notice: Free Pattern: the pattern.s copies are now plain sketch geometry\.$'
+wait-idle
+mark
+sketch-click 27.5 15 right
+wait-log '^Context menu: '
+expect-no-log '^Context menu: .*(Edit Pattern|Free Pattern)'
+key Escape
+wait-idle
+
+command sketch.finish
+wait-log '^Sketch finished'
+command file.save
+wait-log '^Saved '
+expect-never 'Recompute failed|TestDriver: FAIL'

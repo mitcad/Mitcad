@@ -9,7 +9,11 @@
 //! the same curvature) and passes through the points given. The loop is
 //! named edges of the body, or one of its openings: a loop of free edges
 //! (an open boundary of a surface body, whose edges have no names), found
-//! by the faces it runs along. The body itself is not changed, unless the
+//! by the faces it runs along; or named edges and single free edges
+//! (`openings`, mitcad#1955) in one loop, which can close part of an
+//! opening; sketch curves (`sketch_curves`, mitcad#1972) may join them in
+//! the loop, so that a line across an opening closes it with free edges.
+//! The body itself is not changed, unless the
 //! loop has `stitch` (mitcad#1927): then the patch is sewn onto it, as
 //! Stitch sews, and the body becomes a solid where the patch closes it. The
 //! new bodies are the regions' in their order, then the loop's (none when
@@ -24,6 +28,8 @@ use super::extrude::{
 };
 use super::face_refs::{add_faces, check_faces, kernel_error};
 use super::mapping::map_params;
+use super::path::SketchCurves;
+use super::sheet_edges::{self, OpeningEdgesRef};
 use super::{
     BodyChange, CheckContext, EvalContext, Evaluate, FeatureInfo, FeatureOutput, References,
     is_false,
@@ -61,7 +67,19 @@ pub struct PatchLoop {
     /// Named edges of the loop: every edge each name resolves to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<EdgeName>,
-    /// Or an opening of the body (its free edges).
+    /// Free edges of the loop beside the named ones, as the surface
+    /// features pick them (mitcad#1955, `sheet_edges`: an opening, and the
+    /// edge nearest each point of `at`): with `edges`, one loop that can
+    /// close part of an opening.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openings: Vec<OpeningEdgesRef>,
+    /// Sketch curves of the loop beside its edges (mitcad#1972): curves
+    /// of planar or 3D sketches, projected ones too, whose ends meet the
+    /// edges' ends; the patch passes through them. With single free edges
+    /// they close part of an opening across it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sketch_curves: Vec<SketchCurves>,
+    /// Or a whole opening of the body (its free edges).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening: Option<Opening>,
     #[serde(default, skip_serializing_if = "PatchContinuity::is_g0")]
@@ -116,13 +134,34 @@ impl<P> PatchDef<P> {
 impl PatchLoop {
     fn check(&self, ctx: &CheckContext<'_>) -> Result<(), String> {
         ctx.body(self.body)?;
-        match (&self.opening, self.edges.is_empty()) {
-            (Some(_), false) => {
+        let picked = !self.edges.is_empty() || !self.openings.is_empty();
+        match (&self.opening, picked) {
+            (Some(_), true) => {
                 return Err("a patch fills its edges or an opening, not both".to_owned());
             }
-            (None, true) => return Err("no edges or opening to fill selected".to_owned()),
-            (None, false) => ctx.edges(&self.edges)?,
-            (Some(opening), true) => check_faces(ctx, &opening.faces, "faces of the opening")?,
+            (None, false) => return Err("no edges or opening to fill selected".to_owned()),
+            (None, true) => {
+                if !self.edges.is_empty() {
+                    ctx.edges(&self.edges)?;
+                }
+                sheet_edges::check(ctx, &self.openings)?;
+            }
+            (Some(opening), false) => check_faces(ctx, &opening.faces, "faces of the opening")?,
+        }
+        // Sketch curves close a loop with the body's edges (mitcad#1972).
+        if !self.sketch_curves.is_empty() {
+            if self.opening.is_some() {
+                return Err(
+                    "a whole opening is a loop by itself; sketch curves close a loop with single edges"
+                        .to_owned(),
+                );
+            }
+            for curves in &self.sketch_curves {
+                if curves.reversed {
+                    return Err("the sketch curves of a patch have no direction".to_owned());
+                }
+                curves.check_any(ctx)?;
+            }
         }
         for (i, set) in self.edge_continuity.iter().enumerate() {
             if !self.edges.contains(&set.edge) {
@@ -152,6 +191,10 @@ impl FeatureInfo for PatchDef {
         if let Some(boundary) = &self.boundary {
             references.body(boundary.body);
             references.edges(&boundary.edges);
+            sheet_edges::add_references(&mut references, &boundary.openings);
+            for curves in &boundary.sketch_curves {
+                references.features.insert(curves.sketch);
+            }
             if let Some(opening) = &boundary.opening {
                 add_faces(&mut references, &opening.faces);
             }
@@ -240,6 +283,15 @@ fn fill_loop<K: Kernel>(
         Some(opening) => Some(find_opening(ctx, boundary.body, &shape, opening)?),
         None => None,
     };
+    // Free edges beside the named ones (mitcad#1955).
+    let resolved = sheet_edges::resolve(ctx, boundary.body, &shape, &boundary.openings)?;
+    let openings = sheet_edges::kernel_openings(&resolved);
+    // Sketch curves beside them (mitcad#1972), in model space.
+    let mut curves = Vec::new();
+    for set in &boundary.sketch_curves {
+        let (_, pieces) = set.curves(ctx)?;
+        curves.extend(pieces);
+    }
     let spec = PatchLoopSpec {
         feature: ctx.uid,
         body: &shape,
@@ -247,6 +299,8 @@ fn fill_loop<K: Kernel>(
             Some(index) => PatchBoundary::Opening(index),
             None => PatchBoundary::Edges(&edges),
         },
+        openings: &openings,
+        curves: &curves,
         continuity: boundary.continuity,
         edge_continuity: &edge_continuity,
         points: &boundary.points,

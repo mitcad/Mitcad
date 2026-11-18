@@ -77,6 +77,17 @@ pub enum PlaneRef {
         angle: Expr,
         #[serde(default)]
         line: Option<Box<GeoRef>>,
+        /// Only the axis direction, projected onto the base, turning about
+        /// the line through `pivot` or the base's origin (format 51).
+        #[serde(default)]
+        direction_only: bool,
+        #[serde(default)]
+        pivot: Option<Box<GeoRef>>,
+    },
+    /// An origin datum of a component's placement (format 52): its XY, XZ
+    /// or YZ, as the key `o:<occurrence ids>/origin/<item>`.
+    Datum {
+        datum: String,
     },
     /// A construction plane feature, by id (format 40; older designs' names
     /// are ids after the upgrade).
@@ -180,6 +191,43 @@ pub enum GeoRef {
         sketch: u64,
         curve: String,
     },
+    /// An origin datum of a component's placement (format 52): its point,
+    /// an axis or a plane, as the key `o:<occurrence ids>/origin/<item>`.
+    Datum {
+        datum: String,
+    },
+    /// A snap point (format 55): the center or middle (`kind`) of the edge,
+    /// face or sketch curve `of`, picked at `at`.
+    Snap {
+        of: Box<GeoRef>,
+        kind: String,
+        at: Vec3,
+        #[serde(default)]
+        end: Option<usize>,
+    },
+}
+
+/// A component's origin datum by its key (`o:2/3/origin/XY`, SolidCraft's
+/// `DatumRef::parse_key`): the occurrence ids of the placement, root first,
+/// and the item (`O`, `X`, `Y`, `Z`, `XY`, `XZ` or `YZ`, upper case).
+pub fn datum_key(key: &str) -> Option<(Vec<u64>, String)> {
+    if key.len() > 2048 {
+        return None;
+    }
+    let (ids, item) = key.strip_prefix("o:")?.rsplit_once("/origin/")?;
+    if ids.is_empty() || ids.split('/').count() > 64 {
+        return None;
+    }
+    let path = ids
+        .split('/')
+        .map(|id| {
+            id.parse::<u64>()
+                .ok()
+                .filter(|n| *n != 0 && n.to_string() == id)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let item = item.to_ascii_uppercase();
+    matches!(item.as_str(), "O" | "X" | "Y" | "Z" | "XY" | "XZ" | "YZ").then_some((path, item))
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -307,6 +355,16 @@ pub struct Extent {
     /// A Join To Object leaves the body it runs to apart (format 49).
     #[serde(default)]
     pub to_body_apart: bool,
+    /// Two sides of entered distances read as designs before format 51
+    /// read them: the second side goes to the other side of the first,
+    /// wherever a negative first distance sent it. Without it (format 51)
+    /// Direction fixes the sides and a sign turns only its own side over.
+    #[serde(default)]
+    pub second_follows_first: bool,
+    /// Where the other components stood, relative to the extrude's own,
+    /// when its object was picked (format 57): `[{component, placement}]`.
+    #[serde(default)]
+    pub picked_placements: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -352,29 +410,23 @@ pub struct Extrude {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AxisRef {
+    /// A line of the profile's sketch, or of the sketch `sketch` (format
+    /// 52).
     SketchLine {
         curve: String,
+        #[serde(default)]
+        sketch: Option<u64>,
     },
     /// `x` or `y` of the sketch.
-    SketchAxis {
-        axis: String,
-    },
+    SketchAxis { axis: String },
     /// World `X`, `Y` or `Z`.
-    World {
-        axis: String,
-    },
-    Line {
-        origin: Vec3,
-        dir: Vec3,
-    },
+    World { axis: String },
+    /// A fixed line; its origin numbers, or length expressions (format 51).
+    Line { origin: [Expr; 3], dir: Vec3 },
     /// An edge or round face of the model, found again (format 39).
-    Model {
-        geo: GeoRef,
-    },
+    Model { geo: GeoRef },
     /// A construction axis feature, by name (format 31).
-    Construction {
-        name: String,
-    },
+    Construction { name: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -445,6 +497,10 @@ pub struct Fillet {
     /// Corners set back by a distance along their edges.
     #[serde(default)]
     pub setbacks: Vec<CornerSetback>,
+    /// How two rounds turn where they meet at a sharp side edge (format
+    /// 51): `mitre` (none) or `swept` round the edge.
+    #[serde(default)]
+    pub turn: Option<String>,
     /// Each picked edge's tangent chain rounded with it (format 49: false
     /// rounds only the picked edges).
     #[serde(default = "yes")]
@@ -487,6 +543,9 @@ pub struct BoxPrimitive {
     pub height: Expr,
     #[serde(default)]
     pub operation: Operation,
+    /// Placed by its center (format 54): `corner` is the center.
+    #[serde(default)]
+    pub centred: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -641,6 +700,10 @@ pub enum HoleKind {
         cb_depth: Expr,
         #[serde(default)]
         tip_angle: Option<Expr>,
+        /// Two printing layers this thick below the counterbore's floor, a
+        /// slot as wide as the hole and then a square (format 51).
+        #[serde(default)]
+        bridge: Option<Expr>,
     },
     Countersink {
         cs_diameter: Expr,
@@ -704,6 +767,14 @@ pub struct Hole {
     /// (format 35); `position` is where it was placed.
     #[serde(default)]
     pub references: Vec<EdgeDistance>,
+    /// The tapped thread's tolerance class (`6H`, `2B`; format 57): a
+    /// drawing's callout, which changes neither the drill nor the thread.
+    #[serde(default)]
+    pub thread_class: Option<String>,
+    /// Holes at sketch points of a design before format 53: a point inside
+    /// a body moves back to the body's surface.
+    #[serde(default)]
+    pub old_surface_start: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -745,6 +816,20 @@ pub struct Thread {
     /// matches (designs before format 50), not by its diameter.
     #[serde(default)]
     pub old_auto_size: bool,
+    /// Continuous flank faces (format 52): how the thread's faces are
+    /// laid out and named, not its shape.
+    #[serde(default)]
+    pub continuous_flanks: bool,
+    /// Other cylindrical faces threaded with the same options, in
+    /// selection order (format 57).
+    #[serde(default)]
+    pub additional_faces: Vec<Vec3>,
+    /// The body of each selected face, the first face's first (format 57).
+    #[serde(default)]
+    pub target_bodies: Vec<String>,
+    /// The dialog replaces the single face (format 57): no shape of its own.
+    #[serde(default)]
+    pub single_face_selection: bool,
 }
 
 fn one_start() -> u32 {
@@ -787,6 +872,12 @@ pub struct Sweep {
     pub profiles: ProfileSel,
     pub path_sketch: u64,
     pub path: Vec<String>,
+    /// The path on a body's edges instead of sketch curves (format 53):
+    /// the body and a point on each edge of the chain.
+    #[serde(default)]
+    pub path_body: Option<String>,
+    #[serde(default)]
+    pub path_edges: Vec<Vec3>,
     /// `perpendicular` (absent), `parallel` or `{"direction": [x, y, z]}`.
     #[serde(default)]
     pub orientation: Option<Value>,
@@ -870,6 +961,11 @@ pub struct SplitFace {
     pub tool: Option<FaceAt>,
     #[serde(default)]
     pub sketch: Option<u64>,
+    /// The sketch's curves joined end to end first, so a closed loop cuts
+    /// along itself only (format 55); else each curve on its own, an open
+    /// one extended past its ends.
+    #[serde(default)]
+    pub loops: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -977,10 +1073,18 @@ pub struct Move {
     pub translate: [Expr; 3],
     #[serde(default)]
     pub rotate_axis: Option<Vec3>,
+    /// The point the turn is about, length expressions (format 55); none:
+    /// the origin.
+    #[serde(default)]
+    pub origin: Option<[Expr; 3]>,
     #[serde(default)]
     pub angle: Option<Expr>,
     #[serde(default)]
     pub copy: bool,
+    /// Each copy's source frame in the copy's component, applied after the
+    /// move (format 57).
+    #[serde(default)]
+    pub copy_frames: Vec<Mat>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1051,6 +1155,9 @@ pub struct FlangeEdge {
     pub point: Vec3,
     pub angle: Option<Expr>,
     pub height: Option<Expr>,
+    /// Stretches of the edge, each with a bend of its own (format 52:
+    /// `{from, to, angle?, height?, flip?}`); none: the whole edge.
+    pub segments: Vec<Value>,
 }
 
 impl<'de> Deserialize<'de> for FlangeEdge {
@@ -1065,6 +1172,8 @@ impl<'de> Deserialize<'de> for FlangeEdge {
                 angle: Option<Expr>,
                 #[serde(default)]
                 height: Option<Expr>,
+                #[serde(default)]
+                segments: Vec<Value>,
             },
         }
         Ok(match Form::deserialize(d)? {
@@ -1072,15 +1181,18 @@ impl<'de> Deserialize<'de> for FlangeEdge {
                 point,
                 angle: None,
                 height: None,
+                segments: Vec::new(),
             },
             Form::Own {
                 point,
                 angle,
                 height,
+                segments,
             } => FlangeEdge {
                 point,
                 angle,
                 height,
+                segments,
             },
         })
     }
@@ -1384,6 +1496,9 @@ pub struct Patch {
     pub sketch: Option<u64>,
     #[serde(default)]
     pub profiles: ProfileSel,
+    /// Planar loops of the sketch's 3D curves, by index (format 52).
+    #[serde(default)]
+    pub profiles_3d: Vec<usize>,
     #[serde(default)]
     pub body: Option<String>,
     #[serde(default)]
@@ -1459,6 +1574,11 @@ pub struct SurfaceSweep {
     pub curves: Vec<String>,
     pub path_sketch: u64,
     pub path: Vec<String>,
+    /// The path on a body's edges (format 53), as a sweep's.
+    #[serde(default)]
+    pub path_body: Option<String>,
+    #[serde(default)]
+    pub path_edges: Vec<Vec3>,
     #[serde(default)]
     pub orientation: Option<Value>,
     #[serde(default)]

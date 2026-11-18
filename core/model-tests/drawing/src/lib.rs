@@ -23,3 +23,6 @@ mod dxf_units_tests;
 mod title_block_tests;
 // model_render's line art, projected as drawings' views are (mitcad#1736).
 mod render_lines_tests;
+// The BOM Structure acting on the Bill of Materials' views and a drawing's
+// parts list (mitcad#1985).
+mod bom_structure_tests;

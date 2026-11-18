@@ -1,0 +1,7 @@
+[
+  {"comment": "SPDX-License-Identifier: MIT"},
+  {"comment": "The design of the side-middle UI test (mitcad#2002; tools/ui-build-side-middle-test.sh): Upright (C1, Upright:1 O1, its derived part F1, its body F1.b0), the test library's 20x40 profile with two slots on each long side (LIBRARY_URL, replaced by the test) placed by BUILD standing at the origin, 500 long: its x+ side at x = 10 from y = -20 to 20, its slots at y = -10 and 10. All geometry is synthetic."},
+  {"cmd": "build_place", "part": {"library": "test-profiles", "url": "LIBRARY_URL", "rev": "HEAD", "component": "p-two-slot-test"},
+   "at": {"point": [0, 0, 0]}, "length": 500, "name": "Upright"},
+  {"expect": {"bodies": 1}}
+]

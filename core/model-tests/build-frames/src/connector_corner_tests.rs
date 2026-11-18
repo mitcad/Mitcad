@@ -11,7 +11,12 @@
 //! reopened agree. A design whose connectors the first rule placed (b's
 //! own axis, a nut flipped, a screw's head on the profile's face) opens,
 //! after `build_upgrade`, with the current placement, a connector moved
-//! along its slot since staying where it is.
+//! along its slot since staying where it is. A screw and a washer held by
+//! their mount frames (mitcad#2001: a screw's `shaft` frame along its
+//! shank, a washer's `hole` frame out of its bearing face) are not flipped:
+//! the head bears on the washer on the wall and the shank goes into the
+//! profile, at every corner, after a save and reopen too; ones the rule
+//! placed the wrong way round are set right by `build_upgrade`, once.
 
 use serde_json::{Value, json};
 
@@ -691,6 +696,308 @@ fn a_design_placed_by_the_first_rule_opens_with_the_current_placement() {
                 parts(&world(&again, p)),
                 parts(&world(&opened, p))
             ));
+        }
+    }
+}
+
+/// A part a connector brought, by its library component.
+fn brought(doc: &Document<MockKernel>, connector: ComponentUid, component: &str) -> ComponentUid {
+    let found: Vec<ComponentUid> = doc
+        .assembly()
+        .components
+        .iter()
+        .filter(|c| {
+            c.build
+                .as_ref()
+                .is_some_and(|b| b.added_by == Some(connector))
+        })
+        .filter(|c| {
+            c.build
+                .as_ref()
+                .and_then(|b| b.source)
+                .and_then(|id| doc.state().library_sources.get(id))
+                .is_some_and(|s| s.library.component == component)
+        })
+        .map(|c| c.uid)
+        .collect();
+    assert_eq!(found.len(), 1, "the {component} of {connector}: {found:?}");
+    found[0]
+}
+
+/// How far a box reaches along `direction` from `origin`: the nearest and
+/// the farthest of its corners.
+fn reach(b: &BoundingBox, origin: V3, direction: V3) -> (f64, f64) {
+    let mut range = (f64::INFINITY, f64::NEG_INFINITY);
+    for k in 0..8 {
+        let corner: V3 = [0, 1, 2].map(|i| {
+            if (k >> i) & 1 == 0 {
+                b.min[i]
+            } else {
+                b.max[i]
+            }
+        });
+        let d = dot(sub(corner, origin), direction);
+        range = (range.0.min(d), range.1.max(d));
+    }
+    range
+}
+
+/// The checks of `angle30-seat`'s washer and screw, held by their mount
+/// frames `seat` (mitcad#2001): the washer's bearing face on the
+/// connector's wall, `wall` back from its mount_a away from the profile,
+/// the washer behind the wall; the screw's head on the washer and its
+/// shank (its frame's z) through the wall into the profile, its tip 12
+/// beyond the head; both joints not flipped, shifted along their frames'
+/// +z.
+fn check_seated(doc: &Document<MockKernel>, connector: ComponentUid, wall: f64, what: &str) {
+    const WASHER: f64 = 1.5;
+    const SHANK: f64 = 12.0;
+    let mount = frame_of(doc, connector, "mount_a");
+    let into = z_axis(&mount);
+    let face = sub(mount.translation, scale(into, wall));
+    let washer = brought(doc, connector, "washer6-seat");
+    let w = world(doc, washer);
+    assert!(
+        same(w.apply_point([0.0; 3]), face),
+        "{what}: the washer's face at {:?}, the wall's face at {face:?}",
+        w.apply_point([0.0; 3])
+    );
+    assert!(
+        same(w.apply_vector([0.0, 0.0, -1.0]), into),
+        "{what}: the washer's seat points {:?}, not into the profile {into:?}",
+        w.apply_vector([0.0, 0.0, -1.0])
+    );
+    let (near_end, far_end) = reach(&world_box(doc, washer), mount.translation, into);
+    assert!(
+        near(near_end, -wall - WASHER) && near(far_end, -wall),
+        "{what}: the washer from {near_end} to {far_end} along the connector's frame"
+    );
+    let screw_part = brought(doc, connector, "screw6-seat");
+    let screw = world(doc, screw_part);
+    let head = sub(face, scale(into, WASHER));
+    assert!(
+        same(screw.apply_point([0.0, 0.0, SHANK]), head),
+        "{what}: the screw's head at {:?}, on the washer at {head:?}",
+        screw.apply_point([0.0, 0.0, SHANK])
+    );
+    assert!(
+        same(screw.apply_vector([0.0, 0.0, -1.0]), into),
+        "{what}: the screw's shank points {:?}, not into the profile {into:?}",
+        screw.apply_vector([0.0, 0.0, -1.0])
+    );
+    assert!(
+        same(sub(screw.apply_point([0.0; 3]), head), scale(into, SHANK)),
+        "{what}: the screw's tip at {:?}",
+        screw.apply_point([0.0; 3])
+    );
+    let (near_end, far_end) = reach(&world_box(doc, screw_part), mount.translation, into);
+    assert!(
+        near(near_end, -wall - WASHER) && near(far_end, SHANK - wall - WASHER),
+        "{what}: the screw from {near_end} to {far_end} along the connector's frame"
+    );
+    for (p, shift) in [(washer, wall), (screw_part, wall + WASHER)] {
+        let def = joint_def(doc, joint_of(doc, p));
+        assert!(!def.flip, "{what}: {p}'s joint is flipped");
+        let GeomRef::Mount { name, .. } = &def.a.geometry else {
+            panic!("{what}: {p} is not held by its mount frame");
+        };
+        assert_eq!(name, "seat", "{what}");
+        let got = def.a.frame_override.and_then(|o| o.shift);
+        assert!(
+            got.is_some_and(|s| same(s, [0.0, 0.0, shift])),
+            "{what}: {p}'s shift {got:?}, not {shift} along its frame's z"
+        );
+    }
+}
+
+#[test]
+fn screws_and_washers_held_by_their_seat_frames_point_into_the_profile() {
+    // mitcad#2001: at every corner of each frame, the opposite and the
+    // mirrored ones too, on the 4 mm wall of the angle's arm.
+    for v in VARIANTS {
+        let (mut doc, [lo, hi]) = frame(v);
+        let opening = BoundingBox {
+            min: [lo, -15.0, 30.0],
+            max: [hi, 15.0, 970.0],
+        };
+        let mut placed_parts = Vec::new();
+        for j in doc.build_junctions(None) {
+            let what = format!("{v:?} at {}", j.id);
+            let answer = command(
+                &mut doc,
+                json!({"cmd": "build_connect", "junction": j.id, "part": part("angle30-seat")}),
+            )
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+            all_ok(&doc);
+            assert_eq!(answer["warnings"], json!([]), "{what}: {answer}");
+            let connector = component(&answer);
+            let c = world_box(&doc, connector);
+            assert!(within(&c, &opening), "{what}: {c:?}");
+            check_nut(&doc, connector, j.a.component, &what);
+            check_seated(&doc, connector, 4.0, &what);
+            placed_parts.extend([
+                connector,
+                nut_of(&doc, connector),
+                brought(&doc, connector, "washer6-seat"),
+                brought(&doc, connector, "screw6-seat"),
+            ]);
+        }
+        assert_eq!(placed_parts.len(), 4 * 4, "{v:?}");
+        // A recompute and the design saved and reopened keep them there;
+        // there is nothing to place again.
+        let before = placements(&doc, &placed_parts);
+        doc.recompute();
+        all_ok(&doc);
+        assert!(
+            before
+                .iter()
+                .zip(placements(&doc, &placed_parts))
+                .all(|(a, b)| same_frame(*a, b)),
+            "{v:?}: a recompute moved them"
+        );
+        let mut reopened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+        reopened.kernel().box_faces.set(true);
+        reopened.recompute();
+        all_ok(&reopened);
+        let depth = reopened.undo_depth();
+        let answer = command(&mut reopened, json!({"cmd": "build_upgrade"})).unwrap();
+        assert_eq!(answer["count"], json!(0), "{v:?}: {answer}");
+        assert_eq!(reopened.undo_depth(), depth);
+        assert!(
+            before
+                .iter()
+                .zip(placements(&reopened, &placed_parts))
+                .all(|(a, b)| same_frame(*a, b)),
+            "{v:?}: reopened, they moved"
+        );
+    }
+}
+
+#[test]
+fn seated_screws_placed_the_wrong_way_round_are_set_right_by_build_upgrade() {
+    for v in VARIANTS {
+        let (mut doc, _) = frame(v);
+        let mut connectors = Vec::new();
+        for j in doc.build_junctions(None) {
+            let answer = command(
+                &mut doc,
+                json!({"cmd": "build_connect", "junction": j.id, "part": part("angle30-seat")}),
+            )
+            .unwrap();
+            connectors.push((component(&answer), j));
+        }
+        all_ok(&doc);
+        let hardware = |doc: &Document<MockKernel>, c: ComponentUid| {
+            [
+                c,
+                nut_of(doc, c),
+                brought(doc, c, "washer6-seat"),
+                brought(doc, c, "screw6-seat"),
+            ]
+        };
+        let right: Vec<[[V3; 4]; 4]> = connectors
+            .iter()
+            .map(|(c, _)| hardware(&doc, *c).map(|p| parts(&world(&doc, p))))
+            .collect();
+
+        // As the current rule placed them before mitcad#2001: the washer's
+        // and the screw's joints flipped and shifted along their frames'
+        // -z, the records' rule 2.
+        let mut edits: Vec<(FeatureUid, JointDef<ValueInput>)> = Vec::new();
+        for (c, _) in &connectors {
+            for p in [
+                brought(&doc, *c, "washer6-seat"),
+                brought(&doc, *c, "screw6-seat"),
+            ] {
+                let joint = joint_of(&doc, p);
+                let mut def = joint_def(&doc, joint);
+                assert!(!def.flip, "{p}");
+                def.flip = true;
+                let shift = def
+                    .a
+                    .frame_override
+                    .as_mut()
+                    .and_then(|o| o.shift.as_mut())
+                    .unwrap_or_else(|| panic!("{p}: no shift"));
+                shift[2] = -shift[2];
+                edits.push((joint, def));
+            }
+        }
+        doc.apply(|state| {
+            for (joint, def) in &edits {
+                state.edit_feature(*joint, &FeatureDef::Joint(def.clone()))?;
+            }
+            Ok(("Placed the wrong way round".to_owned(), ()))
+        })
+        .unwrap();
+        all_ok(&doc);
+
+        // Opened: each screw's head where it belongs, its shank out of the
+        // profile.
+        let mut opened = Document::from_json(&doc.to_json(), MockKernel::default()).unwrap();
+        opened.kernel().box_faces.set(true);
+        opened.recompute();
+        all_ok(&opened);
+        for (c, _) in &connectors {
+            let mount = frame_of(&opened, *c, "mount_a");
+            let into = z_axis(&mount);
+            let screw = world(&opened, brought(&opened, *c, "screw6-seat"));
+            assert!(
+                same(
+                    screw.apply_point([0.0, 0.0, 12.0]),
+                    sub(mount.translation, scale(into, 5.5))
+                ),
+                "{v:?} {c}: the reversed screw's head"
+            );
+            assert!(
+                same(screw.apply_vector([0.0, 0.0, -1.0]), scale(into, -1.0)),
+                "{v:?} {c}: the screw was not reversed"
+            );
+            for p in hardware(&opened, *c) {
+                assert_eq!(rule_of(&opened, p), Some(CONNECT_RULE));
+            }
+        }
+
+        // Set right, in one undo step: the washer and the screw of each of
+        // the four; the connectors and their nuts stay.
+        let depth = opened.undo_depth();
+        let answer = command(&mut opened, json!({"cmd": "build_upgrade"})).unwrap();
+        all_ok(&opened);
+        assert_eq!(answer["count"], json!(4 * 2), "{v:?}: {answer}");
+        assert_eq!(opened.undo_depth(), depth + 1);
+        assert_eq!(
+            opened.undo_label(),
+            Some("Place connectors by the current rule")
+        );
+        for ((c, j), expected) in connectors.iter().zip(&right) {
+            let what = format!("{v:?} {c} at {}", j.id);
+            let got = hardware(&opened, *c).map(|p| parts(&world(&opened, p)));
+            for (g, e) in got.iter().zip(expected) {
+                assert!(same_frame(*g, *e), "{what}: {g:?} not {e:?}");
+            }
+            check_nut(&opened, *c, j.a.component, &what);
+            check_seated(&opened, *c, 4.0, &what);
+            for p in hardware(&opened, *c) {
+                assert_eq!(rule_of(&opened, p), Some(CONNECT_RULE), "{what}");
+            }
+        }
+
+        // Saved and opened again: the same; nothing more to set right.
+        let mut again = Document::from_json(&opened.to_json(), MockKernel::default()).unwrap();
+        again.kernel().box_faces.set(true);
+        again.recompute();
+        all_ok(&again);
+        let depth = again.undo_depth();
+        let answer = command(&mut again, json!({"cmd": "build_upgrade"})).unwrap();
+        assert_eq!(answer["count"], json!(0), "{v:?}: {answer}");
+        assert_eq!(again.undo_depth(), depth);
+        for (c, _) in &connectors {
+            for p in hardware(&opened, *c) {
+                assert!(same_frame(
+                    parts(&world(&again, p)),
+                    parts(&world(&opened, p))
+                ));
+            }
         }
     }
 }

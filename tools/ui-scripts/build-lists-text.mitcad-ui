@@ -2,7 +2,7 @@
 # The BUILD lists as text (mitcad#1641), on build-lists-text.json (three
 # components of one box each, one with a long name; no BUILD parts):
 #   1. The lists window opened by Bill of Materials (Cut List itself needs
-#      BUILD parts), its Cut List tab chosen by Ctrl+Tab: Copy as CSV puts
+#      BUILD parts), its Cut List tab chosen by Ctrl+Shift+Tab: Copy as CSV puts
 #      rows ending in CRLF on the clipboard, and Save as CSV… writes the
 #      same text.
 #   2. Copy as Text: the tab's three tables as aligned plain text (each
@@ -20,13 +20,14 @@ expect-model-bodies 3 4400
 
 # 1. The cut list's CSV. Cut List (build.cut_list) is enabled only in a
 # design with BUILD parts; the lists window that Bill of Materials opens
-# has the Cut List tab too, reached here by Ctrl+Tab from the Property
+# has the Cut List tab too, reached here by Ctrl+Shift+Tab (the tab before;
+# the Sheet Metal tab comes after it, mitcad#1980) from the Property
 # columns field (ui-bom-grouping opens the window so as well).
 command build.parts_list
 focus-dialog '^Bill of Materials$'
 focus-widget buildPartsColumns
 mark
-key Ctrl+Tab
+key Ctrl+Shift+Tab
 expect-log '^Build lists tab: Cut List$'
 mark
 button '.*' listCopyCsv

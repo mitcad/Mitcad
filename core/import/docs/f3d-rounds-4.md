@@ -1311,7 +1311,11 @@ result is not thrown away unmeasured any more (`core/import-replay/src/deviation
 - While the item's definitions are tried, the first decoded definition
   (not a guess) that builds a result the history does not take is
   recorded (`Importer::record_deviation`), nothing more: most items then
-  find their state with a later definition. Where the kernel failed the
+  find their state with a later definition. Where none does, the item's
+  note (and the deviation's `reason`) names why that result was not
+  taken first, then what the other definitions said (`decoded_cause`,
+  mitcad#1926: a rounding that built in 14 s, 8 % off the file's change,
+  was noted only as out of time, from the guesses tried after it). Where the kernel failed the
   decoded rounding or chamfer, a definition that builds with some of its
   edges only (the same size, a guess of the history's) is recorded the
   same way, with the edges it leaves out (`missing_edges`).

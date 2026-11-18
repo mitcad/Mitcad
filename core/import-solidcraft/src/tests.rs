@@ -213,7 +213,20 @@ fn a_format_50_design_opens_with_placeholders_for_what_has_no_counterpart() {
          "pattern": {"type": "rectangular", "dir1": [1, 0, 0], "count1": "2", "spacing1": "50"}}]});
     let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
     assert_eq!(file.saved_format, 50);
-    assert!(file.upgrades.is_empty(), "{:?}", file.upgrades);
+    // Only the steps of formats 51 to 57 (mitcad#1994), none of its own.
+    assert!(
+        !file.upgrades.iter().any(|u| u == "thread-nominal-size"),
+        "{:?}",
+        file.upgrades
+    );
+    assert!(
+        file.upgrades
+            .iter()
+            .any(|u| u == "two-sided-extrude-fixed-sides"),
+        "{:?}",
+        file.upgrades
+    );
+    assert!(file.newer.is_none());
     let mut doc = Document::new(MockKernel::default());
     let report = import_solidcraft_file(
         &mut doc,
@@ -804,4 +817,283 @@ fn a_modelled_thread_runs_out() {
     let cosmetic = features::thread_def("F2.b0", "F2:side0", "M8", false, "low_end");
     assert_eq!(cosmetic["modeled"], false, "{cosmetic}");
     assert!(cosmetic.get("ends").is_none(), "{cosmetic}");
+}
+
+/// The definition a feature of the import became, as its debug text.
+fn def_of(doc: &Document<MockKernel>, name: &str) -> String {
+    let entry = doc
+        .features()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no feature {name}"));
+    format!("{:?}", entry.def)
+}
+
+/// A design SolidCraft 0.43.0 saves (format 57, mitcad#1994) opens as it
+/// is, with nothing to upgrade and no warning: a two-sided extrude of
+/// entered distances is MitCad's signed one (Direction fixes the sides, a
+/// sign turns its own side over), a revolve's fixed axis whose origin is a
+/// parameter is fixed where it puts it now, a revolve about another
+/// sketch's line takes that line, a box placed by its center is MitCad's
+/// box from its corner, its height both ways.
+#[test]
+fn a_format_57_design_opens_as_it_is() {
+    use mitcad_model::features::Extent;
+    let (doc, report) = import(
+        "format-57-holes-threads-revolve.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    assert_eq!(report.format, 57);
+    assert!(report.newer.is_none());
+    assert!(report.upgrades.is_empty(), "{:?}", report.upgrades);
+    assert_eq!(outcome(&report, "Slab"), Outcome::Parametric);
+    let slab = doc.features().find(|f| f.name == "Slab").unwrap();
+    let FeatureDef::Extrude(extrude) = &slab.def else {
+        panic!("Slab is not an extrude: {:?}", slab.def)
+    };
+    assert!(
+        matches!(extrude.extent, Extent::TwoSides { signed: true, .. }),
+        "{:?}",
+        extrude.extent
+    );
+    assert!(!extrude.flip);
+    let ring = report.features.iter().find(|f| f.name == "Ring").unwrap();
+    assert_eq!(ring.outcome, Outcome::Partial, "{:?}", ring.notes);
+    assert!(
+        ring.notes
+            .iter()
+            .any(|n| n.contains("axis is fixed where its expressions put it now")),
+        "{:?}",
+        ring.notes
+    );
+    let ring_def = def_of(&doc, "Ring");
+    assert!(ring_def.contains("[60.0, 0.0, 0.0]"), "{ring_def}");
+    assert_eq!(outcome(&report, "Collar"), Outcome::Parametric);
+    let cube = def_of(&doc, "Cube");
+    assert!(cube.contains("symmetric: true"), "{cube}");
+    assert!(cube.contains("95.0") && cube.contains("-5.0"), "{cube}");
+    // A tapped hole's tolerance class is a drawing's: nothing of it here.
+    let tapped = report.features.iter().find(|f| f.name == "Tapped").unwrap();
+    assert!(
+        !tapped.notes.iter().any(|n| n.contains("6H")),
+        "{:?}",
+        tapped.notes
+    );
+}
+
+/// The same two-sided extrude in a design before format 51 keeps its older
+/// reading (`second_follows_first`): the first side goes where its sign
+/// sends it and the second to the other side of it, MitCad's unsigned
+/// sides with the extrude flipped.
+#[test]
+fn an_older_two_sided_extrude_keeps_its_sides() {
+    use mitcad_model::features::Extent;
+    let mut v: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(design("format-57-holes-threads-revolve.solidcraft.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    v["format"] = json!("solidcraft/50");
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    assert!(
+        file.upgrades
+            .iter()
+            .any(|u| u == "two-sided-extrude-fixed-sides")
+    );
+    let mut doc = Document::new(MockKernel::default());
+    import_solidcraft_file(
+        &mut doc,
+        file,
+        "old.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    let slab = doc.features().find(|f| f.name == "Slab").unwrap();
+    let FeatureDef::Extrude(extrude) = &slab.def else {
+        panic!("Slab is not an extrude: {:?}", slab.def)
+    };
+    assert!(
+        matches!(extrude.extent, Extent::TwoSides { signed: false, .. }),
+        "{:?}",
+        extrude.extent
+    );
+    assert!(
+        extrude.flip,
+        "a negative first side goes against the normal"
+    );
+}
+
+/// A design a newer SolidCraft saved (format 58) opens with a warning that
+/// names its format and says features may build differently; a feature of
+/// a kind this import does not know keeps its place as a placeholder with
+/// the reason, and the section and the parameter it cannot read are left
+/// out and named (mitcad#1994).
+#[test]
+fn a_newer_design_opens_with_a_warning() {
+    let (doc, report) = import(
+        "format-58-newer.solidcraft.json",
+        &SolidcraftOptions::default(),
+    );
+    assert_eq!(report.format, 58);
+    let newer = report.newer.as_ref().expect("a newer design");
+    assert_eq!((newer.format, newer.reads_up_to), (58, 57));
+    assert!(
+        newer
+            .warning
+            .starts_with("Saved by a newer SolidCraft (format 58;"),
+        "{}",
+        newer.warning
+    );
+    assert!(
+        newer.warning.contains("may build differently"),
+        "{}",
+        newer.warning
+    );
+    assert!(
+        newer
+            .left_out
+            .iter()
+            .any(|l| l.contains("`lattice_library`")),
+        "{:?}",
+        newer.left_out
+    );
+    assert!(
+        newer.left_out.iter().any(|l| l.contains("`spin`")),
+        "{:?}",
+        newer.left_out
+    );
+    assert_eq!(outcome(&report, "Block"), Outcome::Parametric);
+    assert_eq!(outcome(&report, "Lattice"), Outcome::Unmapped);
+    assert_eq!(outcome(&report, "Lid"), Outcome::Parametric);
+    let lattice = doc.features().find(|f| f.name == "Lattice").unwrap();
+    assert!(lattice.suppressed);
+    assert!(
+        doc.import_note(lattice.uid)
+            .unwrap()
+            .contains("saved by a newer SolidCraft"),
+    );
+    // The warning is the result's first notice that is not an error.
+    let notices = report.notices();
+    assert_eq!(notices[0].message, newer.warning);
+    assert!(
+        report
+            .text()
+            .contains("warning: Saved by a newer SolidCraft")
+    );
+}
+
+/// A design of the pinned format that lists a change this import does not
+/// know opens too, the warning naming the change.
+#[test]
+fn an_unknown_change_opens_with_a_warning_naming_it() {
+    let v = json!({"format": "solidcraft/57", "format_pending": ["a-later-change"], "name": "U",
+        "params": [], "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "10", "width": "10",
+         "height": "10", "body_names": ["B"]}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "u.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    let newer = report.newer.as_ref().expect("a newer design");
+    assert_eq!(newer.unknown_changes, ["a-later-change"]);
+    assert!(
+        newer.warning.contains("`a-later-change`"),
+        "{}",
+        newer.warning
+    );
+    assert_eq!(outcome(&report, "Box1"), Outcome::Parametric);
+}
+
+/// The kinds and options of formats 51 to 57 without a MitCad counterpart
+/// are placeholders with their reasons, and the timeline goes on: a cell
+/// grid, a frame member's end cap, a patch of 3D sketch loops, a flange
+/// whose edge is split into stretches, a move whose copies take their
+/// sources' placements in another component (mitcad#1994). Notes anchored
+/// in the model are named in the report.
+#[test]
+fn format_57_kinds_without_a_counterpart_are_placeholders() {
+    let frame = json!([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [5, 0, 0, 1]]);
+    let v = json!({"format": "solidcraft/57", "name": "K", "params": [], "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "40", "width": "40", "height": "10",
+         "body_names": ["B"]},
+        {"id": 2, "name": "Grid", "type": "cell_grid", "sketch": 9, "profiles": {"type": "all"},
+         "size": "5", "web": "1", "depth": "2", "targets": ["B"]},
+        {"id": 3, "name": "Cap", "type": "frame_end_cap", "ends": [], "thickness": "3", "chamfer": "1"},
+        {"id": 4, "name": "Patch3d", "type": "patch", "sketch": 9, "profiles_3d": [0]},
+        {"id": 5, "name": "Flange", "type": "sheet_flange", "height": "10", "angle": "90 deg",
+         "edges": [{"point": [0, 0, 0], "segments": [{"from": 0.0, "to": 0.5}]}]},
+        {"id": 6, "name": "Copy", "type": "move", "bodies": ["B"], "translate": [0, 0, 0], "copy": true,
+         "copy_frames": [frame]},
+        {"id": 7, "name": "Box2", "type": "box", "corner": [60, 0, 0], "length": "5", "width": "5", "height": "5"}],
+        "notes": [{"id": 8, "anchor": [0, 0, 10], "text": "Check this"}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    assert!(file.newer.is_none());
+    let mut doc = Document::new(MockKernel::default());
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "k.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    for name in ["Grid", "Cap", "Patch3d", "Flange", "Copy"] {
+        assert_eq!(outcome(&report, name), Outcome::Unmapped, "{name}");
+    }
+    assert_eq!(outcome(&report, "Box2"), Outcome::Parametric);
+    let grid = doc.features().find(|f| f.name == "Grid").unwrap();
+    assert!(
+        doc.import_note(grid.uid)
+            .unwrap()
+            .contains("no cell grid feature")
+    );
+    assert!(
+        report.notes.iter().any(|n| n.starts_with("a note (text")),
+        "{:?}",
+        report.notes
+    );
+}
+
+/// The options of formats 51 to 57 MitCad has come in: a bridged
+/// counterbore as MitCad's stepped print bridging, a move about a point of
+/// its own given by a parameter (mitcad#1994).
+#[test]
+fn format_57_options_come_in() {
+    let v = json!({"format": "solidcraft/57", "name": "O", "params": [{"name": "px", "expr": "5 mm", "unit": "mm"}], "features": [
+        {"id": 1, "name": "Box1", "type": "box", "corner": [0, 0, 0], "length": "40", "width": "40", "height": "10",
+         "body_names": ["B"]},
+        {"id": 2, "name": "Bridged", "type": "hole", "position": [20, 20, 10], "direction": [0, 0, -1],
+         "diameter": "3", "hole": {"type": "counterbore", "cb_diameter": "6", "cb_depth": "2", "bridge": "0.2 mm"}},
+        {"id": 3, "name": "Turn", "type": "move", "bodies": ["B"], "translate": [0, 0, 0],
+         "rotate_axis": [0, 0, 1], "origin": ["px", 0, 0], "angle": "90 deg"}]});
+    let file = mitcad_solidcraft::SolidcraftFile::from_value(v).unwrap();
+    let mut doc = Document::new(MockKernel::default());
+    doc.kernel().box_faces.set(true);
+    let report = import_solidcraft_file(
+        &mut doc,
+        file,
+        "o.solidcraft",
+        &SolidcraftOptions::default(),
+    )
+    .unwrap();
+    let bridged = report
+        .features
+        .iter()
+        .find(|f| f.name == "Bridged")
+        .unwrap();
+    assert_eq!(bridged.outcome, Outcome::Partial, "{:?}", bridged.notes);
+    assert!(
+        bridged.notes.iter().any(|n| n.contains("print bridging")),
+        "{:?}",
+        bridged.notes
+    );
+    let hole = def_of(&doc, "Bridged");
+    assert!(hole.contains("print_bridging: Stepped"), "{hole}");
+    let turn = report.features.iter().find(|f| f.name == "Turn").unwrap();
+    assert_eq!(turn.outcome, Outcome::Partial, "{:?}", turn.notes);
+    let rotate = def_of(&doc, "Turn (turn)");
+    assert!(rotate.contains("[5.0, 0.0, 0.0]"), "{rotate}");
 }

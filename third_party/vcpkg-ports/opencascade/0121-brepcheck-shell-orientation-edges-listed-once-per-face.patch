@@ -9,17 +9,18 @@ edges or more, the orientations of its edges as its explorer meets them
 (the face oriented as in the shell) are now listed once, and the first or
 second occurrence of an edge is read from the list; faces of fewer edges,
 and an edge a list does not hold, are searched as before. The statuses are
-unchanged.
+unchanged. The lists are OCCT's own containers: a map per face, shared
+through NCollection_Shared, holding each edge's first two orientations
+(the only occurrences the check reads) and its count.
+Test: geometry/tests/port/p0121-shell-orientation-many-edges.cpp (ctest
+geometry.port.0121): the orientation of a plate with 81 holes is right and
+a reversed face is still found, as below the threshold; a plate of 19 881
+holes is checked within 2 s (the search of each face, quadratic, about 7 s).
+diff --git a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx
+index f20626f9..8e335bec 100644
 --- a/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx
 +++ b/src/ModelingAlgorithms/TKTopAlgo/BRepCheck/BRepCheck_Shell.cxx
-@@ -36,10 +36,78 @@
- #include <NCollection_IndexedDataMap.hxx>
- #include <NCollection_Map.hxx>
- 
-+#include <memory>
-+#include <vector>
-+
- IMPLEMENT_STANDARD_RTTIEXT(BRepCheck_Shell, BRepCheck_Result)
+@@ -40,6 +40,84 @@ IMPLEMENT_STANDARD_RTTIEXT(BRepCheck_Shell, BRepCheck_Result)
  
  //=================================================================================================
  
@@ -41,48 +42,61 @@ unchanged.
 +            const int           theRank,
 +            TopAbs_Orientation& theOrientation)
 +  {
-+    const std::shared_ptr<Edges>* aKept = myFaces.Seek(theFace);
++    const occ::handle<Edges>* aKept = myFaces.Seek(theFace);
 +    if (aKept == nullptr)
 +    {
-+      std::shared_ptr<Edges> aNew;
-+      int                    aCount = 0;
++      occ::handle<Edges> aNew;
++      int                aCount = 0;
 +      for (TopExp_Explorer anExp(theFace, TopAbs_EDGE); anExp.More(); anExp.Next())
 +      {
 +        ++aCount;
 +      }
 +      if (aCount >= THE_MANY_EDGES)
 +      {
-+        aNew = std::make_shared<Edges>();
++        aNew = new Edges();
 +        for (TopExp_Explorer anExp(theFace, TopAbs_EDGE); anExp.More(); anExp.Next())
 +        {
-+          std::vector<TopAbs_Orientation>* aList = aNew->ChangeSeek(anExp.Current());
-+          if (aList == nullptr)
++          Occurrences* anOcc = aNew->ChangeSeek(anExp.Current());
++          if (anOcc == nullptr)
 +          {
-+            aList = aNew->Bound(anExp.Current(), std::vector<TopAbs_Orientation>());
++            anOcc = aNew->Bound(anExp.Current(), Occurrences());
 +          }
-+          aList->push_back(anExp.Current().Orientation());
++          if (anOcc->Count < 2)
++          {
++            anOcc->Orientations[anOcc->Count] = anExp.Current().Orientation();
++          }
++          ++anOcc->Count;
 +        }
 +      }
 +      aKept = myFaces.Bound(theFace, aNew);
 +    }
-+    if (!*aKept)
++    if (aKept->IsNull())
 +    {
 +      return false;
 +    }
-+    const std::vector<TopAbs_Orientation>* aList = (*aKept)->Seek(theEdge);
-+    if (aList == nullptr || theRank >= static_cast<int>(aList->size()))
++    // The callers ask for the first or the second occurrence only.
++    const Occurrences* anOcc = (*aKept)->Seek(theEdge);
++    if (anOcc == nullptr || theRank > 1 || theRank >= anOcc->Count)
 +    {
 +      return false;
 +    }
-+    theOrientation = (*aList)[static_cast<size_t>(theRank)];
++    theOrientation = anOcc->Orientations[theRank];
 +    return true;
 +  }
 +
 +private:
 +  static constexpr int THE_MANY_EDGES = 64;
++
++  //! The orientations of an edge's first two occurrences in a face, and how often it occurs.
++  struct Occurrences
++  {
++    TopAbs_Orientation Orientations[2] = {TopAbs_FORWARD, TopAbs_FORWARD};
++    int                Count           = 0;
++  };
++
 +  using Edges =
-+    NCollection_DataMap<TopoDS_Shape, std::vector<TopAbs_Orientation>, TopTools_ShapeMapHasher>;
-+  NCollection_DataMap<TopoDS_Shape, std::shared_ptr<Edges>, TopTools_ShapeMapHasher> myFaces;
++    NCollection_Shared<NCollection_DataMap<TopoDS_Shape, Occurrences, TopTools_ShapeMapHasher>>;
++  NCollection_DataMap<TopoDS_Shape, occ::handle<Edges>, TopTools_ShapeMapHasher> myFaces;
 +};
 +} // namespace
 +
@@ -91,7 +105,7 @@ unchanged.
  static void Propagate(const NCollection_IndexedDataMap<TopoDS_Shape,
                                                         NCollection_List<TopoDS_Shape>,
                                                         TopTools_ShapeMapHasher>&     mapEF,
-@@ -521,9 +589,10 @@
+@@ -521,9 +599,10 @@ BRepCheck_Status BRepCheck_Shell::Orientation(const bool Update)
    // BRepCheck_BadOrientationOfSubshape and
    //         BRepCheck_SubshapeNotInShape are checked;
  
@@ -105,7 +119,7 @@ unchanged.
  
    for (int i = 1; i <= Nbedges; i++)
    {
-@@ -564,15 +633,19 @@
+@@ -564,15 +643,19 @@ BRepCheck_Status BRepCheck_Shell::Orientation(const bool Update)
          // edge is examined
          if (!lite.Value().IsSame(Fref)) // edge non "closed"
          {
@@ -130,7 +144,7 @@ unchanged.
            if (!MapOfShapeOrientation.IsBound(Fcur))
            {
              myOstat = BRepCheck_SubshapeNotInShape;
-@@ -590,33 +663,48 @@
+@@ -590,33 +673,48 @@ BRepCheck_Status BRepCheck_Shell::Orientation(const bool Update)
            //	orf = (TopAbs_Orientation)MapOfShapeOrientation.Find(Fcur);
            Fcur.Orientation(orf);
  
@@ -191,7 +205,7 @@ unchanged.
              {
                myOstat = BRepCheck_BadOrientationOfSubshape;
                if (Update)
-@@ -654,25 +742,29 @@
+@@ -654,25 +752,29 @@ BRepCheck_Status BRepCheck_Shell::Orientation(const bool Update)
          // orf = (TopAbs_Orientation)MapOfShapeOrientation.Find(Fcur);
          Fcur.Orientation(orf);
  

@@ -43,8 +43,22 @@ the top crossing the hole's mouth.
   the blend between the cut's ends, an arc on the face beyond is taken
   first (a rounded rim whose surface the blend cuts twice; one of the two
   arcs lies on the rim's face), then any as before.
+
+Failures (mitcad#1986): the bridge over the gap, its walk and its cut
+pieces fail with OCCT's reports of a computation it cannot make
+(ChFi3d_IsComputationFailure, 0016) where the blend cannot be carried over
+the rim so: no bridge, and the stripe fails as stock does there ("Chaining
+is impossible"); a cut piece that cannot be made leaves the bridge
+without it, reported to its caller. Any other failure (a broken invariant,
+a signal) is rethrown.
+Test: geometry/tests/port/p0160-walked-blend-over-a-rounded-rim.cpp (ctest
+geometry.port.0160): a block's edge rounded with 3 past a hole whose rim is
+rounded with 0.5, and past a wider hole whose rim is rounded with 1, the
+contact on the top crossing the hole's mouth: built, valid, the rim cutting
+the blend (the body less the ball's corner region); a hole whose mouth
+stays behind the contact, as stock.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
-index 5b87977..b25afc0 100644
+index 5b87977b..b25afc06 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
 @@ -922,6 +922,32 @@ private:
@@ -81,7 +95,7 @@ index 5b87977..b25afc0 100644
    //! the face at an end of the spine before that end: the blend is walked
    //! on over that face's surface and cut by the face at the end up to where
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
-index bf71319..3423409 100644
+index 9d2dfe72..c4e3aee2 100644
 --- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 +++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 @@ -26,6 +26,7 @@
@@ -183,7 +197,7 @@ index bf71319..3423409 100644
        return true;
      }
      else if (!Fv.IsNull())
-@@ -3491,6 +3569,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3497,6 +3575,9 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
  
      // No more connected faces. Construction of the tangent plane to continue the path
      // till the output on the other face.
@@ -193,7 +207,7 @@ index bf71319..3423409 100644
      if ((!Ok1 && HC1.IsNull()) || (!Ok2 && HC2.IsNull()))
      {
        if ((intf && !forward) || (intl && forward))
-@@ -3530,7 +3611,58 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3536,7 +3617,63 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
        }
        else
        {
@@ -239,8 +253,13 @@ index bf71319..3423409 100644
 +              aBridge.Clear();
 +            }
 +          }
-+          catch (Standard_Failure const&)
++          catch (Standard_Failure const& anException)
 +          {
++            // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++            if (!ChFi3d_IsComputationFailure(anException))
++            {
++              throw;
++            }
 +            aBridge.Clear();
 +          }
 +        }
@@ -253,7 +272,7 @@ index bf71319..3423409 100644
        }
      }
  
-@@ -3545,7 +3677,22 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3551,7 +3688,22 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
      NCollection_Sequence<occ::handle<ChFiDS_SurfData>> SeqSD;
      SeqSD.Append(SD);
  
@@ -277,7 +296,7 @@ index bf71319..3423409 100644
      {
        TopAbs_Orientation Or1   = HSref1->Face().Orientation();
        TopAbs_Orientation Or2   = HSref2->Face().Orientation();
-@@ -3857,12 +4004,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3863,12 +4015,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          for (ii = 1; ii <= SeqSD.Length(); ii++)
          {
            SD = SeqSD(ii);
@@ -298,7 +317,7 @@ index bf71319..3423409 100644
            if (obstacleon2)
            {
              SD->SetIndexOfC2(DStr.AddShape(HC2->Edge()));
-@@ -3876,12 +4029,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
+@@ -3882,12 +4040,18 @@ void ChFi3d_Builder::PerformSetOfSurfOnElSpine(const occ::handle<ChFiDS_ElSpine>
          for (ii = SeqSD.Length(); ii >= 1; ii--)
          {
            SD = SeqSD(ii);
@@ -319,7 +338,7 @@ index bf71319..3423409 100644
            if (obstacleon2)
            {
              SD->SetIndexOfC2(DStr.AddShape(HC2->Edge()));
-@@ -4059,6 +4218,8 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -4065,6 +4229,8 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
        aLines.Append(aTrim->BasisCurve());
      }
    }
@@ -328,7 +347,7 @@ index bf71319..3423409 100644
    for (int i = 1; i <= aLines.Length(); i++)
    {
      // (The arcs' p-curves are made below; an analytic line, e.g. a conic
-@@ -4182,6 +4343,41 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
+@@ -4188,6 +4354,41 @@ static bool ChFi3d_KPartCutCurve(const occ::handle<Geom_Surface>& S,
        {
          continue;
        }
@@ -370,7 +389,7 @@ index bf71319..3423409 100644
        // The p-curves: the curve's projections on both surfaces, in the
        // periods of the parameters given at its start.
        occ::handle<Geom2d_Curve> aP1 = GeomProjLib::Curve2d(aC, uf, ul, S);
-@@ -6394,6 +6590,525 @@ static bool ChFi3d_KPartCutToEnd(
+@@ -6439,6 +6640,540 @@ static bool ChFi3d_KPartCutToEnd(
    return true;
  }
  
@@ -514,8 +533,13 @@ index bf71319..3423409 100644
 +      walked = PerformSurf(SeqSD, HGuide, Spine, Choix, HS1, It1, HS2, It2, MaxStep, Fleche, tolesp, First,
 +                           Last, false, false, Forward, false, false, Soldep, intf, intl);
 +    }
-+    catch (Standard_Failure const&)
++    catch (Standard_Failure const& anException)
 +    {
++      // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++      if (!ChFi3d_IsComputationFailure(anException))
++      {
++        throw;
++      }
 +      walked = false;
 +    }
 +    if (!walked || SeqSD.Length() != 1)
@@ -684,8 +708,13 @@ index bf71319..3423409 100644
 +        OCC_CATCH_SIGNALS
 +        G = ChFi3d_KPartCutPiece(DStr, Spine, X, ons, N, B, Wa, Wb, aNone, aNone, tolapp3d, Ga, Gb);
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        G.Nullify();
 +      }
 +      return G;
@@ -790,8 +819,13 @@ index bf71319..3423409 100644
 +          Gb = ChFi3d_KPartCutPiece(DStr, Spine, X, ons, N, B, Xc.W, W2, aNone, aNone, tolapp3d, &aMid[after], G2, &aCutEdges);
 +        }
 +      }
-+      catch (Standard_Failure const&)
++      catch (Standard_Failure const& anException)
 +      {
++        // (OCCT reports that this cannot be computed: this step fails, as reported below.)
++        if (!ChFi3d_IsComputationFailure(anException))
++        {
++          throw;
++        }
 +        Gb.Nullify();
 +      }
 +      if (!Ga.IsNull() && !Gb.IsNull())

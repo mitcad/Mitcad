@@ -29,6 +29,16 @@ the stripe it extends, so the one joined before kept the old surface and
 was a face of its own with no edge at the section between them. Now every
 SurfData on that surface, in any stripe, takes the new one.
 
+The condition (mitcad#1986) is general, not the case's: the split is made
+wherever the piece after the gap starts farther than 100 times the 3D
+tolerance from the other stripe's end point, which is so wherever the face
+at that end cuts the blend along the end section (a rib's or a notch's side
+in the spine's normal plane, at any place, of any width or height, on any
+blend that is one surface with the same sides on both stripes); a slanted
+side gives its own piece and the join is as before.
+Test: pending (mitcad#2003): the port test written for this patch does not
+reach its case yet.
+
 Upstream: new.
 diff --git a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_2.cxx
 index ebea22f..8e8e15a 100644
